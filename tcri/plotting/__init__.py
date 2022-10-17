@@ -1,2 +1,1 @@
-from ..plotting._tcr_umap import tcr_umap
-from ..plotting._plotting import clonotypic_entropy
+from ..plotting._plotting import tcr_umap, clonotypic_entropy, phenotypic_entropy, phenotypic_flux
