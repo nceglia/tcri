@@ -44,8 +44,8 @@ tcri.pp.joint_distribution(adata,
     ```
 3. Phenotypic Flux
     ```
-    tcri.metrics.phenotypic_flux(adata,from_this="TP1",to_this="TP2")
-    tcri.pl.phenotypic_flux(adata,from_this="TP1",to_this="TP2")
+    tcri.metrics.phenotypic_flux(adata,from_this="TP1",to_that="TP2")
+    tcri.pl.phenotypic_flux(adata,from_this="TP1",to_that="TP2")
     ```
 
 
