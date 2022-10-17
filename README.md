@@ -31,7 +31,7 @@ tcri.pp.joint_distribution(adata,
                            condition_column=condition_column, 
                            phenotype_column=phenotype_column)
 ```
-
+                
 #### Each metric has an associated plotting function
 1. Clonotypic Entropy
     ```
