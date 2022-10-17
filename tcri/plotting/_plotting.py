@@ -78,42 +78,37 @@ def clonotypic_entropy(adata, title=""):
     df = df.sort_values("Normalized Entropy")
     fig, ax = plt.subplots(1,1,figsize=(10,5))
     sns.boxplot(data=df,x="Phenotype",y="Normalized Entropy",hue="Condition",ax=ax)
-    plt.tight_layout()
     ax.set_xticklabels(ax.get_xticklabels(),rotation=90)
-
-def phenotypic_entropy(adata, title=""):
-    entropies = []
-    phenotypes = []
-    samples = []
-    conditions = []
-    phenotypes = []
-    for s in set(adata.obs[adata.uns["sample_column"]]):
-        sub = adata[adata.obs[adata.uns["sample_column"]]==s]
-        for c in set(sub.obs[sub.uns["condition_column"]]):
-            cdata = sub[sub.obs[sub.uns["condition_column"]]==c]
-            for ph in adata.uns["phenotype_order"]:
-                pdata = cdata[cdata.obs[adata.uns["phenotype_column"]]==ph]
-                ent = phenotypic_entropy(pdata)
-                entropies.append(1-ent)
-                phenotypes.append(ph)
-                samples.append(s)
-                conditions.append(c)
-    df = pandas.DataFrame.from_dict({"Sample":samples,
-                                     "Condition":conditions,  
-                                     "Phenotype":phenotypes,
-                                     "Normalized Entropy":entropies})
-    df = df.sort_values("Normalized Entropy")
-    fig, ax = plt.subplots(1,1,figsize=(10,3))
-    sns.boxplot(data=df,x="Phenotype",y="Normalized Entropy",hue="Condition",ax=ax)
     plt.tight_layout()
-    ax.set_title(title)
-    ax.set_xticklabels(ax.get_xticklabels(),rotation=90)
-    return df
 
-def phenotypic_flux(adata,from_this="Pre",to_this="Post",filename="flux"):
+
+def phenotypic_entropy(adata):
+    ents = []
+    clone = []
+    condition = []
+
+    for c in set(adata.obs[adata.uns["condition_column"]]):
+        sub = adata[adata.obs[adata.uns["condition_column"]]==c]
+        xents = pentropy(sub)
+        for x,y in xents.items():
+            ents.append(abs(xents[x]))
+            clone.append(x)
+            condition.append(c)
+
+    df=pandas.DataFrame.from_dict({"Entropy": ents, 
+                                "Clonotype": clone,
+                                "Condition":condition})
+    fig,ax = plt.subplots(1,1,figsize=(7,3))
+    sns.boxplot(data=df,x="Condition",y="Entropy",ax=ax,color="#999999")
+    sns.swarmplot(data=df,x="Condition",y="Entropy",ax=ax)
+    ax.set_xticklabels(ax.get_xticklabels(),rotation=90)
+    plt.ylabel("Phenotypic Entropy")
+    plt.tight_layout()
+
+def phenotypic_flux(adata,from_this="Pre",to_that="Post",filename="flux", min_clone_size=3):
     import pandas as pd
     from pysankey import sankey
-    table = flux(adata, from_this=from_this, to_this=to_this)
+    table = flux(adata, from_this=from_this, to_that=to_that, min_clone_size=min_clone_size)
     sankey(
         left=table['Phenotype A'], right=table['Phenotype B'], leftWeight=table["Pre"], rightWeight=table['Post'], aspect=20,
         fontsize=20, figureName=filename
