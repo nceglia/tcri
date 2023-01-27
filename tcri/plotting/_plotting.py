@@ -10,7 +10,9 @@ from ..metrics._metrics import clonotypic_entropy as centropy
 from ..metrics._metrics import phenotypic_entropy as pentropy
 from ..metrics._metrics import phenotypic_flux as flux
 
-def tcr_umap(adata, reduction="umap", top_n=10, filename="tcr_plot.png", seq_column="IR_VDJ_1_junction_aa"):
+def tcr_umap(adata, reduction="umap", top_n=10, filename="tcr_plot.png", seq_column=None):
+    if not seq_column:
+        seq_column = adata.uns["clonotype_column"]
     df = adata.obs
     dft = df[df[seq_column].notnull()]
     plt.figure(figsize = (10, 8))

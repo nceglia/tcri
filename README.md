@@ -23,11 +23,13 @@ import tcri
 
 sample_column="sample"
 condition_column="source"
+clonotype_column = "IR_VDJ_1_junction_aa"
 phenotype_column="genevector"
 
 tcri.pp.joint_distribution(adata,
                            sample_column=sample_column, 
-                           condition_column=condition_column, 
+                           condition_column=condition_column,
+                           clonotype_column=clonotype_column,
                            phenotype_column=phenotype_column)
 ```
                 

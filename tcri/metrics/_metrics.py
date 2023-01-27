@@ -9,7 +9,7 @@ def calc_entropy(P, log_units = 2):
 
 def clonotypic_entropy(adata, phenotype):
     clonotype_dist = collections.defaultdict(list)
-    for ct, clonotype in zip(adata.obs[adata.uns["phenotype_column"]], adata.obs["IR_VDJ_1_junction_aa"]):
+    for ct, clonotype in zip(adata.obs[adata.uns["phenotype_column"]], adata.obs[adata.uns["clonotype_column"]]):
         if ct == phenotype:
             prob = 1.0
         else:
@@ -55,18 +55,18 @@ def phenotypic_entropy(adata, min_clone_size=3):
 def phenotypic_flux(adata, from_this="Pre", to_that="Post", min_clone_size=3):
     precounts = collections.defaultdict(lambda : collections.defaultdict(int))
     postcounts = collections.defaultdict(lambda : collections.defaultdict(int))
-    for clone in tqdm.tqdm(list(set(adata.obs[adata.uns["clonotype_column"]]))):
+    phenotype_column = adata.uns["phenotype_column"]
+    clonotypes = adata.obs.groupby(adata.obs[adata.uns["clonotype_column"]])
+    for clone, sub in tqdm.tqdm(clonotypes):
         if str(clone) == "nan": continue
-        sub = adata[adata.obs[adata.uns["clonotype_column"]]==clone].copy()
-        if len(sub.obs.index) < min_clone_size: continue
-        pre = sub[sub.obs[adata.uns["condition_column"]] == from_this]
-        post = sub[sub.obs[adata.uns["condition_column"]] == to_that]
-        for ph_pre in set(pre.obs["genevector"]):
-            for ph_post in set(post.obs["genevector"]):
-                precount = len(pre[pre.obs["genevector"]==ph_pre].obs.index)
-                postcount = len(post[post.obs["genevector"]==ph_post].obs.index)
+        if len(sub.index) < min_clone_size: continue
+        pre = sub[sub[adata.uns["condition_column"]] == from_this].value_counts(phenotype_column)
+        post = sub[sub[adata.uns["condition_column"]] == to_that].value_counts(phenotype_column)
+        for ph_pre, precount in pre.items():
+            for ph_post, postcount in post.items():
                 precounts[ph_pre][ph_post] += precount
                 postcounts[ph_pre][ph_post] += postcount
+
     table = dict()
     table["Pre"] = []
     table["Post"] = []
