@@ -5,5 +5,5 @@ setup(
     version='0.0.1',
     description='Information theoretic metrics for single cell RNA and TCR sequencing.',
     packages=find_packages(include=['tcri','tcri.metrics','tcri.preprocessing','tcri.plotting']),
-    install_requires=["scipy","numpy","notebook","sklearn","pandas","scanpy","tqdm","seaborn","matplotlib","pysankey"],
+    install_requires=["scipy","numpy","notebook","sklearn","pandas","scanpy","tqdm","seaborn","matplotlib","pysankeybeta"],
 )
