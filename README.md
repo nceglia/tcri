@@ -17,7 +17,7 @@ Example code found in /examples.
 
 ### Basics
 
-#### Compute joint distribution with TCRi on anndata processed with GeneVectgor.
+#### Compute joint distribution with TCRi on anndata processed with GeneVector.
 ```
 import tcri
 
