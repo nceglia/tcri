@@ -1,84 +1,99 @@
-import numpy
-import pandas 
-import collections
-import tqdm
+from scipy.stats import entropy
+import numpy as np
+import operator
+from scipy.spatial import distance
+import pandas as pd
+import warnings
+import gseapy as gp
 
-def calc_entropy(P, log_units = 2):
-    P = P[P>0].flatten()
-    return numpy.dot(P, -numpy.log(P))/numpy.log(log_units)
+warnings.filterwarnings('ignore')
 
-def clonotypic_entropy(adata, phenotype):
-    clonotype_dist = collections.defaultdict(list)
-    for ct, clonotype in zip(adata.obs[adata.uns["phenotype_column"]], adata.obs["IR_VDJ_1_junction_aa"]):
-        if ct == phenotype:
-            prob = 1.0
-        else:
-            prob = 0.0
-        clonotype_dist[clonotype].append(prob)
-    clonotype_expected_cells = dict()
-    total_sum = 0
-    for clone, ps in clonotype_dist.items():
-        clonotype_expected_cells[clone] = sum(ps)
-        total_sum += sum(ps)
-    phenotype_entropy = []
-    for clone, psum in clonotype_expected_cells.items():
-        phenotype_entropy.append(psum/total_sum)
-    return calc_entropy(numpy.array(phenotype_entropy))  / numpy.log2(total_sum)
+def clonotypic_entropy(adata, clones=None):
+    if clones != None:
+        clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
+    dist = transcriptional_distribution(adata, clones=clones)
+    dist = dist[dist > 0]
+    ent = entropy(dist, base=2) / np.log2(len(dist))
+    return ent
 
-def phenotypic_entropy(adata, min_clone_size=3):
-    entropies = dict()
-    clonotypes = adata.obs[adata.uns["clonotype_column"]].tolist()
-    for target_clone in set(clonotypes):
-        if clonotypes.count(target_clone) < min_clone_size: continue
-        phenotype_dist = collections.defaultdict(list)
-        for ct, clonotype in zip(adata.obs[adata.uns["phenotype_column"]], adata.obs[adata.uns["clonotype_column"]]):
-            if clonotype == target_clone:
-                prob = 1.0
-            else:
-                prob = 0.0
-            phenotype_dist[ct].append(prob)
-        expected_cells = dict()
-        total_sum = 0
-        for clone, ps in phenotype_dist.items():
-            expected_cells[clone] = sum(ps)
-            total_sum += sum(ps)
-        phenotype_entropy = []
-        for clone, psum in expected_cells.items():
-            if psum == 0.0:
-                continue
-            else:
-                phenotype_entropy.append(psum/total_sum)
-        entropies[target_clone] = calc_entropy(numpy.array(phenotype_entropy)) / numpy.log2(total_sum) 
-    return entropies
+def phenotypic_entropy(adata, genes=None):
+    if genes == None:
+        genes = adata.var.index.tolist()
+    genes = set(genes).intersection(set(adata.var.index.tolist()))
+    dist = clonotype_distribution(adata, genes=list(genes))
+    dist = dist[dist > 0]
+    ent = entropy(dist, base=2) / np.log2(len(dist))
+    return ent
 
+def marker_enrichment(adata, markers):
+    df = rank_genes_by_clonotypic_entropy(adata,probability=True)
+    pre_res = gp.prerank(rnk=df,
+                        gene_sets=markers,
+                        threads=4,
+                        min_size=1,
+                        max_size=1000,
+                        permutation_num=2000, # reduce number to speed up testing
+                        outdir=None, # don't write to disk
+                        seed=6,
+                        verbose=False, # see what's going on behind the scenes
+                        )
+    return pre_res
 
-def phenotypic_flux(adata, from_this="Pre", to_that="Post", min_clone_size=3):
-    precounts = collections.defaultdict(lambda : collections.defaultdict(int))
-    postcounts = collections.defaultdict(lambda : collections.defaultdict(int))
-    for clone in tqdm.tqdm(list(set(adata.obs[adata.uns["clonotype_column"]]))):
-        if str(clone) == "nan": continue
-        sub = adata[adata.obs[adata.uns["clonotype_column"]]==clone].copy()
-        if len(sub.obs.index) < min_clone_size: continue
-        pre = sub[sub.obs[adata.uns["condition_column"]] == from_this]
-        post = sub[sub.obs[adata.uns["condition_column"]] == to_that]
-        for ph_pre in set(pre.obs["genevector"]):
-            for ph_post in set(post.obs["genevector"]):
-                precount = len(pre[pre.obs["genevector"]==ph_pre].obs.index)
-                postcount = len(post[post.obs["genevector"]==ph_post].obs.index)
-                precounts[ph_pre][ph_post] += precount
-                postcounts[ph_pre][ph_post] += postcount
-    table = dict()
-    table["Pre"] = []
-    table["Post"] = []
-    table["Phenotype A"] = []
-    table["Phenotype B"] = []
-    for ph_pre, posts in precounts.items():
-        for ph_post, values in posts.items():
-            table["Pre"].append(values)
-            table["Post"].append(postcounts[ph_pre][ph_post])
-            table["Phenotype A"].append(ph_pre)
-            table["Phenotype B"].append(ph_post)
-    table = pandas.DataFrame.from_dict(table)
-    table["Pre"] = table["Pre"] / table["Pre"].sum()
-    table["Post"] = table["Post"] / table["Post"].sum()
-    return table
+def rank_genes_by_clonotypic_entropy(adata, probability=False):
+    ce = dict(zip(adata.var.index.tolist(), clonotype_distribution(adata,probability=probability)))
+    gene = []
+    entr = []
+    for g in reversed(sorted(ce.items(), key=operator.itemgetter(1))):
+        gene.append(g[0])
+        entr.append(g[1])
+    df = pd.DataFrame.from_dict({'Gene':gene,'Entropy':entr})
+    return df
+
+def rank_clones_by_phenotypic_entropy(adata):
+    ce = dict(zip(adata.var.index.tolist(), transcriptional_distribution(adata,probability=True)))
+    sorted_ce = [x[0] for x in sorted(ce.items(), key=operator.itemgetter(1))]
+    return sorted_ce
+
+def transcriptional_distribution(adata, clones=None, probability=False):
+    if clones == None:
+        clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
+    dist = adata.uns["joint_distribution"][clones].to_numpy()
+    dist = dist.sum(axis=1)
+    if probability:
+        dist /= dist.sum()
+    return np.nan_to_num(dist)
+
+def clonotype_distribution(adata, genes=None, probability=False):
+    if genes == None:
+        genes = adata.var.index.tolist()
+    dist = adata.uns["joint_distribution"].T[genes].to_numpy()
+    dist = dist.sum(axis=1)
+    if probability:
+        dist /= dist.sum()
+    return np.nan_to_num(dist)
+
+def flux_l1(adata, key, from_this, to_that, clones=None):
+    this = adata[adata.obs[key] == from_this]
+    that = adata[adata.obs[key] == to_that]
+    this_distribution = transcriptional_distribution(this,clones=clones)
+    that_distribution = transcriptional_distribution(that,clones=clones)
+    return distance.cityblock(this_distribution, that_distribution)
+
+def flux_dkl(adata, key, from_this, to_that, clones=None):
+    this = adata[adata.obs[key] == from_this]
+    that = adata[adata.obs[key] == to_that]
+    this_distribution = transcriptional_distribution(this,clones=clones)
+    that_distribution = transcriptional_distribution(that,clones=clones)
+    return entropy(this_distribution, that_distribution, base=2, axis=0)
+
+def mutual_information(adata):
+    pxy = adata.uns['joint_distribution'].to_numpy()
+    pxy = pxy / pxy.sum()
+    px = np.sum(pxy, axis=1)
+    px = px / px.sum()
+    py = np.sum(pxy, axis=0)
+    py = py / py.sum()
+    px_py = px[:, None] * py[None, :]
+    nzs = pxy > 0
+    mi = np.sum(pxy[nzs] * np.log2((pxy[nzs] / px_py[nzs])))
+    return mi
