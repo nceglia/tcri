@@ -6,6 +6,8 @@ import pandas as pd
 import warnings
 import gseapy as gp
 
+from ..preprocessing._preprocessing import clone_size
+
 warnings.filterwarnings('ignore')
 
 def clonotypic_entropy(adata, clones=None):
@@ -39,15 +41,13 @@ def marker_enrichment(adata, markers):
                         )
     return pre_res
 
-def rank_genes_by_clonotypic_entropy(adata, probability=False):
-    ce = dict(zip(adata.var.index.tolist(), clonotype_distribution(adata,probability=probability)))
-    gene = []
-    entr = []
-    for g in reversed(sorted(ce.items(), key=operator.itemgetter(1))):
-        gene.append(g[0])
-        entr.append(g[1])
-    df = pd.DataFrame.from_dict({'Gene':gene,'Entropy':entr})
-    return df
+def rank_genes_by_clonotypic_entropy(adata,genes=None, probability=False):
+    if genes == None:
+        genes = adata.var.index.tolist()
+    clone_dist = clonotype_distribution(adata, genes=genes, probability=probability)
+    ents = entropy(clone_dist,base=2) / np.log2(clone_dist.shape[0])
+    gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
+    return gene_entropy.sort_values("Entropy",ascending=True)
 
 def rank_clones_by_phenotypic_entropy(adata):
     ce = dict(zip(adata.var.index.tolist(), transcriptional_distribution(adata,probability=True)))
@@ -61,16 +61,21 @@ def transcriptional_distribution(adata, clones=None, probability=False):
     dist = dist.sum(axis=1)
     if probability:
         dist /= dist.sum()
-    return np.nan_to_num(dist)
+    return np.nan_to_num(dist).T
 
 def clonotype_distribution(adata, genes=None, probability=False):
     if genes == None:
         genes = adata.var.index.tolist()
+    clone_counts = clone_size(adata, return_counts=True)
     dist = adata.uns["joint_distribution"].T[genes].to_numpy()
-    dist = dist.sum(axis=1)
+    order = adata.uns["joint_distribution"].columns.tolist()
+    sizes = []
+    for o in order:
+        sizes.append(clone_counts[o])
+    dist = dist.T / np.array(sizes)
     if probability:
         dist /= dist.sum()
-    return np.nan_to_num(dist)
+    return dist.T
 
 def flux_l1(adata, key, from_this, to_that, clones=None):
     this = adata[adata.obs[key] == from_this]
