@@ -18,6 +18,15 @@ def clonotypic_entropy(adata, clones=None):
     ent = entropy(dist, base=2) / np.log2(len(dist))
     return ent
 
+def transcriptional_entropy(adata, genes=None):
+    if genes == None:
+        genes = adata.var.index.tolist()
+    genes = set(genes).intersection(set(adata.var.index.tolist()))
+    dist = clonotype_distribution(adata, genes=list(genes))
+    dist = dist[dist > 0]
+    ent = entropy(dist, base=2) / np.log2(len(dist))
+    return ent
+
 def phenotypic_entropy(adata, genes=None):
     if genes == None:
         genes = adata.var.index.tolist()
@@ -26,6 +35,7 @@ def phenotypic_entropy(adata, genes=None):
     dist = dist[dist > 0]
     ent = entropy(dist, base=2) / np.log2(len(dist))
     return ent
+
 
 def marker_enrichment(adata, markers):
     df = rank_genes_by_clonotypic_entropy(adata,probability=True)
@@ -49,7 +59,14 @@ def rank_genes_by_clonotypic_entropy(adata,genes=None, probability=False):
     gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
     return gene_entropy.sort_values("Entropy",ascending=True)
 
-def rank_clones_by_phenotypic_entropy(adata):
+def rank_phenotypes_by_clonotypic_entropy(adata,genes=None, probability=False):
+    clone_dist = clonotype_phenotype_distribution(adata, probability=probability)
+    ents = entropy(clone_dist,base=2) / np.log2(clone_dist.shape[0])
+    gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
+    return gene_entropy.sort_values("Entropy",ascending=True)
+
+
+def rank_clones_by_transcriptional_entropy(adata):
     ce = dict(zip(adata.var.index.tolist(), transcriptional_distribution(adata,probability=True)))
     sorted_ce = [x[0] for x in sorted(ce.items(), key=operator.itemgetter(1))]
     return sorted_ce
@@ -69,6 +86,18 @@ def clonotype_distribution(adata, genes=None, probability=False):
     clone_counts = clone_size(adata, return_counts=True)
     dist = adata.uns["joint_distribution"].T[genes].to_numpy()
     order = adata.uns["joint_distribution"].columns.tolist()
+    sizes = []
+    for o in order:
+        sizes.append(clone_counts[o])
+    dist = dist.T / np.array(sizes)
+    if probability:
+        dist /= dist.sum()
+    return dist.T
+
+def clonotype_phenotype_distribution(adata, probability=False):
+    clone_counts = clone_size(adata, return_counts=True)
+    dist = adata.uns["phenotypic_joint_distribution"].T.to_numpy()
+    order = adata.uns["phenotypic_joint_distribution"].columns.tolist()
     sizes = []
     for o in order:
         sizes.append(clone_counts[o])
