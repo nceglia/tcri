@@ -5,12 +5,19 @@ import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 
-def joint_distribution(adata):
+def transcriptional_joint_distribution(adata):
     matrix = adata.to_df()
     matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
     jd = matrix.groupby("clonotype").sum().T
     # jd /= jd.sum(axis=0)
-    adata.uns["joint_distribution"] = jd
+    adata.uns["transcriptional_joint_distribution"] = jd
+
+def phenotypic_joint_distribution(adata):
+    matrix = adata.obs[prob_cols]
+    matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
+    jd = matrix.groupby("clonotype").sum().T
+    jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
+    adata.uns["phenotypic_joint_distribution"] = jd
 
 def add_tcr_key(adata,tcr_key):
     assert tcr_key in adata.obs, "Key {} not found.".fromat(tcr_key)

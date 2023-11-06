@@ -10,11 +10,11 @@ import operator
 import itertools
 
 from ..metrics._metrics import clonotypic_entropy as centropy
-from ..metrics._metrics import phenotypic_entropy as pentropy
+from ..metrics._metrics import transcriptional_entropy as pentropy
 from ..metrics._metrics import mutual_information as mutual_info
-from ..metrics._metrics import rank_clones_by_phenotypic_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
+from ..metrics._metrics import rank_clones_by_transcriptional_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
 from ..metrics._metrics import marker_enrichment as menrich
-from ..preprocessing._preprocessing import joint_distribution
+from ..preprocessing._preprocessing import transcriptional_joint_distribution, phenotypic_joint_distribution
 from ..preprocessing._preprocessing import clone_size as cs
 
 import warnings
@@ -87,7 +87,7 @@ def tcr_umap(adata, reduction="umap", top_n=10, size=25):
     x = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
     y = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
     customPalette = sns.set_palette(sns.color_palette(colors))
-    sns.scatterplot(data=df,x=x, y=y, hue='TCR Sequence',hue_order=order, ax=ax1, alpha=0.7,linewidth=0.05,s=sizes,palette=customPalette)
+    sns.scatterplot(data=df,x=x, y=y, hue='TCR Sequence',hue_order=order, ax=ax1, alpha=0.7,linewidth=0.05,size=sizes,palette=customPalette)
     ax1.set_xlabel('UMAP-1')
     ax1.set_ylabel('UMAP-2')
     ax1.xaxis.set_ticklabels([])
@@ -287,7 +287,7 @@ def clone_size(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,palette=
     df["UMAP2"] = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
     df["log(Clone Size)"] = sizes
     fig,ax=plt.subplots(1,1,figsize=(10,8))
-    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.,s=sizes*scale)
+    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.)
     ax.set_xlabel('UMAP-1')
     ax.set_ylabel('UMAP-2')
     ax.xaxis.set_ticklabels([])
