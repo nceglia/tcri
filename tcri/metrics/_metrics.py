@@ -59,13 +59,21 @@ def rank_genes_by_clonotypic_entropy(adata,genes=None, probability=False):
     gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
     return gene_entropy.sort_values("Entropy",ascending=True)
 
-def rank_phenotypes_by_clonotypic_entropy(adata,genes=None, probability=False):
+def rank_phenotypes_by_clonotypic_entropy(adata, probability=True):
+    phenotypes = adata.uns['phenotypic_joint_distribution'].index.tolist()
     clone_dist = clonotype_phenotype_distribution(adata, probability=probability)
     ents = entropy(clone_dist,base=2) / np.log2(clone_dist.shape[0])
-    gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
+    gene_entropy = pd.DataFrame.from_dict({"Phenotype":phenotypes,"Entropy":np.nan_to_num(ents)})
     return gene_entropy.sort_values("Entropy",ascending=True)
 
-
+def phenotypic_joint_distribution(adata):
+    print("Computing Phenotypic Joint Probability Distribution")
+    matrix = adata.obs[prob_cols]
+    matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
+    jd = matrix.groupby("clonotype").sum().T
+    jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
+    adata.uns["phenotypic_joint_distribution"] = jd
+    
 def rank_clones_by_transcriptional_entropy(adata):
     ce = dict(zip(adata.var.index.tolist(), transcriptional_distribution(adata,probability=True)))
     sorted_ce = [x[0] for x in sorted(ce.items(), key=operator.itemgetter(1))]
