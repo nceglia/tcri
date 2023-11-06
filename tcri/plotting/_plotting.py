@@ -9,8 +9,12 @@ import collections
 import operator
 import itertools
 
-from ..metrics._metrics import clonotypic_entropy as centropy
-from ..metrics._metrics import transcriptional_entropy as pentropy
+from ..metrics._metrics import empirical_phenotypic_entropy as ep_entropy
+from ..metrics._metrics import probabilistic_phenotypic_entropy as pp_entropy
+from ..metrics._metrics import transcriptional_clonotypic_entropy as tc_entropy
+from ..metrics._metrics import probabilistic_clonotypic_entropy as pc_entropy
+from ..metrics._metrics import empirical_clonotypic_entropy as ec_entropy
+
 from ..metrics._metrics import mutual_information as mutual_info
 from ..metrics._metrics import rank_clones_by_transcriptional_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
 from ..metrics._metrics import marker_enrichment as menrich
@@ -154,7 +158,7 @@ def transcriptional_entropy(adata, phenotype_key, groupby, splitby=None, genes=N
 def marker_enrichment_score(adata,markers):
     pre_res = menrich(adata,markers)
     terms = pre_res.res2d.Term
-    return pre_res.plot(terms, show_ranking=False, legend_kws={'loc': (1.05, 0)})
+    pre_res.plot(terms, show_ranking=False, legend_kws={'loc': (1.05, 0)})
 
 def marker_enrichment_dotplot(adata,markers,figsize=(12,7)):
     pre_res = menrich(adata,markers)
