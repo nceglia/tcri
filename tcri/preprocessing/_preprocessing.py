@@ -9,11 +9,10 @@ def transcriptional_joint_distribution(adata):
     matrix = adata.to_df()
     matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
     jd = matrix.groupby("clonotype").sum().T
-    # jd /= jd.sum(axis=0)
     adata.uns["transcriptional_joint_distribution"] = jd
 
 def phenotypic_joint_distribution(adata):
-    matrix = adata.obs[prob_cols]
+    matrix = adata.obs[adata.uns["probability_columns"]]
     matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
     jd = matrix.groupby("clonotype").sum().T
     jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
