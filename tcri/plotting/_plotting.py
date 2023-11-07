@@ -18,8 +18,11 @@ from ..metrics._metrics import empirical_clonotypic_entropy as ec_entropy
 from ..metrics._metrics import mutual_information as mutual_info
 from ..metrics._metrics import rank_clones_by_transcriptional_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
 from ..metrics._metrics import marker_enrichment as menrich
+
+
 from ..preprocessing._preprocessing import transcriptional_joint_distribution, phenotypic_joint_distribution
 from ..preprocessing._preprocessing import clone_size as cs
+
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -102,6 +105,16 @@ def tcr_umap(adata, reduction="umap", top_n=10, size=25):
     h,l = ax1.get_legend_handles_labels()
     ax1.legend(h[:top_n-1], l[:top_n-1], borderaxespad=2.,fontsize='9',bbox_to_anchor=(0, 1), loc='best')
     plt.tight_layout()
+
+def empirical_clonotypic_entropy(adata, groupby=None):
+    if groupby == None:
+        entropies = empirical_clonotypic_entropy(adata)
+        df = pd.DataFrame(list(entropies.items()), columns=['Phenotype', 'Entropy'])
+        fig, ax = plt.subplots(1,1,figsize=(6,4))
+        sns.stripplot(data=df,x="Phenotype",y="Entropy",ax=ax,color=tcri_colors)
+        fig.tight_layout()
+    else:
+        return None
 
 def transcriptional_entropy(adata, phenotype_key, groupby, splitby=None, genes=None, figsize=(12,4)):
     if splitby == None:
@@ -331,4 +344,81 @@ def mutual_information(adata, groupby, splitby, order=None, figsize=(2,4)):
                                             text_format='star', 
                                             loc='outside', 
                                             verbose=2)
+    return ax
+
+# def clonality(adata, groubpy=None, splitby=None):
+#     def calc_entropy(P, log_units = 2):
+#         P = P[P>0].flatten()
+#         return numpy.dot(P, -numpy.log(P))/numpy.log(log_units)
+#     df = adata.obs
+#     if groupby == None and splitby == None:
+
+#     patients = []
+#     disease = []
+#     entropys = []
+#     phenotypes =[]
+#     df["seq"] = [str(x) for x in df["IR_VDJ_1_junction"]]
+
+#     df = df[df["seq"]!="nan"]
+
+#     for p in set(df["patient"]):
+#         dfy = df[df["patient"] == p]
+#         for d in set(dfy["response"]):
+#             dfz = dfy[dfy["response"] == d]
+#             for c in tqdm.tqdm(list(set(dfz["leiden"]))):
+#                 dfx = dfz[dfz["leiden"]==c]
+#                 nums = []
+#                 for cl in set(dfx["IR_VDJ_1_junction"]):
+#                     dfxc = dfx[dfx["IR_VDJ_1_junction"]==cl]
+#                     nums.append(len(dfxc))
+#                 clonality = 1 - entropy(numpy.array(nums),base=2) / numpy.log2(len(nums))
+#                 entropys.append(numpy.nan_to_num(clonality))
+#                 phenotypes.append(c)
+#                 patients.append(p)
+#                 disease.append(d)
+#     clonal = pandas.DataFrame.from_dict({"Phenotype":phenotypes,
+#                                         "Clonality":entropys,
+#                                         "Disease Status":disease,
+#                                         "Patient":patients})
+#     clonal
+
+
+def empirical_clonotypic_entropy(adata, groupby=None, splitby=None):
+    if groupby == None:
+        entropies = ec_entropy(adata)
+        df = pd.DataFrame(list(entropies.items()), columns=['Phenotype', 'Entropy'])
+        df = df.sort_values("Entropy")
+        fig, ax = plt.subplots(1,1,figsize=(6,4))
+        sns.stripplot(data=df,x="Phenotype",y="Entropy",ax=ax,palette=tcri_colors, s=20)
+        fig.tight_layout()
+    elif groupby != None and splitby == None:
+        groups = list(set(adata.obs[groupby]))
+        dfs = []
+        for group in groups:
+            sub = adata[adata.obs[groupby] == group]
+            entropies = ec_entropy(sub)
+            df = pd.DataFrame(list(entropies.items()), columns=['Phenotype', 'Entropy'])
+            df[groupby] = group
+            dfs.append(df)
+        df = pandas.concat(dfs)
+        fig, ax = plt.subplots(1,1,figsize=(6,4))
+        sns.boxplot(data=df,x="Phenotype",y="Entropy",ax=ax,palette=tcri_colors)
+        fig.tight_layout()   
+    elif groupby != None and splitby != None:
+        groups = list(set(adata.obs[groupby]))
+        dfs = []
+        for group in groups:
+            sub = adata[adata.obs[groupby] == group]
+            for split in set(sub.obs[splitby]):
+                subsub = sub[sub.obs[splitby] == split]
+                entropies = ec_entropy(subsub)
+                df = pd.DataFrame(list(entropies.items()), columns=['Phenotype', 'Entropy'])
+                df[groupby] = group
+                df[splitby] = split
+                dfs.append(df)
+        df = pandas.concat(dfs)
+        print(df)
+        fig, ax = plt.subplots(1,1,figsize=(6,4))
+        sns.boxplot(data=df,x="Phenotype",y="Entropy",hue=splitby,ax=ax,palette=reversed(tcri_colors))
+        fig.tight_layout()   
     return ax
