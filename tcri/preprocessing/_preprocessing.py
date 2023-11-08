@@ -12,6 +12,7 @@ def joint_distribution(adata, method='probabalistic'):
         matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
         jd = matrix.groupby("clonotype").sum().T
         jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
+        jd = np.round(jd,decimals=5)
         adata.uns["joint_distribution"] = jd
     elif method == "empirical":
         tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
@@ -27,6 +28,7 @@ def joint_distribution(adata, method='probabalistic'):
             joint_prob_matrix[i, :] /= np.sum(joint_prob_matrix[i, :])
         jd = pd.DataFrame(joint_prob_matrix.T,index=adata.uns["probability_columns"],columns=unique_tcrs)
         jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
+        jd = np.round(jd,decimals=5)
         adata.uns["joint_distribution"] = jd
     else:
         raise ValueError("Method must be 'empirical' or 'probabalistic'.")
