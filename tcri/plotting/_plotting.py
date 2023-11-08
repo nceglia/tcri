@@ -9,7 +9,8 @@ import collections
 import operator
 import itertools
 
-# from ..metrics._metrics import empirical_phenotypic_entropy as ep_entropy
+from ..metrics._metrics import clonotypic_entropies as centropies
+from ..metrics._metrics import clonality as clonality_tl
 # from ..metrics._metrics import probabilistic_phenotypic_entropy as pp_entropy
 # from ..metrics._metrics import transcriptional_clonotypic_entropy as tc_entropy
 # from ..metrics._metrics import probabilistic_clonotypic_entropy as pc_entropy
@@ -19,25 +20,23 @@ import itertools
 # from ..metrics._metrics import rank_clones_by_transcriptional_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
 # from ..metrics._metrics import marker_enrichment as menrich
 
-
 # from ..preprocessing._preprocessing import transcriptional_joint_distribution, phenotypic_joint_distribution
 # from ..preprocessing._preprocessing import clone_size as cs
-
 
 import warnings
 warnings.filterwarnings('ignore')
 
 tcri_colors = [
     "#272822",  # Background
-    "#F92672",  # Red
+    "#AE81FF",  # Purple
     "#FD971F",  # Orange
     "#E6DB74",  # Yellow
     "#A6E22E",  # Green
     "#66D9EF",  # Blue
-    "#AE81FF",  # Purple
     "#75715E",  # Brown
     "#F92659",  # Pink
     "#D65F0E",  # Abricos
+    "#F92672",  # Red
     "#1E1E1E",   # Black
     "#004d47",  # Darker Teal
     "#D291BC",  # Soft Pink
@@ -62,10 +61,10 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
-def tcr_umap(adata, reduction="umap", top_n=10, size=25):
+def tcr_umap(adata, reduction="umap", top_n=10, size=25, figsize=(12,5)):
     df = adata.obs
     seq_column = adata.uns["tcri_clone_key"]
-    plt.figure(figsize = (10, 8))
+    plt.figure(figsize = figsize)
     clonotype_counts = collections.defaultdict(int)
     for clonotype in df[seq_column]:
         clonotype_counts[clonotype] += 1
@@ -77,7 +76,7 @@ def tcr_umap(adata, reduction="umap", top_n=10, size=25):
     for clonotype in df[seq_column]:
         clonotype = str(clonotype)
         if clonotype not in top_clonotypes or clonotype == "None" or clonotype == "nan":
-            sizes.append(2)
+            sizes.append(0.5)
             clonotype_labels.append("_Other")
         else:
             sizes.append(size)
@@ -106,15 +105,63 @@ def tcr_umap(adata, reduction="umap", top_n=10, size=25):
     ax1.legend(h[:top_n-1], l[:top_n-1], borderaxespad=2.,fontsize='9',bbox_to_anchor=(0, 1), loc='best')
     plt.tight_layout()
 
-def empirical_clonotypic_entropy(adata, groupby=None):
-    if groupby == None:
-        entropies = empirical_clonotypic_entropy(adata)
-        df = pd.DataFrame(list(entropies.items()), columns=['Phenotype', 'Entropy'])
-        fig, ax = plt.subplots(1,1,figsize=(6,4))
-        sns.stripplot(data=df,x="Phenotype",y="Entropy",ax=ax,color=tcri_colors)
+def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20):
+    if groupby == None and splitby == None:
+        data = function(adata)
+        df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonality'])
+        fig,ax=plt.subplots(1,1,figsize=figsize)
+        sns.stripplot(data=df,x="Phenotype",y="Clonality",s=s,ax=ax, palette=tcri_colors)
+        ax.set_ylim(0,max(df["Clonality"] + 0.1))
+        ax.set_ylabel(ylabel)
+        ax.set_title("Clonality")
+        fig.tight_layout()
+    elif groupby != None and splitby == None:
+        groups = adata.obs[groupby].unique()
+        dfs = []
+        for group in groups:
+            data = function(adata[adata.obs[groupby]==group])
+            df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonality'])
+            df[groupby] = group
+            dfs.append(df)
+        df = pd.concat(dfs)
+        fig,ax=plt.subplots(1,1,figsize=figsize)
+        sns.stripplot(data=df,x="Phenotype",y="Clonality",s=s,hue=groupby,ax=ax, palette=tcri_colors)
+        sns.boxplot(data=df,x="Phenotype",y="Clonality",ax=ax, color="#999999")
+        ax.set_ylim(0,max(df["Clonality"] + 0.1))
+        ax.set_title("Clonality")
+        ax.set_ylabel(ylabel)
+        sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
+        fig.tight_layout()
+    elif groupby != None and splitby != None:
+        groups = adata.obs[groupby].unique()
+        dfs = []
+        for group in groups:
+            sub = adata[adata.obs[groupby]==group]
+            splits = sub.obs[splitby].unique()
+            for split in splits:
+                data = function(sub[sub.obs[splitby]==split])
+                df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonality'])
+                df[groupby] = group
+                df[splitby] = split
+                dfs.append(df)
+        df = pd.concat(dfs)
+        fig,ax=plt.subplots(1,1,figsize=figsize)
+        sns.boxplot(data=df,x="Phenotype",y="Clonality",ax=ax, hue=splitby,palette=tcri_colors)
+        ax.set_ylim(0,max(df["Clonality"] + 0.1))
+        ax.set_title("Clonality")
+        sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
+        ax.set_ylabel(ylabel)
         fig.tight_layout()
     else:
-        return None
+        raise ValueError("'groupby' must be set to use 'splitby'.")
+    return ax
+
+def clonality(adata, groupby = None, splitby=None, s=10, figsize=(12,5)):
+    return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize)
+
+def clonotypic_entropies(adata, method="probabalistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5)):
+    func = lambda x : centropies(x, normalized=normalized, method=method)
+    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize)
 
 def transcriptional_entropy(adata, phenotype_key, groupby, splitby=None, genes=None, figsize=(12,4)):
     if splitby == None:

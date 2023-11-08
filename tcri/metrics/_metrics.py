@@ -15,7 +15,7 @@ from ..preprocessing._preprocessing import clone_size, joint_distribution
 warnings.filterwarnings('ignore')
 
 
-def clonotypic_entropy(adata, method="probabilistic"):
+def phenotypic_entropy(adata, method="probabilistic"):
     phenotypic_joint_distribution(adata)
     jd = adata.uns["joint_distribution"].to_numpy() 
     jd = jd / np.sum(jd)
@@ -24,7 +24,7 @@ def clonotypic_entropy(adata, method="probabilistic"):
     pheno_entropy = -np.sum(marginal_pheno_probs * np.log(marginal_pheno_probs + epsilon))
     return pheno_entropy
 
-def phenotypic_entropy(adata, method="probabilistic"):
+def clonotypic_entropy(adata, method="probabilistic"):
     joint_distribution(adata, method=method)
     jd = adata.uns["joint_distribution"].to_numpy().T
     jd = jd / np.sum(jd)
@@ -33,7 +33,7 @@ def phenotypic_entropy(adata, method="probabilistic"):
     tcr_entropy = -np.sum(marginal_tcr_probs * np.log(marginal_tcr_probs + epsilon))
     return tcr_entropy
 
-def clonotypic_entropies(adata, method="probabilistic", normalized=True):
+def phenotypic_entropies(adata, method="probabilistic", normalized=True):
     joint_distribution(adata, method=method)
     tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
     unique_tcrs = np.unique(tcr_sequences)
@@ -51,7 +51,7 @@ def clonotypic_entropies(adata, method="probabilistic", normalized=True):
     tcr_to_entropy_dict = dict(zip(unique_tcrs, clonotype_entropies))
     return tcr_to_entropy_dict
 
-def phenotypic_entropies(adata, method="probabilistic", normalized=True):
+def clonotypic_entropies(adata, method="probabilistic", normalized=True):
     joint_distribution(adata, method=method)
     phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
     unique_phenotypes = np.unique(phenotypes)
