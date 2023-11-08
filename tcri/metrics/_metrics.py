@@ -5,83 +5,87 @@ from scipy.spatial import distance
 import pandas as pd
 import warnings
 import gseapy as gp
+import pandas as pd
 
-from ..preprocessing._preprocessing import clone_size, transcriptional_joint_distribution, phenotypic_joint_distribution
+from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 warnings.filterwarnings('ignore')
 
-def empirical_phenotypic_entropy(adata,phenotype_key="genevector"):
-    clonotype_key = adata.uns["tcri_clone_key"]
-    df = adata.obs[[clonotype_key,phenotype_key]]
-    prob_distributions = df.groupby(clonotype_key)[phenotype_key].value_counts(normalize=True)
-    def calc_entropy(P, log_units = 2):
-        P = P[P>0].to_numpy().flatten()
-        return np.dot(P, -np.log(P))/np.log(log_units)
-    grouped_entropy = prob_distributions.groupby(level=0).apply(calc_entropy)
-    num_unique_values_col2 = df[phenotype_key].nunique()
-    max_entropy = np.log(num_unique_values_col2)
-    normalized_entropy = grouped_entropy / max_entropy
-    return dict(normalized_entropy.abs())
 
-def probabilistic_phenotypic_entropy(adata):
+def clonotypic_entropy(adata, method="probabilistic"):
     phenotypic_joint_distribution(adata)
-    clones = adata.uns["phenotypic_joint_distribution"].columns.tolist()
-    dist = clonotype_phenotype_distribution(adata).T
-    ent = entropy(dist, base=2) / np.log2(dist.shape[1])
-    return dict(zip(clones,ent))
+    jd = adata.uns["joint_distribution"].to_numpy() 
+    jd = jd / np.sum(jd)
+    marginal_pheno_probs = np.sum(jd, axis=1)  # Sum over phenotypes
+    epsilon = np.finfo(float).eps  # Smallest positive float number
+    pheno_entropy = -np.sum(marginal_pheno_probs * np.log(marginal_pheno_probs + epsilon))
+    return pheno_entropy
 
-def transcriptional_distribution(adata, genes=None):
-    if genes == None:
-        genes = adata.var.index.tolist()
-    clone_counts = clone_size(adata, return_counts=True)
-    dist = adata.uns["transcriptional_joint_distribution"].T[genes].to_numpy()
-    order = adata.uns["transcriptional_joint_distribution"].columns.tolist()
-    sizes = [clone_counts[o] for o in order]
-    dist = dist.T / np.array(sizes)
-    return dist.T
+def phenotypic_entropy(adata, method="probabilistic"):
+    joint_distribution(adata, method=method)
+    jd = adata.uns["joint_distribution"].to_numpy().T
+    jd = jd / np.sum(jd)
+    marginal_tcr_probs = np.sum(jd, axis=1)  # Sum over phenotypes
+    epsilon = np.finfo(float).eps  # Smallest positive float number
+    tcr_entropy = -np.sum(marginal_tcr_probs * np.log(marginal_tcr_probs + epsilon))
+    return tcr_entropy
 
-def transcriptional_entropy(adata, genes=None):
-    transcriptional_joint_distribution(adata)
-    if genes == None:
-        genes = adata.var.index.tolist()
-    clones = adata.uns["transcriptional_joint_distribution"].columns.tolist()
-    genes = set(genes).intersection(set(adata.var.index.tolist()))
-    dist = transcriptional_distribution(adata, genes=list(genes)).T
-    ent = entropy(dist, base=2) / np.log2(len(dist))
-    return dict(zip(clones,ent))
+def clonotypic_entropies(adata, method="probabilistic", normalized=True):
+    joint_distribution(adata, method=method)
+    tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
+    unique_tcrs = np.unique(tcr_sequences)
+    jd = adata.uns["joint_distribution"].to_numpy() 
+    jd = jd / np.sum(jd)
+    clonotype_entropies = np.zeros(jd.shape[1])
+    max_entropy = np.log(jd.shape[0])
+    for i, clonotype_distribution in enumerate(jd):
+        normalized_distribution = clonotype_distribution / np.sum(clonotype_distribution)
+        epsilon = np.finfo(float).eps
+        if normalized:
+            clonotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon)) / max_entropy
+        else:
+            clonotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon))
+    tcr_to_entropy_dict = dict(zip(unique_tcrs, clonotype_entropies))
+    return tcr_to_entropy_dict
 
-def transcriptional_clonotypic_entropy(adata, genes=None):
-    if genes == None:
-        genes = adata.var.index.tolist()
-    transcriptional_joint_distribution(adata)
-    ent = dict()
-    dist = adata.uns["transcriptional_joint_distribution"].T[genes].to_numpy().T
-    for gene, d in zip(genes, dist):
-        d = d[d > 0]
-        ent[gene] = entropy(d, base=2) / np.log2(len(d))
-    return ent
+def phenotypic_entropies(adata, method="probabilistic", normalized=True):
+    joint_distribution(adata, method=method)
+    phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
+    unique_phenotypes = np.unique(phenotypes)
+    jd = adata.uns["joint_distribution"].to_numpy()
+    jd = jd / np.sum(jd)
+    phenotype_entropies = np.zeros(jd.shape[0])
+    max_entropy = np.log(jd.shape[1])
+    for i, phenotype_distribution in enumerate(jd):
+        normalized_distribution = phenotype_distribution / np.sum(phenotype_distribution)
+        epsilon = np.finfo(float).eps
+        if normalized:
+            phenotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon)) / max_entropy
+            print(normalized_distribution, phenotype_entropies[i])
+        else:
+            phenotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon))
+    phenotype_to_entropy_dict = dict(zip(unique_phenotypes, phenotype_entropies))
+    return phenotype_to_entropy_dict
 
-def probabilistic_clonotypic_entropy(adata):
-    phenotypic_joint_distribution(adata)
-    ent = dict()
-    dist = adata.uns["phenotypic_joint_distribution"].to_numpy()
-    for ph, d in zip(adata.uns["phenotypic_joint_distribution"].index, dist):
-        d = d[d > 0]
-        ent[ph] = entropy(d, base=2) / np.log2(len(d))
-    return ent
+from scipy.stats import entropy
+import numpy
+def clonality(adata):
+    phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
+    unique_phenotypes = np.unique(phenotypes)
+    entropys = dict()
+    df = adata.obs.copy()
+    for phenotype in unique_phenotypes:
+        pheno_df = df[df[adata.uns['tcri_phenotype_key']]==phenotype]
+        clonotypes = pheno_df[adata.uns["tcri_clone_key"]].tolist()
+        unique_clonotypes = np.unique(clonotypes)
+        nums = []
+        for tcr in unique_clonotypes:
+            tcrs = pheno_df[pheno_df[adata.uns["tcri_clone_key"]]==tcr]
+            nums.append(len(tcrs))
+        clonality = 1 - entropy(numpy.array(nums),base=2) / numpy.log2(len(nums))
+        entropys[phenotype] = numpy.nan_to_num(clonality)
+    return entropys
 
-def empirical_clonotypic_entropy(adata, phenotype_key="genevector"):
-    clone_key = adata.uns["tcri_clone_key"]
-    df = adata.obs[[clone_key,phenotype_key]]
-    prob_distributions = df.groupby(phenotype_key)[clone_key].value_counts(normalize=True)
-    def entropy(probs):
-        probs = probs[probs > 0]
-        return -np.sum(probs * np.log2(probs))
-    grouped_entropy = prob_distributions.groupby(level=0).apply(entropy)
-    num_unique_values_col2 = df[clone_key].nunique()
-    max_entropy = np.log2(num_unique_values_col2)
-    normalized_entropy = grouped_entropy / max_entropy
-    return dict(normalized_entropy)
 
 def marker_enrichment(adata, markers):
     gene_entropies = transcriptional_clonotypic_entropy(adata)
