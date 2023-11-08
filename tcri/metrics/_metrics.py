@@ -7,6 +7,9 @@ import warnings
 import gseapy as gp
 import pandas as pd
 
+from scipy.stats import entropy
+import numpy
+
 from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 warnings.filterwarnings('ignore')
@@ -61,14 +64,12 @@ def phenotypic_entropies(adata, method="probabilistic", normalized=True):
         epsilon = np.finfo(float).eps
         if normalized:
             phenotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon)) / max_entropy
-            print(normalized_distribution, phenotype_entropies[i])
         else:
             phenotype_entropies[i] = -np.sum(normalized_distribution * np.log(normalized_distribution + epsilon))
+        phenotype_entropies[i] = np.round(phenotype_entropies[i],decimals=5)
     phenotype_to_entropy_dict = dict(zip(unique_phenotypes, phenotype_entropies))
     return phenotype_to_entropy_dict
 
-from scipy.stats import entropy
-import numpy
 def clonality(adata):
     phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
     unique_phenotypes = np.unique(phenotypes)
