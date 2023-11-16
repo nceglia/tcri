@@ -61,7 +61,7 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
-def tcr_umap(adata, reduction="umap", top_n=10, size=25, figsize=(12,5)):
+def tcr_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
     df = adata.obs
     seq_column = adata.uns["tcri_clone_key"]
     plt.figure(figsize = figsize)
@@ -76,7 +76,7 @@ def tcr_umap(adata, reduction="umap", top_n=10, size=25, figsize=(12,5)):
     for clonotype in df[seq_column]:
         clonotype = str(clonotype)
         if clonotype not in top_clonotypes or clonotype == "None" or clonotype == "nan":
-            sizes.append(0.5)
+            sizes.append(bg_size)
             clonotype_labels.append("_Other")
         else:
             sizes.append(size)
