@@ -6,7 +6,7 @@ import pandas as pd
 import warnings
 warnings.filterwarnings('ignore')
 
-def joint_distribution(adata, method='probabalistic'):
+def joint_distribution(adata, method='probabilistic'):
     if method == "probabilistic":
         matrix = adata.obs[adata.uns["probability_columns"]]
         matrix["clonotype"] = adata.obs[adata.uns["tcri_clone_key"]]
