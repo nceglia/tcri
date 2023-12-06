@@ -11,18 +11,8 @@ import itertools
 
 from ..metrics._metrics import clonotypic_entropies as centropies
 from ..metrics._metrics import clonality as clonality_tl
-# from ..metrics._metrics import probabilistic_phenotypic_entropy as pp_entropy
-# from ..metrics._metrics import transcriptional_clonotypic_entropy as tc_entropy
-# from ..metrics._metrics import probabilistic_clonotypic_entropy as pc_entropy
-# from ..metrics._metrics import empirical_clonotypic_entropy as ec_entropy
-
-# from ..metrics._metrics import mutual_information as mutual_info
-# from ..metrics._metrics import rank_clones_by_transcriptional_entropy, rank_genes_by_clonotypic_entropy, flux_l1, flux_dkl
-# from ..metrics._metrics import marker_enrichment as menrich
-
-# from ..preprocessing._preprocessing import transcriptional_joint_distribution, phenotypic_joint_distribution
-# from ..preprocessing._preprocessing import clone_size as cs
-
+from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots
+#
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -60,6 +50,108 @@ tcri_colors = [
 ]
 
 sns.set_palette(sns.color_palette(tcri_colors))
+
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=True):
+    phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
+    repertoires = dict()
+    times = list(range(len(order)))
+    for s in order:
+        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
+                                        phenotypes = phenotypes, 
+                                        use_genes = False, 
+                                        use_chain = False,
+                                        seq_type = 'ntseq',
+                                        chains_to_use = ['TRB'],
+                                        name = s)
+    for condition, seq, phenotype in zip(adata.obs[splitby],
+                                         adata.obs[adata.uns["tcri_clone_key"]],
+                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
+        if str(seq) != "nan" and condition in repertoires:
+            repertoires[condition].cell_list.append(Tcell(phenotypes = phenotypes, 
+                                                          phenotypes_and_counts = {phenotype: 1}, 
+                                                          TRB = dict(ntseq = seq), 
+                                                          use_genes = False))
+    for condition, rep in repertoires.items():
+        rep._set_consistency()
+    fig, ax = plot_pheno_sankey(phenotypes = phenotypes, 
+                                cell_repertoires = [repertoires[condition] for condition in order], 
+                                clones = clones,
+                                times = times,
+                                xlim = [min(times), max(times)],
+                                time_rescale = 1,
+                                normalize=True,
+                                xlabel = splitby,
+                                return_axes = True, 
+                                show_legend = True)
+    ax.set_xticks(times)
+    ax.set_xticklabels(order)
+    fig.savefig("test.png")
+
+def freq_to_size_scaling(freq):
+    #return 10*(freq**(1/2))
+    return 1
+
+def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], size = 0.25, x_offset = 0.1):
+    freq_to_y_pos = lambda f: loc[1]-np.log(max_freq/f)*size/np.log(max_freq/min_freq)
+    legend_pnts = np.exp(np.arange(np.log(min_freq), np.log(max_freq), 0.001))
+    ax.scatter(loc[0]*np.ones(len(legend_pnts)), [freq_to_y_pos(y) for y in legend_pnts], s = [freq_to_size_scaling(x)**2 for x in legend_pnts], marker = '_', c = 'k')
+    ax.plot(loc[0]*np.ones(2)+ x_offset, [freq_to_y_pos(min_freq), freq_to_y_pos(max_freq)], 'k', lw = 1)
+    major_ticks = [10**x for x in  range(int(np.ceil(np.log10(min_freq))), int(np.floor(np.log10(max_freq))+1))]
+    minor_ticks = sum([[x*major_tick for x in range(1, 10)] for major_tick in major_ticks[:-1]], [])
+    for minor_tick in minor_ticks:
+        ax.plot([loc[0]*np.ones(2)+ x_offset, loc[0]*np.ones(2)+ 1.2*x_offset], [freq_to_y_pos(minor_tick), freq_to_y_pos(minor_tick)], 'k', lw = 0.5)
+    for major_tick in major_ticks:
+        ax.plot([loc[0]*np.ones(2)+ x_offset, loc[0]*np.ones(2)+ 1.5*x_offset], [freq_to_y_pos(major_tick), freq_to_y_pos(major_tick)], 'k', lw = 0.75)
+        if major_tick < 0.1:
+            ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), '%.0e'%(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
+        else:
+            ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
+
+def ternary_plot(adata, phenotype_names, splitby, condition):
+    # c_pt = 'ND43'
+    # start_sample = 'T1'
+    # end_sample = 'T2'
+    # phenotypes_to_plot = ['CD4 Treg','CD4 Naive', 'CD4 ISG']
+
+    
+    phenotypes = Phenotypes(phenotype_names)
+    repertoires = dict()
+
+    for s in set(adata.obs[splitby]):
+        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
+                                        phenotypes = phenotypes, 
+                                        use_genes = False, 
+                                        use_chain = False,
+                                        seq_type = 'ntseq',
+                                        chains_to_use = ['TRB'],
+                                        name = s)
+    for condition, seq, phenotype in zip(adata.obs[splitby],
+                                         adata.obs[adata.uns["tcri_clone_key"]],
+                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
+        if str(seq) != "nan" and condition in repertoires:
+            repertoires[condition].cell_list.append(Tcell(phenotypes = phenotypes, 
+                                                          phenotypes_and_counts = {phenotype: 1}, 
+                                                          TRB = dict(ntseq = seq), 
+                                                          use_genes = False))
+    for condition, rep in repertoires.items():
+        rep._set_consistency()
+
+    phenotype_names_dict = {p: p for p in phenotype_names}
+    start_clones_and_phenos = repertoires[condition]
+    # end_clones_and_phenos = repertoires[end_sample]
+    s_dict = {c: freq_to_size_scaling(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
+
+    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:10]
+
+    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
+                                            #end_clones_and_phenotypes = end_clones_and_phenos,
+                                            phenotypes = phenotype_names, 
+                                            phenotype_names = phenotype_names_dict,
+                                            clones = c_clones,
+                                            line_type = 'arrows', 
+                                            s_dict = s_dict,
+                                            return_axes  = True)
+    freq_to_size_legend(ax)
 
 def tcr_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
     df = adata.obs
