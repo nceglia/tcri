@@ -51,7 +51,7 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=True):
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True):
     phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
     repertoires = dict()
     times = list(range(len(order)))
@@ -67,10 +67,15 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True):
                                          adata.obs[adata.uns["tcri_clone_key"]],
                                          adata.obs[adata.uns["tcri_phenotype_key"]]):
         if str(seq) != "nan" and condition in repertoires:
-            repertoires[condition].cell_list.append(Tcell(phenotypes = phenotypes, 
-                                                          phenotypes_and_counts = {phenotype: 1}, 
+            if nt:
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
+                                                          TRB = dict(aaseq = seq), 
+                                                          use_genes = False)
+            else:
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
                                                           TRB = dict(ntseq = seq), 
-                                                          use_genes = False))
+                                                          use_genes = False)
+            repertoires[condition].cell_list.append(t)
     for condition, rep in repertoires.items():
         rep._set_consistency()
     fig, ax = plot_pheno_sankey(phenotypes = phenotypes, 
@@ -88,8 +93,7 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True):
     fig.savefig("test.png")
 
 def freq_to_size_scaling(freq):
-    #return 10*(freq**(1/2))
-    return 1
+    return 10*(freq**(1/2))
 
 def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], size = 0.25, x_offset = 0.1):
     freq_to_y_pos = lambda f: loc[1]-np.log(max_freq/f)*size/np.log(max_freq/min_freq)
