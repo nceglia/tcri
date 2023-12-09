@@ -17,29 +17,33 @@ def joint_distribution(adata, method='probabilistic'):
     elif method == "empirical":
         tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
         phenotypes = adata.obs[adata.uns['tcri_phenotype_key']].tolist()
-        unique_tcrs = np.unique(tcr_sequences)
-        unique_phenotypes = np.unique(phenotypes)
+        unique_tcrs = adata.uns["tcri_unique_clonotypes"]
+        unique_phenotypes = adata.uns["tcri_unique_phenotypes"]
         joint_prob_matrix = np.zeros((len(unique_tcrs), len(unique_phenotypes)))
         for tcr, phenotype in zip(tcr_sequences, phenotypes):
             tcr_index = np.where(unique_tcrs == tcr)[0][0]
             phenotype_index = np.where(unique_phenotypes == phenotype)[0][0]
             joint_prob_matrix[tcr_index, phenotype_index] += 1
-        for i in range(len(unique_tcrs)):
-            joint_prob_matrix[i, :] /= np.sum(joint_prob_matrix[i, :])
-        jd = pd.DataFrame(joint_prob_matrix.T,index=adata.uns["probability_columns"],columns=unique_tcrs)
+        # for i in range(len(unique_tcrs)):
+        #     joint_prob_matrix[i, :] /= np.sum(joint_prob_matrix[i, :])
+        jd = pd.DataFrame(joint_prob_matrix.T,index=unique_phenotypes,columns=unique_tcrs)
         jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
         jd = np.round(jd,decimals=5)
         adata.uns["joint_distribution"] = jd
     else:
         raise ValueError("Method must be 'empirical' or 'probabalistic'.")
 
-def register_tcr_key(adata, tcr_key):
+def register_phenotype_key(adata, phenotype_key, order=None):
+    assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
+    if order==None:
+        adata.uns["tcri_unique_phenotypes"] = np.unique(adata.obs[phenotype_key].tolist())
+    adata.uns["tcri_phenotype_key"] = phenotype_key
+
+def register_clonotype_key(adata, tcr_key):
     assert tcr_key in adata.obs, "Key {} not found.".format(tcr_key)
     adata.uns["tcri_clone_key"] = tcr_key
+    adata.uns["tcri_unique_clonotypes"] = np.unique(adata.obs[tcr_key].tolist())
 
-def register_phenotype_key(adata, phenotype_key):
-    assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
-    adata.uns["tcri_phenotype_key"] = phenotype_key
 
 def register_probability_columns(adata, probability_columns):
     adata.uns["probability_columns"] = probability_columns

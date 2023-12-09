@@ -14,9 +14,8 @@ from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 warnings.filterwarnings('ignore')
 
-
 def phenotypic_entropy(adata, method="probabilistic"):
-    phenotypic_joint_distribution(adata)
+    joint_distribution(adata,method=method)
     jd = adata.uns["joint_distribution"].to_numpy() 
     jd = jd / np.sum(jd)
     marginal_pheno_probs = np.sum(jd, axis=1)  # Sum over phenotypes
@@ -53,10 +52,8 @@ def phenotypic_entropies(adata, method="probabilistic", normalized=True):
 
 def clonotypic_entropies(adata, method="probabilistic", normalized=True):
     joint_distribution(adata, method=method)
-    phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
-    unique_phenotypes = np.unique(phenotypes)
+    unique_phenotypes = adata.uns["tcri_unique_phenotypes"]
     jd = adata.uns["joint_distribution"].to_numpy()
-    jd = jd / np.sum(jd)
     phenotype_entropies = np.zeros(jd.shape[0])
     max_entropy = np.log(jd.shape[1])
     for i, phenotype_distribution in enumerate(jd):
@@ -87,42 +84,19 @@ def clonality(adata):
         entropys[phenotype] = numpy.nan_to_num(clonality)
     return entropys
 
+def clone_fraction(adata, groupby):
+    frequencies = dict()
+    for group in set(adata.obs[groupby]):
+        frequencies[group] = dict()
+        sdata = adata[adata.obs[groupby] == group]
+        total_cells = len(sdata.obs.index.tolist())
+        clones = sdata.obs[sdata.uns["tcri_clone_key"]].tolist()
+        for c in set(clones):
+            frequencies[group][c] = clones.count(c) / total_cells
+    return frequencies
 
-def marker_enrichment(adata, markers):
-    gene_entropies = transcriptional_clonotypic_entropy(adata)
-    df = pd.DataFrame(list(gene_entropies.items()), columns=['Gene', 'Entropy'])
-    df["Entropy"] = -1* df["Entropy"]
-    pre_res = gp.prerank(rnk=df,
-                        gene_sets=markers,
-                        min_size=1,
-                        max_size=1000,
-                        permutation_num=2000,
-                        outdir=None,
-                        seed=42,
-                        verbose=False)
-    return pre_res
 
-def rank_genes_by_clonotypic_entropy(adata,genes=None, probability=False):
-    if genes == None:
-        genes = adata.var.index.tolist()
-    clone_dist = clonotype_distribution(adata, genes=genes, probability=probability)
-    ents = entropy(clone_dist,base=2) / np.log2(clone_dist.shape[0])
-    gene_entropy = pd.DataFrame.from_dict({"Gene":genes,"Entropy":np.nan_to_num(ents)})
-    return gene_entropy.sort_values("Entropy",ascending=True)
-
-def rank_phenotypes_by_clonotypic_entropy(adata, probability=True):
-    phenotypes = adata.uns['phenotypic_joint_distribution'].index.tolist()
-    clone_dist = clonotype_phenotype_distribution(adata, probability=probability)
-    ents = entropy(clone_dist,base=2) / np.log2(clone_dist.shape[0])
-    gene_entropy = pd.DataFrame.from_dict({"Phenotype":phenotypes,"Entropy":np.nan_to_num(ents)})
-    return gene_entropy.sort_values("Entropy",ascending=True)
-    
-def rank_clones_by_transcriptional_entropy(adata):
-    ce = dict(zip(adata.var.index.tolist(), transcriptional_distribution(adata,probability=True)))
-    sorted_ce = [x[0] for x in sorted(ce.items(), key=operator.itemgetter(1))]
-    return sorted_ce
-
-def transcriptional_distribution(adata, clones=None, probability=False):
+def marginal_phenotypic(adata, clones=None, probability=False):
     if clones == None:
         clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
     dist = adata.uns["joint_distribution"][clones].to_numpy()
@@ -131,45 +105,31 @@ def transcriptional_distribution(adata, clones=None, probability=False):
         dist /= dist.sum()
     return np.nan_to_num(dist).T
 
-def clonotype_distribution(adata, genes=None, probability=False):
-    if genes == None:
-        genes = adata.var.index.tolist()
-    clone_counts = clone_size(adata, return_counts=True)
-    dist = adata.uns["transcriptional_joint_distribution"].T[genes].to_numpy()
-    order = adata.uns["transcriptional_joint_distribution"].columns.tolist()
-    sizes = []
-    for o in order:
-        sizes.append(clone_counts[o])
-    dist = dist.T / np.array(sizes)
-    if probability:
-        dist /= dist.sum()
-    return dist.T
+def marginal_phenotypic(adata, clones=None,method="probabilistic"):
+    joint_distribution(adata,method=method)
+    if clones == None:
+        clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
+    dist = adata.uns["joint_distribution"][clones].to_numpy()
+    dist = dist.sum(axis=1)
+    dist /= dist.sum()
+    return np.nan_to_num(dist).T
 
-def clonotype_phenotype_distribution(adata, probability=False):
-    clone_counts = clone_size(adata, return_counts=True)
-    dist = adata.uns["phenotypic_joint_distribution"].T.to_numpy()
-    order = adata.uns["phenotypic_joint_distribution"].columns.tolist()
-    sizes = []
-    for o in order:
-        sizes.append(clone_counts[o])
-    dist = dist.T / np.array(sizes)
-    if probability:
-        dist /= dist.sum()
-    return dist.T
-
-def flux_l1(adata, key, from_this, to_that, clones=None):
+def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", distance_metric="l1"):
     this = adata[adata.obs[key] == from_this]
     that = adata[adata.obs[key] == to_that]
-    this_distribution = transcriptional_distribution(this,clones=clones)
-    that_distribution = transcriptional_distribution(that,clones=clones)
-    return distance.cityblock(this_distribution, that_distribution)
-
-def flux_dkl(adata, key, from_this, to_that, clones=None):
-    this = adata[adata.obs[key] == from_this]
-    that = adata[adata.obs[key] == to_that]
-    this_distribution = transcriptional_distribution(this,clones=clones)
-    that_distribution = transcriptional_distribution(that,clones=clones)
-    return entropy(this_distribution, that_distribution, base=2, axis=0)
+    this_clones = set(this.obs[this.uns["tcri_clone_key"]])
+    that_clones = set(that.obs[this.uns["tcri_clone_key"]])
+    clones = list(this_clones.intersection(that_clones))
+    distances = dict()
+    for clone in clones:
+        this_distribution = marginal_phenotypic(this,clones=[clone])
+        that_distribution = marginal_phenotypic(that,clones=[clone])
+        if distance_metric == "l1":
+            dist = distance.cityblock(this_distribution, that_distribution)
+        elif distance_metric == "dkl":
+            dist = entropy(this_distribution, that_distribution, base=2, axis=0)
+        distances[clone] = dist
+    return distances 
 
 def mutual_information(adata):
     pxy = adata.uns['joint_distribution'].to_numpy()
