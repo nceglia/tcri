@@ -2494,3 +2494,57 @@ class CellRepertoire(CloneDefinition, ClonesAndPhenotypes, TCRClonePvalue):
                     print(i, l)
 
         self.set_clones_and_counts_attr()
+
+
+def draw_clone_bars(data_dict, dict_order=None, ll=0.5, bk_th=0.0008, save_name=None, hatched=False, title=None, create_new = True):
+    """
+    Created on Wed Jul 26 13:04:54 2023
+    @author: elhanaty
+    """
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    # data_dict is a dict of dict, first level is samples and second is clones, value is fractional size: data_dict[samp1][clone]=0.0001
+    # ll is lower limit for y axis (fraction of sequences)
+    # bk_th is the threshold for clone size that would be part of black bar
+    # save_name is the name of the file to save the plot, None would not save
+    # hatched - if True it would use twice the same colors, but hatch them the second time, so you get twice the number of clones colored
+    n_large_clones = 12 # how many different clones will be colored
+    clrs = sns.color_palette('Paired', n_colors=n_large_clones) #palette for the clones
+    if hatched: #if using hatching, add all colors twice
+        clrs = clrs[:-1]*2
+        n_large_clones *= 2
+    clrs = clrs + [(1,1,1)] #add one color more color for non colored clones (white)
+    all_large_clones_dict = {} #dict for the largest clones over all samples, values would be fractional size
+    for sample in data_dict:
+        all_large_clones_dict = {c: max(all_large_clones_dict.get(c,0), data_dict[sample].get(c,0))
+                                 for c in set(sorted(data_dict[sample],key=data_dict[sample].get,)[-n_large_clones:]
+                                              + list(all_large_clones_dict.keys()))}
+    all_large_clones = {c: i for i,c in enumerate(sorted(all_large_clones_dict,key=all_large_clones_dict.get,)[-n_large_clones:])}
+    # this dict has the largest clones found, but value now is index of color to be used in clrs list
+    if create_new:
+        fig = plt.figure(figsize=(20,10))
+    if not dict_order:
+        dict_order = data_dict.keys()
+    for j,samp in enumerate(dict_order):
+        b = 0 # bottom of current bar
+        t = 0 # top of current bar
+        for c in sorted(data_dict[samp], key=data_dict[samp].get,): #loop over all clones in sample from small to large
+            if b == 0 and data_dict[samp].get(c,0) < bk_th: #as long as clones are smaller than threshold
+                t += data_dict[samp].get(c,0) #add them together to top
+            else:
+                if b == 0:
+                    plt.bar(j, t, color = 'black', edgecolor='black') # use one black bar for all clones below threshold
+                    b = t #advance bottom to where top was
+                color_index = all_large_clones.get(c, n_large_clones) # get correct color for next clone
+                plt.bar(j, data_dict[samp].get(c, 0), bottom=b, color=clrs[color_index],
+                        edgecolor='black', hatch='x' if hatched and n_large_clones / 2 <= color_index < n_large_clones else '')
+                b += data_dict[samp].get(c,0)
+    samp_labels = ['\n'.join(str(x).split('_')) for x in dict_order]
+    plt.xticks(range(len(samp_labels)), samp_labels, rotation=0)
+    plt.ylabel('fraction of all sequences')
+    plt.ylim([ll,1])
+    if title:
+        plt.title(title)
+    if save_name:
+        plt.savefig(save_name)
+    #plt.show()
