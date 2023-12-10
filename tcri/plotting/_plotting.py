@@ -15,9 +15,10 @@ import itertools
 from ..metrics._metrics import clonotypic_entropies as centropies
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
+from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
 from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars
-from ..preprocessing._preprocessing import clone_size
+from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 #
 import warnings
@@ -390,5 +391,31 @@ def flux(adata,key, from_this, to_that, groupby, method="probabilistic", paint=N
     # If paint is not None, add the legend to the plot
     if paint != None:
         ax.legend(handles=legend_handles, title=paint)
+    fig.tight_layout()
+    return ax
+
+def mutual_information(adata, groupby, splitby=None, method="probabilistic", figsize=(6,5)):
+    mis = []
+    groups = []
+    splits = []
+    for group in set(adata.obs[groupby]):
+        gdata = adata[adata.obs[groupby] == group]
+        if splitby != None:
+            for split in set(gdata.obs[splitby]):
+                sdata = gdata[gdata.obs[splitby] == split]
+                mi = mutual_information_tl(sdata, method=method)
+                mis.append(mi)
+                groups.append(group)
+                splits.append(split)
+        else:
+            joint_distribution(gdata, )
+            mi = mutual_information_tl(gdata,method=method)
+            mis.append(mi)
+            groups.append(group)
+    df = pd.DataFrame.from_dict({"MI":mis, groupby: groups})
+    if splitby != None:
+        df[splitby] = splits
+    fig, ax = plt.subplots(1,1,figsize=figsize)
+    sns.boxplot(data=df,x=splitby,y="MI",ax=ax)
     fig.tight_layout()
     return ax

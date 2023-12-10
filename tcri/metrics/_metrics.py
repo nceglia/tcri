@@ -95,7 +95,6 @@ def clone_fraction(adata, groupby):
             frequencies[group][c] = clones.count(c) / total_cells
     return frequencies
 
-
 def marginal_phenotypic(adata, clones=None, probability=False):
     if clones == None:
         clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
@@ -131,7 +130,8 @@ def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", di
         distances[clone] = dist
     return distances 
 
-def mutual_information(adata):
+def mutual_information(adata, method="probabilistic"):
+    joint_distribution(adata,method=method)
     pxy = adata.uns['joint_distribution'].to_numpy()
     pxy = pxy / pxy.sum()
     px = np.sum(pxy, axis=1)
