@@ -92,7 +92,7 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True)
                                 times = times,
                                 xlim = [min(times), max(times)],
                                 time_rescale = 1,
-                                normalize=True,
+                                normalize=normalize,
                                 xlabel = splitby,
                                 return_axes = True, 
                                 show_legend = True)
