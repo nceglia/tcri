@@ -213,6 +213,8 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
     if groupby == None and splitby == None:
         data = function(adata)
         df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonotypic Entropy'])
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        df.dropna(inplace=True)
         fig,ax=plt.subplots(1,1,figsize=figsize)
         sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,ax=ax, palette=tcri_colors)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
@@ -228,6 +230,8 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
             df[groupby] = group
             dfs.append(df)
         df = pd.concat(dfs)
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        df.dropna(inplace=True)
         order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
         fig,ax=plt.subplots(1,1,figsize=figsize)
         sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,hue=groupby,ax=ax, palette=tcri_colors,order=order)
@@ -250,6 +254,8 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
                 df[splitby] = split
                 dfs.append(df)
         df = pd.concat(dfs)
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        df.dropna(inplace=True)
         fig,ax=plt.subplots(1,1,figsize=figsize)
         order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, hue=splitby,palette=tcri_colors,order=order)
@@ -309,13 +315,13 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     clone_size(adata)
     df = adata.obs
     reduction="umap"
+    scale_factor=3.
     sizes = np.log10(adata.obs["clone_size"].to_numpy())
     df["UMAP1"] = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
     df["UMAP2"] = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
-    df["log(Clone Size)"] = sizes 
-    df["log(Clone Size)"] *= scale
-    fig,ax=plt.subplots(1,1,figsize=figsize)
-    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",size="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.)
+    df["log(Clone Size)"] = sizes
+    fig,ax=plt.subplots(1,1,figsize=(10,8))
+    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.)
     ax.set_xlabel('UMAP-1')
     ax.set_ylabel('UMAP-2')
     ax.xaxis.set_ticklabels([])
@@ -325,37 +331,37 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby, order=None, figsize=(2,4)):
-    mis = []
-    label = []
-    group = []
-    for s in set(adata.obs[splitby]):
-        sdata = adata[adata.obs[splitby] == s]
-        for p in set(sdata.obs['patient']):
-            xdata = sdata[sdata.obs['patient'] == p]
-            joint_distribution(xdata)
-            mi = mutual_info(xdata)
-            mis.append(mi)
-            label.append(s)
-            group.append(p)
-    df = pd.DataFrame.from_dict({"Label":label,"MI": mis, "Group":group})
-    if order == None:
-        order = df.groupby("Label").median().sort_values("MI").index.tolist()
-    pairs = list(itertools.combinations(order,2))
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df, x="Label", y='MI', order=order)
-    sns.swarmplot(data=df, x="Label", y="MI",color="#999999",s=10,order=order)
-    ax, test_results = add_stat_annotation(ax, 
-                                            data=df,
-                                            x="Label",
-                                            y="MI", 
-                                            order=order,
-                                            box_pairs=pairs,
-                                            test='t-test_ind', 
-                                            text_format='star', 
-                                            loc='outside', 
-                                            verbose=2)
-    return ax
+# def mutual_information(adata, groupby, splitby, order=None, figsize=(2,4)):
+#     mis = []
+#     label = []
+#     group = []
+#     for s in set(adata.obs[splitby]):
+#         sdata = adata[adata.obs[splitby] == s]
+#         for p in set(sdata.obs['patient']):
+#             xdata = sdata[sdata.obs['patient'] == p]
+#             joint_distribution(xdata)
+#             mi = mutual_info(xdata)
+#             mis.append(mi)
+#             label.append(s)
+#             group.append(p)
+#     df = pd.DataFrame.from_dict({"Label":label,"MI": mis, "Group":group})
+#     if order == None:
+#         order = df.groupby("Label").median().sort_values("MI").index.tolist()
+#     pairs = list(itertools.combinations(order,2))
+#     fig, ax = plt.subplots(1,1,figsize=figsize)
+#     sns.boxplot(data=df, x="Label", y='MI', order=order)
+#     sns.swarmplot(data=df, x="Label", y="MI",color="#999999",s=10,order=order)
+#     ax, test_results = add_stat_annotation(ax, 
+#                                             data=df,
+#                                             x="Label",
+#                                             y="MI", 
+#                                             order=order,
+#                                             box_pairs=pairs,
+#                                             test='t-test_ind', 
+#                                             text_format='star', 
+#                                             loc='outside', 
+#                                             verbose=2)
+#     return ax
 
 def clone_fraction(adata, groupby):
     fractions = clone_fraction_tl(adata,groupby=groupby)
@@ -415,7 +421,21 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
     df = pd.DataFrame.from_dict({"MI":mis, groupby: groups})
     if splitby != None:
         df[splitby] = splits
+    order = list(set(adata.obs[splitby]))
+
     fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=splitby,y="MI",ax=ax)
+    sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order)
+    sns.swarmplot(data=df,x=splitby,y="MI",order=order)
+    pairs = list(itertools.combinations(list(set(hue)),2))
+    ax, test_results = add_stat_annotation(ax, 
+                                            data=df,
+                                            x=splitby,
+                                            y="MI", 
+                                            order=order,
+                                            box_pairs=pairs, 
+                                            test='Mann-Whitney', 
+                                            text_format='star', 
+                                            loc='outside', 
+                                            verbose=2)
     fig.tight_layout()
     return ax

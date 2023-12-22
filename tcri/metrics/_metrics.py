@@ -40,7 +40,7 @@ def phenotypic_entropies(adata, method="probabilistic", normalized=True):
     jd = jd / np.sum(jd)
     clonotype_entropies = np.zeros(jd.shape[1])
     max_entropy = np.log(jd.shape[0])
-    for i, clonotype_distribution in enumerate(jd):
+    for i, clonotype_distribution in enumerate(jd.T):
         normalized_distribution = clonotype_distribution / np.sum(clonotype_distribution)
         epsilon = np.finfo(float).eps
         if normalized:
