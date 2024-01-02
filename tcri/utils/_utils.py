@@ -14,6 +14,19 @@ from matplotlib.collections import LineCollection
 import mpltern
 import numpy as np
 from scipy.stats import fisher_exact, binom_test
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.colors as mcolors
+
+
+def probabilities(adata):
+    matrix = adata.obs[adata.uns["probability_columns"]]
+    barcodes = matrix.index.tolist()
+    cells = np.nan_to_num(matrix.to_numpy())
+    index = adata.uns["joint_distribution"].index
+    probabs = dict()
+    for bc, cell in zip(barcodes, cells):
+        probabs[bc] = dict(zip(index, cell))
+    return probabs
 
 class Error(Exception):
     pass
@@ -1232,7 +1245,7 @@ class SankeyNode(object):
         self.y = y
         self.dx = dx
         self.dy = val
-        self.x_gap = 0
+        self.x_gap = 0.05
         
         self.max_x = self.x + self.dx/2
         self.min_x = self.x - self.dx/2
@@ -1244,20 +1257,31 @@ class SankeyNode(object):
     
     def plot(self, ax):
         ax.add_patch(self.patch)
-    
+
+
+    def hex_to_rgb(self, hex_color):
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+
     def plot_node_connection(self, destination_node, ax, **kwargs):
-        
-        discretize = np.linspace(0, 1, 1000)
-        
-        x = self.max_x + (destination_node.min_x - self.max_x)*discretize
-        y_shape = 1/(1+(10**2/np.power(10, 4*discretize)))
-        y_shape = (y_shape - y_shape[0])/(y_shape[-1]-y_shape[0])
-        
-        y_top = self.max_y + (destination_node.max_y - self.max_y)*y_shape
-        y_bot = self.min_y + (destination_node.min_y - self.min_y)*y_shape
-        
-        
-        ax.fill_between(x, y_top, y_bot, fc = self.color, edgecolor = None, **kwargs)
+        num_segments = 500                                 
+        discretize = np.linspace(0, 1, num_segments)
+
+        # Shape of the connection
+        x = self.max_x + (destination_node.min_x - self.max_x) * discretize
+        y_shape = 1 / (1 + (10**2 / np.power(10, 4 * discretize)))
+        y_shape = (y_shape - y_shape[0]) / (y_shape[-1] - y_shape[0])
+        y_top = self.max_y + (destination_node.max_y - self.max_y) * y_shape
+        y_bot = self.min_y + (destination_node.min_y - self.min_y) * y_shape
+
+        # Color interpolation
+        start_color = np.array(mcolors.to_rgb(self.color))
+        end_color = np.array(mcolors.to_rgb(destination_node.color)) if destination_node.color else start_color
+
+        for i in range(num_segments - 1):
+            interp_color = (1 - discretize[i]) * start_color + discretize[i] * end_color
+            ax.fill_between(x[i:i+2], y_top[i:i+2], y_bot[i:i+2], facecolor=interp_color, edgecolor='none')
+
 
 def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
 
@@ -1273,8 +1297,6 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
     for kw, val in kwargs.items():
         if kw in fontsize_dict: fontsize_dict[kw] = val
 
-    
-    
     phenotypes = Phenotypes(phenotypes)
     n_reps = len(cell_repertoires)
     
@@ -1358,7 +1380,7 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
                     # running_dest_node_ys[k] -= c_dest_flow_array[j, k]
                     # destination_nodes[i][(origin_phenotype, dest_phenotype)] = SankeyNode(times[i+1], running_dest_node_ys[k], c_dest_flow_array[j, k], **kwargs)
                     
-                    destination_nodes[i][(origin_phenotype, dest_phenotype)] = SankeyNode(times[i+1], running_dest_node_ys[k], c_dest_flow_array[j, k], dx = dx, **kwargs)
+                    destination_nodes[i][(origin_phenotype, dest_phenotype)] = SankeyNode(times[i+1], running_dest_node_ys[k], c_dest_flow_array[j, k], dx = dx, color = phenotype_colors[dest_phenotype], **kwargs)
                     running_dest_node_ys[k] += c_dest_flow_array[j, k]
                     
             if i == n_reps - 2:
@@ -1394,8 +1416,8 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
         
     
     if kwargs.get('show_legend', True):
-        ax.legend([plot_nodes[0][phenotype].patch for phenotype in phenotypes], list(phenotypes), frameon = True, fontsize = fontsize_dict['legend_fontsize'], bbox_to_anchor=(1, 0.9))
-    
+        ax.legend([plot_nodes[0][phenotype].patch for phenotype in phenotypes], list(phenotypes),frameon=True, fontsize=fontsize_dict['legend_fontsize'],bbox_to_anchor=(1.05, 1), loc='upper left')
+
     if kwargs.get('plot_seperate_legend', False):
         legend_fig, legend_ax = plt.subplots(figsize = (4, 3))
         legend_ax.legend([plot_nodes[0][phenotype].patch for phenotype in phenotypes], list(phenotypes), frameon = False, fontsize = fontsize_dict['legend_fontsize'])
@@ -1432,11 +1454,10 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
     if 'savefig_filename' in kwargs and 'ax' not in kwargs:
         fig.savefig(kwargs['savefig_filename'])
 
-        
-    
-    
     if kwargs.get('return_axes', False):
         return fig, ax    
+    
+
 def plot_pheno_sankey_bulk_norm(phenotypes, cell_repertoires, bulk_cell_repertoires, clones = None, **kwargs):
 
     fontsize = kwargs.get('fontsize', 12)

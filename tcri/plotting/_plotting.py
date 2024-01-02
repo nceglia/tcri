@@ -13,11 +13,13 @@ import operator
 import itertools
 
 from ..metrics._metrics import clonotypic_entropies as centropies
+from ..metrics._metrics import phenotypic_entropies as pentropies
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
+from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
-from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars
+from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 #
@@ -59,8 +61,9 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True):
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True, method="probabilistic", phenotype_colors=None, save=None, figsize=(6,3), show_legend=True):
     phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
+    cell_probabilities = probabilities(adata)
     repertoires = dict()
     times = list(range(len(order)))
     for s in order:
@@ -71,21 +74,28 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True)
                                         seq_type = 'ntseq',
                                         chains_to_use = ['TRB'],
                                         name = s)
-    for condition, seq, phenotype in zip(adata.obs[splitby],
+    for bc, condition, seq, phenotype in zip(adata.obs.index,
+                                         adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
                                          adata.obs[adata.uns["tcri_phenotype_key"]]):
         if str(seq) != "nan" and condition in repertoires:
+            if method == "probabilistic":
+                phenotypes_and_counts = cell_probabilities[bc]
+            elif method == "empirical":
+                phenotypes_and_counts = {phenotype: 1}
             if nt:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(ntseq = seq), 
                                                           use_genes = False)
             else:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(aaseq = seq), 
-                                                          use_genes = False)
+                                                          use_genes = False)    
             repertoires[condition].cell_list.append(t)
     for condition, rep in repertoires.items():
         rep._set_consistency()
+    if phenotype_colors==None:
+        phenotype_colors = dict(zip(set(adata.obs[adata.uns["tcri_phenotype_key"]]), tcri_colors))
     fig, ax = plot_pheno_sankey(phenotypes = phenotypes, 
                                 cell_repertoires = [repertoires[condition] for condition in order], 
                                 clones = clones,
@@ -95,10 +105,14 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True)
                                 normalize=normalize,
                                 xlabel = splitby,
                                 return_axes = True, 
-                                show_legend = True)
+                                show_legend = show_legend,
+                                figsize = figsize,
+                                phenotype_colors=phenotype_colors)
     ax.set_xticks(times)
     ax.set_xticklabels(order)
-    fig.savefig("test.png")
+    if save != None:
+        fig.savefig(save)
+
 
 def freq_to_size_scaling(freq):
     return 10*(freq**(1/2))
@@ -209,7 +223,7 @@ def clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=
     plt.tight_layout()
 
 
-def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20):
+def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None):
     if groupby == None and splitby == None:
         data = function(adata)
         df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonotypic Entropy'])
@@ -232,7 +246,8 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         df = pd.concat(dfs)
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(inplace=True)
-        order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
+        if order == None:
+            order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
         fig,ax=plt.subplots(1,1,figsize=figsize)
         sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,hue=groupby,ax=ax, palette=tcri_colors,order=order)
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, color="#999999",order=order)
@@ -257,7 +272,9 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(inplace=True)
         fig,ax=plt.subplots(1,1,figsize=figsize)
-        order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
+        if order == None:
+            order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
+        print(order)
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, hue=splitby,palette=tcri_colors,order=order)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
         ax.set_title(ylabel)
@@ -268,48 +285,12 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         raise ValueError("'groupby' must be set to use 'splitby'.")
     return ax
 
+def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5)):
+    return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order)
 
-def clonality(adata, groupby = None, splitby=None, s=10, figsize=(12,5)):
-    return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize)
-
-def clonotypic_entropies(adata, method="probabalistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5)):
+def clonotypic_entropy(adata, method="probabalistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None):
     func = lambda x : centropies(x, normalized=normalized, method=method)
-    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize)
-
-def clonotypic_entropy(adata, groupby, splitby,  clones=None, figsize=(12,4)):
-    tcr_key = adata.uns["tcri_clone_key"]
-    fig,ax = plt.subplots(1,1,figsize=figsize)
-    ents = []
-    group = []
-    phs = []
-    hue = []
-    for g in set(adata.obs[groupby]):
-        pdata = adata[adata.obs[groupby]==g]
-        for s in set(pdata.obs[splitby]):
-            zdata = pdata[pdata.obs[splitby] == s]
-            joint_distribution(zdata)
-            ent = centropy(zdata,clones=clones)
-            ents.append(ent)
-            group.append(g)
-            hue.append(s)
-    df = pd.DataFrame.from_dict({"Entropy":ents,"Group":group, splitby:hue})
-    order = df.groupby(splitby).median().sort_values("Entropy").index.tolist()
-    hue_order = list(set(hue))
-    sns.boxplot(data=df,x=splitby,y="Entropy",order=order)
-    sns.swarmplot(data=df,x=splitby,y="Entropy",order=order)
-    pairs = list(itertools.combinations(list(set(hue)),2))
-    ax, test_results = add_stat_annotation(ax, 
-                                            data=df,
-                                            x=splitby,
-                                            y="Entropy", 
-                                            order=order,
-                                            box_pairs=pairs, 
-                                            test='Mann-Whitney', 
-                                            text_format='star', 
-                                            loc='outside', 
-                                            verbose=2)
-    fig.legend(loc='upper left', bbox_to_anchor=(1.03, 1))
-    return ax
+    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order)
 
 def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,palette="coolwarm"):
     clone_size(adata)
@@ -331,70 +312,81 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     fig.tight_layout()
     return ax
 
-# def mutual_information(adata, groupby, splitby, order=None, figsize=(2,4)):
-#     mis = []
-#     label = []
-#     group = []
-#     for s in set(adata.obs[splitby]):
-#         sdata = adata[adata.obs[splitby] == s]
-#         for p in set(sdata.obs['patient']):
-#             xdata = sdata[sdata.obs['patient'] == p]
-#             joint_distribution(xdata)
-#             mi = mutual_info(xdata)
-#             mis.append(mi)
-#             label.append(s)
-#             group.append(p)
-#     df = pd.DataFrame.from_dict({"Label":label,"MI": mis, "Group":group})
-#     if order == None:
-#         order = df.groupby("Label").median().sort_values("MI").index.tolist()
-#     pairs = list(itertools.combinations(order,2))
-#     fig, ax = plt.subplots(1,1,figsize=figsize)
-#     sns.boxplot(data=df, x="Label", y='MI', order=order)
-#     sns.swarmplot(data=df, x="Label", y="MI",color="#999999",s=10,order=order)
-#     ax, test_results = add_stat_annotation(ax, 
-#                                             data=df,
-#                                             x="Label",
-#                                             y="MI", 
-#                                             order=order,
-#                                             box_pairs=pairs,
-#                                             test='t-test_ind', 
-#                                             text_format='star', 
-#                                             loc='outside', 
-#                                             verbose=2)
-#     return ax
+def phenotypic_entropy(adata, groupby, splitby, figsize=(5,4), save=None, order=None):
+    ps = []
+    rs = []
+    r2 = []
+    ts = []
+    for r in set(adata.obs[splitby]):
+        rdata = adata[adata.obs[splitby] == r]
+        for p in set(rdata.obs[groupby]):
+            pdata = rdata[rdata.obs[groupby] == p]
+            for clone, ent in pentropies(pdata).items():
+                rs.append(r)
+                r2.append(ent)
+                ts.append(clone)
+                ps.append(p)
+    df = pd.DataFrame.from_dict({groupby:ps,splitby:rs,"Phenotypic Entropy":r2,"Clone":ts})
+    fig, ax = plt.subplots(1,1,figsize=figsize)
+    if order == None:
+        order = list(set(rs))
+    sns.boxplot(data=df, x=splitby,y="Phenotypic Entropy",ax=ax,order=order,palette=tcri_colors)
+    if save!=None:
+        fig.savefig(save)
+
+def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
+    pdist = pdistribution(adata, method=method)
+    if phenotypes == None:
+        phenotypes = adata.uns["joint_distribution"].index
+    fig, ax = plt.subplots(1,1,figsize=figsize)
+    sns.barplot(data=pdist,ax=ax,order=phenotypes,color="#000000")
+    ax.set_xticklabels(ax[1].get_xticklabels(), rotation=45)
+    ax.set_title("BCC CD8 Post")
+    fig.tight_layout()
+    if save:
+        fig.savefig(save)
 
 def clone_fraction(adata, groupby):
     fractions = clone_fraction_tl(adata,groupby=groupby)
     draw_clone_bars(fractions, title=groupby)
 
-def flux(adata,key, from_this, to_that, groupby, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5)):
+def flux(adata, key, order, groupby, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5), colors=None):
     dfs = []
+    if colors == None:
+        colors = tcri_colors
     if paint != None:
         palette = []
+        paint_order = []
         legend_handles = [] 
         paint_categories = adata.obs[paint].unique()
-        pcolors = dict(zip(paint_categories, tcri_colors))
+        pcolors = dict(zip(paint_categories, colors))
         for category in paint_categories:
             handle = mpatches.Patch(color=pcolors[category], label=category)
             legend_handles.append(handle)
     else:
-        palette = tcri_colors
+        palette = colors
     for x in tqdm.tqdm(list(set(adata.obs[groupby]))):
         sdata = adata[adata.obs[groupby]==x]
-        l1_distances = flux_tl(sdata,key=key,from_this=from_this,to_that=to_that,distance_metric=distance_metric)
-        df = pd.DataFrame(list(l1_distances.items()), columns=['Clone', distance_metric])
-        df[groupby] = x
-        if paint!=None:
-            pcat = sdata.obs[paint].unique().tolist()[0]
-            palette.append(pcolors[pcat])
-        dfs.append(df)
+        hue_order = []
+        for i in range(len(order)-1):
+            l1_distances = flux_tl(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
+            df = pd.DataFrame(list(l1_distances.items()), columns=['Clone', distance_metric])
+            df[groupby] = x
+            if paint!=None:
+                pcat = sdata.obs[paint].unique().tolist()[0]
+                palette.append(pcolors[pcat])
+                paint_order.append(pcat)
+                df[paint] = pcat
+            df["Comparison"] = "{}_{}".format(order[i],order[i+1])
+            hue_order.append("{}_{}".format(order[i],order[i+1]))
+            dfs.append(df)
     df = pd.concat(dfs)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
     order = df.groupby(groupby).median(distance_metric).sort_values(distance_metric).index.tolist()
     fig,ax=plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=groupby,y=distance_metric,order=order,palette=palette,ax=ax)
-    # If paint is not None, add the legend to the plot
+    print(df)
+    sns.boxplot(data=df,x=groupby,y=distance_metric,hue=paint,order=order,palette=palette,ax=ax)
     if paint != None:
         ax.legend(handles=legend_handles, title=paint)
     fig.tight_layout()

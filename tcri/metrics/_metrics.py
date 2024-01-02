@@ -32,6 +32,15 @@ def clonotypic_entropy(adata, method="probabilistic"):
     tcr_entropy = -np.sum(marginal_tcr_probs * np.log(marginal_tcr_probs + epsilon))
     return tcr_entropy
 
+def probability_distribution(adata, method="probabilistic"):
+    if method == "probabilistic":
+        joint_distribution(adata) 
+        total = adata.uns["joint_distribution"].to_numpy().sum()
+        pdist = adata.uns["joint_distribution"].sum(axis=1) / total
+    else:
+        raise NotImplementedError("In progress!")
+    return pdist
+
 def phenotypic_entropies(adata, method="probabilistic", normalized=True):
     joint_distribution(adata, method=method)
     tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
