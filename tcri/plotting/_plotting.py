@@ -22,7 +22,7 @@ from ..metrics._metrics import clone_fraction as clone_fraction_tl
 from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
 
-#
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -66,14 +66,19 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True,
     cell_probabilities = probabilities(adata)
     repertoires = dict()
     times = list(range(len(order)))
+    if nt:
+        chains_to_use = "ntseq"
+    else:
+        chains_to_use = "aaseq"
     for s in order:
         repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
                                         phenotypes = phenotypes, 
                                         use_genes = False, 
                                         use_chain = False,
-                                        seq_type = 'ntseq',
+                                        seq_type = chains_to_use,
                                         chains_to_use = ['TRB'],
                                         name = s)
+    
     for bc, condition, seq, phenotype in zip(adata.obs.index,
                                          adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
@@ -114,6 +119,7 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True,
         fig.savefig(save)
 
 
+
 def freq_to_size_scaling(freq):
     return 10*(freq**(1/2))
 
@@ -133,43 +139,63 @@ def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], s
         else:
             ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
 
-def ternary_plot(adata, phenotype_names, splitby, condition, nt=False):
+def probability_ternary(adata, phenotype_names, splitby, conditions, method="probabilistic", nt=False, top_n=None):
     phenotypes = Phenotypes(phenotype_names)
+    cell_probabilities = probabilities(adata)
     repertoires = dict()
+    if nt:
+        chains_to_use = "ntseq"
+    else:
+        chains_to_use = "aaseq"
 
     for s in set(adata.obs[splitby]):
         repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
                                         phenotypes = phenotypes, 
                                         use_genes = False, 
                                         use_chain = False,
-                                        seq_type = 'ntseq',
+                                        seq_type = chains_to_use,
                                         chains_to_use = ['TRB'],
                                         name = s)
-    for condition, seq, phenotype in zip(adata.obs[splitby],
+    for bc, condition, seq, phenotype in zip(adata.obs.index,
+                                         adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
                                          adata.obs[adata.uns["tcri_phenotype_key"]]):
         if str(seq) != "nan" and condition in repertoires:
+            if method == "probabilistic":
+                phenotypes_and_counts = cell_probabilities[bc]
+            elif method == "empirical":
+                phenotypes_and_counts = {phenotype: 1}
             if nt:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(ntseq = seq), 
                                                           use_genes = False)
             else:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = {phenotype: 1}, 
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(aaseq = seq), 
                                                           use_genes = False)
             repertoires[condition].cell_list.append(t)
     for condition, rep in repertoires.items():
         rep._set_consistency()
-
     phenotype_names_dict = {p: p for p in phenotype_names}
-    start_clones_and_phenos = repertoires[condition]
-    # end_clones_and_phenos = repertoires[end_sample]
+    if type(conditions) == list:
+        if len(conditions) == 1:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = None
+        elif len(conditions) == 2:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = repertoires[conditions[1]]
+        else:
+            raise ValueError("Only two conditions supported.")
+    else:
+        start_clones_and_phenos = repertoires[conditions]
+        end_clones_and_phenos = None
     s_dict = {c: freq_to_size_scaling(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
-
-    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:10]
+    if top_n == None:
+        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
+    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
 
     fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
-                                            #end_clones_and_phenotypes = end_clones_and_phenos,
+                                            end_clones_and_phenotypes = end_clones_and_phenos,
                                             phenotypes = phenotype_names, 
                                             phenotype_names = phenotype_names_dict,
                                             clones = c_clones,
@@ -385,7 +411,6 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
     df.dropna(inplace=True)
     order = df.groupby(groupby).median(distance_metric).sort_values(distance_metric).index.tolist()
     fig,ax=plt.subplots(1,1,figsize=figsize)
-    print(df)
     sns.boxplot(data=df,x=groupby,y=distance_metric,hue=paint,order=order,palette=palette,ax=ax)
     if paint != None:
         ax.legend(handles=legend_handles, title=paint)

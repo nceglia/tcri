@@ -24,8 +24,6 @@ def joint_distribution(adata, method='probabilistic'):
             tcr_index = np.where(unique_tcrs == tcr)[0][0]
             phenotype_index = np.where(unique_phenotypes == phenotype)[0][0]
             joint_prob_matrix[tcr_index, phenotype_index] += 1
-        # for i in range(len(unique_tcrs)):
-        #     joint_prob_matrix[i, :] /= np.sum(joint_prob_matrix[i, :])
         jd = pd.DataFrame(joint_prob_matrix.T,index=unique_phenotypes,columns=unique_tcrs)
         jd.index = [i.replace(" Pseudo-probability","") for i in jd.index]
         jd = np.round(jd,decimals=5)
