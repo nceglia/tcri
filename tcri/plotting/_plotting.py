@@ -204,7 +204,7 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
                                             return_axes  = True)
     freq_to_size_legend(ax)
 
-def clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
+def top_clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
     df = adata.obs
     seq_column = adata.uns["tcri_clone_key"]
     plt.figure(figsize = figsize)
@@ -376,33 +376,28 @@ def clone_fraction(adata, groupby):
     fractions = clone_fraction_tl(adata,groupby=groupby)
     draw_clone_bars(fractions, title=groupby)
 
-def flux(adata, key, order, groupby, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5), colors=None):
+def flux(adata, key, order, groupby, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5)):
     dfs = []
-    if colors == None:
-        colors = tcri_colors
     if paint != None:
         palette = []
-        paint_order = []
         legend_handles = [] 
         paint_categories = adata.obs[paint].unique()
-        pcolors = dict(zip(paint_categories, colors))
+        pcolors = dict(zip(paint_categories, tcri_colors))
         for category in paint_categories:
             handle = mpatches.Patch(color=pcolors[category], label=category)
             legend_handles.append(handle)
     else:
-        palette = colors
+        palette = tcri_colors
     for x in tqdm.tqdm(list(set(adata.obs[groupby]))):
         sdata = adata[adata.obs[groupby]==x]
         hue_order = []
         for i in range(len(order)-1):
-            l1_distances = flux_tl(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
+            l1_distances = tcri.tl.flux(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
             df = pd.DataFrame(list(l1_distances.items()), columns=['Clone', distance_metric])
             df[groupby] = x
             if paint!=None:
                 pcat = sdata.obs[paint].unique().tolist()[0]
                 palette.append(pcolors[pcat])
-                paint_order.append(pcat)
-                df[paint] = pcat
             df["Comparison"] = "{}_{}".format(order[i],order[i+1])
             hue_order.append("{}_{}".format(order[i],order[i+1]))
             dfs.append(df)
@@ -411,7 +406,7 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
     df.dropna(inplace=True)
     order = df.groupby(groupby).median(distance_metric).sort_values(distance_metric).index.tolist()
     fig,ax=plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=groupby,y=distance_metric,hue=paint,order=order,palette=palette,ax=ax)
+    sns.boxplot(data=df,x=groupby,y=distance_metric,hue="Comparison",order=order,palette=palette,ax=ax, hue_order=hue_order)
     if paint != None:
         ax.legend(handles=legend_handles, title=paint)
     fig.tight_layout()
