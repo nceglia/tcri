@@ -314,7 +314,7 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
 def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5)):
     return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order)
 
-def clonotypic_entropy(adata, method="probabalistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None):
+def clonotypic_entropy(adata, method="probabilistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None):
     func = lambda x : centropies(x, normalized=normalized, method=method)
     return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order)
 
@@ -322,12 +322,12 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     clone_size(adata)
     df = adata.obs
     reduction="umap"
-    scale_factor=3.
     sizes = np.log10(adata.obs["clone_size"].to_numpy())
     df["UMAP1"] = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
     df["UMAP2"] = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
     df["log(Clone Size)"] = sizes
-    fig,ax=plt.subplots(1,1,figsize=(10,8))
+    df["log(Clone Size)"] *= scale
+    fig,ax=plt.subplots(1,1,figsize=figsize)
     sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.)
     ax.set_xlabel('UMAP-1')
     ax.set_ylabel('UMAP-2')
