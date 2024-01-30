@@ -22,7 +22,6 @@ from ..metrics._metrics import clone_fraction as clone_fraction_tl
 from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
 
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -118,8 +117,6 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True,
     if save != None:
         fig.savefig(save)
 
-
-
 def freq_to_size_scaling(freq):
     return 10*(freq**(1/2))
 
@@ -139,7 +136,10 @@ def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], s
         else:
             ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
 
-def probability_ternary(adata, phenotype_names, splitby, conditions, method="probabilistic", nt=False, top_n=None):
+
+def probability_ternary(adata, phenotype_names, splitby, conditions, method="probabilistic", nt=False, top_n=None, scale_function=None,color="k",save=None):
+    if scale_function == None:
+        scale_function = freq_to_size_scaling
     phenotypes = Phenotypes(phenotype_names)
     cell_probabilities = probabilities(adata)
     repertoires = dict()
@@ -189,7 +189,7 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
     else:
         start_clones_and_phenos = repertoires[conditions]
         end_clones_and_phenos = None
-    s_dict = {c: freq_to_size_scaling(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
+    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
     if top_n == None:
         top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
     c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
@@ -200,9 +200,12 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
                                             phenotype_names = phenotype_names_dict,
                                             clones = c_clones,
                                             line_type = 'arrows', 
+                                            kwargs_for_plots={"color":color},
                                             s_dict = s_dict,
                                             return_axes  = True)
     freq_to_size_legend(ax)
+    if save != None:
+        fig.savefig(save)
 
 def top_clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
     df = adata.obs
@@ -338,16 +341,18 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     fig.tight_layout()
     return ax
 
-def phenotypic_entropy(adata, groupby, splitby, figsize=(5,4), save=None, order=None):
+def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_df=False, normalized=True, decimals=5, figsize=(5,4), save=None, order=None, rotation=0, minimum_clone_size=1, palette=None):
     ps = []
     rs = []
     r2 = []
     ts = []
-    for r in set(adata.obs[splitby]):
-        rdata = adata[adata.obs[splitby] == r]
-        for p in set(rdata.obs[groupby]):
-            pdata = rdata[rdata.obs[groupby] == p]
-            for clone, ent in pentropies(pdata).items():
+    for r in set(adata.obs[groupby]):
+        rdata = adata[adata.obs[groupby] == r]
+        clone_size(rdata)
+        rdata = rdata[rdata.obs["clone_size"] >= minimum_clone_size]
+        for p in set(rdata.obs[splitby]):
+            pdata = rdata[rdata.obs[splitby] == p]
+            for clone, ent in pentropies(pdata,method=method,normalized=normalized,decimals=decimals).items():
                 rs.append(r)
                 r2.append(ent)
                 ts.append(clone)
@@ -356,9 +361,14 @@ def phenotypic_entropy(adata, groupby, splitby, figsize=(5,4), save=None, order=
     fig, ax = plt.subplots(1,1,figsize=figsize)
     if order == None:
         order = list(set(rs))
-    sns.boxplot(data=df, x=splitby,y="Phenotypic Entropy",ax=ax,order=order,palette=tcri_colors)
+    if palette == None:
+        palette = tcri_colors
+    sns.boxplot(data=df, x=splitby,y="Phenotypic Entropy",ax=ax,order=order,palette=palette)
+    plt.xticks(rotation=rotation)
     if save!=None:
         fig.savefig(save)
+    if return_df:
+        return df
 
 def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
     pdist = pdistribution(adata, method=method)
@@ -392,7 +402,7 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
         sdata = adata[adata.obs[groupby]==x]
         hue_order = []
         for i in range(len(order)-1):
-            l1_distances = tcri.tl.flux(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
+            l1_distances = flux(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
             df = pd.DataFrame(list(l1_distances.items()), columns=['Clone', distance_metric])
             df[groupby] = x
             if paint!=None:
@@ -412,12 +422,14 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", figsize=(6,5)):
+def mutual_information(adata, groupby, splitby=None, method="probabilistic", figsize=(6,5), minimum_clone_size=1, rotation=90,return_df=False):
     mis = []
     groups = []
     splits = []
     for group in set(adata.obs[groupby]):
         gdata = adata[adata.obs[groupby] == group]
+        clone_size(gdata)
+        gdata = gdata[gdata.obs["clone_size"] >= minimum_clone_size]
         if splitby != None:
             for split in set(gdata.obs[splitby]):
                 sdata = gdata[gdata.obs[splitby] == split]
@@ -426,7 +438,7 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
                 groups.append(group)
                 splits.append(split)
         else:
-            joint_distribution(gdata, )
+            joint_distribution(gdata)
             mi = mutual_information_tl(gdata,method=method)
             mis.append(mi)
             groups.append(group)
@@ -438,16 +450,9 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
     fig, ax = plt.subplots(1,1,figsize=figsize)
     sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order)
     sns.swarmplot(data=df,x=splitby,y="MI",order=order)
-    pairs = list(itertools.combinations(list(set(hue)),2))
-    ax, test_results = add_stat_annotation(ax, 
-                                            data=df,
-                                            x=splitby,
-                                            y="MI", 
-                                            order=order,
-                                            box_pairs=pairs, 
-                                            test='Mann-Whitney', 
-                                            text_format='star', 
-                                            loc='outside', 
-                                            verbose=2)
     fig.tight_layout()
-    return ax
+    plt.xticks(rotation=rotation)
+    if return_df:
+        return df
+    else:
+        return ax
