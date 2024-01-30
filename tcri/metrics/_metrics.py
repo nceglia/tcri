@@ -25,6 +25,16 @@ def clonotypic_entropy(adata, phenotype, method="probabilistic", base=2, normali
         cent = cent / logf(len(res))
     return cent
 
+def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="probabilistic"):
+    logf = lambda x : np.log(x) / np.log(base)
+    joint_distribution(adata, method=method)
+    jd = adata.uns['joint_distribution'].T
+    res = jd.loc[clonotype].to_numpy()
+    pent = entropy(res,base=base)
+    if normalized:
+        pent = pent / logf(len(res))
+    return pent
+
 def probability_distribution(adata, method="probabilistic"):
     if method == "probabilistic":
         joint_distribution(adata) 
