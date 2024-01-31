@@ -60,12 +60,12 @@ def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
         if agg_function == None:
             agg_function = np.mean
         entropies = collections.defaultdict(list)
-        for x in set(adata.obs[batch_key]):
+        for x in tqdm.tqdm(list(set(adata.obs[batch_key]))):
             sdata = adata[adata.obs[batch_key]==x]
             X = sdata.X.todense()
             X = np.array(X.T)
             gene_to_row = list(zip(sdata.var.index.tolist(), X))
-            for symbol, exp in tqdm.tqdm(gene_to_row):
+            for symbol, exp in gene_to_row:
                 counts = np.unique(exp, return_counts = True)
                 entropies[symbol].append(entropy(counts[1][1:]))        
         aggregated_entropies = []
@@ -75,11 +75,9 @@ def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
         adata.var[key_added] = aggregated_entropies
 
 def clone_size(adata, key_added="clone_size", return_counts=False):
-    df = adata.obs
     tcr_key = adata.uns["tcri_clone_key"]
-    clone_sizes = dict()
-    for clone in set(df[tcr_key]):
-        clone_sizes[clone] = len(df[df[tcr_key]==clone].index)
+    res = np.unique(adata.obs[tcr_key].tolist(), return_counts=True)
+    clone_sizes = dict(zip(res[0],res[1]))
     sizes = []
     for clone in adata.obs[tcr_key]:
         sizes.append(clone_sizes[clone])

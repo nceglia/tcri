@@ -136,7 +136,6 @@ def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], s
         else:
             ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
 
-
 def probability_ternary(adata, phenotype_names, splitby, conditions, method="probabilistic", nt=False, top_n=None, scale_function=None,color="k",save=None):
     if scale_function == None:
         scale_function = freq_to_size_scaling
@@ -207,7 +206,7 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
     if save != None:
         fig.savefig(save)
 
-def top_clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figsize=(12,5)):
+def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, bg_size=0.1, bg_alpha=0.6, figsize=(12,5), return_df=False,save=None):
     df = adata.obs
     seq_column = adata.uns["tcri_clone_key"]
     plt.figure(figsize = figsize)
@@ -217,29 +216,30 @@ def top_clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figs
     top_clonotypes = sorted(clonotype_counts.items(), key=operator.itemgetter(1),reverse=True)
     top_clonotypes = [x[0] for x in top_clonotypes[:top_n]]
     ax1 = plt.subplot(1,1,1)
-    sizes = []
+    x = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
+    y = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
+    sns.scatterplot(x=x,y=y, color="#75715E",  alpha=bg_alpha, ax=ax1, s=bg_size, linewidth=0.0)
+    xonly = []
+    yonly = []
     clonotype_labels = []
-    for clonotype in df[seq_column]:
+    size = []
+    for clonotype,x1,y1 in zip(df[seq_column],x,y):
         clonotype = str(clonotype)
         if clonotype not in top_clonotypes or clonotype == "None" or clonotype == "nan":
-            sizes.append(bg_size)
-            clonotype_labels.append("_Other")
+            continue
         else:
-            sizes.append(size)
+            xonly.append(x1)
+            yonly.append(y1)
+            size.append(1/clonotype_counts[clonotype])
             clonotype_labels.append(str(clonotype) + " {}".format(clonotype_counts[clonotype]))
-    df["Size"] = sizes
-    df["TCR Sequence"] = clonotype_labels
+    dftop = pd.DataFrame.from_dict({"TCR Sequence":clonotype_labels,"Cells":size, "UMAP1":xonly,"UMAP2":yonly})
     colors = tcri_colors
     order = []
     for c in set(clonotype_labels):
         if c != "_Other":
             order.append(c)
-    order.append("_Other")
-    colors = colors[:len(set(clonotype_labels))-1] + ["#75715E"]
-    x = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
-    y = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
-    customPalette = sns.set_palette(sns.color_palette(colors))
-    sns.scatterplot(x=x, y=y, hue=clonotype_labels,hue_order=order, ax=ax1, alpha=0.7,size=sizes, linewidth=0.0,palette=customPalette)
+    colors = colors[:len(set(clonotype_labels))-1]
+    sns.scatterplot(data=dftop, x="UMAP1", y="UMAP2", hue="TCR Sequence", hue_order=order, ax=ax1, alpha=fg_alpha,size=fg_size, linewidth=0.0,palette=colors)
     ax1.set_xlabel('UMAP-1')
     ax1.set_ylabel('UMAP-2')
     ax1.xaxis.set_ticklabels([])
@@ -250,7 +250,10 @@ def top_clone_umap(adata, reduction="umap", top_n=10, size=25, bg_size=0.1, figs
     h,l = ax1.get_legend_handles_labels()
     ax1.legend(h[:top_n-1], l[:top_n-1], borderaxespad=2.,fontsize='9',bbox_to_anchor=(0, 1), loc='best')
     plt.tight_layout()
-
+    if return_df:
+        return dftop
+    elif save != None:
+        plt.savefig(save)
 
 def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None):
     if groupby == None and splitby == None:
@@ -321,7 +324,7 @@ def clonotypic_entropy(adata, method="probabilistic", normalized=True, groupby=N
     func = lambda x : centropies(x, normalized=normalized, method=method)
     return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order)
 
-def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,palette="coolwarm"):
+def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,palette="coolwarm",save=None):
     clone_size(adata)
     df = adata.obs
     reduction="umap"
@@ -329,9 +332,8 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     df["UMAP1"] = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
     df["UMAP2"] = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
     df["log(Clone Size)"] = sizes
-    df["log(Clone Size)"] *= scale
     fig,ax=plt.subplots(1,1,figsize=figsize)
-    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",palette=palette, ax=ax, alpha=alpha,linewidth=0.)
+    sns.scatterplot(data=df,x="UMAP1", y="UMAP2", hue="log(Clone Size)",s=size,palette=palette, ax=ax, alpha=alpha,linewidth=0.)
     ax.set_xlabel('UMAP-1')
     ax.set_ylabel('UMAP-2')
     ax.xaxis.set_ticklabels([])
@@ -339,6 +341,8 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),scale=1,alpha=0.7,pal
     ax.xaxis.set_ticks([])
     ax.yaxis.set_ticks([])
     fig.tight_layout()
+    if save != None:
+        fig.savefig(save)
     return ax
 
 def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_df=False, normalized=True, decimals=5, figsize=(5,4), save=None, order=None, rotation=0, minimum_clone_size=1, palette=None):
@@ -353,10 +357,10 @@ def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_d
         for p in set(rdata.obs[splitby]):
             pdata = rdata[rdata.obs[splitby] == p]
             for clone, ent in pentropies(pdata,method=method,normalized=normalized,decimals=decimals).items():
-                rs.append(r)
+                rs.append(p)
                 r2.append(ent)
                 ts.append(clone)
-                ps.append(p)
+                ps.append(r)
     df = pd.DataFrame.from_dict({groupby:ps,splitby:rs,"Phenotypic Entropy":r2,"Clone":ts})
     fig, ax = plt.subplots(1,1,figsize=figsize)
     if order == None:
