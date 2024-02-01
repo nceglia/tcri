@@ -206,6 +206,116 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
     if save != None:
         fig.savefig(save)
 
+def probability_distribution(adata, phenotype_order=None, color="#000000", rotation=90, splitby=None, order=None, figsize=(7,5), save=None):
+    columns = []
+    if splitby != None:
+        ncols = len(set(adata.obs[splitby]))
+    else:
+        ncols = 1
+    fig, ax = plt.subplots(1,ncols,figsize=figsize)
+
+    if order == None:
+        order = list(sorted(adata.obs[splitby]))
+    for i, o in enumerate(order):
+        zdata = adata[adata.obs[splitby] == o]
+        pdist = tcri.tl.probability_distribution(zdata)
+        sns.barplot(data=pdist,ax=ax[i],order=phenotype_order,color=color)
+        ax[i].set_xticklabels(ax[i].get_xticklabels(), rotation=rotation)
+        ax[i].set_title(o)
+
+    fig.tight_layout()
+    if save != None:
+        fig.savefig(save)
+
+def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.001, nt=False, top_n=None, color="k",save=None, scale_function=None):
+    def get_expression(gene):
+        return adata.X[:,adata.var.index.tolist().index(gene)].T.todense().tolist()[0]
+    assert len(gene_symbols) == 3, "Must select three genes."
+    def normalized_exponential(values):
+        assert temperature > 0, "Temperature must be positive"
+        exps = np.exp(values / temperature)
+        dist = exps / np.sum(exps)
+        return np.nan_to_num(dist,nan=1)
+
+    expression_matrix = []
+    for gene in gene_symbols:
+        expression = get_expression(gene)
+        expression_matrix.append(expression)
+    matrix = np.array(expression_matrix).T
+    cell_probabilities = dict()
+    for bc, exp in zip(adata.obs.index.tolist(), matrix):
+        probs = normalized_exponential(exp,temperature=temperature)
+        print(probs, probs.sum())
+        cell_probabilities[bc] = dict(zip(gene_symbols,probs))
+    if scale_function == None:
+        scale_function = freq_to_size_scaling
+    
+    phenotypes = Phenotypes(gene_symbols)
+    repertoires = dict()
+    
+    if nt:
+        chains_to_use = "ntseq"
+    else:
+        chains_to_use = "aaseq"
+    
+    for s in set(adata.obs[splitby]):
+        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
+                                        phenotypes = phenotypes, 
+                                        use_genes = False, 
+                                        use_chain = False,
+                                        seq_type = chains_to_use,
+                                        chains_to_use = ['TRB'],
+                                        name = s)
+    
+    for bc, condition, seq, phenotype in zip(adata.obs.index,
+                                         adata.obs[splitby],
+                                         adata.obs[adata.uns["tcri_clone_key"]],
+                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
+        if str(seq) != "nan" and condition in repertoires:
+            phenotypes_and_counts = cell_probabilities[bc]
+            if nt:
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
+                                                          TRB = dict(ntseq = seq), 
+                                                          use_genes = False)
+            else:
+                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
+                                                          TRB = dict(aaseq = seq), 
+                                                          use_genes = False)
+            repertoires[condition].cell_list.append(t)
+    for condition, rep in repertoires.items():
+        rep._set_consistency()
+    
+    phenotype_names_dict = {p: p for p in gene_symbols}
+    if type(conditions) == list:
+        if len(conditions) == 1:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = None
+        elif len(conditions) == 2:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = repertoires[conditions[1]]
+        else:
+            raise ValueError("Only two conditions supported.")
+    else:
+        start_clones_and_phenos = repertoires[conditions]
+        end_clones_and_phenos = None
+    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
+    if top_n == None:
+        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
+    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
+
+    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
+                                            end_clones_and_phenotypes = end_clones_and_phenos,
+                                            phenotypes = gene_symbols, 
+                                            phenotype_names = phenotype_names_dict,
+                                            clones = c_clones,
+                                            line_type = 'arrows', 
+                                            kwargs_for_plots={"color":color},
+                                            s_dict = s_dict,
+                                            return_axes  = True)
+    freq_to_size_legend(ax)
+    if save != None:
+        fig.savefig(save)
+
 def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, bg_size=0.1, bg_alpha=0.6, figsize=(12,5), return_df=False,save=None):
     df = adata.obs
     seq_column = adata.uns["tcri_clone_key"]
