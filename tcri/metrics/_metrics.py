@@ -36,6 +36,7 @@ def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="proba
     return pent
 
 def probability_distribution(adata, method="probabilistic"):
+    joint_distribution(adata,method=method)
     if method == "probabilistic":
         joint_distribution(adata) 
         total = adata.uns["joint_distribution"].to_numpy().sum()
@@ -124,15 +125,17 @@ def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", di
     that_clones = set(that.obs[this.uns["tcri_clone_key"]])
     clones = list(this_clones.intersection(that_clones))
     distances = dict()
+    tcri.pp.joint_distribution(this, method=method)
+    tcri.pp.joint_distribution(that, method=method)
     for clone in clones:
-        this_distribution = marginal_phenotypic(this,clones=[clone])
-        that_distribution = marginal_phenotypic(that,clones=[clone])
+        this_distribution = marginal_phenotypic(this,clones=[clone], probability=True)
+        that_distribution = marginal_phenotypic(that,clones=[clone], probability=True)
         if distance_metric == "l1":
             dist = distance.cityblock(this_distribution, that_distribution)
         elif distance_metric == "dkl":
             dist = entropy(this_distribution, that_distribution, base=2, axis=0)
         distances[clone] = dist
-    return distances 
+    return distances
 
 def mutual_information(adata, method="probabilistic"):
     joint_distribution(adata,method=method)
@@ -146,3 +149,4 @@ def mutual_information(adata, method="probabilistic"):
     nzs = pxy > 0
     mi = np.sum(pxy[nzs] * np.log2((pxy[nzs] / px_py[nzs])))
     return mi
+

@@ -236,7 +236,6 @@ def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.0
         exps = np.exp(values / temperature)
         dist = exps / np.sum(exps)
         return np.nan_to_num(dist,nan=1)
-
     expression_matrix = []
     for gene in gene_symbols:
         expression = get_expression(gene)
@@ -244,20 +243,16 @@ def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.0
     matrix = np.array(expression_matrix).T
     cell_probabilities = dict()
     for bc, exp in zip(adata.obs.index.tolist(), matrix):
-        probs = normalized_exponential(exp,temperature=temperature)
-        print(probs, probs.sum())
+        probs = normalized_exponential(exp)
         cell_probabilities[bc] = dict(zip(gene_symbols,probs))
     if scale_function == None:
         scale_function = freq_to_size_scaling
-    
     phenotypes = Phenotypes(gene_symbols)
     repertoires = dict()
-    
     if nt:
         chains_to_use = "ntseq"
     else:
         chains_to_use = "aaseq"
-    
     for s in set(adata.obs[splitby]):
         repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
                                         phenotypes = phenotypes, 
@@ -266,7 +261,6 @@ def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.0
                                         seq_type = chains_to_use,
                                         chains_to_use = ['TRB'],
                                         name = s)
-    
     for bc, condition, seq, phenotype in zip(adata.obs.index,
                                          adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
@@ -284,7 +278,6 @@ def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.0
             repertoires[condition].cell_list.append(t)
     for condition, rep in repertoires.items():
         rep._set_consistency()
-    
     phenotype_names_dict = {p: p for p in gene_symbols}
     if type(conditions) == list:
         if len(conditions) == 1:
@@ -302,7 +295,6 @@ def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.0
     if top_n == None:
         top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
     c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
-
     fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
                                             end_clones_and_phenotypes = end_clones_and_phenos,
                                             phenotypes = gene_symbols, 
@@ -349,7 +341,7 @@ def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, 
         if c != "_Other":
             order.append(c)
     colors = colors[:len(set(clonotype_labels))-1]
-    sns.scatterplot(data=dftop, x="UMAP1", y="UMAP2", hue="TCR Sequence", hue_order=order, ax=ax1, alpha=fg_alpha,size=fg_size, linewidth=0.0,palette=colors)
+    sns.scatterplot(data=dftop, x="UMAP1", y="UMAP2", hue="TCR Sequence", hue_order=order, ax=ax1, alpha=fg_alpha,s=fg_size, linewidth=0.0,palette=colors)
     ax1.set_xlabel('UMAP-1')
     ax1.set_ylabel('UMAP-2')
     ax1.xaxis.set_ticklabels([])
@@ -484,7 +476,7 @@ def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_d
     if return_df:
         return df
 
-def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
+def probability_distribution_bar(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
     pdist = pdistribution(adata, method=method)
     if phenotypes == None:
         phenotypes = adata.uns["joint_distribution"].index
@@ -570,3 +562,38 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
         return df
     else:
         return ax
+
+def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None):
+    joint_distribution(adata,method=method )
+    # plt.figure(figsize=figsize)
+    ax = plt.subplot(111, projection='polar', figsize=figsize)
+    if splitby is None:
+        splits = ['All']
+    else:
+        splits = list(set(adata.obs[splitby]))
+    if phenotypes is None:
+        phenotypes = adata.uns["joint_distribution"].index
+    N = len(phenotypes)
+    theta = np.linspace(0.0, 2 * np.pi, N, endpoint=False)
+    plot_theta = np.append(theta, theta[0])
+    subset = adata[adata.obs[adata.uns["tcri_phenotype_key"]].isin(phenotypes)]
+    for i, split in enumerate(splits): 
+        if split == 'All':
+            pdist = pdistribution(subset, method=method)
+        else:
+            psubset = subset[subset.obs[splitby] == split]
+            pdist = pdistribution(psubset, method=method)
+        pdist = pdist.tolist()
+        pdist.append(pdist[0])
+        ax.plot(plot_theta, pdist, color=tcri_colors[i], alpha=alpha, label=split)
+        ax.fill_between(plot_theta, 0, pdist, color=tcri_colors[i], alpha=alpha)
+    ax.set_xticks(theta)
+    ax.set_xticklabels(phenotypes, fontsize=fontsize)
+    ax.grid(True)
+    leg = ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.15))
+    for line in leg.get_lines():
+        line.set_linewidth(8.0)  # Set the line width
+    if title:
+        plt.title(title, va='bottom', fontsize=fontsize)
+    if save:
+        plt.savefig(save)
