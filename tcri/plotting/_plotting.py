@@ -61,6 +61,7 @@ tcri_colors = [
 sns.set_palette(sns.color_palette(tcri_colors))
 
 def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True, method="probabilistic", phenotype_colors=None, save=None, figsize=(6,3), show_legend=True):
+    joint_distribution(adata)
     phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
     cell_probabilities = probabilities(adata)
     repertoires = dict()
@@ -508,7 +509,7 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
         sdata = adata[adata.obs[groupby]==x]
         hue_order = []
         for i in range(len(order)-1):
-            l1_distances = flux(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
+            l1_distances = flux_tl(sdata,key=key,from_this=order[i],to_that=order[i+1],distance_metric=distance_metric)
             df = pd.DataFrame(list(l1_distances.items()), columns=['Clone', distance_metric])
             df[groupby] = x
             if paint!=None:
@@ -565,7 +566,6 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
 
 def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None):
     joint_distribution(adata,method=method )
-    # plt.figure(figsize=figsize)
     ax = plt.subplot(111, projection='polar', figsize=figsize)
     if splitby is None:
         splits = ['All']

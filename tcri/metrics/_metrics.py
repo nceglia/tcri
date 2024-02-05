@@ -125,8 +125,8 @@ def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", di
     that_clones = set(that.obs[this.uns["tcri_clone_key"]])
     clones = list(this_clones.intersection(that_clones))
     distances = dict()
-    tcri.pp.joint_distribution(this, method=method)
-    tcri.pp.joint_distribution(that, method=method)
+    joint_distribution(this, method=method)
+    joint_distribution(that, method=method)
     for clone in clones:
         this_distribution = marginal_phenotypic(this,clones=[clone], probability=True)
         that_distribution = marginal_phenotypic(that,clones=[clone], probability=True)
