@@ -100,7 +100,8 @@ def clone_fraction(adata, groupby):
             frequencies[group][c] = clones.count(c) / total_cells
     return frequencies
 
-def marginal_phenotypic(adata, clones=None, probability=False):
+def marginal_phenotypic(adata, clones=None, probability=False, method="probabilistic"):
+    joint_distribution(adata,method=method)
     if clones == None:
         clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
     dist = adata.uns["joint_distribution"][clones].to_numpy()
@@ -109,14 +110,14 @@ def marginal_phenotypic(adata, clones=None, probability=False):
         dist /= dist.sum()
     return np.nan_to_num(dist).T
 
-def marginal_phenotypic(adata, clones=None,method="probabilistic"):
-    joint_distribution(adata,method=method)
-    if clones == None:
-        clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
-    dist = adata.uns["joint_distribution"][clones].to_numpy()
-    dist = dist.sum(axis=1)
-    dist /= dist.sum()
-    return np.nan_to_num(dist).T
+# def marginal_phenotypic(adata, clones=None,method="probabilistic"):
+    
+#     if clones == None:
+#         clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
+#     dist = adata.uns["joint_distribution"][clones].to_numpy()
+#     dist = dist.sum(axis=1)
+#     dist /= dist.sum()
+#     return np.nan_to_num(dist).T
 
 def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", distance_metric="l1"):
     this = adata[adata.obs[key] == from_this]
