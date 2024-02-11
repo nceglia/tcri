@@ -35,6 +35,10 @@ def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="proba
         pent = pent / logf(len(res))
     return pent
 
+def get_largest_clonotypes(adata, n=20):
+    df = adata.obs[[adata.uns["tcri_clone_key"],"clone_size"]]
+    return df.sort_values("clone_size",ascending=False)[adata.uns['tcri_clone_key']].unique().tolist()[:n]
+
 def probability_distribution(adata, method="probabilistic"):
     joint_distribution(adata,method=method)
     if method == "probabilistic":
@@ -109,15 +113,6 @@ def marginal_phenotypic(adata, clones=None, probability=False, method="probabili
     if probability:
         dist /= dist.sum()
     return np.nan_to_num(dist).T
-
-# def marginal_phenotypic(adata, clones=None,method="probabilistic"):
-    
-#     if clones == None:
-#         clones = adata.obs[adata.uns["tcri_clone_key"]].tolist()
-#     dist = adata.uns["joint_distribution"][clones].to_numpy()
-#     dist = dist.sum(axis=1)
-#     dist /= dist.sum()
-#     return np.nan_to_num(dist).T
 
 def flux(adata, key, from_this, to_that, clones=None, method="probabilistic", distance_metric="l1"):
     this = adata[adata.obs[key] == from_this]

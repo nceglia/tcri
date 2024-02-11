@@ -529,7 +529,7 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", figsize=(6,5), minimum_clone_size=1, rotation=90,return_df=False):
+def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.15)):
     mis = []
     groups = []
     splits = []
@@ -555,18 +555,20 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", fig
     order = list(set(adata.obs[splitby]))
 
     fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order)
-    sns.swarmplot(data=df,x=splitby,y="MI",order=order)
+    sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order, color=box_color)
+    sns.swarmplot(data=df,x=splitby,y="MI",order=order ,s=size, hue=groupby)
     fig.tight_layout()
     plt.xticks(rotation=rotation)
+    _ = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor)
     if return_df:
         return df
     else:
         return ax
 
-def probability_distribution(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None):
+def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15):
     joint_distribution(adata,method=method )
-    ax = plt.subplot(111, projection='polar', figsize=figsize)
+    plt.figure(figsize=figsize)
+    ax = plt.subplot(111, projection='polar')
     if splitby is None:
         splits = ['All']
     else:
@@ -578,22 +580,22 @@ def probability_distribution(adata, phenotypes=None, method="probabilistic", sav
     plot_theta = np.append(theta, theta[0])
     subset = adata[adata.obs[adata.uns["tcri_phenotype_key"]].isin(phenotypes)]
     for i, split in enumerate(splits): 
-        if split == 'All':
-            pdist = pdistribution(subset, method=method)
-        else:
-            psubset = subset[subset.obs[splitby] == split]
+        psubset = adata[adata.obs[splitby] == split]
+        if statistic == "entropy":
+            pdist = pd.Series(tcri.tl.clonotypic_entropies(psubset))
+        else:    
             pdist = pdistribution(psubset, method=method)
         pdist = pdist.tolist()
         pdist.append(pdist[0])
-        ax.plot(plot_theta, pdist, color=tcri_colors[i], alpha=alpha, label=split)
+        ax.plot(plot_theta, pdist, color=tcri_colors[i], alpha=alpha, label=split, linewidth=linewidth)
         ax.fill_between(plot_theta, 0, pdist, color=tcri_colors[i], alpha=alpha)
     ax.set_xticks(theta)
     ax.set_xticklabels(phenotypes, fontsize=fontsize)
     ax.grid(True)
-    leg = ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1.15))
+    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
     for line in leg.get_lines():
         line.set_linewidth(8.0)  # Set the line width
     if title:
-        plt.title(title, va='bottom', fontsize=fontsize)
+        plt.title(title, va='bottom', fontsize=fontsize, fontweight="bold")
     if save:
         plt.savefig(save)
