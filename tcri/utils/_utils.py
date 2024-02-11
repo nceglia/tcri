@@ -1310,7 +1310,7 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
 
     if 'times' in kwargs:
         times = np.array(kwargs['times'])*kwargs.get('time_rescale', 1)
-        dx = (max(times) - min(times)) / 100
+        dx = (max(times) - min(times)) / 500
     else:
         times = list(range(n_reps))
     
