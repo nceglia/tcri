@@ -493,18 +493,26 @@ def clone_fraction(adata, groupby):
     fractions = clone_fraction_tl(adata,groupby=groupby)
     draw_clone_bars(fractions, title=groupby)
 
-def flux(adata, key, order, groupby, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5)):
+def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5), paint_order=None, palette=None):
     dfs = []
     if paint != None:
         palette = []
         legend_handles = [] 
         paint_categories = adata.obs[paint].unique()
-        pcolors = dict(zip(paint_categories, tcri_colors))
+        if paint_dict != None:
+            pcolors = paint_dict
+        else:
+            pcolors = dict(zip(paint_categories, tcri_colors))
         for category in paint_categories:
+            print(category,pcolors[category])
             handle = mpatches.Patch(color=pcolors[category], label=category)
             legend_handles.append(handle)
     else:
-        palette = tcri_colors
+        if palette == None:
+            if "{}_colors".format(paint) in adata.uns:
+                palette = adata.uns["{}_colors".format(paint)]
+            else:
+                palette = tcri.pl.tcri_colors
     for x in tqdm.tqdm(list(set(adata.obs[groupby]))):
         sdata = adata[adata.obs[groupby]==x]
         hue_order = []
@@ -515,21 +523,19 @@ def flux(adata, key, order, groupby, method="probabilistic", paint=None, distanc
             if paint!=None:
                 pcat = sdata.obs[paint].unique().tolist()[0]
                 palette.append(pcolors[pcat])
-            df["Comparison"] = "{}_{}".format(order[i],order[i+1])
-            hue_order.append("{}_{}".format(order[i],order[i+1]))
+            df["Comparison"] = pcat
             dfs.append(df)
+    print(palette)
     df = pd.concat(dfs)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
     order = df.groupby(groupby).median(distance_metric).sort_values(distance_metric).index.tolist()
     fig,ax=plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=groupby,y=distance_metric,hue="Comparison",order=order,palette=palette,ax=ax, hue_order=hue_order)
-    if paint != None:
-        ax.legend(handles=legend_handles, title=paint)
+    sns.boxplot(data=df,x=groupby,y=distance_metric,hue="Comparison",order=order,palette=pcolors,ax=ax)
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.15)):
+def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), colors=None, minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.15), order=None):
     mis = []
     groups = []
     splits = []
@@ -552,11 +558,13 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", box
     df = pd.DataFrame.from_dict({"MI":mis, groupby: groups})
     if splitby != None:
         df[splitby] = splits
-    order = list(set(adata.obs[splitby]))
-
+    if order == None:
+        order = list(set(adata.obs[splitby]))
+    if colors == None:
+        colors = tcri_colors
     fig, ax = plt.subplots(1,1,figsize=figsize)
     sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order, color=box_color)
-    sns.swarmplot(data=df,x=splitby,y="MI",order=order ,s=size, hue=groupby)
+    sns.swarmplot(data=df,x=splitby,y="MI",order=order ,s=size, hue=groupby, palette=colors)
     fig.tight_layout()
     plt.xticks(rotation=rotation)
     _ = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor)
@@ -582,7 +590,7 @@ def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilisti
     for i, split in enumerate(splits): 
         psubset = adata[adata.obs[splitby] == split]
         if statistic == "entropy":
-            pdist = pd.Series(tcri.tl.clonotypic_entropies(psubset))
+            pdist = pd.Series(clonotypic_entropies(psubset))
         else:    
             pdist = pdistribution(psubset, method=method)
         pdist = pdist.tolist()
