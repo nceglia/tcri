@@ -18,6 +18,7 @@ from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
 from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
+from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
 from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
@@ -147,7 +148,6 @@ def probability_ternary(adata, phenotype_names, splitby, conditions, method="pro
         chains_to_use = "ntseq"
     else:
         chains_to_use = "aaseq"
-
     for s in set(adata.obs[splitby]):
         repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
                                         phenotypes = phenotypes, 
@@ -219,7 +219,7 @@ def probability_distribution(adata, phenotype_order=None, color="#000000", rotat
         order = list(sorted(adata.obs[splitby]))
     for i, o in enumerate(order):
         zdata = adata[adata.obs[splitby] == o]
-        pdist = tcri.tl.probability_distribution(zdata)
+        pdist = probability_distribution(zdata)
         sns.barplot(data=pdist,ax=ax[i],order=phenotype_order,color=color)
         ax[i].set_xticklabels(ax[i].get_xticklabels(), rotation=rotation)
         ax[i].set_title(o)
@@ -357,6 +357,16 @@ def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, 
         return dftop
     elif save != None:
         plt.savefig(save)
+
+def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that, palette=None, figsize=(7,5),save=None):
+    df = phenotypic_entropy_delta_tl(adata, groupby, key, from_this, to_that)
+    if palette==None:
+        print("hit")
+        palette=tcri_colors
+    fig, ax = plt.subplots(1,1,figsize=figsize)
+    sns.boxplot(data=df, y='Delta Phenotypic Entropy', x=groupby, palette=palette,ax=ax)
+    if save != None:
+        fig.savefig(save)
 
 def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None):
     if groupby == None and splitby == None:
@@ -504,7 +514,6 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
         else:
             pcolors = dict(zip(paint_categories, tcri_colors))
         for category in paint_categories:
-            print(category,pcolors[category])
             handle = mpatches.Patch(color=pcolors[category], label=category)
             legend_handles.append(handle)
     else:
@@ -512,7 +521,7 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
             if "{}_colors".format(paint) in adata.uns:
                 palette = adata.uns["{}_colors".format(paint)]
             else:
-                palette = tcri.pl.tcri_colors
+                palette = tcri_colors
     for x in tqdm.tqdm(list(set(adata.obs[groupby]))):
         sdata = adata[adata.obs[groupby]==x]
         hue_order = []

@@ -35,6 +35,30 @@ def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="proba
         pent = pent / logf(len(res))
     return pent
 
+def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that):
+    clone = []
+    entropy = []
+    diffs = []
+    timepoint = []
+    resp = []
+    for x in set(adata.obs[groupby]):
+        response = adata[adata.obs[groupby] == x]
+        predata = response[response.obs[key] == from_this]
+        joint_distribution(predata)
+        postdata = response[response.obs[key] == to_that]
+        joint_distribution(postdata)
+        preents = phenotypic_entropies(predata,normalized=True)
+        postents = phenotypic_entropies(postdata,normalized=True)
+        common_tcr = set(preents.keys()).intersection(postents.keys())
+        for c in common_tcr:
+            diff = postents[c] - preents[c] / (preents[c] +0.00000000000001)
+            resp.append(x)
+            entropy.append(diff)
+            clone.append(c)
+    df = pd.DataFrame.from_dict({"Clone":clone,groupby:resp, "Delta Phenotypic Entropy":entropy})
+    return df
+
+
 def get_largest_clonotypes(adata, n=20):
     df = adata.obs[[adata.uns["tcri_clone_key"],"clone_size"]]
     return df.sort_values("clone_size",ascending=False)[adata.uns['tcri_clone_key']].unique().tolist()[:n]
