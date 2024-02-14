@@ -29,7 +29,7 @@ def joint_distribution(adata, method='probabilistic'):
         jd = np.round(jd,decimals=5)
         adata.uns["joint_distribution"] = jd
     else:
-        raise ValueError("Method must be 'empirical' or 'probabalistic'.")
+        raise ValueError("Method must be 'empirical' or 'probabilistic'.")
 
 def register_phenotype_key(adata, phenotype_key, order=None):
     assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
