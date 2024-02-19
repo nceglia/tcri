@@ -20,7 +20,7 @@ from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
-from ..utils._utils     import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
+from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
 
 import warnings
@@ -368,14 +368,16 @@ def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that, palette=No
     if save != None:
         fig.savefig(save)
 
-def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None):
+def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None, palette=None):
+    if palette == None:
+        palette = tcri_colors
     if groupby == None and splitby == None:
         data = function(adata)
         df = pd.DataFrame(list(data.items()), columns=['Phenotype', 'Clonotypic Entropy'])
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(inplace=True)
         fig,ax=plt.subplots(1,1,figsize=figsize)
-        sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,ax=ax, palette=tcri_colors)
+        sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,ax=ax, palette=palette)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
         ax.set_ylabel(ylabel)
         ax.set_title(ylabel)
@@ -394,7 +396,7 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         if order == None:
             order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
         fig,ax=plt.subplots(1,1,figsize=figsize)
-        sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,hue=groupby,ax=ax, palette=tcri_colors,order=order)
+        sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,hue=groupby,ax=ax,order=order, palette=palette)
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, color="#999999",order=order)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
         ax.set_title(ylabel)
@@ -419,8 +421,7 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         fig,ax=plt.subplots(1,1,figsize=figsize)
         if order == None:
             order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
-        print(order)
-        sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, hue=splitby,palette=tcri_colors,order=order)
+        sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, hue=splitby,order=order,palette=palette)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
         ax.set_title(ylabel)
         sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1))
@@ -430,12 +431,12 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         raise ValueError("'groupby' must be set to use 'splitby'.")
     return ax
 
-def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5)):
-    return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order)
+def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5), palette=None):
+    return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order, palette=palette)
 
-def clonotypic_entropy(adata, method="probabilistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None):
+def clonotypic_entropy(adata, method="probabilistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None, palette=None):
     func = lambda x : centropies(x, normalized=normalized, method=method)
-    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order)
+    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order, palette=palette)
 
 def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,palette="coolwarm",save=None):
     clone_size(adata)
@@ -544,7 +545,7 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), colors=None, minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.15), order=None):
+def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), colors=None, minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.), order=None):
     mis = []
     groups = []
     splits = []
@@ -582,7 +583,7 @@ def mutual_information(adata, groupby, splitby=None, method="probabilistic", box
     else:
         return ax
 
-def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15):
+def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15, color_dict=None):
     joint_distribution(adata,method=method )
     plt.figure(figsize=figsize)
     ax = plt.subplot(111, projection='polar')
@@ -597,15 +598,19 @@ def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilisti
     plot_theta = np.append(theta, theta[0])
     subset = adata[adata.obs[adata.uns["tcri_phenotype_key"]].isin(phenotypes)]
     for i, split in enumerate(splits): 
+        if color_dict == None:
+            colorx = tcri_colors[i]
+        else:
+            colorx = color_dict[split]
         psubset = adata[adata.obs[splitby] == split]
         if statistic == "entropy":
-            pdist = pd.Series(clonotypic_entropies(psubset))
+            pdist = pd.Series(tcri.tl.clonotypic_entropies(psubset))
         else:    
             pdist = pdistribution(psubset, method=method)
         pdist = pdist.tolist()
         pdist.append(pdist[0])
-        ax.plot(plot_theta, pdist, color=tcri_colors[i], alpha=alpha, label=split, linewidth=linewidth)
-        ax.fill_between(plot_theta, 0, pdist, color=tcri_colors[i], alpha=alpha)
+        ax.plot(plot_theta, pdist, color=colorx, alpha=alpha, label=split, linewidth=linewidth)
+        ax.fill_between(plot_theta, 0, pdist, color=colorx, alpha=alpha)
     ax.set_xticks(theta)
     ax.set_xticklabels(phenotypes, fontsize=fontsize)
     ax.grid(True)
