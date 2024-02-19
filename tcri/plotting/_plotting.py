@@ -12,6 +12,8 @@ import collections
 import operator
 import itertools
 
+from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
+from ..preprocessing._preprocessing import clone_size, joint_distribution
 from ..metrics._metrics import clonotypic_entropies as centropies
 from ..metrics._metrics import phenotypic_entropies as pentropies
 from ..metrics._metrics import clonality as clonality_tl
@@ -20,8 +22,7 @@ from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
-from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
-from ..preprocessing._preprocessing import clone_size, joint_distribution
+
 
 import warnings
 warnings.filterwarnings('ignore')
