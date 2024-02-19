@@ -38,8 +38,6 @@ def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="proba
 def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that):
     clone = []
     entropy = []
-    diffs = []
-    timepoint = []
     resp = []
     for x in set(adata.obs[groupby]):
         response = adata[adata.obs[groupby] == x]
