@@ -337,12 +337,12 @@ def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, 
             size.append(1/clonotype_counts[clonotype])
             clonotype_labels.append(str(clonotype) + " {}".format(clonotype_counts[clonotype]))
     dftop = pd.DataFrame.from_dict({"TCR Sequence":clonotype_labels,"Cells":size, "UMAP1":xonly,"UMAP2":yonly})
-    colors = tcri_colors
+    colors = tcri_colors + tcri_colors + tcri_colors
     order = []
     for c in set(clonotype_labels):
         if c != "_Other":
             order.append(c)
-    colors = colors[:len(set(clonotype_labels))-1]
+    colors = colors[:len(set(clonotype_labels))]
     sns.scatterplot(data=dftop, x="UMAP1", y="UMAP2", hue="TCR Sequence", hue_order=order, ax=ax1, alpha=fg_alpha,s=fg_size, linewidth=0.0,palette=colors)
     ax1.set_xlabel('UMAP-1')
     ax1.set_ylabel('UMAP-2')
@@ -489,6 +489,20 @@ def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_d
     if return_df:
         return df
 
+def set_color_palette(adata, columns):
+    i = 0
+    main_color_map = dict()
+    adata = adata.copy()
+    colors = tcri_colors.copy() + tcri_colors.copy() + tcri_colors.copy()
+    for x in columns:
+        ct = []
+        for i, val in enumerate(set(adata.obs[x].tolist())):
+            c = colors.pop(i)
+            ct.append(c)
+            main_color_map[val] = c
+        adata.uns["{}_colors".format(x)] = ct
+    return main_color_map
+
 def probability_distribution_bar(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
     pdist = pdistribution(adata, method=method)
     if phenotypes == None:
@@ -605,7 +619,7 @@ def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilisti
             colorx = color_dict[split]
         psubset = adata[adata.obs[splitby] == split]
         if statistic == "entropy":
-            pdist = pd.Series(tcri.tl.clonotypic_entropies(psubset))
+            pdist = pd.Series(centropies(psubset))
         else:    
             pdist = pdistribution(psubset, method=method)
         pdist = pdist.tolist()
