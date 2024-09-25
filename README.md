@@ -1,6 +1,8 @@
 # **TCR**i
 Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing
 
+![alt text](https://github.com/nceglia/tcri/blob/main/framework.png?raw=true)
+
 https://www.biorxiv.org/content/10.1101/2022.10.01.510457v1
 
 
