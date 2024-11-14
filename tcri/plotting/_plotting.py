@@ -62,10 +62,12 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
+
 def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True, method="probabilistic", phenotype_colors=None, save=None, figsize=(6,3), show_legend=True):
-    joint_distribution(adata)
+    joint_distribution(adata, method=method)
     phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
-    cell_probabilities = probabilities(adata)
+    if method == "probabilistic":
+        cell_probabilities = probabilities(adata)
     repertoires = dict()
     times = list(range(len(order)))
     if nt:
