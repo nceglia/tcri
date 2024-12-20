@@ -13,7 +13,7 @@ import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 import mpltern
 import numpy as np
-from scipy.stats import fisher_exact, binom_test
+from scipy.stats import fisher_exact#, binom_test
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as mcolors
 

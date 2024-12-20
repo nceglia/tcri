@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import pyro.distributions as dist
 from torch.distributions import constraints
-
+import matplotlib.pyplot as plt
 
 class AnnDataTCRDataset(Dataset):
     def __init__(self, adata, gene_list, tcr_key):
@@ -80,13 +80,9 @@ def model(genes, tcrs, K, D):
         )
         pyro.sample("genes", zinb.to_event(1), obs=genes)  
 
-
-
 def guide(genes, tcrs, K, D):
-
     probs_q = pyro.param("probs_q", torch.ones(K, device=genes.device), constraint=constraints.simplex)
     pyro.sample("probs", dist.Dirichlet(probs_q))  # Shape: (K,)
-
 
     with pyro.plate("tcr_plate", K, dim=-2):  # Plate over K (TCRs)
         with pyro.plate("gene_plate", D, dim=-1):  # Plate over D (genes)
@@ -105,33 +101,46 @@ def guide(genes, tcrs, K, D):
         z_logits = pyro.param("z_logits", torch.randn((genes.shape[0], K), device=genes.device))  # Shape: (batch_size, K)
         pyro.sample("z", dist.Categorical(logits=z_logits), infer={"is_auxiliary": True})  # Shape: (batch_size,)
 
-def train_model(adata, gene_list, tcr_key, num_epochs=1000, batch_size=10000):
-    losses = []
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    dataset = AnnDataTCRDataset(adata, gene_list, tcr_key)
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    K = len(dataset.get_tcr_mapping())  # Number of TCRs
-    D = len(gene_list)  # Number of genes
+class JointProbabilityDistribution(object):
+    def __init__(self, adata, gene_list, batch_size=500, lr=0.01):
+        self.adata = adata
+        self.losses = []
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device: {self.device}")
+        self.dataset = AnnDataTCRDataset(adata, gene_list, adata.uns["tcri_clone_key"])
+        self.data_loader = DataLoader(self.dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    pyro.clear_param_store()
-    svi = SVI(
-        model=lambda genes, tcrs, K, D: model(genes, tcrs, K, D), 
-        guide=lambda genes, tcrs, K, D: guide(genes, tcrs, K, D), 
-        optim=pyro.optim.Adam({"lr": 0.01}), 
-        loss=Trace_ELBO()
-    )
+        self.K = len(self.dataset.get_tcr_mapping())  # Number of TCRs
+        self.D = len(gene_list)  # Number of genes
 
-    for epoch in range(num_epochs):
-        epoch_loss = 0
-        for batch_idx, (gene_batch, tcr_batch) in enumerate(data_loader):
-            gene_batch = gene_batch.to(device)
-            tcr_batch = tcr_batch.to(device)
-            loss = svi.step(gene_batch, tcr_batch, K=K, D=D)
-            epoch_loss += loss
-            losses.append(loss)
+        pyro.clear_param_store()
+        self.svi = SVI(
+            model=lambda genes, tcrs, K, D: model(genes, tcrs, K, D), 
+            guide=lambda genes, tcrs, K, D: guide(genes, tcrs, K, D), 
+            optim=pyro.optim.Adam({"lr": lr}), 
+            loss=Trace_ELBO()
+        )
 
-        if epoch % 5 == 0:
-            print(f"Epoch {epoch} Loss: {epoch_loss / len(data_loader):.4f}")
-    return losses
+    def train(self, num_epochs, print_every=5):
+        for epoch in range(num_epochs):
+            epoch_loss = 0
+            for batch_idx, (gene_batch, tcr_batch) in enumerate(self.data_loader):
+                gene_batch = gene_batch.to(self.device)
+                tcr_batch = tcr_batch.to(self.device)
+                loss = self.svi.step(gene_batch, tcr_batch, K=self.K, D=self.D)
+                epoch_loss += loss
+                self.losses.append(loss)
+            if epoch % print_every == 0:
+                print(f"Epoch {epoch} Loss: {epoch_loss / len(self.data_loader):.4f}")
+    
+    def plot_loss(self):
+        """ Plot training loss """
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.losses, label="ELBO Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss Over Epochs")
+        plt.legend()
+        plt.show()
+
