@@ -6,6 +6,8 @@ import collections
 import warnings
 warnings.filterwarnings('ignore')
 
+from ..model._model import JointProbabilityDistribution
+
 def joint_distribution(adata, method='probabilistic'):
     if method == "probabilistic":
         matrix = adata.obs[adata.uns["probability_columns"]]
@@ -30,6 +32,7 @@ def joint_distribution(adata, method='probabilistic'):
         adata.uns["joint_distribution"] = jd
     else:
         raise ValueError("Method must be 'empirical' or 'probabilistic'.")
+
 
 def register_phenotype_key(adata, phenotype_key, order=None):
     assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
