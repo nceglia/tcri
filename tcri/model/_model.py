@@ -1,26 +1,16 @@
-# Standard library imports
 from typing import Dict, List, Optional, Tuple, Union
 import warnings
-
-# Third-party data science & ML imports
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import dirichlet
 from scipy.cluster.hierarchy import dendrogram, linkage
-from sklearn.manifold import TSNE
-
-# AnnData & Scanpy
 import anndata
 import scanpy as sc
-
-# PyTorch imports
 import torch
 from torch.distributions import Categorical, kl_divergence
 from torch.utils.data import DataLoader, Dataset
-
-# Pyro imports
 import pyro
 import pyro.distributions as dist
 from pyro.distributions import Dirichlet, Gamma, constraints
@@ -177,7 +167,6 @@ class TCRCooccurrenceDataset(Dataset):
                 self.timepoints[idx]  # new
             )
         else:
-            # If no timepoint was provided, return None or a sentinel
             return (
                 self.matrix[idx],
                 self.tcrs[idx],
@@ -328,7 +317,6 @@ class JointProbabilityDistribution:
             clone_to_phenotype_prior, dtype=torch.float32, device=self.device
         )
         
-        # You might update your get_patient_tcr_indices or define similar
         self.patient_tcr_indices = self._get_patient_tcr_indices()
         
         # Pyro init
@@ -421,7 +409,7 @@ class JointProbabilityDistribution:
             )
 
     def _get_patient_tcr_indices(self):
-        # or rename to a more general _get_covariate_tcr_indices
+        # rename to a more general _get_covariate_tcr_indices
         patient_tcrs = {}
         tcr_indices = self.dataset.tcrs.numpy()
         covariate_indices = self.dataset.covariates.numpy()
@@ -496,7 +484,7 @@ class JointProbabilityDistribution:
             )
             # shape => (K*C*T, n_phenotypes)
 
-        # -- 5) Phenotype->gene profile (unchanged) --
+        # -- 5) Phenotype->gene profile
         gene_prior = (
             self.gene_profile_prior * self.gene_profile_prior_strength 
             + self.gene_profile_prior_offset
@@ -518,7 +506,7 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(base_dist * self.persistence_factor + 1.0)
             )
             
-            # (Optional) Clone consistency penalty
+            # Clone consistency penalty .... remove?
             unique_clones = torch.unique(tcr_idx)
             consistency_loss = 0.0
             for clone in unique_clones:
@@ -734,7 +722,7 @@ class JointProbabilityDistribution:
 
 
     # ------------------------------------------------------------------------
-    # Parameter retrieval
+    # Parameter retrieval --- some of these are defunct, use dataset class index mappings
     # ------------------------------------------------------------------------
     def get_params(self):
         """Get the learned parameters from Pyro's param store."""
@@ -946,7 +934,7 @@ class JointProbabilityDistribution:
             # Convert to distribution p(phi|k)
             p_phi_given_k = conc_k / conc_k.sum()
             dist_kp.append(p_phi_given_k)
-            clone_freqs.append(1.0)  # or real frequencies if you have them
+            clone_freqs.append(1.0)  # or real frequencies...
 
         dist_kp = torch.stack(dist_kp, dim=0)  # (K, n_phenotypes)
         clone_freqs = torch.tensor(clone_freqs, dtype=torch.float)
@@ -969,7 +957,7 @@ class JointProbabilityDistribution:
         entropy_per_phi = torch.stack(entropy_per_phi, dim=0)
         phenotypic_entropy = torch.sum(p_phi * entropy_per_phi)
 
-        # Normalize by ln(K) if requested
+        # Normalize by ln(K)
         if normalize and self.K > 1:
             phenotypic_entropy = phenotypic_entropy / math.log(self.K)
 
@@ -1017,14 +1005,13 @@ class JointProbabilityDistribution:
         dist_kp = []
         clone_freqs = []
         
-        # 1) Build distribution p(phi|k) + a notion of p(k).
         for k in range(self.K):
             kct = k * (self.C * self.T) + patient_idx * self.T + time_idx
             conc_k = local_conc_pt[kct]
             p_phi_given_k = conc_k / conc_k.sum()
             dist_kp.append(p_phi_given_k)
             
-            # p(k) (placeholder)
+            # p(k) .... placeholder
             if weight_by_clone_freq:
                 clone_freqs.append(1.0)
             else:
@@ -1094,7 +1081,7 @@ class JointProbabilityDistribution:
             entropy_k = -torch.sum(p_k * torch.log(p_k))
             entropies.append(entropy_k.item())
 
-            # weighting for p(k) if we have real frequencies
+            # weighting if we have fequencies
             clone_freqs.append(1.0)
 
         clone_freqs = torch.tensor(clone_freqs, dtype=torch.float)
@@ -1103,7 +1090,7 @@ class JointProbabilityDistribution:
 
         clonotypic_entropy = torch.sum(clone_freqs * entropies)
 
-        # Normalize by ln(n_phenotypes) if requested
+        # Normalize by ln(n_phenotypes) 
         if normalize and self.n_phenotypes > 1:
             clonotypic_entropy = clonotypic_entropy / math.log(self.n_phenotypes)
 
@@ -1131,7 +1118,7 @@ class JointProbabilityDistribution:
         local_conc_pt = pyro.param("local_clone_concentration_pt").detach().cpu()
         # shape (K*C*T, n_phenotypes)
 
-        # Build p(k,phi) = p(k)*p(phi|k). We'll do uniform p(k) or 
+        # Build p(k,phi) = p(k)*p(phi|k).
         # some weighting if weight_by_clone_freq is True. 
         dist_kp = []
         clone_freqs = []
@@ -1219,7 +1206,6 @@ class JointProbabilityDistribution:
             raise ValueError(f"TCR label '{tcr_label}' not found")
 
         # If timepoint_label is provided, we look up the index. 
-        # If your dataset has e.g. self.dataset.timepoint_mapping, do:
         if timepoint_label is not None:
             time_idx = self.dataset.timepoint_mapping.get(timepoint_label)
             if time_idx is None:
@@ -1228,17 +1214,14 @@ class JointProbabilityDistribution:
             # If not provided, we either default to 0, or handle it as single-time scenario
             time_idx = 0  # or handle however you prefer
 
-        # 2) Retrieve learned local concentration from pyro's param store
-        #    e.g. shape: (K*C*T, n_phenotypes)
+
         local_clone_conc_pt = pyro.param("local_clone_concentration_pt").detach().cpu()
 
         # 3) Compute the flattened index for (clone, patient, timepoint) in [0..K*C*T)
         kct_index = tcr_idx * (self.C * self.T) + patient_idx * self.T + time_idx
         
-        # 4) Also retrieve gene_profile_concentration for later mixing
         gene_profile_concentration = pyro.param("gene_profile_concentration").detach().cpu()
         
-        # 5) (Optionally) retrieve patient variance parameters if needed
         patient_effect_samples = None
         if include_patient_effects:
             patient_variance_shape = pyro.param("patient_variance_shape")[patient_idx].detach().cpu()
@@ -1252,37 +1235,25 @@ class JointProbabilityDistribution:
 
         # 7) Draw posterior samples
         for i in range(n_samples):
-            # 7a) Sample phenotype distribution from local concentration
-            #     shape: (n_phenotypes,)
             local_conc = local_clone_conc_pt[kct_index]
             phenotype_dist = dist.Dirichlet(local_conc).sample().numpy()
             phenotype_samples[i] = phenotype_dist
 
-            # 7b) Sample gene expression for each phenotype, then combine
-            #     Here we treat gene_profile_concentration as shape (n_phenotypes, D).
-            #     So we sample once for each phenotype, or we can do a simpler approach
-            #     as if there's a single global phenotype->gene distribution. 
-            #     Typically, you might do:
-            #           gene_profile_matrix = dist.Dirichlet(gene_profile_concentration).sample() 
-            #       shape => (n_phenotypes, D)
-            #     Then do a weighted sum. 
-            #     For simplicity below, we treat gene_profile_concentration as (n_phenotypes, D).
             
             gene_profile = dist.Dirichlet(gene_profile_concentration).sample().numpy()  
             # shape: (n_phenotypes, D)
             # Weighted sum by phenotype_dist
             mixed_profile = np.sum(gene_profile * phenotype_dist[:, np.newaxis], axis=0)
 
-            # 7c) Optionally apply patient effect
+            # Optionally apply patient effect
             if include_patient_effects:
                 p_effect = dist.Gamma(patient_variance_shape, patient_variance_rate).sample().numpy()
                 patient_effect_samples[i] = p_effect
                 mixed_profile = mixed_profile * p_effect
 
-            # 7d) Normalize to get gene-expression distribution
+            # Normalize to get gene-expression distribution
             gene_expression_samples[i] = mixed_profile / mixed_profile.sum()
 
-        # 8) Assemble final result dict
         result = {
             'phenotype_samples': phenotype_samples,
             'gene_expression_samples': gene_expression_samples
