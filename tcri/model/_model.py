@@ -24,12 +24,9 @@ import warnings
 from torch.utils.data.dataloader import default_collate
 
 def to_device_collate(batch, device):
-    """
-    A custom collate function that:
-      - Uses PyTorch's default_collate to turn a list of samples into batched tensors.
-      - Moves each batched tensor onto the specified device.
-    """
-    batch_tensors = default_collate(batch)  # e.g. returns a tuple of tensors
+    # default_collate: merges a list of samples to a single batch on CPU
+    batch_tensors = default_collate(batch)
+    # Move each tensor to GPU
     return tuple(t.to(device) for t in batch_tensors)
 
 class TCRCooccurrenceDataset(Dataset):
@@ -283,14 +280,13 @@ class JointProbabilityDistribution:
         # Setup dataloader
         self.dataloader = DataLoader(
             self.dataset,
-            batch_size=batch_size,
+            batch_size=64,  # or another batch size
             shuffle=True,
             drop_last=True,
-            collate_fn=lambda b: to_device_collate(b, self.device),
-            pin_memory=True,
-            
+            collate_fn=lambda batch: to_device_collate(batch, self.device),
+            pin_memory=True
         )
-        
+
         # Store dimensions
         self.K = self.dataset.K  # number of TCRs/clones
         self.D = self.dataset.D  # number of genes
