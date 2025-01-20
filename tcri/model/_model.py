@@ -274,10 +274,7 @@ class JointProbabilityDistribution:
             self.dataset,
             batch_size=batch_size,
             shuffle=True,
-            drop_last=True,
-            collate_fn=lambda b: to_device_collate(b, self.device),
-            pin_memory=True,
-            
+            drop_last=True
         )
         
         # Store dimensions
@@ -787,8 +784,6 @@ class JointProbabilityDistribution:
                     break
         
         return self.losses, self.smoothed_losses
-
-
 
 
     # ------------------------------------------------------------------------
