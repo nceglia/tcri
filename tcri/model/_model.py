@@ -21,6 +21,17 @@ import pandas as pd
 import torch
 import warnings
 
+from torch.utils.data.dataloader import default_collate
+
+def to_device_collate(batch, device):
+    """
+    A custom collate function that:
+      - Uses PyTorch's default_collate to turn a list of samples into batched tensors.
+      - Moves each batched tensor onto the specified device.
+    """
+    batch_tensors = default_collate(batch)  # e.g. returns a tuple of tensors
+    return tuple(t.to(device) for t in batch_tensors)
+
 class TCRCooccurrenceDataset(Dataset):
     """
     Dataset for Shared Global Model with Covariate Weights and Phenotype Priors,
