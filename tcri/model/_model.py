@@ -27,7 +27,7 @@ def to_device_collate(batch, device):
     # default_collate: merges a list of samples to a single batch on CPU
     batch_tensors = default_collate(batch)
     # Move each tensor to GPU
-    return tuple(t.to(device) for t in batch_tensors)
+    return tuple(t for t in batch_tensors)
 
 class TCRCooccurrenceDataset(Dataset):
     """
@@ -752,7 +752,11 @@ class JointProbabilityDistribution:
             
             # Each batch is already on GPU, thanks to the custom collate_fn + pin_memory.
             for gene_probs, tcr_idx, patient_idx, phenotype_probs, time_idx in self.dataloader:
-                
+                gene_probs = gene_probs.to(self.device)
+                tcr_idx = tcr_idx.to(self.device)
+                patient_idx = patient_idx.to(self.device)
+                phenotype_probs = phenotype_probs.to(self.device)
+                time_idx = time_idx.to(self.device)
                 # Check for any NaNs in the input batch
                 if torch.isnan(gene_probs).any():
                     if verbose:
