@@ -196,6 +196,7 @@ class JointProbabilityDistribution:
             patient_variance_rate_val: float = 4.0,
             persistence_factor: float = 1.0,
             beta = 1.0,
+            consistency_weight=1,
             gene_concentration=100.,
             local_concentration_offset=1.,
             time_variance_prior=1.,
@@ -239,6 +240,7 @@ class JointProbabilityDistribution:
         self.beta = beta
         self.gene_concentration = gene_concentration
         self.persistence_factor = persistence_factor
+        self.consistency_weight = consistency_weight
 
         # Process phenotype prior
         self.phenotype_probabilities = self._process_phenotype_prior(
@@ -518,6 +520,19 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(base_dist * phenotype_probs * self.persistence_factor + 1.0)
             )
+            # >>> Clone consistency penalty block <<<
+            if self.consistency_weight > 0.0:
+                unique_clones = torch.unique(tcr_idx)
+                consistency_loss = 0.0
+                for clone_id in unique_clones:
+                    mask = (tcr_idx == clone_id)
+                    if mask.sum() > 1:
+                        # shape: (N_clonal_cells, n_phenotypes)
+                        cells_clone = cell_phenotype_dist[mask]
+                        mean_clone = cells_clone.mean(dim=0)
+                        dev = torch.mean(torch.sum((cells_clone - mean_clone) ** 2, dim=1))
+                        consistency_loss += dev
+                pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
 
             # Mix phenotype->gene
             mixed_profile = torch.sum(
