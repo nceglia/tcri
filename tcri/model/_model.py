@@ -195,7 +195,7 @@ class JointProbabilityDistribution:
             consistency_weight: float = 0.1,
             patient_variance_shape_val: float = 4.0,
             patient_variance_rate_val: float = 4.0,
-            beta: float = 10.0,
+            scale_offset: float = 1.0,
             gene_concentration=100.,
             # NEW:
             timepoint_label: Optional[str] = None
@@ -234,7 +234,7 @@ class JointProbabilityDistribution:
         self.consistency_weight = consistency_weight
         self.patient_variance_shape_val = patient_variance_shape_val
         self.patient_variance_rate_val = patient_variance_rate_val
-        self.beta = beta
+        self.scale_offset = scale_offset
         self.gene_concentration = gene_concentration
 
         # Process phenotype prior
@@ -551,7 +551,7 @@ class JointProbabilityDistribution:
                 "clone_time_offset",
                 dist.Normal(
                     torch.zeros(self.n_phenotypes, device=self.device),
-                    expanded_scale[idxs].unsqueeze(-1).expand(-1, self.n_phenotypes)
+                    expanded_scale[idxs].unsqueeze(-1).expand(-1, self.n_phenotypes) + self.offset_scale
                 )
             )
             # shape => (K*T, n_phenotypes)
