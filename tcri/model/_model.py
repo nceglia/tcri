@@ -514,7 +514,7 @@ class JointProbabilityDistribution:
 
             cell_phenotype_dist = pyro.sample(
                 "cell_phenotype_dist",
-                dist.Dirichlet(base_dist)
+                dist.Dirichlet(base_dist*phenotype_probs + 1.0)
             )
 
             # Mix phenotype->gene
@@ -630,7 +630,7 @@ class JointProbabilityDistribution:
         with pyro.plate("cells", batch_size):
             pyro.sample(
                 "cell_phenotype_dist",
-                dist.Dirichlet(cell_phenotype_concentration)
+                dist.Dirichlet(cell_phenotype_concentration * phenotype_probs + 1.0)
             )
 
 
