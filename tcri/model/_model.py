@@ -187,12 +187,11 @@ class JointProbabilityDistribution:
             marker_prior: float = 2.0,
             batch_size: int = 32,
             learning_rate: float = 1e-4,
+            particles: int = 1,
             # -- Added arguments to control priors in model/guide --
             clone_to_phenotype_prior_strength: float = 10.0,
             gene_profile_prior_strength: float = 5.0,
             gene_profile_prior_offset: float = 0.5,
-            persistence_factor: float = 100.0,
-            consistency_weight: float = 0.1,
             patient_variance_shape_val: float = 4.0,
             patient_variance_rate_val: float = 4.0,
             beta = 1.0,
@@ -226,6 +225,7 @@ class JointProbabilityDistribution:
         self._tcr_label = tcr_label
         self._covariate_label = covariate_label
         self._timepoint_label = timepoint_label
+        self.particles = particles
 
         # Store prior-related parameters
         self.local_concentration_offset = local_concentration_offset
@@ -233,8 +233,6 @@ class JointProbabilityDistribution:
         self.clone_to_phenotype_prior_strength = clone_to_phenotype_prior_strength
         self.gene_profile_prior_strength = gene_profile_prior_strength
         self.gene_profile_prior_offset = gene_profile_prior_offset
-        self.persistence_factor = persistence_factor
-        self.consistency_weight = consistency_weight
         self.patient_variance_shape_val = patient_variance_shape_val
         self.patient_variance_rate_val = patient_variance_rate_val
         self.beta = beta
@@ -344,7 +342,7 @@ class JointProbabilityDistribution:
             model=self._model,
             guide=self._guide,
             optim=self.optimizer,
-            loss=TraceMeanField_ELBO(num_particles=5)
+            loss=TraceMeanField_ELBO(num_particles=self.particles)
         )
         
         self.training_losses = []
@@ -360,82 +358,6 @@ class JointProbabilityDistribution:
         print(f"Clone-to-phenotype prior shape: {self.clone_to_phenotype_prior.shape}")
         print(f"Gene profile prior shape: {self.gene_profile_prior.shape}")
 
-    def compute_log_likelihood(self, adata_hold) -> float:
-        """
-        Plug-in log-likelihood for hold-out:
-        usage => local_clone_concentration_pct, shape (K*C*T, n_phenotypes).
-        flatten index => k*(C*T) + c*T + t
-        patient offset
-        etc.
-        """
-        import numpy as np
-        import torch
-        import pyro
-        import pyro.distributions as dist
-
-        hold_pheno_probs = np.ones((self.n_phenotypes, adata_hold.n_obs)) / self.n_phenotypes
-        hold_dataset = TCRCooccurrenceDataset(
-            adata_hold,
-            tcr_label=self._tcr_label,
-            covariate_label=self._covariate_label,
-            phenotype_probs=hold_pheno_probs,
-            min_expression=1e-6,
-            timepoint_label=self._timepoint_label
-        )
-
-        param_store = pyro.get_param_store()
-        local_conc_pct = param_store["local_clone_concentration_pct"].detach()  # shape (K*C*T, P)
-
-        raw_log = param_store["unconstrained_gene_profile_log"].detach()
-        log_clamped = torch.clamp(raw_log, min=-10, max=10)
-        gene_conc_raw = torch.exp(log_clamped)
-        gene_profiles = gene_conc_raw / gene_conc_raw.sum(dim=1, keepdim=True)
-
-        shape_vals = param_store["patient_variance_shape"].detach() if "patient_variance_shape" in param_store else None
-        rate_vals  = param_store["patient_variance_rate"].detach() if "patient_variance_rate" in param_store else None
-        if shape_vals is not None and rate_vals is not None:
-            patient_offset_means = shape_vals / rate_vals
-        else:
-            patient_offset_means = None
-
-        persistence_factor = self.persistence_factor
-        total_logp = 0.0
-        n_cells = len(hold_dataset)
-
-        for i in range(n_cells):
-            gene_probs, k_idx, c_idx, phen_probs, t_idx = hold_dataset[i]
-            gene_probs = gene_probs.cpu()
-            k = k_idx.item()
-            c = c_idx.item()
-            t = t_idx.item()
-
-            # flatten (k,c,t)
-            kct = k*(self.C*self.T) + c*self.T + t
-            conc_row = local_conc_pct[kct]
-            base_dist = conc_row / conc_row.sum()
-
-            # cell-level phenotype => mean of Dirichlet
-            alpha_vec = base_dist*persistence_factor + 1.0
-            alpha_sum = alpha_vec.sum()
-            cell_phen_mean = alpha_vec/alpha_sum
-
-            # Weighted sum across phenotypes => shape(D,)
-            mixed_profile = torch.sum(gene_profiles * cell_phen_mean.unsqueeze(-1), dim=0)
-
-            # patient offset
-            if patient_offset_means is not None:
-                p_off = patient_offset_means[c]
-            else:
-                p_off = 1.0
-            adjusted = mixed_profile * p_off
-
-            exponentiated = torch.exp(adjusted)
-            concentration = exponentiated*self.gene_concentration+ 1.0
-
-            dirich = dist.Dirichlet(concentration)
-            total_logp += float(dirich.log_prob(gene_probs))
-
-        return total_logp
 
     # ------------------------------------------------------------------------
     # Process phenotype prior
@@ -594,18 +516,6 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(base_dist*phenotype_probs + 1.0)
             )
-
-            # (Optional) Clone consistency penalty
-            unique_clones = torch.unique(tcr_idx)
-            consistency_loss = 0.0
-            for clone_id in unique_clones:
-                mask = (tcr_idx == clone_id)
-                if mask.sum() > 1:
-                    cells_clone = cell_phenotype_dist[mask]
-                    mean_clone = torch.mean(cells_clone, dim=0)
-                    dev = torch.mean(torch.sum((cells_clone - mean_clone)**2, dim=1))
-                    consistency_loss += dev
-            pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
 
             # Mix phenotype->gene
             mixed_profile = torch.sum(
