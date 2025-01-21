@@ -509,9 +509,6 @@ class JointProbabilityDistribution:
         return patient_tcrs
 
     def _model(self, matrix, tcr_idx, patient_idx, time_idx, phenotype_probs):
-        import torch
-        import pyro
-        import pyro.distributions as dist
 
         batch_size = matrix.shape[0]
 
@@ -595,7 +592,7 @@ class JointProbabilityDistribution:
 
             cell_phenotype_dist = pyro.sample(
                 "cell_phenotype_dist",
-                dist.Dirichlet(base_dist*self.persistence_factor + 1.0)
+                dist.Dirichlet(base_dist*phenotype_probs + 1.0)
             )
 
             # (Optional) Clone consistency penalty
@@ -626,10 +623,6 @@ class JointProbabilityDistribution:
             pyro.sample("obs", dist.Dirichlet(concentration), obs=matrix)
 
     def _guide(self, matrix, tcr_idx, patient_idx, time_idx, phenotype_probs):
-        import torch
-        import pyro
-        import pyro.distributions as dist
-        from pyro.distributions import constraints
 
         batch_size = matrix.shape[0]
 
@@ -727,7 +720,7 @@ class JointProbabilityDistribution:
         with pyro.plate("cells", batch_size):
             pyro.sample(
                 "cell_phenotype_dist",
-                dist.Dirichlet(cell_phenotype_concentration)
+                dist.Dirichlet(cell_phenotype_concentration * phenotype_probs + 1.0)
             )
 
 
