@@ -557,11 +557,11 @@ class JointProbabilityDistribution:
         # 4) (k,t) offset => Normal(0, clone_scale[k]) with to_event(1)
         # ----------------------------------------------------------------
         # We'll have K*T offsets, each an n_phenotypes-dimensional vector
-        with pyro.plate("clone_time_offset", self.K*self.T) as idxs:
+        with pyro.plate("clone_time_offset_model", self.K*self.T) as idxs:
             # shape => (K*T,)
             expanded_scale = clone_scale.repeat_interleave(self.T)
             clone_time_offset = pyro.sample(
-                "clone_time_offset",
+                "clone_time_offset_model",
                 dist.Normal(
                     torch.zeros(self.n_phenotypes, device=self.device),
                     expanded_scale[idxs].unsqueeze(-1).expand(-1, self.n_phenotypes)
@@ -711,11 +711,10 @@ class JointProbabilityDistribution:
             constraint=constraints.real
         )
 
-        # We do the same plate: "clone_time_offset", self.K*self.T
-        with pyro.plate("clone_time_offset", self.K*self.T) as idxs:
+        with pyro.plate("clone_time_offset_guide", self.K*self.T) as idxs:
             repeated_scale = guide_clone_scale.repeat_interleave(self.T)  # (K*T,)
             pyro.sample(
-                "clone_time_offset",
+                "clone_time_offset_guide",
                 dist.Normal(
                     offset_loc[idxs],  # shape => (K*T, n_phenotypes)
                     repeated_scale[idxs].unsqueeze(-1).expand(-1, self.n_phenotypes)
