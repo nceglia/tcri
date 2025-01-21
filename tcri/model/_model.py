@@ -187,11 +187,11 @@ class JointProbabilityDistribution:
             marker_prior: float = 2.0,
             batch_size: int = 32,
             learning_rate: float = 1e-4,
+            particles: int = 1,
             # -- Added arguments to control priors in model/guide --
             clone_to_phenotype_prior_strength: float = 10.0,
             gene_profile_prior_strength: float = 5.0,
             gene_profile_prior_offset: float = 0.5,
-            consistency_weight: float = 0.1,
             patient_variance_shape_val: float = 4.0,
             patient_variance_rate_val: float = 4.0,
             beta = 1.0,
@@ -225,6 +225,7 @@ class JointProbabilityDistribution:
         self._tcr_label = tcr_label
         self._covariate_label = covariate_label
         self._timepoint_label = timepoint_label
+        self.particles = particles
 
         # Store prior-related parameters
         self.local_concentration_offset = local_concentration_offset
@@ -232,7 +233,6 @@ class JointProbabilityDistribution:
         self.clone_to_phenotype_prior_strength = clone_to_phenotype_prior_strength
         self.gene_profile_prior_strength = gene_profile_prior_strength
         self.gene_profile_prior_offset = gene_profile_prior_offset
-        self.consistency_weight = consistency_weight
         self.patient_variance_shape_val = patient_variance_shape_val
         self.patient_variance_rate_val = patient_variance_rate_val
         self.beta = beta
@@ -342,7 +342,7 @@ class JointProbabilityDistribution:
             model=self._model,
             guide=self._guide,
             optim=self.optimizer,
-            loss=TraceMeanField_ELBO(num_particles=5)
+            loss=TraceMeanField_ELBO(num_particles=self.particles)
         )
         
         self.training_losses = []
@@ -516,18 +516,6 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(base_dist*phenotype_probs + 1.0)
             )
-
-            # (Optional) Clone consistency penalty
-            unique_clones = torch.unique(tcr_idx)
-            consistency_loss = 0.0
-            for clone_id in unique_clones:
-                mask = (tcr_idx == clone_id)
-                if mask.sum() > 1:
-                    cells_clone = cell_phenotype_dist[mask]
-                    mean_clone = torch.mean(cells_clone, dim=0)
-                    dev = torch.mean(torch.sum((cells_clone - mean_clone)**2, dim=1))
-                    consistency_loss += dev
-            pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
 
             # Mix phenotype->gene
             mixed_profile = torch.sum(
