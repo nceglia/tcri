@@ -677,7 +677,8 @@ class JointProbabilityDistribution:
             with pyro.plate("time_offset_plate", self.T):
                 pyro.sample(
                     "time_offset_log",
-                    dist.Normal(unconstrained_time_offset_log, 1.0).to_event(1)
+                    dist.Normal(unconstrained_time_offset_log,
+                                torch.ones(self.n_phenotypes, device=self.device) * self.time_variance_prior).to_event(1)
                 )
 
         # 4) local_clone_phenotype_pct => shape (K*C*T, n_phenotypes)
