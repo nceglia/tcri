@@ -714,7 +714,7 @@ class JointProbabilityDistribution:
         with pyro.plate("clone_time_offset_guide", self.K*self.T) as idxs:
             repeated_scale = guide_clone_scale.repeat_interleave(self.T)  # (K*T,)
             pyro.sample(
-                "clone_time_offset_guide",
+                "clone_time_offset_model",
                 dist.Normal(
                     offset_loc[idxs],  # shape => (K*T, n_phenotypes)
                     repeated_scale[idxs].unsqueeze(-1).expand(-1, self.n_phenotypes)
