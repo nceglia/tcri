@@ -316,11 +316,15 @@ class JointProbabilityDistribution:
         # clone-to-phenotype prior
         epsilon = 1e-6
         if phenotype_prior is not None and isinstance(phenotype_prior, str):
-            clone_to_phenotype_prior = pd.crosstab(
+            ctab = pd.crosstab(
                 adata.obs[tcr_label],
                 adata.obs[phenotype_prior],
                 normalize="index"
-            ).to_numpy()
+            )
+            # Reorder columns to match phenotypes.categories
+            ctab = ctab[phenotypes.categories]
+            # Now convert to numpy
+            clone_to_phenotype_prior = ctab.to_numpy()
         else:
             clone_to_phenotype_prior = np.ones((self.K, n_phenotypes)) / n_phenotypes
         
