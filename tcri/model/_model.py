@@ -504,7 +504,6 @@ class JointProbabilityDistribution:
             )
         return patient_tcrs
 
-
     def _model(self, matrix, tcr_idx, patient_idx, time_idx, phenotype_probs):
         import torch
         import pyro
@@ -512,9 +511,7 @@ class JointProbabilityDistribution:
 
         batch_size = matrix.shape[0]
 
-        # ----------------------------------------------------------------
         # 1) Patient variance (Gamma) for gene-scaling
-        # ----------------------------------------------------------------
         with pyro.plate("patient_global", self.C):
             patient_variance = pyro.sample(
                 "patient_variance",
@@ -524,51 +521,49 @@ class JointProbabilityDistribution:
                 )
             )
 
-        # ----------------------------------------------------------------
-        # 2) (k,c) baseline usage => Dirichlet
-        # ----------------------------------------------------------------
+        # 2) Baseline usage for each (k,c): Dirichlet
+        #    shape => (K*C, n_phenotypes)
         baseline_prior = (
             self.clone_to_phenotype_prior * self.clone_to_phenotype_prior_strength 
             + 1.0
-        )  # shape => (K, n_phenotypes)
+        )
         expanded_baseline_prior = baseline_prior.repeat_interleave(self.C, dim=0)
-        # shape => (K*C, n_phenotypes)
 
         with pyro.plate("clone_patient_baseline", self.K*self.C):
             local_clone_phenotype_pc = pyro.sample(
                 "local_clone_phenotype_pc",
                 dist.Dirichlet(expanded_baseline_prior)
             )
-            # shape => (K*C, n_phenotypes)
 
-        # ----------------------------------------------------------------
-        # 3) Time offset in log space => shape (T, n_phenotypes)
-        # ----------------------------------------------------------------
-        # We'll define a Normal(0,1) prior for each timepoint & phenotype dimension.
-        with pyro.plate("time_offset_plate", self.T):
-            time_offset = pyro.sample(
-                "time_offset",
-                dist.Normal(
-                    torch.zeros(self.n_phenotypes, device=self.device),
-                    torch.ones(self.n_phenotypes, device=self.device)*1.0
+        # 3) Per-timepoint random offset in log-space
+        #    shape => (T, n_phenotypes)
+        if self.T > 0:
+            with pyro.plate("time_offset_plate", self.T):
+                time_offset_log = pyro.sample(
+                    "time_offset_log",
+                    dist.Normal(
+                        torch.zeros(self.n_phenotypes, device=self.device),
+                        torch.ones(self.n_phenotypes, device=self.device)
+                    ).to_event(1)
                 )
-            ).to_event(1) 
-            # shape => (T, n_phenotypes)
+        else:
+            # If T=0 or we have no time dimension:
+            time_offset_log = torch.zeros(1, self.n_phenotypes, device=self.device)
 
-        # ----------------------------------------------------------------
-        # 4) Combine baseline + offset => shape => (K*C*T, n_phenotypes)
-        # ----------------------------------------------------------------
-        # (k,c) baseline => shape (K*C, n_phenotypes)
-        # repeated T times => (K*C*T, n_phenotypes)
-        expanded_baseline = local_clone_phenotype_pc.repeat_interleave(self.T, dim=0)
-        # shape => (K*C*T, n_phenotypes)
+        # 4) Combine baseline + offset => local Dirichlet parameters
+        #    (K*C) repeated over T => (K*C*T, n_phenotypes)
+        expanded_pc = local_clone_phenotype_pc.repeat_interleave(self.T, dim=0)
 
-        # time_offset => shape (T, n_phenotypes), repeated (K*C) times
-        expanded_offset = time_offset.repeat_interleave(self.K*self.C, dim=0)
-        # shape => (K*C*T, n_phenotypes)
+        # Also replicate time_offset_log over (K*C) => same final shape (K*C*T, n_phenotypes)
+        if self.T > 0:
+            expanded_offset = time_offset_log.repeat_interleave(self.K*self.C, dim=0)
+        else:
+            expanded_offset = torch.zeros_like(expanded_pc)
 
-        local_concentration_pct = expanded_baseline * torch.exp(expanded_offset) + 1.0
-        # shape => (K*C*T, n_phenotypes)
+        # Partial-pooling scalar beta
+        beta_val = torch.tensor(self.beta, device=self.device)
+
+        local_concentration_pct = beta_val * expanded_pc * torch.exp(expanded_offset) + 1.0
 
         with pyro.plate("clone_patient_time", self.K*self.C*self.T):
             local_clone_phenotype_pct = pyro.sample(
@@ -576,11 +571,9 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(local_concentration_pct)
             )
 
-        # ----------------------------------------------------------------
         # 5) Phenotype->gene profile => Dirichlet
-        # ----------------------------------------------------------------
         gene_prior = (
-            self.gene_profile_prior*self.gene_profile_prior_strength
+            self.gene_profile_prior*self.gene_profile_prior_strength 
             + self.gene_profile_prior_offset
         )
         gene_prior = torch.clamp(gene_prior, min=1e-4)
@@ -590,10 +583,9 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(gene_prior)
             )
 
-        # ----------------------------------------------------------------
-        # 6) Cell-level mixture => observed expression => Dirichlet
-        # ----------------------------------------------------------------
+        # 6) Cell-level mixture => observed expression
         with pyro.plate("cells", batch_size):
+            # Flatten (k, c, t) => single index
             kct_index = self._get_kct_index(tcr_idx, patient_idx, time_idx)
             base_dist = local_clone_phenotype_pct[kct_index]
 
@@ -602,133 +594,27 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(base_dist*self.persistence_factor + 1.0)
             )
 
-            # Optional clone consistency penalty
+            # (Optional) Clone consistency penalty
             unique_clones = torch.unique(tcr_idx)
             consistency_loss = 0.0
             for clone_id in unique_clones:
                 mask = (tcr_idx == clone_id)
-                if mask.sum()>1:
+                if mask.sum() > 1:
                     cells_clone = cell_phenotype_dist[mask]
                     mean_clone = torch.mean(cells_clone, dim=0)
                     dev = torch.mean(torch.sum((cells_clone - mean_clone)**2, dim=1))
                     consistency_loss += dev
             pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
 
+            # Mix phenotype->gene
             mixed_profile = torch.sum(
                 clone_gene_profiles * cell_phenotype_dist.unsqueeze(-1),
                 dim=1
             )
+
+            # Patient effect
             p_effect = patient_variance[patient_idx]
             adjusted_probs = mixed_profile * p_effect.unsqueeze(-1)
-
-            exponentiated = torch.exp(adjusted_probs)
-            concentration = exponentiated*self.gene_concentration + 1.0
-
-            pyro.sample("obs", dist.Dirichlet(concentration), obs=matrix)
-
-    def _model(self, matrix, tcr_idx, patient_idx, time_idx, phenotype_probs):
-        import torch
-        import pyro
-        import pyro.distributions as dist
-
-        batch_size = matrix.shape[0]
-        
-        # ----------------------------------------------------------------
-        # 1) Patient variance for gene-scaling
-        # ----------------------------------------------------------------
-        with pyro.plate("patient_global", self.C):
-            patient_variance = pyro.sample(
-                "patient_variance",
-                dist.Gamma(
-                    torch.ones(1, device=self.device)*self.patient_variance_shape_val,
-                    torch.ones(1, device=self.device)*self.patient_variance_rate_val
-                )
-            )
-
-        # ----------------------------------------------------------------
-        # 2) (k,c) baseline usage: shape (K*C, n_phenotypes)
-        # ----------------------------------------------------------------
-        baseline_prior = (
-            self.clone_to_phenotype_prior * self.clone_to_phenotype_prior_strength + 1.0
-        )
-        # shape => (K, n_phenotypes)
-        expanded_baseline_prior = baseline_prior.repeat_interleave(self.C, dim=0)
-        # shape => (K*C, n_phenotypes)
-
-        with pyro.plate("clone_patient_baseline", self.K*self.C):
-            local_clone_phenotype_pc = pyro.sample(
-                "local_clone_phenotype_pc",
-                dist.Dirichlet(expanded_baseline_prior)
-            )
-            # shape => (K*C, n_phenotypes)
-
-        # ----------------------------------------------------------------
-        # 3) Time-level partial pooling => shape (K*C*T, n_phenotypes)
-        #    Using a single scalar beta
-        # ----------------------------------------------------------------
-        beta_val = torch.tensor(self.beta, device=self.device)
-        expanded_pc = local_clone_phenotype_pc.repeat_interleave(self.T, dim=0)
-        # shape => (K*C*T, n_phenotypes)
-
-        local_concentration_pct = beta_val * expanded_pc + 1.0
-
-        with pyro.plate("clone_patient_time", self.K*self.C*self.T):
-            local_clone_phenotype_pct = pyro.sample(
-                "local_clone_phenotype_pct",
-                dist.Dirichlet(local_concentration_pct)
-            )
-            # shape => (K*C*T, n_phenotypes)
-
-        # ----------------------------------------------------------------
-        # 4) Phenotype->gene profile
-        # ----------------------------------------------------------------
-        gene_prior = (
-            self.gene_profile_prior*self.gene_profile_prior_strength
-            + self.gene_profile_prior_offset
-        )
-        gene_prior = torch.clamp(gene_prior, min=1e-4)
-
-        with pyro.plate("phenotype", self.n_phenotypes):
-            clone_gene_profiles = pyro.sample(
-                "clone_gene_profiles",
-                dist.Dirichlet(gene_prior)
-            )
-
-        # ----------------------------------------------------------------
-        # 5) Cell-level mixture => observed expression
-        # ----------------------------------------------------------------
-        with pyro.plate("cells", batch_size):
-            # flatten (k,c,t) => single index
-            kct_index = self._get_kct_index(tcr_idx, patient_idx, time_idx)
-            base_dist = local_clone_phenotype_pct[kct_index]  # shape => (batch_size, n_phenotypes)
-
-            # cell-level Dirichlet
-            cell_phenotype_dist = pyro.sample(
-                "cell_phenotype_dist",
-                dist.Dirichlet(base_dist*self.persistence_factor + 1.0)
-            )  # shape => (batch_size, n_phenotypes)
-
-            # optional clone consistency penalty
-            unique_clones = torch.unique(tcr_idx)
-            consistency_loss = 0.0
-            for clone_id in unique_clones:
-                mask = (tcr_idx == clone_id)
-                if mask.sum()>1:
-                    cells_clone = cell_phenotype_dist[mask]
-                    mean_clone = torch.mean(cells_clone, dim=0)
-                    dev = torch.mean(torch.sum((cells_clone - mean_clone)**2, dim=1))
-                    consistency_loss += dev
-            pyro.factor("clone_consistency", -self.consistency_weight*consistency_loss)
-
-            # mix phenotype->gene
-            mixed_profile = torch.sum(
-                clone_gene_profiles*cell_phenotype_dist.unsqueeze(-1),
-                dim=1
-            )
-
-            # patient effect
-            p_effect = patient_variance[patient_idx]
-            adjusted_probs = mixed_profile*p_effect.unsqueeze(-1)
 
             exponentiated = torch.exp(adjusted_probs)
             concentration = exponentiated*self.gene_concentration + 1.0
@@ -743,9 +629,7 @@ class JointProbabilityDistribution:
 
         batch_size = matrix.shape[0]
 
-        # ----------------------------------------------------------------
-        # 1) Patient variance (Gamma shape, rate) => param
-        # ----------------------------------------------------------------
+        # 1) Patient variance => param
         patient_variance_shape = pyro.param(
             "patient_variance_shape",
             torch.ones(self.C, device=self.device)*self.patient_variance_shape_val,
@@ -762,11 +646,10 @@ class JointProbabilityDistribution:
                 dist.Gamma(patient_variance_shape, patient_variance_rate)
             )
 
-        # ----------------------------------------------------------------
-        # 2) (k,c) baseline usage => Dirichlet
-        # ----------------------------------------------------------------
+        # 2) (k,c) baseline param => Dirichlet
         baseline_clone_conc_init = (
-            self.clone_to_phenotype_prior*self.clone_to_phenotype_prior_strength + 1.0
+            self.clone_to_phenotype_prior*self.clone_to_phenotype_prior_strength 
+            + 1.0
         )
         expanded_baseline_init = baseline_clone_conc_init.repeat_interleave(self.C, dim=0)
         local_clone_conc_pc = pyro.param(
@@ -780,18 +663,24 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(local_clone_conc_pc)
             )
 
-        # ----------------------------------------------------------------
-        # 3) time-level partial pooling => single scalar beta
-        # ----------------------------------------------------------------
-        beta_val = pyro.param(
-            "partial_pool_beta",
-            torch.tensor(self.beta, device=self.device),
-            constraint=constraints.positive
-        )
-        # We define param "local_clone_concentration_pct" for (k,c,t)
-        # shape => (K*C*T, n_phenotypes)
-        # or we do an immediate approach:
-        local_clone_conc_pct_init = torch.ones(self.K*self.C*self.T, self.n_phenotypes, device=self.device) + 1.0
+        # 3) time_offset_log param => shape (T, n_phenotypes)
+        if self.T > 0:
+            unconstrained_time_offset_log = pyro.param(
+                "unconstrained_time_offset_log",
+                torch.zeros(self.T, self.n_phenotypes, device=self.device),
+                constraint=constraints.real
+            )
+            with pyro.plate("time_offset_plate", self.T):
+                pyro.sample(
+                    "time_offset_log",
+                    dist.Normal(unconstrained_time_offset_log, 1.0).to_event(1)
+                )
+
+        # 4) local_clone_phenotype_pct => shape (K*C*T, n_phenotypes)
+        #    We can param it directly. (Some people fold 'beta' in as well.)
+        local_clone_conc_pct_init = torch.ones(
+            self.K*self.C*self.T, self.n_phenotypes, device=self.device
+        ) + 1.0
         local_clone_conc_pct = pyro.param(
             "local_clone_concentration_pct",
             local_clone_conc_pct_init,
@@ -803,9 +692,7 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(local_clone_conc_pct)
             )
 
-        # ----------------------------------------------------------------
-        # 4) Phenotype->gene param => Dirichlet
-        # ----------------------------------------------------------------
+        # 5) Phenotype->gene Dirichlet
         gene_profile_concentration_init = (
             self.gene_profile_prior*self.gene_profile_prior_strength
             + self.gene_profile_prior_offset
@@ -819,15 +706,13 @@ class JointProbabilityDistribution:
             constraint=constraints.real
         )
         with pyro.plate("phenotype", self.n_phenotypes):
-            gene_profile_concentration = torch.exp(torch.clamp(unconstrained_profile, min=-10, max=10))
+            gene_profile_concentration = torch.exp(torch.clamp(unconstrained_profile, -10, 10))
             pyro.sample(
                 "clone_gene_profiles",
                 dist.Dirichlet(gene_profile_concentration)
             )
 
-        # ----------------------------------------------------------------
-        # 5) cell-level param => Dirichlet
-        # ----------------------------------------------------------------
+        # 6) cell-level param => Dirichlet
         cell_phenotype_conc_init = torch.ones(batch_size, self.n_phenotypes, device=self.device) + 1.0
         cell_phenotype_concentration = pyro.param(
             "cell_phenotype_concentration",
@@ -839,7 +724,6 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(cell_phenotype_concentration)
             )
-
 
 
     def train(
