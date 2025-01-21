@@ -197,6 +197,8 @@ class JointProbabilityDistribution:
             patient_variance_rate_val: float = 4.0,
             beta = 1.0,
             gene_concentration=100.,
+            local_concentration_offset=1.,
+            time_variance_prior=1.,
             timepoint_label: Optional[str] = None
         ):
         """
@@ -226,6 +228,8 @@ class JointProbabilityDistribution:
         self._timepoint_label = timepoint_label
 
         # Store prior-related parameters
+        self.local_concentration_offset = local_concentration_offset
+        self.time_variance_prior = time_variance_prior
         self.clone_to_phenotype_prior_strength = clone_to_phenotype_prior_strength
         self.gene_profile_prior_strength = gene_profile_prior_strength
         self.gene_profile_prior_offset = gene_profile_prior_offset
@@ -543,7 +547,7 @@ class JointProbabilityDistribution:
                     "time_offset_log",
                     dist.Normal(
                         torch.zeros(self.n_phenotypes, device=self.device),
-                        torch.ones(self.n_phenotypes, device=self.device)
+                        torch.ones(self.n_phenotypes, device=self.device) * self.time_variance_prior
                     ).to_event(1)
                 )
         else:
@@ -563,7 +567,7 @@ class JointProbabilityDistribution:
         # Partial-pooling scalar beta
         beta_val = torch.tensor(self.beta, device=self.device)
 
-        local_concentration_pct = beta_val * expanded_pc * torch.exp(expanded_offset) + 1.0
+        local_concentration_pct = beta_val * expanded_pc * torch.exp(expanded_offset) + self.local_concentration_offset
 
         with pyro.plate("clone_patient_time", self.K*self.C*self.T):
             local_clone_phenotype_pct = pyro.sample(
