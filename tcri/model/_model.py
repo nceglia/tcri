@@ -195,9 +195,8 @@ class JointProbabilityDistribution:
             consistency_weight: float = 0.1,
             patient_variance_shape_val: float = 4.0,
             patient_variance_rate_val: float = 4.0,
-            scale_offset: float = 1.0,
+            scale_offset = 1.0,
             gene_concentration=100.,
-            # NEW:
             timepoint_label: Optional[str] = None
         ):
         """
