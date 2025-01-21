@@ -552,7 +552,7 @@ class JointProbabilityDistribution:
                     torch.zeros(self.n_phenotypes, device=self.device),
                     torch.ones(self.n_phenotypes, device=self.device)*1.0
                 )
-            )
+            ).to_event(1) 
             # shape => (T, n_phenotypes)
 
         # ----------------------------------------------------------------
@@ -690,7 +690,7 @@ class JointProbabilityDistribution:
             pyro.sample(
                 "time_offset",
                 dist.Normal(offset_loc, offset_scale)
-            )
+            ).to_event(1) 
 
         # ----------------------------------------------------------------
         # 4) (k,c,t) usage => Dirichlet
