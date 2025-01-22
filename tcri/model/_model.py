@@ -302,7 +302,10 @@ class JointProbabilityDistribution:
 
         # Apply marker gene prior if provided
         if marker_genes is not None:
-            for phenotype_idx, genes in marker_genes.items():
+            for phenotype_name, genes in marker_genes.items():
+                if phenotype_name not in self.reverse_phenotype_mapping:
+                    raise ValueError(f"Unknown phenotype name: {phenotype_name}")
+                phenotype_idx = self.reverse_phenotype_mapping[phenotype_name]
                 for gene in genes:
                     if gene in adata.var_names:
                         gene_idx = adata.var_names.get_loc(gene)
