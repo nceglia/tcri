@@ -2042,3 +2042,80 @@ class JointProbabilityDistribution:
         result["phenotype_labels"] = phenotype_labels_ordered
 
         return result
+
+    def save_model(self, path: str):
+        """
+        Save the current state of this JointProbabilityDistribution, including:
+        - Pyro param store
+        - Key attributes (like self.K, self.C, self.n_phenotypes, self.phenotype_mapping, etc.)
+        - Anything else you'd want to recover exactly upon load
+        """
+        # 1) Grab Pyro's param store state
+        param_store_state = pyro.get_param_store().get_state()
+
+        # 2) Gather any relevant class-level data
+        #    (some you might not need, but these are typical)
+        class_attrs = {
+            "K": self.K,
+            "C": self.C,
+            "T": self.T,
+            "n_phenotypes": self.n_phenotypes,
+            "phenotype_mapping": self.phenotype_mapping,
+            "clone_mapping": self.clone_mapping,
+            "reverse_clone_mapping": self.reverse_clone_mapping,
+            # ... add other relevant fields ...
+        }
+
+        # 3) Combine into one dictionary
+        save_dict = {
+            "param_store_state": param_store_state,
+            "class_attrs": class_attrs
+        }
+
+        # 4) Use torch.save to serialize
+        torch.save(save_dict, path)
+
+        print(f"Model saved to {path}")
+
+
+    @classmethod
+    def load_model(cls, path: str, adata):
+        """
+        Load a JointProbabilityDistribution from disk. We typically pass `adata` 
+        if we need a reference to the original AnnData or something. 
+        If you only need to restore params, you might not need it.
+        """
+        import torch
+        import pyro
+
+        print(f"Loading model from {path}")
+        load_dict = torch.load(path)
+        param_store_state = load_dict["param_store_state"]
+        class_attrs = load_dict["class_attrs"]
+
+        # 1) Create a new instance. 
+        #    We'll pass any needed parameters in the constructor. 
+        #    For convenience, you can pass minimal placeholders, then override attributes:
+        jpd = cls(
+            adata=adata,
+            tcr_label="placeholder",
+            covariate_label="placeholder",
+            n_phenotypes=class_attrs["n_phenotypes"]
+        )
+        # Or do a no-arg constructor if your class allows it.
+
+        # 2) Overwrite class attributes 
+        jpd.K = class_attrs["K"]
+        jpd.C = class_attrs["C"]
+        jpd.T = class_attrs["T"]
+        jpd.n_phenotypes = class_attrs["n_phenotypes"]
+        jpd.phenotype_mapping = class_attrs["phenotype_mapping"]
+        jpd.clone_mapping = class_attrs["clone_mapping"]
+        jpd.reverse_clone_mapping = class_attrs["reverse_clone_mapping"]
+        # ... add others as needed ...
+
+        # 3) Load the Pyro param store
+        pyro.get_param_store().set_state(param_store_state)
+
+        print("Model loaded successfully.")
+        return jpd
