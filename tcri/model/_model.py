@@ -177,94 +177,115 @@ class TCRCooccurrenceDataset(Dataset):
 
 class JointProbabilityDistribution:
     def __init__(
-            self,
-            adata,
-            tcr_label: str,
-            covariate_label: str,
-            n_phenotypes: int,
-            phenotype_prior: Optional[Union[str, np.ndarray]] = None,
-            marker_genes: Optional[Dict[int, List[str]]] = None,
-            marker_prior: float = 2.0,
-            batch_size: int = 32,
-            learning_rate: float = 1e-4,
-            particles: int = 1,
-            # -- Added arguments to control priors in model/guide --
-            clone_to_phenotype_prior_strength: float = 10.0,
-            gene_profile_prior_strength: float = 5.0,
-            gene_profile_prior_offset: float = 0.5,
-            patient_variance_shape_val: float = 4.0,
-            patient_variance_rate_val: float = 4.0,
-            persistence_factor: float = 1.0,
-            beta = 1.0,
-            consistency_weight=1,
-            gene_concentration=100.,
-            local_concentration_offset=1.,
-            time_variance_prior=1.,
-            timepoint_label: Optional[str] = None
-        ):
+        self,
+        adata,
+        tcr_label: str,
+        covariate_label: str,
+        n_phenotypes: int,
+        phenotype_prior: Optional[Union[str, np.ndarray]] = None,
+        marker_genes: Optional[Dict[int, List[str]]] = None,
+        marker_prior: float = 2.0,
+        batch_size: int = 32,
+        learning_rate: float = 1e-4,
+        particles: int = 1,
+        # --- Hierarchical Dirichlet: Per-Clone Baseline + Dimension-wise Gamma Scale ---
+        clone_to_phenotype_prior_strength: float = 10.0,
+        gene_profile_prior_strength: float = 5.0,
+        gene_profile_prior_offset: float = 0.5,
+        patient_variance_shape_val: float = 4.0,
+        patient_variance_rate_val: float = 4.0,
+        gamma_scale_shape: float = 2.0,  # new: dimension-wise Gamma shape
+        gamma_scale_rate: float = 2.0,   # new: dimension-wise Gamma rate
+        persistence_factor: float = 1.0,
+        beta: float = 1.0,
+        consistency_weight: float = 1.0,
+        gene_concentration: float = 100.0,
+        local_concentration_offset: float = 1.0,
+        timepoint_label: Optional[str] = None
+    ):
         """
-        Extended Joint Probability Distribution to handle an optional timepoint_label.
-        
+        Joint Probability Distribution with hierarchical Dirichlet modeling:
+        - Baseline Dirichlet for each clone+patient
+        - Dimension-wise Gamma scale factors per timepoint
+        - Optional marker gene priors
+
         Args:
             adata: AnnData object with expression data
-            tcr_label: Name of TCR column in adata.obs
-            covariate_label: Name of patient or main covariate column in adata.obs
+            tcr_label: Column in adata.obs with TCR/clone identity
+            covariate_label: Column in adata.obs for patient (or other main covariate)
             n_phenotypes: Number of phenotype states
-            phenotype_prior: Name of phenotype column in adata.obs, or probability matrix
-            marker_genes: Optional dict mapping phenotype indices to marker gene lists
-            marker_prior: Prior strength for marker genes
-            batch_size: Batch size for training
+            phenotype_prior: Either a column name in adata.obs or a probability matrix 
+                            of shape (n_phenotypes, n_cells) or None for uniform
+            marker_genes: Optional dict mapping phenotype index -> list of marker genes
+            marker_prior: Multiplier for marker genes in gene-profile prior
+            batch_size: Training batch size
             learning_rate: Learning rate for optimizer
-            
-            # Additional prior controls...
-            
-            # New param:
-            timepoint_label: Name of timepoint column in adata.obs (optional).
+            particles: Number of particles for TraceMeanField_ELBO
+            clone_to_phenotype_prior_strength: How strongly to weight the prior linking clones -> phenotypes
+            gene_profile_prior_strength: Strength for the gene-profile prior
+            gene_profile_prior_offset: Small constant offset for the gene-profile prior
+            patient_variance_shape_val: Patient-level Gamma shape parameter for expression scaling
+            patient_variance_rate_val: Patient-level Gamma rate parameter
+            gamma_scale_shape: Shape hyperparameter for dimension-wise Gamma scale
+            gamma_scale_rate: Rate hyperparameter for dimension-wise Gamma scale
+            persistence_factor: Multiplicative factor for cell-level Dirichlet
+            beta: Scalar that multiplies baseline usage in local child distributions
+            consistency_weight: Weight for the clone consistency penalty in the cell-level phenotype
+            gene_concentration: Multiplier in the final gene-level Dirichlet
+            local_concentration_offset: Offset added to the child distribution concentration
+            timepoint_label: If provided, name of the column in adata.obs with timepoint info
         """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.adata = adata
-        
+
         self._tcr_label = tcr_label
         self._covariate_label = covariate_label
         self._timepoint_label = timepoint_label
         self.particles = particles
 
-        # Store prior-related parameters
-        self.local_concentration_offset = local_concentration_offset
-        self.time_variance_prior = time_variance_prior
+        # -------------------- Store hierarchical priors --------------------
         self.clone_to_phenotype_prior_strength = clone_to_phenotype_prior_strength
         self.gene_profile_prior_strength = gene_profile_prior_strength
         self.gene_profile_prior_offset = gene_profile_prior_offset
         self.patient_variance_shape_val = patient_variance_shape_val
         self.patient_variance_rate_val = patient_variance_rate_val
+        self.gamma_scale_shape = gamma_scale_shape
+        self.gamma_scale_rate = gamma_scale_rate
+
+        # Other modeling parameters
         self.beta = beta
         self.gene_concentration = gene_concentration
         self.persistence_factor = persistence_factor
         self.consistency_weight = consistency_weight
+        self.local_concentration_offset = local_concentration_offset
 
-        # Process phenotype prior
+        # -------------------- Process phenotype prior --------------------
         self.phenotype_probabilities = self._process_phenotype_prior(
             adata, phenotype_prior, n_phenotypes
         )
 
-        # TCR mappings
+        # -------------------- Build TCR mappings --------------------
         tcrs = pd.Categorical(adata.obs[tcr_label])
         self.tcr_mapping = {tcr: idx for idx, tcr in enumerate(tcrs.categories)}
         self.reverse_tcr_mapping = {v: k for k, v in self.tcr_mapping.items()}
-        
-        # Phenotype mappings
+
+        # -------------------- Phenotype mappings --------------------
         if phenotype_prior is not None and isinstance(phenotype_prior, str):
             phenotypes = pd.Categorical(adata.obs[phenotype_prior])
-            self.phenotype_mapping = {idx: label for idx, label in enumerate(phenotypes.categories)}
+            self.phenotype_mapping = {
+                idx: label for idx, label in enumerate(phenotypes.categories)
+            }
         else:
-            self.phenotype_mapping = {idx: f"Phenotype {idx}" for idx in range(n_phenotypes)}
+            self.phenotype_mapping = {
+                idx: f"Phenotype {idx}" for idx in range(n_phenotypes)
+            }
         self.reverse_phenotype_mapping = {v: k for k, v in self.phenotype_mapping.items()}
-        
-        # Clone (TCR) labels
+
+        # -------------------- Clone labels --------------------
         self.clone_mapping = {idx: clone for idx, clone in enumerate(tcrs.categories)}
         self.reverse_clone_mapping = {v: k for k, v in self.clone_mapping.items()}
-        
-        # Initialize dataset, now passing `timepoint_label`
+
+        # -------------------- Dataset & DataLoader --------------------
         self.dataset = TCRCooccurrenceDataset(
             adata,
             tcr_label=tcr_label,
@@ -273,8 +294,7 @@ class JointProbabilityDistribution:
             phenotype_probs=self.phenotype_probabilities,
             timepoint_label=timepoint_label
         )
-        
-        # Setup dataloader
+
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
@@ -282,16 +302,15 @@ class JointProbabilityDistribution:
             drop_last=True
         )
         self._posterior_cache = dict()
-        # Store dimensions
-        self.K = self.dataset.K  # number of TCRs/clones
-        self.D = self.dataset.D  # number of genes
-        self.C = self.dataset.C  # number of main covariates (patients)
+
+        # -------------------- Dimensions --------------------
+        self.K = self.dataset.K  # Number of TCRs/clones
+        self.D = self.dataset.D  # Number of genes
+        self.C = self.dataset.C  # Number of patients
         self.n_phenotypes = n_phenotypes
-        
-        # If timepoint_label was provided, store T if found, else 0
-        self.T = getattr(self.dataset, "T", 0)  # number of timepoints
-        
-        # Calculate gene expression profile prior from data
+        self.T = getattr(self.dataset, "T", 0)  # Number of timepoints (if any)
+
+        # -------------------- Gene profile prior --------------------
         df = adata.to_df()
         if phenotype_prior is not None and isinstance(phenotype_prior, str):
             df["phenotype"] = adata.obs[phenotype_prior]
@@ -300,7 +319,7 @@ class JointProbabilityDistribution:
         else:
             gene_profile_prior = np.ones((n_phenotypes, self.D)) / self.D
 
-        # Apply marker gene prior if provided
+        # If marker genes are specified, apply that prior
         if marker_genes is not None:
             for phenotype_name, genes in marker_genes.items():
                 if phenotype_name not in self.reverse_phenotype_mapping:
@@ -315,8 +334,8 @@ class JointProbabilityDistribution:
         self.gene_profile_prior = torch.tensor(
             gene_profile_prior, dtype=torch.float32, device=self.device
         )
-        
-        # clone-to-phenotype prior
+
+        # -------------------- Clone-to-phenotype prior --------------------
         epsilon = 1e-6
         if phenotype_prior is not None and isinstance(phenotype_prior, str):
             clone_to_phenotype_prior = pd.crosstab(
@@ -326,35 +345,37 @@ class JointProbabilityDistribution:
             ).to_numpy()
         else:
             clone_to_phenotype_prior = np.ones((self.K, n_phenotypes)) / n_phenotypes
-        
+
         clone_to_phenotype_prior += epsilon
         clone_to_phenotype_prior /= clone_to_phenotype_prior.sum(axis=1, keepdims=True)
         self.clone_to_phenotype_prior = torch.tensor(
             clone_to_phenotype_prior, dtype=torch.float32, device=self.device
         )
-        
+
         self.patient_tcr_indices = self._get_patient_tcr_indices()
-        
-        # Pyro init
+
+        # -------------------- Pyro setup (optimizer + SVI) --------------------
         pyro.clear_param_store()
-        self.optimizer = pyro.optim.ClippedAdam({
-            "lr": learning_rate,
-            "betas": (0.9, 0.999),
-            "eps": 1e-8,
-            "clip_norm": 5.0,
-            "weight_decay": 1e-4
-        })
-        
+        self.optimizer = pyro.optim.ClippedAdam(
+            {
+                "lr": learning_rate,
+                "betas": (0.9, 0.999),
+                "eps": 1e-8,
+                "clip_norm": 5.0,
+                "weight_decay": 1e-4,
+            }
+        )
+
         self.svi = SVI(
             model=self._model,
             guide=self._guide,
             optim=self.optimizer,
-            loss=TraceMeanField_ELBO(num_particles=self.particles)
+            loss=TraceMeanField_ELBO(num_particles=self.particles),
         )
-        
+
         self.training_losses = []
-        
-        # Print diagnostics
+
+        # -------------------- Initialization Summary --------------------
         print("\nInitialization Summary:")
         print(f"Number of TCRs/Clones (K): {self.K}")
         print(f"Number of Phenotypes: {self.n_phenotypes}")
@@ -364,6 +385,7 @@ class JointProbabilityDistribution:
         print(f"\nPhenotype Categories: {list(self.phenotype_mapping.values())}")
         print(f"Clone-to-phenotype prior shape: {self.clone_to_phenotype_prior.shape}")
         print(f"Gene profile prior shape: {self.gene_profile_prior.shape}")
+        print(f"Gamma scale shape: {self.gamma_scale_shape}, rate: {self.gamma_scale_rate}")
 
 
     # ------------------------------------------------------------------------
@@ -465,43 +487,40 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(expanded_baseline_prior)
             )
 
-        # 3) Per-timepoint random offset in log-space
-        #    shape => (T, n_phenotypes)
+        # 3) Dimension-wise scale factors for each timepoint
+        #    shape => (K*C*T, n_phenotypes)
         if self.T > 0:
-            with pyro.plate("time_offset_plate", self.T):
-                time_offset_log = pyro.sample(
-                    "time_offset_log",
-                    dist.Normal(
-                        torch.zeros(self.n_phenotypes, device=self.device),
-                        torch.ones(self.n_phenotypes, device=self.device) * self.time_variance_prior
+            # We'll replicate baseline over T to align with each timepoint
+            expanded_baseline = local_clone_phenotype_pc.repeat_interleave(self.T, dim=0)
+
+            with pyro.plate("clone_patient_time", self.K*self.C*self.T) as ind:
+                # Sample a vector of Gamma scales (one per phenotype) for each (k,c,t)
+                scale_factor_kct = pyro.sample(
+                    "scale_factor_kct",
+                    dist.Gamma(
+                        torch.ones(self.n_phenotypes, device=self.device)*self.gamma_scale_shape,
+                        torch.ones(self.n_phenotypes, device=self.device)*self.gamma_scale_rate
                     ).to_event(1)
                 )
+
+                # Combine baseline & scale => child distribution
+                beta_val = torch.tensor(self.beta, device=self.device)
+                local_concentration_pct = (
+                    beta_val * expanded_baseline[ind] * scale_factor_kct
+                    + self.local_concentration_offset
+                )
+
+                # Sample the child distribution from Dirichlet
+                local_clone_phenotype_pct = pyro.sample(
+                    "local_clone_phenotype_pct",
+                    dist.Dirichlet(local_concentration_pct)
+                )
         else:
-            # If T=0 or we have no time dimension:
-            time_offset_log = torch.zeros(1, self.n_phenotypes, device=self.device)
+            # If T=0 => no time dimension; child = baseline
+            local_clone_phenotype_pct = local_clone_phenotype_pc
+            scale_factor_kct = None
 
-        # 4) Combine baseline + offset => local Dirichlet parameters
-        #    (K*C) repeated over T => (K*C*T, n_phenotypes)
-        expanded_pc = local_clone_phenotype_pc.repeat_interleave(self.T, dim=0)
-
-        # Also replicate time_offset_log over (K*C) => same final shape (K*C*T, n_phenotypes)
-        if self.T > 0:
-            expanded_offset = time_offset_log.repeat_interleave(self.K*self.C, dim=0)
-        else:
-            expanded_offset = torch.zeros_like(expanded_pc)
-
-        # Partial-pooling scalar beta
-        beta_val = torch.tensor(self.beta, device=self.device)
-
-        local_concentration_pct = beta_val * expanded_pc * torch.exp(expanded_offset) + self.local_concentration_offset
-
-        with pyro.plate("clone_patient_time", self.K*self.C*self.T):
-            local_clone_phenotype_pct = pyro.sample(
-                "local_clone_phenotype_pct",
-                dist.Dirichlet(local_concentration_pct)
-            )
-
-        # 5) Phenotype->gene profile => Dirichlet
+        # 4) Phenotype->gene profile => Dirichlet
         gene_prior = (
             self.gene_profile_prior*self.gene_profile_prior_strength 
             + self.gene_profile_prior_offset
@@ -513,7 +532,7 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(gene_prior)
             )
 
-        # 6) Cell-level mixture => observed expression
+        # 5) Cell-level mixture => observed expression
         with pyro.plate("cells", batch_size):
             # Flatten (k, c, t) => single index
             kct_index = self._get_kct_index(tcr_idx, patient_idx, time_idx)
@@ -523,19 +542,20 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(base_dist * phenotype_probs * self.persistence_factor + 1.0)
             )
+
             # >>> Clone consistency penalty block <<<
-            if self.consistency_weight > 0.0:
-                unique_clones = torch.unique(tcr_idx)
-                consistency_loss = 0.0
-                for clone_id in unique_clones:
-                    mask = (tcr_idx == clone_id)
-                    if mask.sum() > 1:
-                        # shape: (N_clonal_cells, n_phenotypes)
-                        cells_clone = cell_phenotype_dist[mask]
-                        mean_clone = cells_clone.mean(dim=0)
-                        dev = torch.mean(torch.sum((cells_clone - mean_clone) ** 2, dim=1))
-                        consistency_loss += dev
-                pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
+            # if self.consistency_weight > 0.0:
+            #     unique_clones = torch.unique(tcr_idx)
+            #     consistency_loss = 0.0
+            #     for clone_id in unique_clones:
+            #         mask = (tcr_idx == clone_id)
+            #         if mask.sum() > 1:
+            #             # shape: (N_clonal_cells, n_phenotypes)
+            #             cells_clone = cell_phenotype_dist[mask]
+            #             mean_clone = cells_clone.mean(dim=0)
+            #             dev = torch.mean(torch.sum((cells_clone - mean_clone) ** 2, dim=1))
+            #             consistency_loss += dev
+            #     pyro.factor("clone_consistency", -self.consistency_weight * consistency_loss)
 
             # Mix phenotype->gene
             mixed_profile = torch.sum(
@@ -590,37 +610,38 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(local_clone_conc_pc)
             )
 
-        # 3) time_offset_log param => shape (T, n_phenotypes)
+        # 3) dimension-wise scale factors
         if self.T > 0:
-            unconstrained_time_offset_log = pyro.param(
-                "unconstrained_time_offset_log",
-                torch.zeros(self.T, self.n_phenotypes, device=self.device),
-                constraint=constraints.real
+            shape_init = torch.ones(
+                self.K*self.C*self.T, self.n_phenotypes, device=self.device
+            ) * self.gamma_scale_shape
+            rate_init = torch.ones(
+                self.K*self.C*self.T, self.n_phenotypes, device=self.device
+            ) * self.gamma_scale_rate
+
+            guide_shape = pyro.param(
+                "scale_factor_shape",
+                shape_init,
+                constraint=constraints.greater_than(0.0)
             )
-            with pyro.plate("time_offset_plate", self.T):
+            guide_rate = pyro.param(
+                "scale_factor_rate",
+                rate_init,
+                constraint=constraints.greater_than(0.0)
+            )
+
+            with pyro.plate("clone_patient_time", self.K*self.C*self.T) as ind:
                 pyro.sample(
-                    "time_offset_log",
-                    dist.Normal(unconstrained_time_offset_log,
-                                torch.ones(self.n_phenotypes, device=self.device) * self.time_variance_prior).to_event(1)
+                    "scale_factor_kct",
+                    dist.Gamma(guide_shape[ind], guide_rate[ind]).to_event(1)
                 )
+        # else: T=0 => no gamma scale needed.
 
-        # 4) local_clone_phenotype_pct => shape (K*C*T, n_phenotypes)
-        #    We can param it directly. (Some people fold 'beta' in as well.)
-        local_clone_conc_pct_init = torch.ones(
-            self.K*self.C*self.T, self.n_phenotypes, device=self.device
-        ) + 1.0
-        local_clone_conc_pct = pyro.param(
-            "local_clone_concentration_pct",
-            local_clone_conc_pct_init,
-            constraint=constraints.greater_than(0.1)
-        )
-        with pyro.plate("clone_patient_time", self.K*self.C*self.T):
-            pyro.sample(
-                "local_clone_phenotype_pct",
-                dist.Dirichlet(local_clone_conc_pct)
-            )
+        # Note: We do *not* define a param for local_clone_phenotype_pct here!
+        # The child distribution is implied by baseline * scale, so
+        # there's no direct pyro.param(...) for it.
 
-        # 5) Phenotype->gene Dirichlet
+        # 4) Phenotype->gene Dirichlet
         gene_profile_concentration_init = (
             self.gene_profile_prior*self.gene_profile_prior_strength
             + self.gene_profile_prior_offset
@@ -640,7 +661,7 @@ class JointProbabilityDistribution:
                 dist.Dirichlet(gene_profile_concentration)
             )
 
-        # 6) cell-level param => Dirichlet
+        # 5) cell-level param => Dirichlet
         cell_phenotype_conc_init = torch.ones(batch_size, self.n_phenotypes, device=self.device) + 1.0
         cell_phenotype_concentration = pyro.param(
             "cell_phenotype_concentration",
@@ -652,7 +673,6 @@ class JointProbabilityDistribution:
                 "cell_phenotype_dist",
                 dist.Dirichlet(cell_phenotype_concentration * phenotype_probs * self.persistence_factor + 1.0)
             )
-
 
     def train(
         self, 
@@ -755,24 +775,61 @@ class JointProbabilityDistribution:
         }
     
     def get_clone_phenotype_distributions(self) -> torch.Tensor:
-        """Get current clone-level phenotype distributions."""
-        return pyro.param("clone_phenotype_concentration").detach()
-    
+        """
+        Get the *baseline* clone-level phenotype Dirichlet parameters for each (k,c).
+        That is, the param 'local_clone_concentration_pc' of shape (K*C, n_phenotypes).
+
+        Returns:
+            A Torch tensor of shape (K*C, n_phenotypes).
+        """
+        # This replaces the old "clone_phenotype_concentration" param.
+        # In the guide, we define param("local_clone_concentration_pc", ...).
+        return pyro.param("local_clone_concentration_pc").detach().cpu()
+
     def get_cell_phenotype_distributions(self) -> torch.Tensor:
-        """Get current cell-level phenotype distributions."""
-        return pyro.param("cell_phenotype_concentration").detach()
+        """
+        Get current cell-level Dirichlet parameters for each cell's phenotype distribution,
+        i.e. 'cell_phenotype_concentration' of shape (N_cells, n_phenotypes).
+
+        Returns:
+            A Torch tensor of shape (batch_size, n_phenotypes) in the param store.
+        """
+        return pyro.param("cell_phenotype_concentration").detach().cpu()
+
     
     def get_gene_profiles(self) -> torch.Tensor:
-        """Get current gene expression profiles for each phenotype."""
-        return pyro.param("gene_profile_concentration").detach()
+        """
+        Get current gene expression Dirichlet *concentrations* for each phenotype.
+
+        In the guide, we define:
+            unconstrained_profile = pyro.param("unconstrained_gene_profile_log", ...)
+            gene_profile_concentration = exp(clamp(unconstrained_profile, -10, 10))
+            pyro.sample("clone_gene_profiles", Dirichlet(gene_profile_concentration))
+
+        Here, we return 'gene_profile_concentration' = exp(...) from the ParamStore,
+        NOT normalized as a distribution, but as the raw Dirichlet concentration parameter.
+
+        Returns:
+            A Torch tensor of shape (n_phenotypes, n_genes).
+        """
+        unconstrained_profile = pyro.param("unconstrained_gene_profile_log").detach().cpu()
+        log_clamped = torch.clamp(unconstrained_profile, -10, 10)
+        gene_profile_conc = torch.exp(log_clamped)
+        return gene_profile_conc
+
     
     def get_patient_effects(self) -> torch.Tensor:
         """
-        Get current patient variance parameters (Gamma shape and rate).
+        Get the current patient variance parameters (Gamma shape and rate)
+        from the ParamStore. These are arrays of shape (C,).
+
+        Returns:
+            A tuple (shape, rate), each a Torch tensor of length C (number of patients).
         """
-        shape = pyro.param("patient_variance_shape").detach()
-        rate = pyro.param("patient_variance_rate").detach()
+        shape = pyro.param("patient_variance_shape").detach().cpu()
+        rate = pyro.param("patient_variance_rate").detach().cpu()
         return shape, rate
+
 
     def map_tcr_index_to_label(self, idx: int) -> str:
         return self.reverse_tcr_mapping.get(idx, f"Unknown TCR {idx}")
@@ -827,115 +884,39 @@ class JointProbabilityDistribution:
         """
         return k_idx*(self.C*self.T) + c_idx*self.T + t_idx
 
-    def get_phenotypic_flux_posterior(
-        self,
-        clone_idx: int,
-        patient_idx: int,
-        time1: int,
-        time2: int,
-        metric: str = "l1",
-        n_samples: int = 100,
-        temperature: float = 1.0
-    ) -> float:
+    def _reconstruct_single_distribution(self, clone_idx: int, patient_idx: int, time_idx: int) -> torch.Tensor:
         """
-        Compute a Bayesian version of the 'phenotypic flux' between time1, time2 for:
-        - TCR = clone_idx (integer index)
-        - patient = patient_idx (integer index)
-        by sampling from the posterior distributions at time1 and time2,
-        then comparing those *averaged* distributions with a chosen metric.
-
-        Args:
-        clone_idx: int, which clone index in [0..K-1]
-        patient_idx: int, which patient index in [0..C-1]
-        time1, time2: int, which time indices in [0..T-1]
-        metric: "l1" or "dkl" for D_KL(p1||p2). (You could add other metrics.)
-        n_samples: number of posterior draws for each distribution
-        temperature: post-hoc temperature scaling factor
-            - <1 => sharper distribution, >1 => flatter, =1 => no change
-
-        Returns:
-        flux_value (float): the distance between the (averaged) distribution at time1 vs time2.
+        Reconstruct a single point-estimate distribution p(phi| clone_idx, patient_idx, time_idx)
+        via baseline + mean(Gamma scale) + offset. Return it as a torch.Tensor shape (n_phenotypes,).
         """
-        import numpy as np
         import torch
-        import math
+        eps = 1e-12
 
-        # 1) Map integer indices -> labels
-        rev_patient_map = {v: k for k, v in self.dataset.covariate_mapping.items()}
-        patient_label = rev_patient_map.get(patient_idx, None)
-        if patient_label is None:
-            raise ValueError(f"Unknown patient_idx={patient_idx} in covariate_mapping.")
+        # Retrieve baseline => (K*C, n_phenotypes)
+        baseline_param = pyro.param("local_clone_concentration_pc").detach().cpu()
+        baseline_idx = clone_idx * self.C + patient_idx
+        baseline_kc = baseline_param[baseline_idx]  # shape => (n_phenotypes,)
+
+        beta_val = self.beta
+        offset_val = self.local_concentration_offset
 
         if self.T > 0:
-            rev_time_map = {v: k for k, v in self.dataset.timepoint_mapping.items()}
-            time_label1 = rev_time_map.get(time1, None)
-            time_label2 = rev_time_map.get(time2, None)
-            if time_label1 is None or time_label2 is None:
-                raise ValueError(f"Unknown time indices {time1}, {time2} in timepoint_mapping.")
+            # Retrieve shape & rate => (K*C*T, n_phenotypes)
+            shape_all = pyro.param("scale_factor_shape").detach().cpu()
+            rate_all  = pyro.param("scale_factor_rate").detach().cpu()
+            kct_index = clone_idx*(self.C*self.T) + patient_idx*self.T + time_idx
+            shape_kct = shape_all[kct_index]  # shape => (n_phenotypes,)
+            rate_kct  = rate_all[kct_index]
+            mean_scale = shape_kct / (rate_kct + eps)
         else:
-            time_label1 = None
-            time_label2 = None
+            mean_scale = torch.ones_like(baseline_kc)
 
-        # Map clone_idx -> TCR label
-        tcr_label = self.clone_mapping.get(clone_idx, None)
-        if tcr_label is None:
-            raise ValueError(f"Unknown clone_idx={clone_idx} in clone_mapping.")
+        child_conc = beta_val * baseline_kc * mean_scale + offset_val
+        child_conc = torch.clamp(child_conc, min=eps)
+        # (We do not strictly have to normalize here, but let's make it a distribution.)
+        dist = child_conc / torch.clamp(child_conc.sum(), min=eps)
+        return dist
 
-        # 2) Posterior samples for distribution at time1
-        posterior_result1 = self.generate_posterior_samples(
-            patient_label=patient_label,
-            tcr_label=tcr_label,
-            timepoint_label=time_label1,
-            n_samples=n_samples,
-            include_patient_effects=True
-        )
-        # shape (n_samples, n_phenotypes)
-        pheno_samples1 = posterior_result1["phenotype_samples"]
-
-        # 3) Posterior samples for distribution at time2
-        posterior_result2 = self.generate_posterior_samples(
-            patient_label=patient_label,
-            tcr_label=tcr_label,
-            timepoint_label=time_label2,
-            n_samples=n_samples,
-            include_patient_effects=True
-        )
-        pheno_samples2 = posterior_result2["phenotype_samples"]
-
-        # 4) Average across draws => p1, p2
-        p1 = pheno_samples1.mean(axis=0)  # shape (n_phenotypes,)
-        p2 = pheno_samples2.mean(axis=0)
-
-        # 5) Optional temperature scaling
-        if temperature != 1.0:
-            def temp_scale(vec, tau):
-                v_power = vec ** (1.0 / tau)
-                denom = v_power.sum()
-                if denom > 1e-12:
-                    return v_power / denom
-                else:
-                    return np.ones_like(vec) / len(vec)
-
-            p1 = temp_scale(p1, temperature)
-            p2 = temp_scale(p2, temperature)
-
-        # 6) Compute distance
-        eps = 1e-12
-        p1 = np.clip(p1, eps, None)
-        p2 = np.clip(p2, eps, None)
-        p1 /= p1.sum()
-        p2 /= p2.sum()
-
-        if metric.lower() == "l1":
-            # sum |p1 - p2|
-            flux_value = float(np.sum(np.abs(p1 - p2)))
-        elif metric.lower() == "dkl":
-            # sum p1 log(p1/p2) = KL(p1||p2)
-            flux_value = float(np.sum(p1 * np.log(p1 / p2)))
-        else:
-            raise ValueError(f"Unknown metric {metric}, use 'l1' or 'dkl'.")
-
-        return flux_value
 
 
     def get_phenotypic_flux(
@@ -948,46 +929,38 @@ class JointProbabilityDistribution:
         temperature: float = 1.0
     ) -> float:
         """
-        Flux between time1, time2 for TCR=clone_idx, patient=patient_idx,
-        using the single point estimate from local_clone_concentration_pct.
-        Optionally apply a post-hoc temperature transform to each distribution.
+        Compute the "phenotypic flux" between time1 and time2 for:
+        - TCR=clone_idx
+        - patient=patient_idx
+        using a *single point estimate* of the child distribution for each timepoint:
+        p(phi|k,c,t) = Dirichlet( baseline_kc * scale_mean_kct + offset ).
+
+        Then we compute a chosen distance metric ("l1" or "dkl") between the two distributions.
 
         Args:
             clone_idx: index in [0..K-1]
             patient_idx: index in [0..C-1]
-            time1, time2: indices in [0..T-1]
+            time1, time2: time indices in [0..T-1]
             metric: "l1" or "dkl"
-            temperature: post-hoc temperature factor
-                - 1.0 => no change (original distribution)
-                - <1 => sharper
-                - >1 => flatter
+            temperature: post-hoc temperature factor (<1 => sharper, >1 => flatter)
 
         Returns:
-            float: flux value (distance) between the two distributions at (time1, time2).
+            flux_value: float, the distance between the 2 distributions at (time1, time2).
         """
         import torch
         import pyro
 
-        # Retrieve the single point estimate of Dirichlet concentration
-        local_conc_pct = pyro.param("local_clone_concentration_pct").detach().cpu()
-        # shape => (K*C*T, n_phenotypes)
-
-        # Flatten index => k*(C*T) + c*T + t
-        idx1 = clone_idx*(self.C*self.T) + patient_idx*self.T + time1
-        idx2 = clone_idx*(self.C*self.T) + patient_idx*self.T + time2
-
-        conc1 = local_conc_pct[idx1]
-        conc2 = local_conc_pct[idx2]
-
-        # Convert to distributions
         eps = 1e-12
-        p1 = conc1 / torch.clamp(conc1.sum(), min=eps)
-        p2 = conc2 / torch.clamp(conc2.sum(), min=eps)
 
-        # Post-hoc temperature scaling if needed
+        # 1) Reconstruct distribution at time1
+        p1 = self._reconstruct_single_distribution(clone_idx, patient_idx, time1)
+        # 2) Reconstruct distribution at time2
+        p2 = self._reconstruct_single_distribution(clone_idx, patient_idx, time2)
+
+        # 3) Optional temperature transform
         def temp_scale(tensor_dist, tau):
             if tau == 1.0:
-                return tensor_dist
+                return tensor_dist / torch.clamp(tensor_dist.sum(), min=eps)
             power = tensor_dist ** (1.0 / tau)
             denom = torch.clamp(power.sum(), min=eps)
             return power / denom
@@ -996,18 +969,244 @@ class JointProbabilityDistribution:
             p1 = temp_scale(p1, temperature)
             p2 = temp_scale(p2, temperature)
 
-        # Re-clamp for safety
-        p1 = torch.clamp(p1, min=eps)
-        p2 = torch.clamp(p2, min=eps)
+        # Re-clamp & re-normalize
+        p1 = p1.clamp_min(eps)
+        p2 = p2.clamp_min(eps)
+        p1 = p1 / p1.sum()
+        p2 = p2 / p2.sum()
 
-        # Final metric
+        # 4) Distance
         if metric.lower() == "l1":
-            return float(torch.sum(torch.abs(p1 - p2)))
+            flux_value = float(torch.sum(torch.abs(p1 - p2)))
         elif metric.lower() == "dkl":
-            return float(torch.sum(p1 * torch.log(p1 / p2)))
+            flux_value = float(torch.sum(p1 * torch.log(p1 / p2)))
         else:
             raise ValueError(f"Unknown metric {metric}, use 'l1' or 'dkl'.")
 
+        return flux_value
+
+
+    def get_phenotypic_entropy_by_clone(
+        self,
+        patient_idx: int,
+        time_idx: int,
+        weight_by_clone_freq: bool = False,
+        normalize: bool = False,
+        temperature: float = 1.0
+    ) -> Dict[int, float]:
+        """
+        For each clone k, compute H(Phenotype | Clone=k) in nats or bits (here, using ln or log).
+        We do a single *point estimate* of p(phenotype|k) by:
+        - Reconstructing child_concentration = beta * baseline + scale_mean + offset
+        - Then normalizing => distribution over phenotypes.
+
+        Optionally:
+        - weight_by_clone_freq => multiply distribution by freq_for_clone[k]
+        - temperature transform => p^(1/tau)
+        - normalize => divide by ln(n_phenotypes)
+
+        Returns:
+            dict: {clone_idx -> entropy_value}
+        """
+        import torch
+        import pyro
+        import math
+        import numpy as np
+
+        eps = 1e-12
+
+        # Helper: temperature transform
+        def temperature_transform(p: torch.Tensor, tau: float) -> torch.Tensor:
+            # p has shape (n_phenotypes,)
+            if tau == 1.0:
+                s = torch.clamp(p.sum(), min=eps)
+                return p / s
+            else:
+                p_pow = p ** (1.0 / tau)
+                denom = torch.clamp(p_pow.sum(), min=eps)
+                return p_pow / denom
+
+        # 1) Retrieve baseline => shape (K*C, n_phenotypes)
+        baseline_param = pyro.param("local_clone_concentration_pc").detach().cpu()
+
+        # If T>0 => retrieve scale param => (K*C*T, n_phenotypes)
+        if self.T > 0:
+            guide_shape = pyro.param("scale_factor_shape").detach().cpu()
+            guide_rate  = pyro.param("scale_factor_rate").detach().cpu()
+        else:
+            guide_shape = None
+            guide_rate  = None
+
+        # Possibly gather real clone frequencies
+        freq_for_clone = np.ones(self.K, dtype=np.float32)
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
+            freq_for_clone[:] = 0.0
+            clone_sizes = self.adata.obs["clone_size"].values
+            for i in range(len(self.dataset)):
+                cell_pat = self.dataset.covariates[i].item()
+                cell_time = self.dataset.timepoints[i].item() if self.dataset.timepoints is not None else 0
+                if (cell_pat == patient_idx) and (cell_time == time_idx):
+                    c_id = self.dataset.tcrs[i].item()
+                    freq_for_clone[c_id] += clone_sizes[i]
+            total_size = freq_for_clone.sum()
+            if total_size > 0:
+                freq_for_clone /= total_size
+            else:
+                freq_for_clone[:] = 1.0 / self.K
+
+        phen_entropy_by_clone = {}
+
+        beta_val = torch.tensor(self.beta, dtype=torch.float)
+        offset_val = torch.tensor(self.local_concentration_offset, dtype=torch.float)
+
+        # 2) For each clone k => reconstruct p(phenotype|k)
+        for k_idx in range(self.K):
+            # flatten indices => baseline_idx = k*C + patient_idx
+            baseline_idx = k_idx * self.C + patient_idx
+            baseline_kc = baseline_param[baseline_idx]  # shape => (n_phenotypes,)
+
+            if self.T > 0:
+                # scale => index = k*(C*T) + patient_idx*T + time_idx
+                kct = k_idx * (self.C * self.T) + patient_idx*self.T + time_idx
+                shape_kct = guide_shape[kct]
+                rate_kct  = guide_rate[kct]
+                mean_scale = shape_kct / (rate_kct + eps)
+            else:
+                mean_scale = torch.ones_like(baseline_kc)
+
+            child_conc = beta_val * baseline_kc * mean_scale + offset_val
+            denom = torch.clamp(child_conc.sum(), min=eps)
+            p_phi_given_k = child_conc / denom
+
+            # optional weighting by clone freq
+            if weight_by_clone_freq:
+                p_phi_given_k = p_phi_given_k * freq_for_clone[k_idx]
+                s2 = torch.clamp(p_phi_given_k.sum(), min=eps)
+                p_phi_given_k = p_phi_given_k / s2
+
+            # temperature transform
+            p_phi_given_k = temperature_transform(p_phi_given_k, temperature)
+            p_phi_given_k = torch.clamp(p_phi_given_k, min=eps)
+            p_phi_given_k = p_phi_given_k / p_phi_given_k.sum()
+
+            # Entropy = - sum p(phi|k)* log p(phi|k)
+            entropy_val = -torch.sum(p_phi_given_k * torch.log(p_phi_given_k))
+            # Convert to float
+            entropy_val = entropy_val.item()
+
+            # if normalize => divide by ln(n_phenotypes)
+            if normalize and self.n_phenotypes > 1:
+                entropy_val /= math.log(self.n_phenotypes)
+
+            phen_entropy_by_clone[k_idx] = float(entropy_val)
+
+        return phen_entropy_by_clone
+
+    def get_phenotypic_flux_posterior(
+        self,
+        clone_idx: int,
+        patient_idx: int,
+        time1: int,
+        time2: int,
+        metric: str = "l1",
+        n_samples: int = 100,
+        temperature: float = 1.0
+    ) -> float:
+        """
+        A Bayesian version of phenotypic flux: we call generate_posterior_samples(...)
+        for (time1) and (time2), average each => p1, p2 => measure distance.
+
+        Args:
+            clone_idx, patient_idx, time1, time2
+            metric: "l1" or "dkl"
+            n_samples: how many draws per distribution
+            temperature: post-hoc factor
+        Returns:
+            flux_value (float)
+        """
+        import numpy as np
+        import math
+
+        # 1) Map integer => labels
+        rev_patient_map = {v:k for k,v in self.dataset.covariate_mapping.items()}
+        patient_label = rev_patient_map.get(patient_idx, None)
+        if patient_label is None:
+            raise ValueError(f"Unknown patient_idx={patient_idx} in covariate_mapping.")
+
+        if self.T > 0:
+            rev_time_map = {v:k for k,v in self.dataset.timepoint_mapping.items()}
+            time_label1 = rev_time_map.get(time1, None)
+            time_label2 = rev_time_map.get(time2, None)
+            if time_label1 is None or time_label2 is None:
+                raise ValueError(f"Unknown time indices {time1}, {time2} in timepoint_mapping.")
+        else:
+            time_label1 = None
+            time_label2 = None
+
+        # Map clone_idx => TCR label
+        tcr_label = self.clone_mapping.get(clone_idx, None)
+        if tcr_label is None:
+            raise ValueError(f"Unknown clone_idx={clone_idx} in clone_mapping.")
+
+        # 2) Posterior samples for time1 => shape (n_samples, n_phenotypes)
+        posterior_res1 = self.generate_posterior_samples(
+            patient_label=patient_label,
+            tcr_label=tcr_label,
+            timepoint_label=time_label1,
+            n_samples=n_samples,
+            include_patient_effects=True
+        )
+        pheno_samples1 = posterior_res1["phenotype_samples"]
+
+        # 3) Posterior samples for time2
+        posterior_res2 = self.generate_posterior_samples(
+            patient_label=patient_label,
+            tcr_label=tcr_label,
+            timepoint_label=time_label2,
+            n_samples=n_samples,
+            include_patient_effects=True
+        )
+        pheno_samples2 = posterior_res2["phenotype_samples"]
+
+        # 4) Average => p1, p2
+        p1 = pheno_samples1.mean(axis=0)  # shape => (n_phenotypes,)
+        p2 = pheno_samples2.mean(axis=0)
+
+        # 5) Temperature
+        import numpy as np
+        eps = 1e-12
+
+        def temp_scale(vec, tau):
+            vec = np.clip(vec, eps, None)
+            if tau == 1.0:
+                s = vec.sum()
+                return vec / s
+            v_pow = vec**(1.0/tau)
+            denom = v_pow.sum()
+            if denom > eps:
+                return v_pow / denom
+            else:
+                return np.ones_like(vec)/len(vec)
+
+        if temperature != 1.0:
+            p1 = temp_scale(p1, temperature)
+            p2 = temp_scale(p2, temperature)
+
+        # clamp & normalize
+        p1 = np.clip(p1, eps, None)
+        p2 = np.clip(p2, eps, None)
+        p1 /= p1.sum()
+        p2 /= p2.sum()
+
+        # 6) distance
+        if metric.lower() == "l1":
+            flux_value = float(np.sum(np.abs(p1 - p2)))
+        elif metric.lower() == "dkl":
+            flux_value = float(np.sum(p1 * np.log(p1 / p2)))
+        else:
+            raise ValueError(f"Unknown metric {metric}, use 'l1' or 'dkl'.")
+
+        return flux_value
 
     def get_phenotypic_flux_posterior_pairwise(
         self,
@@ -1021,43 +1220,28 @@ class JointProbabilityDistribution:
     ) -> float:
         """
         A fully Bayesian 'phenotypic flux' measure between time1 and time2 for:
-        - TCR=clone_idx (int index)
-        - patient=patient_idx (int index)
-        that compares *all* posterior draws pairwise, then averages.
+        - TCR=clone_idx
+        - patient=patient_idx
+        that compares *all* posterior draws pairwise (n_samples^2).
+        Then we average the chosen distance.
 
         Steps:
-        1) Map integer (patient_idx, timeX, clone_idx) -> labels
-        2) generate_posterior_samples(...) for time1 => shape (n_samples, n_phenotypes)
-            generate_posterior_samples(...) for time2 => shape (n_samples, n_phenotypes)
-        3) For each sample i from time1, each sample j from time2:
-            - Possibly apply temperature transform
-            - Normalize distribution
-            - Compute chosen distance (l1 or dkl)
-            Sum over i,j => average by dividing by (n_samples^2).
-        4) Return that scalar flux measure.
-
-        Args:
-        clone_idx: which clone index in [0..K-1]
-        patient_idx: which patient index in [0..C-1]
-        time1, time2: which time indices in [0..T-1]
-        metric: "l1" or "dkl"
-        n_samples: number of posterior draws for each time distribution
-        temperature: post-hoc temperature factor (<1 => sharper, >1 => flatter, =1 => no change)
-
-        Returns:
-        flux_value: float, the average pairwise distance between draws from time1, time2.
+        1) generate_posterior_samples(...) for (time1) => shape (n_samples, n_phenotypes)
+            generate_posterior_samples(...) for (time2)
+        2) For each sample i in time1, each j in time2 => apply temperature => distance
+        3) average => final flux_value
         """
         import numpy as np
         import math
 
-        # 1) Map integer -> labels for patient, time
-        rev_patient_map = {v: k for k, v in self.dataset.covariate_mapping.items()}
+        # 0) Convert (clone_idx, patient_idx, timeX) => labels
+        rev_patient_map = {v:k for k,v in self.dataset.covariate_mapping.items()}
         patient_label = rev_patient_map.get(patient_idx, None)
         if patient_label is None:
-            raise ValueError(f"Unknown patient_idx={patient_idx} in covariate_mapping.")
+            raise ValueError(f"Unknown patient_idx={patient_idx}")
 
         if self.T > 0:
-            rev_time_map = {v: k for k, v in self.dataset.timepoint_mapping.items()}
+            rev_time_map = {v:k for k,v in self.dataset.timepoint_mapping.items()}
             time_label1 = rev_time_map.get(time1, None)
             time_label2 = rev_time_map.get(time2, None)
             if time_label1 is None or time_label2 is None:
@@ -1066,68 +1250,65 @@ class JointProbabilityDistribution:
             time_label1 = None
             time_label2 = None
 
-        # Map clone_idx -> TCR label
+        # clone_idx => TCR label
         tcr_label = self.clone_mapping.get(clone_idx, None)
         if tcr_label is None:
-            raise ValueError(f"Unknown clone_idx={clone_idx} in clone_mapping.")
+            raise ValueError(f"Unknown clone_idx={clone_idx}")
 
-        # 2) Generate posterior samples for time1, time2
-        #    shape => (n_samples, n_phenotypes) each
-        posterior_result1 = self.generate_posterior_samples(
+        # 1) Posterior samples for time1 => (n_samples, n_phenotypes)
+        post1 = self.generate_posterior_samples(
             patient_label=patient_label,
             tcr_label=tcr_label,
             timepoint_label=time_label1,
             n_samples=n_samples,
             include_patient_effects=True
         )
-        pheno_samples1 = posterior_result1["phenotype_samples"]
+        pheno1 = post1["phenotype_samples"]
 
-        posterior_result2 = self.generate_posterior_samples(
+        # 2) Posterior samples for time2
+        post2 = self.generate_posterior_samples(
             patient_label=patient_label,
             tcr_label=tcr_label,
             timepoint_label=time_label2,
             n_samples=n_samples,
             include_patient_effects=True
         )
-        pheno_samples2 = posterior_result2["phenotype_samples"]
+        pheno2 = post2["phenotype_samples"]
 
-        # 3) Define a helper for temperature transform + normalization
         eps = 1e-12
+
         def process_distribution(vec: np.ndarray, tau: float) -> np.ndarray:
-            # clamp
             vec = np.clip(vec, eps, None)
             if tau != 1.0:
-                v_power = vec ** (1.0 / tau)
-                denom = v_power.sum()
+                power = vec ** (1.0/tau)
+                denom = power.sum()
                 if denom > eps:
-                    vec = v_power / denom
+                    vec = power / denom
                 else:
-                    vec = np.ones_like(vec) / len(vec)
+                    vec = np.ones_like(vec)/len(vec)
             else:
-                # no temperature transform, just renormalize
                 s = vec.sum()
                 if s < eps:
-                    vec = np.ones_like(vec) / len(vec)
+                    vec = np.ones_like(vec)/len(vec)
                 else:
-                    vec = vec / s
+                    vec = vec/s
             return vec
 
-        # 4) Pairwise distances
         total_dist = 0.0
         count = 0
 
+        # 3) Double loop => all pairs
         for i in range(n_samples):
-            p1 = process_distribution(pheno_samples1[i], temperature)  # shape (n_phenotypes,)
+            p1 = process_distribution(pheno1[i], temperature)
             for j in range(n_samples):
-                p2 = process_distribution(pheno_samples2[j], temperature)
+                p2 = process_distribution(pheno2[j], temperature)
 
                 if metric.lower() == "l1":
                     dist_ij = np.sum(np.abs(p1 - p2))
                 elif metric.lower() == "dkl":
-                    # KL(p1||p2) = sum p1 * log(p1/p2)
                     dist_ij = np.sum(p1 * np.log(p1 / p2))
                 else:
-                    raise ValueError(f"Unknown metric {metric}, use 'l1' or 'dkl'.")
+                    raise ValueError(f"Unknown metric {metric}")
 
                 total_dist += dist_ij
                 count += 1
@@ -1135,98 +1316,6 @@ class JointProbabilityDistribution:
         flux_value = float(total_dist / count)
         return flux_value
 
-    def get_phenotypic_entropy_by_clone(
-        self,
-        patient_idx: int,
-        time_idx: int,
-        weight_by_clone_freq: bool = False,
-        normalize: bool = False,
-        temperature: float = 1.0
-    ) -> Dict[int, float]:
-        """
-        For each clone k, compute H(Phenotype | Clone=k) from the single point estimate
-        in local_clone_concentration_pct, optionally:
-        - weighting the distribution by clone frequency
-        - applying a post-hoc temperature transform
-        - normalizing the entropy by ln(n_phenotypes).
-
-        Returns:
-        dict: {clone_idx: entropy_value}.
-        """
-        import torch
-        import pyro
-        import math
-        import numpy as np
-
-        eps = 1e-12
-
-        # Helper: apply temperature transform to a distribution
-        def temperature_transform(p: torch.Tensor, tau: float) -> torch.Tensor:
-            if tau == 1.0:
-                # Just ensure nonzero and re-normalize
-                s = torch.clamp(p.sum(), min=eps)
-                return p / s
-            else:
-                p_power = p**(1.0 / tau)
-                denom = torch.clamp(p_power.sum(), min=eps)
-                return p_power / denom
-
-        # 1) Retrieve local_clone_concentration_pct => shape (K*C*T, n_phenotypes)
-        local_conc_pt = pyro.param("local_clone_concentration_pct").detach().cpu()
-
-        # 2) Possibly gather real clone frequencies
-        freq_for_clone = np.ones(self.K, dtype=np.float32)
-        if weight_by_clone_freq:
-            freq_for_clone[:] = 0.0
-            clone_sizes = self.adata.obs["clone_size"].values  # shape (#cells,)
-
-            for i in range(len(self.dataset)):
-                cell_pat = self.dataset.covariates[i].item()
-                cell_time = (
-                    self.dataset.timepoints[i].item()
-                    if self.dataset.timepoints is not None
-                    else 0
-                )
-                if (cell_pat == patient_idx) and (cell_time == time_idx):
-                    c_id = self.dataset.tcrs[i].item()
-                    freq_for_clone[c_id] += clone_sizes[i]
-
-            total_size = freq_for_clone.sum()
-            if total_size > 0:
-                freq_for_clone /= total_size
-            else:
-                freq_for_clone[:] = 1.0 / self.K
-
-        # 3) For each clone, read out the distribution => apply freq => temperature => compute entropy
-        phen_entropy_by_clone = {}
-
-        for k in range(self.K):
-            kct = k * (self.C * self.T) + patient_idx * self.T + time_idx
-            conc_k = local_conc_pt[kct]  # shape (n_phenotypes,)
-
-            # Convert to distribution p(phi|k)
-            denom = torch.clamp(conc_k.sum(), min=eps)
-            p_phi_given_k = conc_k / denom
-
-            # (Optional) multiply by freq_for_clone[k], then re-normalize
-            if weight_by_clone_freq:
-                p_phi_given_k = p_phi_given_k * freq_for_clone[k]
-
-            # Post-hoc temperature transform
-            p_phi_given_k = temperature_transform(p_phi_given_k, temperature)
-            # Now it sums to ~1
-
-            # H(Phenotype | Clone=k) = - sum_phi p(phi|k) ln p(phi|k)
-            p_phi_given_k = torch.clamp(p_phi_given_k, min=eps)
-            entropy_val = -torch.sum(p_phi_given_k * torch.log(p_phi_given_k))
-
-            # Normalize by ln(n_phenotypes)?
-            if normalize and self.n_phenotypes > 1:
-                entropy_val = entropy_val / math.log(self.n_phenotypes)
-
-            phen_entropy_by_clone[k] = float(entropy_val.item())
-
-        return phen_entropy_by_clone
 
     def get_phenotypic_entropy_by_clone_posterior(
         self,
@@ -1238,29 +1327,23 @@ class JointProbabilityDistribution:
         temperature: float = 1.0
     ) -> Dict[int, float]:
         """
-        A Bayesian version of H(Phenotype | Clone=k) for each clone k in [0..K-1],
-        by sampling each clone's posterior distribution at (patient_idx, time_idx),
-        optionally multiplying by clone frequency, applying post-hoc temperature,
-        and computing entropy in nats (or normalized by ln(n_phenotypes)).
+        Bayesian version of H(Phenotype | Clone=k). For each clone k, we:
+        - call generate_posterior_samples(...) => (n_samples, n_phenotypes)
+        - average => p(phi|k)
+        - optionally multiply by freq_for_clone[k], re-normalize
+        - temperature transform => re-normalize
+        - compute - sum p(phi|k)* log p(phi|k)
 
-        Steps:
-        1) Possibly gather clone frequencies freq_for_clone[k].
-        2) For each clone k:
-            - generate_posterior_samples(...) => shape (n_samples, n_phenotypes)
-            - average => p(phi|k)
-            - multiply by freq_for_clone[k] => re-normalize if weight_by_clone_freq=True
-            - apply temperature => p^(1/tau), re-normalize
-            - compute H(Phenotype|Clone=k) = - sum_phi p(phi|k)* log p(phi|k)
-        3) If normalize=True, divide by ln(n_phenotypes).
-        4) Return dict {k: entropy_val}.
+        If normalize=True => divide by ln(n_phenotypes).
 
         Returns:
-        phen_entropy_by_clone: dict {clone_idx: float} in [0..ln(n_phenotypes)] or [0..1] if normalized.
+            dict {clone_idx -> float} 
         """
         import numpy as np
         import math
+        from typing import Dict
 
-        # ------------------- 0) Map integer => labels (patient, time) -------------------
+        # 1) Map integer => labels for patient, time
         rev_patient_map = {v: k for k, v in self.dataset.covariate_mapping.items()}
         patient_label = rev_patient_map.get(patient_idx, None)
         if patient_label is None:
@@ -1276,13 +1359,12 @@ class JointProbabilityDistribution:
 
         K = self.K
         P = self.n_phenotypes
-
         eps = 1e-12
 
-        # ------------------- 1) Possibly gather clone frequencies -------------------
-        if weight_by_clone_freq:
+        # 2) Possibly gather real clone frequencies
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
             freq_for_clone = np.zeros(K, dtype=np.float32)
-            clone_sizes = self.adata.obs["clone_size"].values  # (#cells,)
+            clone_sizes = self.adata.obs["clone_size"].values
 
             for i in range(len(self.dataset)):
                 cell_pat = self.dataset.covariates[i].item()
@@ -1297,9 +1379,8 @@ class JointProbabilityDistribution:
             else:
                 freq_for_clone[:] = 1.0 / K
         else:
-            freq_for_clone = np.ones(K, dtype=np.float32)  # no weighting
+            freq_for_clone = np.ones(K, dtype=np.float32)
 
-        # ------------------- 2) A helper for temperature transform + re-normalize -------------------
         def temperature_transform(vec: np.ndarray, tau: float) -> np.ndarray:
             vec = np.clip(vec, eps, None)
             if tau == 1.0:
@@ -1315,15 +1396,15 @@ class JointProbabilityDistribution:
                 else:
                     return np.ones_like(vec) / len(vec)
 
-        # ------------------- 3) For each clone => posterior draws => average => weighting => temperature => entropy -------------------
         phen_entropy_by_clone = {}
 
+        # 3) For each clone => posterior draws => average => weighting => temperature => compute entropy
         for k_idx in range(K):
             tcr_label = self.clone_mapping.get(k_idx, None)
             if tcr_label is None:
                 continue
 
-            # 3a) Generate posterior samples for this (patient, tcr, time)
+            # generate posterior samples => (n_samples, n_phenotypes)
             posterior_result = self.generate_posterior_samples(
                 patient_label=patient_label,
                 tcr_label=tcr_label,
@@ -1331,37 +1412,40 @@ class JointProbabilityDistribution:
                 n_samples=n_samples,
                 include_patient_effects=True
             )
-            # shape => (n_samples, n_phenotypes)
             pheno_samples = posterior_result["phenotype_samples"]
 
-            # 3b) average => p(phi|k)
+            # average => p(phi|k)
             p_phi_given_k = pheno_samples.mean(axis=0)  # shape (P,)
 
-            # 3c) multiply by freq_for_clone => re-normalize if weighting
+            # multiply by freq_for_clone[k], then re-normalize if requested
             if weight_by_clone_freq:
                 p_phi_given_k *= freq_for_clone[k_idx]
-            s2 = p_phi_given_k.sum()
-            if s2 < eps:
-                p_phi_given_k[:] = 1.0 / P
-            else:
-                p_phi_given_k /= s2
+                s2 = p_phi_given_k.sum()
+                if s2 < eps:
+                    p_phi_given_k[:] = 1.0 / P
+                else:
+                    p_phi_given_k /= s2
 
-            # 3d) temperature transform
+            # temperature transform
             p_phi_given_k = temperature_transform(p_phi_given_k, temperature)
 
-            # 3e) H(Phenotype|Clone=k) = - sum_phi p(phi|k)* ln p(phi|k)
+            # clamp => re-normalize
             p_phi_given_k = np.clip(p_phi_given_k, eps, None)
-            p_phi_given_k /= p_phi_given_k.sum()  # ensure sum=1
+            sum_phi = p_phi_given_k.sum()
+            if sum_phi < eps:
+                p_phi_given_k[:] = 1.0 / P
+            else:
+                p_phi_given_k /= sum_phi
+
+            # Entropy => - sum p(phi|k)* log p(phi|k)
             entropy_val = -np.sum(p_phi_given_k * np.log(p_phi_given_k))
 
-            # 3f) optionally normalize by ln(n_phenotypes)
             if normalize and P > 1:
                 entropy_val /= math.log(P)
 
             phen_entropy_by_clone[k_idx] = float(entropy_val)
 
         return phen_entropy_by_clone
-
 
 
     def get_mutual_information(
@@ -1372,120 +1456,121 @@ class JointProbabilityDistribution:
         temperature: float = 1.0
     ) -> float:
         """
-        Compute I(Clone; Phenotype) for a given (patient_idx, time_idx), optionally
-        applying a post-hoc temperature transform to each phenotype distribution p(phi|k).
+        Compute I(Clone; Phenotype) for a given (patient_idx, time_idx), 
+        using a *point estimate* of each clone's distribution derived from:
+        - local_clone_concentration_pc (baseline)
+        - scale_factor_{kct} shape/rate => mean scale
+        - offset + beta
+        Then we do:
+        p(k,phi) = p(k)* p(phi|k),
+        sum => p(phi), then compute MI in bits (log2).
 
-        If weight_by_clone_freq=True, we use actual clone frequencies from adata.obs["clone_size"].
-        Otherwise, clones are weighted uniformly.
-
-        temperature: float
-            - 1.0 => no change (use the model's distribution)
-            - <1.0 => "sharpen" distribution (more peaked)
-            - >1.0 => "flatten" distribution (less peaked)
+        Args:
+            patient_idx: int in [0..C-1]
+            time_idx: int in [0..T-1], or 0 if T=0
+            weight_by_clone_freq: whether to gather real clone frequencies from adata.obs["clone_size"]
+            temperature: float, post-hoc temperature transform
 
         Returns:
-            mutual_info (float) in bits (log base 2).
+            mutual_info (float) in bits (log2).
         """
         import torch
         import numpy as np
         import pyro
 
-        # Helper function to apply temperature scaling to a 2D batch of distributions
-        def apply_temperature_scaling_2d(p, tau):
-            """
-            p: Tensor of shape (K, n_phenotypes), each row sums to ~1
-            tau: temperature factor. tau < 1 => sharper, tau > 1 => flatter
-            """
-            if tau == 1.0:
-                return p  # no change
-            p_power = p ** (1.0 / tau)               # raise each prob to 1/tau
-            row_sums = p_power.sum(dim=1, keepdim=True)
-            row_sums = torch.clamp(row_sums, min=1e-12)
-            return p_power / row_sums
+        eps = 1e-12
 
-        # -------------------------------------------------------------
-        # 1) Retrieve local_clone_concentration_pct and build p(phi|k)
-        # -------------------------------------------------------------
-        local_conc_pt = pyro.param("local_clone_concentration_pct").detach().cpu()  
-        # shape => (K*C*T, n_phenotypes)
+        # 1) Retrieve baseline param => shape (K*C, n_phenotypes)
+        baseline_param = pyro.param("local_clone_concentration_pc").detach().cpu()
 
-        # We'll build a distribution p(phi|k), plus p(k)
+        # If T>0, retrieve gamma scale shape & rate => shape (K*C*T, n_phenotypes)
+        if self.T > 0:
+            scale_shape = pyro.param("scale_factor_shape").detach().cpu()
+            scale_rate  = pyro.param("scale_factor_rate").detach().cpu()
+        else:
+            scale_shape = None
+            scale_rate  = None
+
+        # We'll build a distribution p(phi|k), and a clone freq array => p(k)
         dist_kp = []
         clone_freqs = []
 
-        # -------------------------------------------------------------
-        # 2) If weight_by_clone_freq, gather frequencies from adata
-        # -------------------------------------------------------------
-        if weight_by_clone_freq:
+        # Possibly gather real clone frequencies
+        import numpy as np
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
             freq_for_clone = np.zeros(self.K, dtype=np.float32)
-            clone_sizes = self.adata.obs["clone_size"].values  # shape => (#cells,)
-
+            clone_sizes = self.adata.obs["clone_size"].values
             for i in range(len(self.dataset)):
-                cell_patient = self.dataset.covariates[i].item()
-                cell_time = self.dataset.timepoints[i].item() if self.dataset.timepoints is not None else 0
-                if cell_patient == patient_idx and cell_time == time_idx:
-                    clone_id = self.dataset.tcrs[i].item()
-                    freq_for_clone[clone_id] += clone_sizes[i]
+                cell_pat = self.dataset.covariates[i].item()
+                cell_time = self.dataset.timepoints[i].item() if (self.dataset.timepoints is not None) else 0
+                if (cell_pat == patient_idx) and (cell_time == time_idx):
+                    c_id = self.dataset.tcrs[i].item()
+                    freq_for_clone[c_id] += clone_sizes[i]
 
             total_size = freq_for_clone.sum()
             if total_size > 0:
                 freq_for_clone /= total_size
             else:
                 freq_for_clone[:] = 1.0 / self.K
+        else:
+            freq_for_clone = np.ones(self.K, dtype=np.float32) / self.K
 
-        # -------------------------------------------------------------
-        # 3) Construct p(phi|k) for each clone k
-        # -------------------------------------------------------------
+        beta_val = torch.tensor(self.beta, dtype=torch.float)
+        offset_val = torch.tensor(self.local_concentration_offset, dtype=torch.float)
+
+        # 2) For each clone k => reconstruct child distribution
         for k in range(self.K):
-            # Flatten index => k*(C*T) + patient_idx*T + time_idx
-            kct = k * (self.C * self.T) + patient_idx * self.T + time_idx
+            # flatten index => baseline_idx = k*C + patient_idx
+            baseline_idx = k * self.C + patient_idx
+            baseline_kc = baseline_param[baseline_idx]  # shape => (n_phenotypes,)
 
-            conc_k = local_conc_pt[kct]
-            # unscaled distribution
-            p_phi_given_k = conc_k / torch.clamp(conc_k.sum(), min=1e-12)
+            if self.T > 0:
+                kct_index = k * (self.C*self.T) + patient_idx*self.T + time_idx
+                shape_kct = scale_shape[kct_index]  # (n_phenotypes,)
+                rate_kct  = scale_rate[kct_index]
+                mean_scale = shape_kct / (rate_kct + eps)
+            else:
+                mean_scale = torch.ones_like(baseline_kc)
+
+            # child_concentration => beta*baseline*mean_scale + offset
+            child_conc = beta_val * baseline_kc * mean_scale + offset_val
+            denom = torch.clamp(child_conc.sum(), min=eps)
+            p_phi_given_k = child_conc / denom  # shape => (n_phenotypes,)
 
             dist_kp.append(p_phi_given_k)
 
             # p(k)
-            if weight_by_clone_freq:
-                p_k = freq_for_clone[k]
-            else:
-                p_k = 1.0  # uniform weighting
+            p_k = freq_for_clone[k]  # either uniform or real freq
             clone_freqs.append(p_k)
 
-        # Stack => shape (K, n_phenotypes)
-        dist_kp = torch.stack(dist_kp, dim=0)
+        dist_kp = torch.stack(dist_kp, dim=0)  # shape => (K, n_phenotypes)
 
-        # -------------------------------------------------------------
-        # 4) Apply post-hoc temperature scaling
-        # -------------------------------------------------------------
-        dist_kp = apply_temperature_scaling_2d(dist_kp, temperature)  # shape (K, n_phenotypes)
+        # 3) Temperature transform
+        if temperature != 1.0:
+            dist_kp_pow = dist_kp ** (1.0 / temperature)
+            row_sums = dist_kp_pow.sum(dim=1, keepdim=True).clamp_min(eps)
+            dist_kp = dist_kp_pow / row_sums
 
-        # -------------------------------------------------------------
-        # 5) Build p(k) array and normalize
-        # -------------------------------------------------------------
+        # 4) p(k) array => normalize
         clone_freqs = np.array(clone_freqs, dtype=np.float32)
-        clone_freqs_sum = clone_freqs.sum()
-        if clone_freqs_sum > 0:
-            clone_freqs /= clone_freqs_sum
+        total_clone_freq = clone_freqs.sum()
+        if total_clone_freq > 0:
+            clone_freqs /= total_clone_freq
         else:
             clone_freqs[:] = 1.0 / self.K
 
-        # p(k, phi) = p(k)* p(phi|k)
+        # build p(k, phi) = p(k)* p(phi|k)
         pxy = dist_kp * torch.tensor(clone_freqs, dtype=torch.float).unsqueeze(1)
         pxy = pxy.detach().numpy()
         pxy_sum = pxy.sum()
-        if pxy_sum > 0:
+        if pxy_sum > eps:
             pxy /= pxy_sum
 
-        # p(k) = sum_phi p(k, phi)
+        # px = sum_phi p(k,phi), py = sum_k p(k,phi)
         px = pxy.sum(axis=1)
-        # p(phi) = sum_k p(k, phi)
         py = pxy.sum(axis=0)
 
-        # -------------------------------------------------------------
-        # 6) I(X; Y) = sum_{x,y} p(x,y) log2( p(x,y) / [ p(x) p(y) ] )
-        # -------------------------------------------------------------
+        # 5) Compute mutual info => sum_{k,phi} p(k,phi)* log2 [ p(k,phi)/(p(k)* p(phi)) ]
         px_py = np.outer(px, py)
         nzs = (pxy > 1e-12)
 
@@ -1494,7 +1579,6 @@ class JointProbabilityDistribution:
         )
 
         return float(mutual_info)
-
 
     def get_mutual_information_posterior(
         self,
@@ -1505,36 +1589,30 @@ class JointProbabilityDistribution:
         temperature: float = 1.0
     ) -> float:
         """
-        A Bayesian approach to computing I(Clone; Phenotype) for a given (patient_idx, time_idx),
-        sampling from the posterior for each clone.
+        A Bayesian approach to computing I(Clone; Phenotype) for a given (patient_idx,time_idx),
+        sampling from the posterior for each clone, then combining.
 
         Steps:
-        1) Map integer patient_idx -> patient_label, same for time_idx -> time_label.
-        2) Loop over k in [0..K-1], map k -> tcr_label.
-            - Call self.generate_posterior_samples(patient_label, tcr_label, timepoint_label, 
-            n_samples).
-            - That yields shape (n_samples, n_phenotypes) for "phenotype_samples."
-        3) Average these samples => p(phi|k).
-        4) Apply optional temperature transform p(phi|k)^(1/tau).
-        5) Weight by p(k) if weight_by_clone_freq else uniform => p(k, phi).
-        6) Sum => p(phi). Then compute I(Clone; Phenotype) = sum_{k,phi} p(k,phi) log2 [ p(k,phi)/(p(k)*p(phi)) ].
+        1) For each clone k in [0..K-1], we call generate_posterior_samples(...) => (n_samples, n_phenotypes)
+        2) Average => p(phi|k), apply temperature transform
+        3) Possibly weight by real clone frequencies => p(k, phi)
+        4) sum => p(phi), compute I(X;Y) in bits (log2).
 
         Args:
-        patient_idx: integer index of patient
-        time_idx: integer index of time
-        n_samples: how many posterior draws for each clone
-        weight_by_clone_freq: whether to scale p(k) by real clone frequencies
-        temperature: <1 => sharpen p(phi|k), >1 => flatten, 1 => no change
+            patient_idx: which patient index in [0..C-1]
+            time_idx: which time index in [0..T-1]
+            n_samples: how many posterior draws
+            weight_by_clone_freq: if True, we gather frequencies from adata.obs["clone_size"]
+            temperature: post-hoc temperature factor
+                        <1 => sharper, >1 => flatter
 
         Returns:
-        mutual_info (float) in bits (log2).
+            mutual_info (float) in bits (log base 2)
         """
         import numpy as np
         import math
 
-        # -----------------------------------------------------------------
-        # 0) Map integer -> label for patient, time
-        # -----------------------------------------------------------------
+        # 0) Map integer indices -> string labels
         rev_patient_map = {v: k for k, v in self.dataset.covariate_mapping.items()}
         patient_label = rev_patient_map.get(patient_idx, None)
         if patient_label is None:
@@ -1546,21 +1624,16 @@ class JointProbabilityDistribution:
             if time_label is None:
                 raise ValueError(f"Unknown time_idx={time_idx} in timepoint_mapping.")
         else:
-            time_label = None  # or "0"
+            time_label = None
 
         K = self.K
         P = self.n_phenotypes
+        eps = 1e-12
 
-        # We'll accumulate p(k,phi) in shape (K, P).
-        p_k_phi = np.zeros((K, P), dtype=np.float64)
-
-        # -----------------------------------------------------------------
-        # 1) Possibly gather real clone frequencies if requested
-        # -----------------------------------------------------------------
-        if weight_by_clone_freq:
+        # 1) Possibly gather real clone frequencies => p(k)
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
             freq_for_clone = np.zeros(K, dtype=np.float32)
-            clone_sizes = self.adata.obs["clone_size"].values  # shape (#cells,)
-
+            clone_sizes = self.adata.obs["clone_size"].values
             for i in range(len(self.dataset)):
                 cell_pat = self.dataset.covariates[i].item()
                 cell_time = self.dataset.timepoints[i].item() if self.dataset.timepoints is not None else 0
@@ -1576,16 +1649,15 @@ class JointProbabilityDistribution:
         else:
             freq_for_clone = np.ones(K, dtype=np.float32) / K
 
-        # -----------------------------------------------------------------
-        # 2) Loop over clones k => generate posterior samples => average => apply temperature => build p(k,phi)
-        # -----------------------------------------------------------------
+        # 2) We'll accumulate p(k,phi) => shape (K,P)
+        p_k_phi = np.zeros((K, P), dtype=np.float64)
+
+        # 3) For each clone k => generate samples => average => temperature => build p(k,phi)
         for k_idx in range(K):
-            # Map k_idx -> tcr_label
             tcr_label = self.clone_mapping.get(k_idx, None)
             if tcr_label is None:
                 continue
 
-            # Generate samples for this (patient, tcr, time)
             posterior_result = self.generate_posterior_samples(
                 patient_label=patient_label,
                 tcr_label=tcr_label,
@@ -1596,53 +1668,45 @@ class JointProbabilityDistribution:
             # shape => (n_samples, n_phenotypes)
             pheno_samples = posterior_result["phenotype_samples"]
 
-            # Average => p(phi|k)
-            p_phi_given_k = pheno_samples.mean(axis=0)  # shape (n_phenotypes,)
+            # average => p(phi|k)
+            p_phi_given_k = pheno_samples.mean(axis=0)
 
-            # Temperature transform
+            # temperature transform
             if temperature != 1.0:
-                p_power = p_phi_given_k ** (1.0 / temperature)
-                denom = p_power.sum()
-                if denom > 1e-12:
-                    p_phi_given_k = p_power / denom
+                power = p_phi_given_k ** (1.0 / temperature)
+                denom = power.sum()
+                if denom > eps:
+                    p_phi_given_k = power / denom
                 else:
                     p_phi_given_k = np.ones(P, dtype=np.float32) / P
 
-            # p(k, phi) = p(k)* p(phi|k)
+            # p(k,phi) = p(k)* p(phi|k)
             for phi_idx in range(P):
                 p_k_phi[k_idx, phi_idx] = freq_for_clone[k_idx] * p_phi_given_k[phi_idx]
 
-        # -----------------------------------------------------------------
-        # 3) Normalize => sum_{k,phi} = 1
-        # -----------------------------------------------------------------
+        # 4) Normalize => sum_{k,phi}=1
         total_mass = p_k_phi.sum()
-        if total_mass > 0:
+        if total_mass > eps:
             p_k_phi /= total_mass
         else:
             p_k_phi[:] = 1.0 / (K*P)
 
-        # -----------------------------------------------------------------
-        # 4) p(k) = sum_phi p(k,phi), p(phi) = sum_k p(k,phi)
-        # -----------------------------------------------------------------
-        px = p_k_phi.sum(axis=1)   # shape (K,)
-        py = p_k_phi.sum(axis=0)   # shape (P,)
+        # p(k)= sum_phi, p(phi)= sum_k
+        px = p_k_phi.sum(axis=1)
+        py = p_k_phi.sum(axis=0)
 
-        # -----------------------------------------------------------------
-        # 5) I(X;Y) = sum_{k,phi} p(k,phi) log2 [ p(k,phi)/( p(k)* p(phi) ) ]
-        # -----------------------------------------------------------------
-        eps = 1e-12
+        # 5) I(X;Y) => sum_{k,phi} p(k,phi)* log2[ p(k,phi)/( p(k)* p(phi) ) ]
         mutual_info = 0.0
         for k_idx in range(K):
             for phi_idx in range(P):
                 val = p_k_phi[k_idx, phi_idx]
                 if val > eps:
                     denom = px[k_idx]* py[phi_idx]
-                    # denom could be 0 if px or py=0 => skip or clamp
-                    if denom < eps:
-                        continue
-                    mutual_info += val * math.log2(val / denom)
+                    if denom > eps:
+                        mutual_info += val * math.log2(val / denom)
 
         return float(mutual_info)
+
 
     def get_clonotypic_entropy_by_phenotype(
         self,
@@ -1656,106 +1720,131 @@ class JointProbabilityDistribution:
         For each phenotype phi, compute H(Clone | Phenotype=phi) in bits (base 2).
         If `normalize=True`, we divide by log2(K).
 
-        Optionally apply a post-hoc temperature transform to each p(phi|k), i.e.
-            p_scaled(phi|k) = normalize( p(phi|k)^(1/temperature) ).
-        temperature < 1 => sharper / more peaked
-        temperature > 1 => flatter
+        We do NOT rely on local_clone_concentration_pct. Instead, for each clone k:
+        - We reconstruct p(phi|k) using:
+            baseline_k + dimension-wise gamma scale (mean) + offset
+        - Then build p(k, phi), sum over k => p(phi).
 
-        Returns a dict: {phi_idx: entropy_value_in_bits}.
+        Optionally:
+        - weight_by_clone_freq: weight each clone by freq in adata.obs["clone_size"]
+        - apply temperature transform p(phi|k)^(1/tau).
+
+        Returns:
+            dict: {phi_idx -> entropy_value_in_bits}
         """
         import torch
         import pyro
         import math
         from typing import Dict
 
-        # Helper: apply temperature scaling to a 2D matrix of distributions
-        def apply_temperature_scaling_2d(p, tau):
-            """
-            p: Tensor of shape (K, n_phenotypes), each row sums ~1
-            tau: float, temperature factor
-            """
-            if tau == 1.0:
-                return p  # no change
-            p_power = p ** (1.0 / tau)
-            row_sums = p_power.sum(dim=1, keepdim=True).clamp_min(1e-12)
-            return p_power / row_sums
+        eps = 1e-12
 
-        # -------------------------------------------------------------
-        # 1) Retrieve local_clone_concentration_pct => shape (K*C*T, n_phenotypes)
-        # -------------------------------------------------------------
-        local_conc_pt = pyro.param("local_clone_concentration_pct").detach().cpu()
+        # -----------------------------
+        # 1) Retrieve baseline => shape (K*C, n_phenotypes)
+        # -----------------------------
+        baseline_param = pyro.param("local_clone_concentration_pc").detach().cpu()
 
-        # Build p(phi|k) distribution for each clone k
+        # If T>0, also retrieve gamma scale shape/rate => shape (K*C*T, n_phenotypes)
+        if self.T > 0:
+            scale_shape = pyro.param("scale_factor_shape").detach().cpu()
+            scale_rate  = pyro.param("scale_factor_rate").detach().cpu()
+        else:
+            scale_shape = None
+            scale_rate  = None
+
+        # Beta + offset
+        beta_val = self.beta
+        offset_val = self.local_concentration_offset
+
+        # We'll accumulate p(k,phi) => shape (K, n_phenotypes)
         dist_kp = []
-        clone_freqs = []
+        # Possibly gather real clone frequencies
+        import numpy as np
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
+            freq_for_clone = np.zeros(self.K, dtype=np.float32)
+            clone_sizes = self.adata.obs["clone_size"].values
+            for i in range(len(self.dataset)):
+                cell_pat = self.dataset.covariates[i].item()
+                cell_time = self.dataset.timepoints[i].item() if self.dataset.timepoints is not None else 0
+                if (cell_pat == patient_idx) and (cell_time == time_idx):
+                    c_id = self.dataset.tcrs[i].item()
+                    freq_for_clone[c_id] += clone_sizes[i]
+            total_size = freq_for_clone.sum()
+            if total_size > 0:
+                freq_for_clone /= total_size
+            else:
+                freq_for_clone[:] = 1.0 / self.K
+        else:
+            freq_for_clone = np.ones(self.K, dtype=np.float32) / self.K
 
-        # -------------------------------------------------------------
-        # 2) Possibly gather real clone frequencies if weight_by_clone_freq
-        #    (placeholder logic here)
-        # -------------------------------------------------------------
-        # For now, we just store 1.0 for each clone
-        # In practice, you'd compute it similarly to your other function
+        # For each clone k in [0..K)
         for k in range(self.K):
-            clone_freqs.append(1.0)
+            # 2) Flatten indices => baseline index => k*C + patient_idx
+            baseline_idx = k * self.C + patient_idx
+            baseline_kc = baseline_param[baseline_idx]  # shape (n_phenotypes,)
 
-        # -------------------------------------------------------------
-        # 3) Construct p(phi|k) for each clone k
-        # -------------------------------------------------------------
-        for k in range(self.K):
-            kct = k * (self.C * self.T) + patient_idx * self.T + time_idx
-            conc_k = local_conc_pt[kct]
-            p_phi_given_k = conc_k / torch.clamp(conc_k.sum(), min=1e-12)
+            # 3) If T>0, we have a time dimension => scale index => k*C*T + patient_idx*T + time_idx
+            if self.T > 0:
+                kct_idx = k * (self.C * self.T) + patient_idx * self.T + time_idx
+                shape_kct = scale_shape[kct_idx]  # (n_phenotypes,)
+                rate_kct  = scale_rate[kct_idx]
+                # mean scale factor => shape_kct / rate_kct
+                mean_scale = shape_kct / (rate_kct + eps)
+            else:
+                # T=0 => no scale factor
+                mean_scale = torch.ones_like(baseline_kc)
+
+            # child_conc => beta * baseline + offset
+            child_conc = beta_val * baseline_kc * mean_scale + offset_val
+            # convert to p(phi|k)
+            denom = torch.clamp(child_conc.sum(), min=eps)
+            p_phi_given_k = child_conc / denom
+
             dist_kp.append(p_phi_given_k)
 
-        dist_kp = torch.stack(dist_kp, dim=0)  # shape (K, n_phenotypes)
+        # shape => (K, n_phenotypes)
+        dist_kp = torch.stack(dist_kp, dim=0)
 
-        # -------------------------------------------------------------
-        # 4) Apply post-hoc temperature transform
-        # -------------------------------------------------------------
-        dist_kp = apply_temperature_scaling_2d(dist_kp, temperature)
+        # 4) Temperature transform
+        if temperature != 1.0:
+            dist_kp_pow = dist_kp ** (1.0 / temperature)
+            row_sums = dist_kp_pow.sum(dim=1, keepdim=True).clamp_min(eps)
+            dist_kp = dist_kp_pow / row_sums
 
-        # -------------------------------------------------------------
-        # 5) Weight clones if requested (placeholder)
-        # -------------------------------------------------------------
-        clone_freqs = torch.tensor(clone_freqs, dtype=torch.float)
-        clone_freqs = clone_freqs / clone_freqs.sum()  # shape => (K,)
+        # 5) Weighted distribution p(k) if requested
+        import torch
+        clone_freqs_t = torch.tensor(freq_for_clone, dtype=torch.float)
+        clone_freqs_t = clone_freqs_t / torch.clamp(clone_freqs_t.sum(), min=eps)
 
-        # p(k, phi) = p(k) * p(phi|k)
-        p_k_phi = dist_kp * clone_freqs.unsqueeze(1)
-        p_k_phi_sum = torch.clamp(p_k_phi.sum(), min=1e-12)
-        p_k_phi = p_k_phi / p_k_phi_sum  # ensure total mass = 1
+        # p(k, phi) = p(k)* p(phi|k)
+        p_k_phi = dist_kp * clone_freqs_t.unsqueeze(-1)
+        total_mass = torch.clamp(p_k_phi.sum(), min=eps)
+        p_k_phi = p_k_phi / total_mass
 
         # p(phi) = sum_k p(k, phi)
-        p_phi = p_k_phi.sum(dim=0)  # shape => (n_phenotypes,)
+        p_phi = p_k_phi.sum(dim=0)
 
-        eps = 1e-12
+        # 6) For each phenotype => H(Clone|phi)
         clonotypic_entropy_dict: Dict[int, float] = {}
-
-        # -------------------------------------------------------------
-        # 6) For each phenotype phi, compute H(Clone | Phi=phi) in bits
-        # -------------------------------------------------------------
         for phi_idx in range(self.n_phenotypes):
             denom = p_phi[phi_idx]
             if denom < eps:
-                # If p(phi_idx) ~ 0 => no data
                 clonotypic_entropy_dict[phi_idx] = 0.0
                 continue
 
-            # p(k|phi_idx) = p(k, phi_idx) / p(phi_idx)
-            p_k_given_phi = (p_k_phi[:, phi_idx] / denom).clamp_min(eps)
+            # p(k|phi) = p(k, phi)/p(phi)
+            p_k_given_phi = p_k_phi[:, phi_idx] / denom.clamp_min(eps)
+            p_k_given_phi = p_k_given_phi.clamp_min(eps)
+            p_k_given_phi = p_k_given_phi / p_k_given_phi.sum()
 
-            # H(Clone|phi) = - sum_k p(k|phi) log2 [p(k|phi)]
             H_clone_phi = -torch.sum(p_k_given_phi * torch.log2(p_k_given_phi))
-
-            # Normalize by log2(K) if requested
             if normalize and self.K > 1:
                 H_clone_phi = H_clone_phi / math.log2(self.K)
 
             clonotypic_entropy_dict[phi_idx] = float(H_clone_phi.item())
 
         return clonotypic_entropy_dict
-
-    def get_clonotypic_entropy_by_phenotype(
+    def get_clonotypic_entropy_by_phenotype_posterior(
         self,
         patient_idx: int,
         time_idx: int,
@@ -1765,59 +1854,49 @@ class JointProbabilityDistribution:
         temperature: float = 1.0
     ) -> Dict[int, float]:
         """
-        A Bayesian version of H(Clone | Phenotype), using posterior samples for each clone
-        and optionally applying a post-hoc temperature transform.
+        A Bayesian version of H(Clone | Phenotype=phi). We:
+        1) Convert (patient_idx,time_idx) to string labels
+        2) For each clone k, call generate_posterior_samples(..., n_samples) 
+            => shape (n_samples, n_phenotypes) 
+        3) Average => p(phi|k), apply temperature, and combine across clones.
 
-        Steps:
-        1) Convert (patient_idx, time_idx) -> their string labels
-        2) For each clone k in [0..K-1], map -> TCR label
-            then call generate_posterior_samples(..., n_samples=?),
-            which returns shape (n_samples, n_phenotypes).
-        3) Average across draws => p(phi|k), then apply temperature scaling if needed.
-        4) Weighted by p(k) if weight_by_clone_freq else uniform => p(k,phi).
-        5) Compute p(phi) = sum_k p(k,phi) => H(Clone|phi) in bits, 
-            optionally normalized by log2(K).
+        If weight_by_clone_freq=True, use real frequencies from adata.obs["clone_size"] 
+        to define p(k).
 
-        Returns:
-        A dict {phi_idx: H(Clone|phi_idx)} in bits.
+        Then for each phi: H(Clone|phi) in bits. If normalize=True => divide by log2(K).
         """
         import numpy as np
         import math
         from typing import Dict
 
-        # ------------------ 0) Map integer -> label ------------------
-        rev_patient_map = {v:k for k,v in self.dataset.covariate_mapping.items()}
+        # 0) Map integer => string label
+        rev_patient_map = {v: k for k, v in self.dataset.covariate_mapping.items()}
         patient_label = rev_patient_map.get(patient_idx, None)
         if patient_label is None:
             raise ValueError(f"Unknown patient_idx={patient_idx} in covariate_mapping.")
 
         if self.T > 0 and time_idx >= 0:
-            rev_time_map = {v:k for k,v in self.dataset.timepoint_mapping.items()}
+            rev_time_map = {v: k for k, v in self.dataset.timepoint_mapping.items()}
             time_label = rev_time_map.get(time_idx, None)
             if time_label is None:
                 raise ValueError(f"Unknown time_idx={time_idx} in timepoint_mapping.")
         else:
-            time_label = None  # or "0"
+            time_label = None
 
-        # -------------- 1) Setup for loops & arrays --------------
         K = self.K
         P = self.n_phenotypes
+        eps = 1e-12
 
-        # We'll accumulate p(k, phi) in a 2D array shape (K, P).
-        p_k_phi_accum = np.zeros((K, P), dtype=np.float64)
-
-        # -------------- 2) Possibly gather clone frequencies --------------
-        if weight_by_clone_freq:
+        # 1) Possibly gather real clone frequencies => p(k)
+        if weight_by_clone_freq and "clone_size" in self.adata.obs:
             freq_for_clone = np.zeros(K, dtype=np.float32)
-            clone_sizes = self.adata.obs["clone_size"].values  # (#cells,)
-
+            clone_sizes = self.adata.obs["clone_size"].values
             for i in range(len(self.dataset)):
                 cell_pat = self.dataset.covariates[i].item()
                 cell_time = self.dataset.timepoints[i].item() if (self.dataset.timepoints is not None) else 0
                 if (cell_pat == patient_idx) and (cell_time == time_idx):
                     c_id = self.dataset.tcrs[i].item()
                     freq_for_clone[c_id] += clone_sizes[i]
-
             total_size = freq_for_clone.sum()
             if total_size > 0:
                 freq_for_clone /= total_size
@@ -1826,13 +1905,16 @@ class JointProbabilityDistribution:
         else:
             freq_for_clone = np.ones(K, dtype=np.float32) / K
 
-        # -------------- 3) Loop clones k => (patient_label, tcr_label, time_label) --------------
-        for k in range(K):
-            tcr_label = self.clone_mapping.get(k, None)
+        # 2) We'll accumulate p(k,phi) in shape (K, P)
+        p_k_phi_accum = np.zeros((K, P), dtype=np.float64)
+
+        # 3) For each clone k => generate posterior samples => average => weight
+        for k_idx in range(K):
+            tcr_label = self.clone_mapping.get(k_idx, None)
             if tcr_label is None:
                 continue
 
-            # Generate posterior samples for this (patient, tcr, time)
+            # get posterior samples => shape (n_samples, n_phenotypes)
             posterior_result = self.generate_posterior_samples(
                 patient_label=patient_label,
                 tcr_label=tcr_label,
@@ -1840,38 +1922,35 @@ class JointProbabilityDistribution:
                 n_samples=n_samples,
                 include_patient_effects=True
             )
-            # shape => (n_samples, n_phenotypes)
-            pheno_samples = posterior_result["phenotype_samples"]
+            pheno_samples = posterior_result["phenotype_samples"]  # (n_samples, P)
 
-            # 4) Average across draws => p(phi|k)
-            p_phi_given_k = pheno_samples.mean(axis=0)  # shape (n_phenotypes,)
+            # average => p(phi|k)
+            p_phi_given_k = pheno_samples.mean(axis=0)  # shape (P,)
 
-            # 5) Temperature transform (post-hoc)
+            # temperature transform
             if temperature != 1.0:
-                p_power = p_phi_given_k ** (1.0 / temperature)
-                denom = p_power.sum()
-                if denom > 1e-12:
-                    p_phi_given_k = p_power / denom
+                power = p_phi_given_k ** (1.0 / temperature)
+                denom = power.sum()
+                if denom > eps:
+                    p_phi_given_k = power / denom
                 else:
-                    # fallback uniform
                     p_phi_given_k = np.ones(P, dtype=np.float32) / P
 
-            # p(k, phi) = p(k) * p(phi|k)
+            # p(k,phi) = p(k) * p(phi|k)
             for phi_idx in range(P):
-                p_k_phi_accum[k, phi_idx] = freq_for_clone[k] * p_phi_given_k[phi_idx]
+                p_k_phi_accum[k_idx, phi_idx] = freq_for_clone[k_idx] * p_phi_given_k[phi_idx]
 
-        # 6) Normalize => sum_{k,phi} p(k,phi)=1
+        # 4) Normalize => sum_{k,phi} = 1
         total_mass = p_k_phi_accum.sum()
         if total_mass > 0:
             p_k_phi_accum /= total_mass
         else:
             p_k_phi_accum[:] = 1.0 / (K * P)
 
-        # 7) p(phi)= sum_k p(k,phi)
-        p_phi = p_k_phi_accum.sum(axis=0)  # shape (P,)
+        # p(phi) = sum_k p(k,phi)
+        p_phi = p_k_phi_accum.sum(axis=0)
 
-        # 8) For each phenotype, compute H(Clone|phi) in bits
-        eps = 1e-12
+        # 5) For each phenotype => H(Clone|phi)
         clonotypic_entropy_dict: Dict[int, float] = {}
         for phi_idx in range(P):
             denom = p_phi[phi_idx]
@@ -1881,19 +1960,17 @@ class JointProbabilityDistribution:
 
             # p(k|phi) = p(k,phi)/p(phi)
             p_k_given_phi = p_k_phi_accum[:, phi_idx] / denom
-            # clamp
             p_k_given_phi = np.clip(p_k_given_phi, eps, None)
             p_k_given_phi /= p_k_given_phi.sum()
 
-            # H(Clone|phi) = - sum_k p(k|phi)* log2[p(k|phi]]
             H_clone_phi = -np.sum(p_k_given_phi * np.log2(p_k_given_phi))
-
             if normalize and K > 1:
                 H_clone_phi /= math.log2(K)
 
             clonotypic_entropy_dict[phi_idx] = float(H_clone_phi)
 
         return clonotypic_entropy_dict
+
 
     def generate_posterior_samples(
         self,
@@ -1904,26 +1981,22 @@ class JointProbabilityDistribution:
         include_patient_effects: bool = True
     ) -> Dict[str, np.ndarray]:
         """
-        A 'progressive caching' version of posterior sampling:
-        - We store the *largest* number of samples so far for each combo
-        (patient_label, tcr_label, timepoint_label, include_patient_effects).
-        - If user requests fewer, we sub-slice.
-        - If user requests more, we sample only the difference, then store the new total.
+        A fully Bayesian version of posterior sampling for (patient_label, tcr_label, timepoint_label),
+        where each draw re-samples:
+        - dimension-wise scale factors from their Gamma shape/rate
+        - child distribution from Dirichlet( baseline * scale + offset )
+        - gene profiles from Dirichlet(unconstrained_gene_profile_log)
+        - (optionally) patient effect from Gamma(patient_variance_shape, patient_variance_rate)
 
-        Args:
-            patient_label: Label of the patient in adata.obs
-            tcr_label: Label of the TCR in adata.obs
-            timepoint_label: (Optional) Label of the timepoint in adata.obs.
-                            If not provided or self.T==0, defaults to 0.
-            n_samples: Number of posterior samples to return
-            include_patient_effects: Whether to sample patient-specific offsets
+        This approach does not rely on 'local_clone_concentration_pct' param, since we do not store
+        the child distribution explicitly. Instead, we reconstruct it from:
+        (baseline, scale_factor) for every single sample.
 
-        Returns:
-            A dict with:
-                - "phenotype_samples": shape (n_samples, self.n_phenotypes)
-                - "gene_expression_samples": shape (n_samples, self.D)
-                - "patient_effect_samples": shape (n_samples,) if include_patient_effects=True
-                - "phenotype_labels": list of length self.n_phenotypes
+        Returns a dict with:
+            - "phenotype_samples": (n_samples, n_phenotypes)
+            - "gene_expression_samples": (n_samples, self.D)
+            - "patient_effect_samples": (n_samples,) if include_patient_effects
+            - "phenotype_labels": list[str] of length self.n_phenotypes
         """
         import numpy as np
         import torch
@@ -1931,10 +2004,9 @@ class JointProbabilityDistribution:
         import pyro.distributions as dist
 
         # 1) Build a cache key that ignores n_samples
-        #    (We store and track the *maximum* number for that key.)
         cache_key = (patient_label, tcr_label, timepoint_label, include_patient_effects)
 
-        # 2) Map user labels -> indices
+        # 2) Map labels -> indices
         patient_idx = self.dataset.covariate_mapping.get(patient_label)
         if patient_idx is None:
             raise ValueError(f"Patient label '{patient_label}' not found.")
@@ -1951,64 +2023,99 @@ class JointProbabilityDistribution:
 
         kct_index = tcr_idx * (self.C * self.T) + patient_idx * self.T + time_idx
 
-        # 3) See if we have a cache entry
+        # 3) Check cache
         cache_entry = self._posterior_cache.get(cache_key, None)
-
-        # 4) If we do not have any cached samples, we sample from scratch
-        #    Otherwise we only sample the difference if n_samples > cached 'max_samples'
-        cached_max = 0
-        if cache_entry is not None:
-            cached_max = cache_entry["max_samples"]
-
+        cached_max = cache_entry["max_samples"] if cache_entry else 0
         need_to_sample = n_samples - cached_max
 
-        # 5) Retrieve pyro params
-        local_conc_pt = pyro.param("local_clone_concentration_pct").detach().cpu()
-        local_dirichlet_conc = local_conc_pt[kct_index]  # shape (n_phenotypes,)
-
-        unconstrained_log = pyro.param("unconstrained_gene_profile_log").detach().cpu()
-        log_clamped = torch.clamp(unconstrained_log, min=-10.0, max=10.0)
-        raw_concentration = torch.exp(log_clamped)  # shape (n_phenotypes, D)
-
-        if include_patient_effects:
-            patient_var_shape = pyro.param("patient_variance_shape")[patient_idx].detach().cpu()
-            patient_var_rate  = pyro.param("patient_variance_rate")[patient_idx].detach().cpu()
-        else:
-            patient_var_shape = None
-            patient_var_rate  = None
-
-        # 6) If need_to_sample > 0, we do the sampling loop for that many draws
         if need_to_sample > 0:
-            # Prepare arrays for the new draws
+            # Prepare arrays for new draws
             new_phenotype_samples = np.zeros((need_to_sample, self.n_phenotypes), dtype=np.float32)
             new_gene_expression_samples = np.zeros((need_to_sample, self.D), dtype=np.float32)
             new_patient_effect_samples = None
             if include_patient_effects:
                 new_patient_effect_samples = np.zeros(need_to_sample, dtype=np.float32)
 
+            # ---------------------------
+            #  A) Retrieve baseline => local_clone_concentration_pc (K*C, n_phenotypes)
+            # ---------------------------
+            local_baseline = pyro.param("local_clone_concentration_pc").detach().cpu()
+            # For (k,c), index = tcr_idx*C + patient_idx
+            baseline_idx = tcr_idx * self.C + patient_idx
+            baseline_kc = local_baseline[baseline_idx]  # shape (n_phenotypes,)
+
+            # ---------------------------
+            #  B) Retrieve scale factor shape/rate => shape (K*C*T, n_phenotypes)
+            # ---------------------------
+            if self.T > 0:
+                guide_shape = pyro.param("scale_factor_shape").detach().cpu()
+                guide_rate  = pyro.param("scale_factor_rate").detach().cpu()
+                shape_kct = guide_shape[kct_index]  # shape (n_phenotypes,)
+                rate_kct  = guide_rate[kct_index]
+            else:
+                shape_kct = None
+                rate_kct = None
+
+            # ---------------------------
+            #  C) Retrieve gene profile => "unconstrained_gene_profile_log"
+            # ---------------------------
+            unconstrained_log = pyro.param("unconstrained_gene_profile_log").detach().cpu()
+            log_clamped = torch.clamp(unconstrained_log, -10, 10)
+            raw_concentration = torch.exp(log_clamped)  # (n_phenotypes, D)
+
+            # ---------------------------
+            #  D) Patient variance shape/rate if needed
+            # ---------------------------
+            if include_patient_effects:
+                pv_shape_all = pyro.param("patient_variance_shape").detach().cpu()
+                pv_rate_all  = pyro.param("patient_variance_rate").detach().cpu()
+                pat_shape = pv_shape_all[patient_idx]
+                pat_rate  = pv_rate_all[patient_idx]
+            else:
+                pat_shape = None
+                pat_rate  = None
+
+            # 4) Do the actual sampling for the needed draws
+            beta_val = torch.tensor(self.beta, dtype=torch.float)
+            offset_val = torch.tensor(self.local_concentration_offset, dtype=torch.float)
+
             for i in range(need_to_sample):
-                phenotype_dist = dist.Dirichlet(local_dirichlet_conc).sample().numpy()
+                # (1) Sample dimension-wise scale if T>0, else all ones
+                if self.T > 0:
+                    # shape => (n_phenotypes,)
+                    scale_draw = dist.Gamma(shape_kct, rate_kct).sample()
+                    # child_conc => beta * baseline * scale_draw + offset
+                    child_conc = beta_val * baseline_kc * scale_draw + offset_val
+                else:
+                    # T=0 => no scale factor
+                    child_conc = beta_val * baseline_kc + offset_val
+
+                # (2) phenotype_dist => Dirichlet(child_conc)
+                phenotype_dist = dist.Dirichlet(child_conc).sample().numpy()  # shape (n_phenotypes,)
                 new_phenotype_samples[i] = phenotype_dist
 
+                # (3) sample gene_profile => Dirichlet(raw_concentration) => shape (n_phenotypes, D)
                 gene_profile_draw = dist.Dirichlet(raw_concentration).sample().numpy()
+                # Weighted sum by phenotype_dist => final profile => shape (D,)
                 mixed_profile = np.sum(gene_profile_draw * phenotype_dist[:, np.newaxis], axis=0)
 
+                # (4) sample patient effect if requested
                 if include_patient_effects:
-                    p_effect = dist.Gamma(patient_var_shape, patient_var_rate).sample().item()
+                    p_effect = dist.Gamma(pat_shape, pat_rate).sample().item()
                     new_patient_effect_samples[i] = p_effect
                     mixed_profile *= p_effect
 
+                # (5) normalize => gene expression
                 denom = mixed_profile.sum() + 1e-12
                 new_gene_expression_samples[i] = mixed_profile / denom
 
-            # If we have an existing cache entry, we append
+            # 5) Combine with cache
             if cache_entry is not None:
-                # Append new samples to existing
                 phenotype_samples_full = np.concatenate(
                     [cache_entry["phenotype_samples"], new_phenotype_samples],
                     axis=0
                 )
-                gene_expression_full = np.concatenate(
+                gene_expr_full = np.concatenate(
                     [cache_entry["gene_expression_samples"], new_gene_expression_samples],
                     axis=0
                 )
@@ -2020,30 +2127,27 @@ class JointProbabilityDistribution:
                 else:
                     pe_full = None
             else:
-                # No existing cache => these new samples are the full set
                 phenotype_samples_full = new_phenotype_samples
-                gene_expression_full   = new_gene_expression_samples
+                gene_expr_full = new_gene_expression_samples
                 pe_full = new_patient_effect_samples
 
-            # Build a new or updated cache entry
             new_cache_entry = {
                 "max_samples": cached_max + need_to_sample,
                 "phenotype_samples": phenotype_samples_full,
-                "gene_expression_samples": gene_expression_full,
+                "gene_expression_samples": gene_expr_full,
                 "patient_effect_samples": pe_full
             }
             self._posterior_cache[cache_key] = new_cache_entry
 
-        # 7) Now we can build the result by sub-slicing the first n_samples
+        # 6) Now sub-slice from cache
         final_cache = self._posterior_cache[cache_key]
-        # sub-slice
         selected_phenotype = final_cache["phenotype_samples"][:n_samples]
         selected_gene_expr = final_cache["gene_expression_samples"][:n_samples]
         selected_patient_eff = None
         if include_patient_effects:
             selected_patient_eff = final_cache["patient_effect_samples"][:n_samples]
 
-        # 8) Build the final result
+        # 7) Build the result
         result = {
             "phenotype_samples": selected_phenotype,
             "gene_expression_samples": selected_gene_expr
@@ -2051,13 +2155,12 @@ class JointProbabilityDistribution:
         if include_patient_effects:
             result["patient_effect_samples"] = selected_patient_eff
 
-        # Add phenotype labels
-        phenotype_labels_ordered = []
-        for i in range(self.n_phenotypes):
-            phenotype_labels_ordered.append(self.phenotype_mapping[i])
+        # 8) Add phenotype labels
+        phenotype_labels_ordered = [self.phenotype_mapping[i] for i in range(self.n_phenotypes)]
         result["phenotype_labels"] = phenotype_labels_ordered
 
         return result
+
 
 
     def save_model(self, path: str):
