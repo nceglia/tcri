@@ -281,7 +281,7 @@ class JointProbabilityDistribution:
             shuffle=True,
             drop_last=True
         )
-        
+        self._posterior_cache = dict()
         # Store dimensions
         self.K = self.dataset.K  # number of TCRs/clones
         self.D = self.dataset.D  # number of genes
@@ -1895,8 +1895,7 @@ class JointProbabilityDistribution:
 
         return clonotypic_entropy_dict
 
-
-    def generate_posterior_samples(
+    def generate_posterior_samples_progressive(
         self,
         patient_label: str,
         tcr_label: str,
@@ -1905,143 +1904,161 @@ class JointProbabilityDistribution:
         include_patient_effects: bool = True
     ) -> Dict[str, np.ndarray]:
         """
-        Generate posterior samples for a given (patient, TCR, [optional timepoint]) combination
-        under the partial-pooling model that uses a log-reparameterized 
-        'unconstrained_gene_profile_log' in the guide.
+        A 'progressive caching' version of posterior sampling:
+        - We store the *largest* number of samples so far for each combo
+        (patient_label, tcr_label, timepoint_label, include_patient_effects).
+        - If user requests fewer, we sub-slice.
+        - If user requests more, we sample only the difference, then store the new total.
 
         Args:
             patient_label: Label of the patient in adata.obs
             tcr_label: Label of the TCR in adata.obs
-            timepoint_label: (Optional) Label of the timepoint in adata.obs. 
+            timepoint_label: (Optional) Label of the timepoint in adata.obs.
                             If not provided or self.T==0, defaults to 0.
-            n_samples: Number of posterior samples to generate
-            include_patient_effects: Whether to sample patient-specific Gamma offsets
+            n_samples: Number of posterior samples to return
+            include_patient_effects: Whether to sample patient-specific offsets
 
         Returns:
-            Dictionary with:
+            A dict with:
                 - "phenotype_samples": shape (n_samples, self.n_phenotypes)
                 - "gene_expression_samples": shape (n_samples, self.D)
                 - "patient_effect_samples": shape (n_samples,) if include_patient_effects=True
+                - "phenotype_labels": list of length self.n_phenotypes
         """
         import numpy as np
         import torch
         import pyro
         import pyro.distributions as dist
 
-        # ------------------------------------------------------------------------
-        # 1) Map user labels -> indices (patient, TCR, [timepoint])
-        # ------------------------------------------------------------------------
+        # 1) Build a cache key that ignores n_samples
+        #    (We store and track the *maximum* number for that key.)
+        cache_key = (patient_label, tcr_label, timepoint_label, include_patient_effects)
+
+        # 2) Map user labels -> indices
         patient_idx = self.dataset.covariate_mapping.get(patient_label)
         if patient_idx is None:
-            raise ValueError(f"Patient label '{patient_label}' not found in dataset.covariate_mapping.")
-
+            raise ValueError(f"Patient label '{patient_label}' not found.")
         tcr_idx = self.tcr_mapping.get(tcr_label)
         if tcr_idx is None:
-            raise ValueError(f"TCR label '{tcr_label}' not found in tcr_mapping.")
+            raise ValueError(f"TCR label '{tcr_label}' not found.")
 
         if self.T > 0 and timepoint_label is not None:
             time_idx = self.dataset.timepoint_mapping.get(timepoint_label)
             if time_idx is None:
-                raise ValueError(f"Timepoint label '{timepoint_label}' not found in dataset.timepoint_mapping.")
+                raise ValueError(f"Timepoint label '{timepoint_label}' not found.")
         else:
-            time_idx = 0  # default if no timepoint or T=0
+            time_idx = 0
 
-        # Flatten clone/patient/time => single index
         kct_index = tcr_idx * (self.C * self.T) + patient_idx * self.T + time_idx
 
-        # ------------------------------------------------------------------------
-        # 2) Retrieve the relevant Pyro params from the param store
-        # ------------------------------------------------------------------------
-        # local clone->phenotype partial pooling
+        # 3) See if we have a cache entry
+        cache_entry = self._posterior_cache.get(cache_key, None)
+
+        # 4) If we do not have any cached samples, we sample from scratch
+        #    Otherwise we only sample the difference if n_samples > cached 'max_samples'
+        cached_max = 0
+        if cache_entry is not None:
+            cached_max = cache_entry["max_samples"]
+
+        need_to_sample = n_samples - cached_max
+
+        # 5) Retrieve pyro params
         local_conc_pt = pyro.param("local_clone_concentration_pct").detach().cpu()
         local_dirichlet_conc = local_conc_pt[kct_index]  # shape (n_phenotypes,)
 
-        # gene profile log param => exponentiate & clamp => "gene_profile_concentration"
         unconstrained_log = pyro.param("unconstrained_gene_profile_log").detach().cpu()
-        # shape: (n_phenotypes, D)
-
-        # clamp in [min, max] to avoid extreme or NaN
         log_clamped = torch.clamp(unconstrained_log, min=-10.0, max=10.0)
-        # exponentiate
-        raw_concentration = torch.exp(log_clamped)
-        # => shape (n_phenotypes, D)
+        raw_concentration = torch.exp(log_clamped)  # shape (n_phenotypes, D)
 
-        # We do NOT row-normalize here, because the model's guide uses:
-        #   pyro.sample("clone_gene_profiles", dist.Dirichlet(gene_profile_concentration))
-        # which expects a Dirichlet concentration (not a distribution).
-        # So we pass `raw_concentration` to Dirichlet, same as the guide.
-
-        # patient variance if requested
         if include_patient_effects:
-            # shape & rate for that single patient
             patient_var_shape = pyro.param("patient_variance_shape")[patient_idx].detach().cpu()
             patient_var_rate  = pyro.param("patient_variance_rate")[patient_idx].detach().cpu()
         else:
             patient_var_shape = None
             patient_var_rate  = None
 
-        # ------------------------------------------------------------------------
-        # 3) Prepare output arrays
-        # ------------------------------------------------------------------------
-        phenotype_samples = np.zeros((n_samples, self.n_phenotypes), dtype=np.float32)
-        gene_expression_samples = np.zeros((n_samples, self.D), dtype=np.float32)
-        patient_effect_samples = None
-        if include_patient_effects:
-            patient_effect_samples = np.zeros(n_samples, dtype=np.float32)
-
-        # ------------------------------------------------------------------------
-        # 4) Sample in a loop
-        # ------------------------------------------------------------------------
-        # For each sample:
-        #   1) phenotype_dist ~ Dirichlet(local_dirichlet_conc)
-        #   2) gene_profile_draw ~ Dirichlet(raw_concentration) => shape (n_phenotypes, D)
-        #   3) Weighted sum across phenotypes
-        #   4) (Optional) multiply by patient effect ~ Gamma(...)
-        #   5) Normalize
-        # ------------------------------------------------------------------------
-        for i in range(n_samples):
-            # 4a) phenotype distribution
-            phenotype_dist = dist.Dirichlet(local_dirichlet_conc).sample().numpy()
-            phenotype_samples[i] = phenotype_dist
-
-            # 4b) gene profile draw => shape (n_phenotypes, D)
-            gene_profile_draw = dist.Dirichlet(raw_concentration).sample().numpy()
-
-            # Weighted sum => shape (D,)
-            mixed_profile = np.sum(gene_profile_draw * phenotype_dist[:, np.newaxis], axis=0)
-
-            # 4c) optional patient effect
+        # 6) If need_to_sample > 0, we do the sampling loop for that many draws
+        if need_to_sample > 0:
+            # Prepare arrays for the new draws
+            new_phenotype_samples = np.zeros((need_to_sample, self.n_phenotypes), dtype=np.float32)
+            new_gene_expression_samples = np.zeros((need_to_sample, self.D), dtype=np.float32)
+            new_patient_effect_samples = None
             if include_patient_effects:
-                p_effect = dist.Gamma(patient_var_shape, patient_var_rate).sample().item()
-                patient_effect_samples[i] = p_effect
-                mixed_profile *= p_effect
+                new_patient_effect_samples = np.zeros(need_to_sample, dtype=np.float32)
 
-            # 4d) normalize => final gene expression distribution
-            denom = mixed_profile.sum() + 1e-12
-            gene_expression_samples[i] = mixed_profile / denom
+            for i in range(need_to_sample):
+                phenotype_dist = dist.Dirichlet(local_dirichlet_conc).sample().numpy()
+                new_phenotype_samples[i] = phenotype_dist
 
-        # ------------------------------------------------------------------------
-        # 5) Return the result dict
-        # ------------------------------------------------------------------------
+                gene_profile_draw = dist.Dirichlet(raw_concentration).sample().numpy()
+                mixed_profile = np.sum(gene_profile_draw * phenotype_dist[:, np.newaxis], axis=0)
+
+                if include_patient_effects:
+                    p_effect = dist.Gamma(patient_var_shape, patient_var_rate).sample().item()
+                    new_patient_effect_samples[i] = p_effect
+                    mixed_profile *= p_effect
+
+                denom = mixed_profile.sum() + 1e-12
+                new_gene_expression_samples[i] = mixed_profile / denom
+
+            # If we have an existing cache entry, we append
+            if cache_entry is not None:
+                # Append new samples to existing
+                phenotype_samples_full = np.concatenate(
+                    [cache_entry["phenotype_samples"], new_phenotype_samples],
+                    axis=0
+                )
+                gene_expression_full = np.concatenate(
+                    [cache_entry["gene_expression_samples"], new_gene_expression_samples],
+                    axis=0
+                )
+                if include_patient_effects:
+                    pe_full = np.concatenate(
+                        [cache_entry["patient_effect_samples"], new_patient_effect_samples],
+                        axis=0
+                    )
+                else:
+                    pe_full = None
+            else:
+                # No existing cache => these new samples are the full set
+                phenotype_samples_full = new_phenotype_samples
+                gene_expression_full   = new_gene_expression_samples
+                pe_full = new_patient_effect_samples
+
+            # Build a new or updated cache entry
+            new_cache_entry = {
+                "max_samples": cached_max + need_to_sample,
+                "phenotype_samples": phenotype_samples_full,
+                "gene_expression_samples": gene_expression_full,
+                "patient_effect_samples": pe_full
+            }
+            self._posterior_cache[cache_key] = new_cache_entry
+
+        # 7) Now we can build the result by sub-slicing the first n_samples
+        final_cache = self._posterior_cache[cache_key]
+        # sub-slice
+        selected_phenotype = final_cache["phenotype_samples"][:n_samples]
+        selected_gene_expr = final_cache["gene_expression_samples"][:n_samples]
+        selected_patient_eff = None
+        if include_patient_effects:
+            selected_patient_eff = final_cache["patient_effect_samples"][:n_samples]
+
+        # 8) Build the final result
         result = {
-            "phenotype_samples": phenotype_samples,
-            "gene_expression_samples": gene_expression_samples
+            "phenotype_samples": selected_phenotype,
+            "gene_expression_samples": selected_gene_expr
         }
         if include_patient_effects:
-            result["patient_effect_samples"] = patient_effect_samples
+            result["patient_effect_samples"] = selected_patient_eff
 
-        # NEW: Also store the *ordered phenotype labels* in the same order
-        # that the index [0..n_phenotypes-1] refers to.
-        # Typically, this is just range(n_phenotypes).
-        # But let's store the label string for each index i.
-        # We rely on `jd.phenotype_mapping[i]` or something consistent.
+        # Add phenotype labels
         phenotype_labels_ordered = []
         for i in range(self.n_phenotypes):
             phenotype_labels_ordered.append(self.phenotype_mapping[i])
-
         result["phenotype_labels"] = phenotype_labels_ordered
 
         return result
+
 
     def save_model(self, path: str):
         """
@@ -2063,7 +2080,7 @@ class JointProbabilityDistribution:
             "phenotype_mapping": self.phenotype_mapping,
             "clone_mapping": self.clone_mapping,
             "reverse_clone_mapping": self.reverse_clone_mapping,
-            # ... add other relevant fields ...
+            "posterior_cache": self._posterior_cache,
         }
 
         # 3) Combine into one dictionary
