@@ -1895,7 +1895,7 @@ class JointProbabilityDistribution:
 
         return clonotypic_entropy_dict
 
-    def generate_posterior_samples_progressive(
+    def generate_posterior_samples(
         self,
         patient_label: str,
         tcr_label: str,
