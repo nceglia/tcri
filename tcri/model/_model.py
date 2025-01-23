@@ -1755,7 +1755,7 @@ class JointProbabilityDistribution:
 
         return clonotypic_entropy_dict
 
-    def get_clonotypic_entropy_by_phenotype_posterior(
+    def get_clonotypic_entropy_by_phenotype(
         self,
         patient_idx: int,
         time_idx: int,
