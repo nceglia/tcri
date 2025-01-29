@@ -867,8 +867,9 @@ class JointProbabilityDistribution:
         
         for epoch in range(num_epochs):
             epoch_loss = 0.0
-            num_batches = 0
             for batch_data in self.dataloader:
+                if self.device != "cpu":
+                    batch_data = tuple(x.to(self.device) for x in batch_data)
                 epoch_loss += self.svi.step(batch_data)
             
             avg_loss = epoch_loss / len(self.dataloader)
@@ -3230,7 +3231,7 @@ class JointProbabilityDistribution:
         else:
             p_kct_final_conc = None  # won't be used in posterior approach
 
-        
+
         def get_distribution_map(k_idx, t_idx):
             # Flatten => kct_index
             kct_index = k_idx*(self.C*self.T) + (t_idx if self.T>0 else 0) + (self.C*self.T)*(0)  # careful
