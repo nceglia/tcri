@@ -6,7 +6,7 @@ import collections
 import warnings
 warnings.filterwarnings('ignore')
 
-from ..model._model import JointProbabilityDistribution
+# from ..model._model import JointProbabilityDistribution
 
 def joint_distribution(adata, method='probabilistic'):
     if method == "probabilistic":
