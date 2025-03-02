@@ -584,6 +584,7 @@ class TCRIModel(BaseModelClass):
         adata_manager.registry["covariate_col"] = covariate_key
         adata_manager.registry["batch_col"] = batch_key
         cls.register_manager(adata_manager)
+        adata.uns["tcri_manager"] = adata_manager
         return adata
 
     def __init__(

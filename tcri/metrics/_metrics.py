@@ -173,26 +173,6 @@ class TCRIMetrics:
 
         return self.adata
 
-def clonotypic_entropy(adata, phenotype, model, base=2, normalized=False):
-    logf = lambda x : np.log(x) / np.log(base)
-    joint_distribution(adata, method=method)
-    jd = adata.uns['joint_distribution']
-    res = jd.loc[phenotype].to_numpy()
-    cent = entropy(res,base=base)
-    if normalized:
-        cent = cent / logf(len(res))
-    return cent
-
-def phenotypic_entropy(adata, clonotype, base=2, normalized=False, method="probabilistic"):
-    logf = lambda x : np.log(x) / np.log(base)
-    joint_distribution(adata, method=method)
-    jd = adata.uns['joint_distribution'].T
-    res = jd.loc[clonotype].to_numpy()
-    pent = entropy(res,base=base)
-    if normalized:
-        pent = pent / logf(len(res))
-    return pent
-
 def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that):
     clone = []
     entropy = []
@@ -228,12 +208,28 @@ def probability_distribution(adata, method="probabilistic"):
         raise NotImplementedError("In progress!")
     return pdist
 
-def phenotypic_entropies(adata, method="probabilistic", normalized=True, decimals=5):
-    joint_distribution(adata, method=method)
+def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, temperature=1.):
+    logf = lambda x : np.log(x) / np.log(base)
+    jd = joint_distribution(adata,covariate,temperature=temperature).T
+    res = jd.loc[phenotype].to_numpy()
+    cent = entropy(res,base=base)
+    if normalized:
+        cent = cent / logf(len(res))
+    return cent
+
+def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1.):
+    logf = lambda x : np.log(x) / np.log(base)
+    jd = joint_distribution(adata,covariate, temperature=temperature)
+    res = jd.loc[clonotype].to_numpy()
+    pent = entropy(res,base=base)
+    if normalized:
+        pent = pent / logf(len(res))
+    return pent
+
+def phenotypic_entropies(adata, covariate, base=2, normalized=True, temperature=1.):
     tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
     unique_tcrs = np.unique(tcr_sequences)
-    jd = adata.uns["joint_distribution"].to_numpy() 
-    jd = jd / np.sum(jd)
+    jd = joint_distribution(adata,covariate, temperature=temperature).to_numpy().T
     clonotype_entropies = np.zeros(jd.shape[1])
     max_entropy = np.log2(jd.shape[0])
     for i, clonotype_distribution in enumerate(jd.T):
@@ -243,15 +239,14 @@ def phenotypic_entropies(adata, method="probabilistic", normalized=True, decimal
             clonotype_entropies[i] = -np.sum(normalized_distribution * np.log2(normalized_distribution + epsilon)) / max_entropy
         else:
             clonotype_entropies[i] = -np.sum(normalized_distribution * np.log2(normalized_distribution + epsilon))
-    clonotype_entropies = [abs(round(x,decimals)) for x in clonotype_entropies]
     tcr_to_entropy_dict = dict(zip(unique_tcrs, clonotype_entropies))
     return tcr_to_entropy_dict
 
-def clonotypic_entropies(adata, method="probabilistic", normalized=True, base=2, decimals=5):
-    unique_phenotypes = adata.uns["tcri_unique_phenotypes"]
+def clonotypic_entropies(adata, covariate, normalized=True, base=2, temperature=1., decimals=5):
+    unique_phenotypes = adata.uns["tcri_phenotype_categories"]
     phenotype_entropies = dict()
     for phenotype in unique_phenotypes:
-        cent = clonotypic_entropy(adata, phenotype, base=base, method=method, normalized=normalized)
+        cent = clonotypic_entropy(adata, covariate, phenotype, base=base, normalized=normalized, temperature=temperature)
         phenotype_entropies[phenotype] = np.round(cent,decimals=decimals)
     return phenotype_entropies
 
