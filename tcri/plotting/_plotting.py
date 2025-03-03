@@ -18,9 +18,9 @@ from ..metrics._metrics import clonotypic_entropies as centropies
 from ..metrics._metrics import phenotypic_entropies as pentropies
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
-from ..metrics._metrics import probability_distribution as pdistribution
+# from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
-from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
+# from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
 
 
@@ -62,12 +62,16 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
-
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True, method="probabilistic", phenotype_colors=None, save=None, figsize=(6,3), show_legend=True):
-    joint_distribution(adata, method=method)
-    phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
-    if method == "probabilistic":
-        cell_probabilities = probabilities(adata)
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False, n_samples=0, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
+    phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
+    cell_probabilities = collections.defaultdict(dict)
+    for s in order:
+        jd = tcri.pp.joint_distribution(adata,s,n_samples=n_samples,temperature=temperature)
+        if n_samples > 0:
+            jd["clonotype_id"] = ["_".join(x.split("_")[:-1]) for x in jd.index]
+            jd = jd.groupby("clonotype_id").mean()
+        for x in jd.T:
+            cell_probabilities[s][x] = jd.T[x].to_dict()
     repertoires = dict()
     times = list(range(len(order)))
     if nt:
@@ -87,11 +91,8 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True,
                                          adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
                                          adata.obs[adata.uns["tcri_phenotype_key"]]):
-        if str(seq) != "nan" and condition in repertoires:
-            if method == "probabilistic":
-                phenotypes_and_counts = cell_probabilities[bc]
-            elif method == "empirical":
-                phenotypes_and_counts = {phenotype: 1}
+        if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
+            phenotypes_and_counts = cell_probabilities[condition][seq]
             if nt:
                 t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(ntseq = seq), 
@@ -361,15 +362,6 @@ def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, 
     elif save != None:
         plt.savefig(save)
 
-def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that, palette=None, figsize=(7,5),save=None):
-    df = phenotypic_entropy_delta_tl(adata, groupby, key, from_this, to_that)
-    if palette==None:
-        print("hit")
-        palette=tcri_colors
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df, y='Delta Phenotypic Entropy', x=groupby, palette=palette,ax=ax)
-    if save != None:
-        fig.savefig(save)
 
 def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None, palette=None):
     if palette == None:
@@ -562,43 +554,231 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), colors=None, minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.), order=None):
-    mis = []
-    groups = []
-    splits = []
-    for group in set(adata.obs[groupby]):
-        gdata = adata[adata.obs[groupby] == group]
-        clone_size(gdata)
-        gdata = gdata[gdata.obs["clone_size"] >= minimum_clone_size]
-        if splitby != None:
-            for split in set(gdata.obs[splitby]):
-                sdata = gdata[gdata.obs[splitby] == split]
-                mi = mutual_information_tl(sdata, method=method)
-                mis.append(mi)
-                groups.append(group)
-                splits.append(split)
+
+def mutual_information(
+    adata,
+    groupby,
+    label,
+    temperature=1,
+    n_samples=0,
+    box_color="#999999",
+    size=1,
+    figsize=(6, 5),
+    colors=None,
+    minimum_clone_size=1,
+    rotation=90,
+    return_df=False,
+    bbox_to_anchor=(1.15, 1.0),
+    order=None,
+):
+    """
+    Plot mutual information values grouped by a given column and split by a covariate.
+    For each group (from adata.obs[groupby]) and for each covariate value (from the
+    column in adata.obs given by adata.uns["tcri_metadata"]["covariate_col"]), the
+    mutual information for the clones in that subset is computed using the 
+    mutual_information function. If multiple posterior samples are drawn (n_samples>0),
+    each combination has repeated draws.
+    
+    Additionally, for each x-axis category (given by 'label'), the function computes 
+    the posterior p-value comparing the two extreme hue groups (lowest vs. highest median)
+    by forming an empirical distribution of differences between the groups. A bracket 
+    with the corresponding significance is then added above the boxes.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data object containing obs and uns.
+    groupby : str
+        Name of the column in adata.obs to group by.
+    label : str
+        Column name in adata.obs that provides the x-axis label.
+    temperature : float, default=1
+        Temperature parameter for the mutual_information calculation.
+    n_samples : int, default=0
+        Number of posterior samples to draw per group–covariate combination.
+    box_color : str, default="#999999"
+        Color used for the boxenplot (used here only for the box outline).
+    size : int, default=1
+        Size of points in the swarmplot.
+    figsize : tuple, default=(6, 5)
+        Figure size.
+    colors : list or dict, optional
+        Palette for the hue mapping. If None, a default pastel palette is used.
+    minimum_clone_size : int, default=1
+        Minimum number of clones required for a subset to be considered.
+    rotation : float, default=90
+        Rotation angle for the x-axis tick labels.
+    return_df : bool, default=False
+        If True, returns the DataFrame used for plotting.
+    bbox_to_anchor : tuple, default=(1.15, 1.0)
+        Position for the legend.
+    order : list, optional
+        Order of categories for the x-axis.
+    
+    Returns
+    -------
+    pd.DataFrame or None
+        If return_df is True, returns the DataFrame used for plotting; otherwise, None.
+    """
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+
+    # Extract metadata keys from adata.uns
+    metadata = adata.uns.get("tcri_metadata", {})
+    cov_col = metadata.get("covariate_col", "covariate")
+    clone_key = adata.uns.get("tcri_clone_key", "clone_key")
+    
+    # Prepare lists to accumulate data.
+    mi_vals = []
+    group_vals = []
+    cov_vals = []
+    label_vals = []
+    sample_ids = []  # record sample id if multiple samples are drawn
+    
+    # Loop over groups (preserving the order in the obs column)
+    for grp in adata.obs[groupby].unique():
+        adata_grp = adata[adata.obs[groupby] == grp]
+        for cov in adata_grp.obs[cov_col].unique():
+            adata_sub = adata_grp[adata_grp.obs[cov_col] == cov]
+            clones = adata_sub.obs[clone_key].unique().tolist()
+            if len(clones) < minimum_clone_size:
+                continue
+            # Assume that the provided label is unique within the subset
+            label_val = adata_sub.obs[label].unique()[0]
+            if n_samples > 0:
+                for s in range(n_samples):
+                    mi_val = mutual_information(
+                        adata, cov, temperature=temperature, n_samples=1, clones=clones
+                    )
+                    mi_vals.append(mi_val)
+                    group_vals.append(grp)
+                    cov_vals.append(cov)
+                    label_vals.append(label_val)
+                    sample_ids.append(s)
+            else:
+                mi_val = mutual_information(
+                    adata, cov, temperature=temperature, n_samples=0, clones=clones
+                )
+                mi_vals.append(mi_val)
+                group_vals.append(grp)
+                cov_vals.append(cov)
+                label_vals.append(label_val)
+                sample_ids.append(0)  # default sample id for point estimate
+
+    # Build DataFrame.
+    df = pd.DataFrame({
+        label: label_vals,
+        cov_col: cov_vals,
+        groupby: group_vals,
+        "Mutual Information": mi_vals,
+        "sample_id": sample_ids
+    })
+
+    # Set order for x-axis if not provided.
+    if order is None:
+        order = list(adata.obs[label].unique())
+    if colors is None:
+        colors = tcri.pl.tcri_colors[2:]
+    
+    # Create the plot.
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Draw boxenplot (using hue grouping).
+    sns.boxenplot(
+        data=df,
+        x=label,
+        y="Mutual Information",
+        hue=cov_col,
+        order=order,
+        ax=ax,
+        color=box_color
+    )
+    
+    # Overlay swarmplot.
+    sns.swarmplot(
+        data=df,
+        x=label,
+        y="Mutual Information",
+        hue=cov_col,
+        order=order,
+        ax=ax,
+        palette=colors,
+        dodge=True,
+        size=size,
+    )
+    
+    # Remove duplicate legend entries.
+    handles, labels_legend = ax.get_legend_handles_labels()
+    n_hue = df[cov_col].nunique()
+    ax.legend(handles[:n_hue], labels_legend[:n_hue], loc='upper right', bbox_to_anchor=bbox_to_anchor)
+    
+    # --- Compute and annotate posterior statistics ---
+    # Here we assume that MI values for each (x-category, hue) are drawn from a posterior.
+    # For each x-category, we identify the two extreme hue groups (by median MI) and then
+    # compute the distribution of differences by taking all pairwise differences between
+    # the draws from the "max" and "min" groups.
+    dodge_width = 0.2
+    hue_order = sorted(df[cov_col].unique())
+    offsets = np.linspace(-dodge_width, dodge_width, num=len(hue_order))
+    
+    for i, x_cat in enumerate(order):
+        df_x = df[df[label] == x_cat]
+        hue_groups = df_x[cov_col].unique()
+        if len(hue_groups) < 2:
+            continue
+        
+        # Compute median MI for each hue group (across all posterior samples).
+        medians = {}
+        for hue_val in hue_groups:
+            medians[hue_val] = np.median(df_x[df_x[cov_col] == hue_val]["Mutual Information"])
+        
+        # Identify the two extreme groups.
+        hue_min = min(medians, key=medians.get)
+        hue_max = max(medians, key=medians.get)
+        
+        # Get all MI draws for each group.
+        values_min = df_x[df_x[cov_col] == hue_min]["Mutual Information"].values
+        values_max = df_x[df_x[cov_col] == hue_max]["Mutual Information"].values
+        if len(values_min) == 0 or len(values_max) == 0:
+            continue
+        # Compute the full difference distribution (all pairwise differences).
+        diffs = np.subtract.outer(values_max, values_min).flatten()
+        # Compute tail probability.
+        prop = np.mean(diffs > 0)
+        p_value = 2 * min(prop, 1 - prop)
+        
+        # Determine approximate x-axis positions for the groups.
+        try:
+            x_pos_min = i + offsets[hue_order.index(hue_min)]
+            x_pos_max = i + offsets[hue_order.index(hue_max)]
+        except ValueError:
+            continue
+        
+        # Compute bracket y position.
+        y_max = df_x["Mutual Information"].max()
+        y_range = df["Mutual Information"].max() - df["Mutual Information"].min()
+        bracket_y = y_max + 0.05 * y_range
+        
+        # Draw bracket.
+        ax.plot([x_pos_min, x_pos_max], [bracket_y, bracket_y], c="k", lw=1.5)
+        ax.plot([x_pos_min, x_pos_min], [bracket_y, bracket_y - 0.02*y_range], c="k", lw=1.5)
+        ax.plot([x_pos_max, x_pos_max], [bracket_y, bracket_y - 0.02*y_range], c="k", lw=1.5)
+        
+        # Annotate with p-value.
+        x_center = (x_pos_min + x_pos_max) / 2.0
+        if p_value < 0.001:
+            p_text = "p < 0.001"
         else:
-            joint_distribution(gdata)
-            mi = mutual_information_tl(gdata,method=method)
-            mis.append(mi)
-            groups.append(group)
-    df = pd.DataFrame.from_dict({"MI":mis, groupby: groups})
-    if splitby != None:
-        df[splitby] = splits
-    if order == None:
-        order = list(set(adata.obs[splitby]))
-    if colors == None:
-        colors = tcri_colors
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order, color=box_color)
-    sns.swarmplot(data=df,x=splitby,y="MI",order=order ,s=size, hue=groupby, palette=colors)
-    fig.tight_layout()
+            p_text = f"p = {p_value:.3f}"
+        ax.text(x_center, bracket_y + 0.02*y_range, p_text, ha="center", va="bottom", fontsize=10)
+    
     plt.xticks(rotation=rotation)
-    _ = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor)
+    fig.tight_layout()
+    
     if return_df:
         return df
-    else:
-        return ax
 
 def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15, color_dict=None):
     joint_distribution(adata,method=method )
