@@ -4,6 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from statannot import add_stat_annotation
 import matplotlib.patches as mpatches
+from scipy.cluster.hierarchy import dendrogram, linkage
 
 from gseapy import dotplot
 import tqdm
@@ -18,9 +19,7 @@ from ..metrics._metrics import clonotypic_entropies as centropies
 from ..metrics._metrics import phenotypic_entropies as pentropies
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
-# from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
-# from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
 
 
@@ -61,6 +60,103 @@ tcri_colors = [
 ]
 
 sns.set_palette(sns.color_palette(tcri_colors))
+
+def compare_joint_distribution(adata, temperature=1):
+    # -----------------------------
+    # 1. Get Model-Inferred Distributions
+    # -----------------------------
+    # Create a dictionary mapping each tissue (treatment group) to its clone phenotype DataFrame
+    covariate_col = adata.uns["tcri_metadata"]["covariate_col"]
+    model_dists = dict()
+    for tissue in set(adata.obs[covariate_col]):
+        # Use your function to get the inferred p_ct distribution (with temperature scaling)
+        df_tissue = tcri.pp.joint_distribution(adata,tissue, temperature=temperature)
+        df_tissue[covariate_col] = tissue
+        # Set clonotype_id as index for easier merging/comparison later
+        #df_tissue.set_index("clonotype_id", inplace=True)
+        model_dists[tissue] = df_tissue
+    
+    # Concatenate the inferred distributions from all tissues into a single DataFrame
+    df_model = pd.concat(model_dists.values(), axis=0)
+    
+    empirical_dists = dict()
+    clonotype_col = model.adata_manager.registry["clonotype_col"]
+    phenotype_col = model.adata_manager.registry["phenotype_col"]
+    
+    for tissue in set(adata.obs[covariate_col]):
+        # Filter for cells in the given tissue
+        adata_tissue = adata[adata.obs[covariate_col] == tissue].copy()
+        # Group by clonotype and compute normalized counts of each phenotype
+        emp = (
+            adata_tissue.obs.groupby(clonotype_col)[phenotype_col]
+            .value_counts(normalize=True)
+            .unstack(fill_value=0)
+        )
+        # Ensure that the DataFrame uses the actual phenotype category names as columns.
+        # If some phenotype categories are missing in a tissue, add them with 0.
+        phenotype_categories = list(adata.obs[phenotype_col].astype("category").cat.categories)
+        for ph in phenotype_categories:
+            if ph not in emp.columns:
+                emp[ph] = 0.0
+        # Reorder columns
+        emp = emp[phenotype_categories]
+        emp[covariate_col] = tissue
+        # Use clonotype ID (from the index) as a column if needed
+        emp.index.name = "clonotype_id"
+        empirical_dists[tissue] = emp
+    
+    # Concatenate the empirical distributions from all tissues into one DataFrame.
+    df_empirical = pd.concat(empirical_dists.values(), axis=0)
+    
+    # -----------------------------
+    # 3. Compare Distributions: Plotting Side-by-Side
+    # -----------------------------
+    # We’ll loop over the unique tissues and for each, plot the inferred (model) and empirical distributions.
+    unique_tissues = df_model[covariate_col].unique()
+    n_tissues = len(unique_tissues)
+    
+    fig, axes = plt.subplots(n_tissues, 4, figsize=(20, 4 * n_tissues),
+                             gridspec_kw={'width_ratios': [1, 4, 1, 4]})
+    
+    # In case there's only one tissue, ensure axes is 2D.
+    if n_tissues == 1:
+        axes = np.expand_dims(axes, axis=0)
+    
+    for i, tissue in enumerate(unique_tissues):
+        # Select the rows for the current tissue for both distributions
+        model_data = df_model[df_model[covariate_col] == tissue]
+        empirical_data = df_empirical[df_empirical[covariate_col] == tissue]
+        
+        # Determine the phenotype columns (assumed to be common to both)
+        phenotype_cols = [col for col in model_data.columns if col not in ["clonotype_index", covariate_col]]
+        
+        # --- Model-Inferred Distribution ---
+        # Compute hierarchical clustering for the model distribution.
+        Z_model = linkage(model_data[phenotype_cols], method='average')
+        dendro_model = dendrogram(Z_model, orientation='left', ax=axes[i, 0], no_labels=True)
+        # Order the data
+        ordered_model = model_data.iloc[dendro_model['leaves']]
+        sns.heatmap(ordered_model[phenotype_cols], ax=axes[i, 1], cmap="viridis", cbar=True)
+        axes[i, 1].set_title(f"Model-Inferred: {tissue}")
+        axes[i, 0].set_title("Dendrogram")
+        axes[i, 0].set_xticks([])
+        axes[i, 0].set_yticks([])
+        axes[i, 1].set_yticklabels([])
+        
+        # --- Empirical Distribution ---
+        # Compute hierarchical clustering for the empirical distribution.
+        Z_emp = linkage(empirical_data[phenotype_cols], method='average')
+        dendro_emp = dendrogram(Z_emp, orientation='left', ax=axes[i, 2], no_labels=True)
+        ordered_emp = empirical_data.iloc[dendro_emp['leaves']]
+        sns.heatmap(ordered_emp[phenotype_cols], ax=axes[i, 3], cmap="viridis", cbar=True)
+        axes[i, 3].set_title(f"Empirical: {tissue}")
+        axes[i, 2].set_title("Dendrogram")
+        axes[i, 2].set_xticks([])
+        axes[i, 2].set_yticks([])
+        axes[i, 3].set_yticklabels([])
+    
+    plt.tight_layout()
+    plt.show()
 
 def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False, n_samples=0, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
     phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
@@ -649,7 +745,7 @@ def mutual_information(
             label_val = adata_sub.obs[label].unique()[0]
             if n_samples > 0:
                 for s in range(n_samples):
-                    mi_val = mutual_information(
+                    mi_val = mutual_information_tl(
                         adata, cov, temperature=temperature, n_samples=1, clones=clones
                     )
                     mi_vals.append(mi_val)
@@ -658,7 +754,7 @@ def mutual_information(
                     label_vals.append(label_val)
                     sample_ids.append(s)
             else:
-                mi_val = mutual_information(
+                mi_val = mutual_information_tl(
                     adata, cov, temperature=temperature, n_samples=0, clones=clones
                 )
                 mi_vals.append(mi_val)
@@ -680,7 +776,7 @@ def mutual_information(
     if order is None:
         order = list(adata.obs[label].unique())
     if colors is None:
-        colors = tcri.pl.tcri_colors[2:]
+        colors = tcri_colors[2:]
     
     # Create the plot.
     fig, ax = plt.subplots(figsize=figsize)
@@ -714,11 +810,6 @@ def mutual_information(
     n_hue = df[cov_col].nunique()
     ax.legend(handles[:n_hue], labels_legend[:n_hue], loc='upper right', bbox_to_anchor=bbox_to_anchor)
     
-    # --- Compute and annotate posterior statistics ---
-    # Here we assume that MI values for each (x-category, hue) are drawn from a posterior.
-    # For each x-category, we identify the two extreme hue groups (by median MI) and then
-    # compute the distribution of differences by taking all pairwise differences between
-    # the draws from the "max" and "min" groups.
     dodge_width = 0.2
     hue_order = sorted(df[cov_col].unique())
     offsets = np.linspace(-dodge_width, dodge_width, num=len(hue_order))

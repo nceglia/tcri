@@ -12,12 +12,9 @@ from scipy.stats import entropy
 import numpy
 import torch.nn.functional as F
 import scanpy as sc
-
 from ..preprocessing._preprocessing import joint_distribution
 
-
 warnings.filterwarnings('ignore')
-
 
 def dkl(p, q):
     epsilon = 1e-10
