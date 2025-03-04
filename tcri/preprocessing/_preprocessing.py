@@ -11,6 +11,17 @@ import pyro.distributions as dist
 
 warnings.filterwarnings('ignore')
 
+def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
+    adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
+    clone_counts = adata.obs["trb_candidate"].value_counts()
+    def collapse_singleton(row):
+        candidate = row["trb_candidate"]
+        if clone_counts[candidate] < min_clone_size:
+            return f"Singleton_{row['patient']}"
+        else:
+            return candidate
+    adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
+
 @torch.no_grad()
 def register_model(adata, model,
                         phenotype_prob_slot="X_tcri_phenotypes",
