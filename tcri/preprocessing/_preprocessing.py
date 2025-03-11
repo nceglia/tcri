@@ -17,7 +17,7 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
     def collapse_singleton(row):
         candidate = row["trb_candidate"]
         if clone_counts[candidate] < min_clone_size:
-            return f"Singleton_{row['patient']}"
+            return f"Singleton_{row[groupby]}"
         else:
             return candidate
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
