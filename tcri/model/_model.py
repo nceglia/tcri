@@ -233,18 +233,12 @@ class TCRIModule(PyroBaseModuleClass):
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
-            if self.sharpness_penalty_scale > 0:
-                ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor("sharpness_penalty_top", -self.sharpness_penalty_scale * ent_c.sum())
     
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
-            if self.sharpness_penalty_scale > 0:
-                ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor("sharpness_penalty_ct", -self.sharpness_penalty_scale * ent_ct.sum())
-    
+
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
@@ -303,9 +297,6 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
-            if self.sharpness_penalty_scale > 0:
-                entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top", -self.sharpness_penalty_scale * entropy_c_guide.sum())
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
     
         with pyro.plate("ct_plate", self.ct_count):
@@ -317,9 +308,6 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
-            if self.sharpness_penalty_scale > 0:
-                entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct", -self.sharpness_penalty_scale * entropy_ct_guide.sum())
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
     
         # Encoder
@@ -469,11 +457,24 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # classification
         cls_val = 0.0
         if self.cls_loss_scale > 0.0:
+            # cls_logits = self.module.classifier(z_batch)
+            # Retrieve indices for cell-level clonotype-timepoint mapping
+            ct_indices = self.module.ct_array[idx].to(device)
+
+            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+
+            # Compute the classifier logits
             cls_logits = self.module.classifier(z_batch)
+
+            # Explicitly incorporate log-priors into the logits
+            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+
             cls_loss_val = F.cross_entropy(
-                cls_logits, target_phen,
+                cls_logits_with_prior, target_phen,
                 label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
             ).to(device)
+
             cls_loss = self.cls_loss_scale * cls_loss_val
             loss_dict["loss"] += cls_loss
             cls_val = cls_loss_val.item()
