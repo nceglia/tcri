@@ -262,7 +262,7 @@ class TCRIModule(PyroBaseModuleClass):
                 z = pyro.sample("latent", latent_prior.to_event(1))
     
             # Phenotype classification from the phenotype-conditioned latent mean
-            local_logits = self.classifier(new_z_loc)
+            local_logits = self.classifier(z_loc)
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
@@ -338,7 +338,7 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("latent", latent_posterior.to_event(1))
     
             # Phenotype classification from new_z_loc for consistency
-            local_logits = self.classifier(new_z_loc)
+            local_logits = self.classifier(z_loc)
             pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
@@ -371,9 +371,6 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
 
-    @torch.no_grad()
-    def get_cell_phenotype_logits(self):
-        return None
 
 ###############################################################################
 # 3) Unified Training Plan with Validation Step for scvi Early Stopping
@@ -756,31 +753,31 @@ class TCRIModel(BaseModelClass):
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
         device = next(self.module.parameters()).device
-    
-        # Retrieve learned hierarchical probabilities and mappings
-        p_ct = self.module.get_p_ct().to(device)  # shape (ct_count, P)
-        ct_array = self.module.ct_array.to(device)  # cell-level clonotype-timepoint indices
-    
+
+        p_ct = self.module.get_p_ct().to(device)          # Learned clonotype-covariate posterior
+        ct_array = self.module.ct_array.to(device)        # Cell clonotype-covariate indices
+
         all_probs = []
         current_idx = 0
         for tensors in scdl:
-            x = tensors[REGISTRY_KEYS.X_KEY].to(device)
-            batch_size_local = x.shape[0]
-    
-            # Extract prior probabilities for the current batch
+            batch_size_local = tensors[REGISTRY_KEYS.X_KEY].shape[0]
+
             ct_indices = ct_array[current_idx: current_idx + batch_size_local]
-            prior_probs = p_ct[ct_indices]  # (batch_size_local, P)
-    
-            # Compute latent representation and classifier logits
-            z = self.module.get_latent(tensors).to(device)
-            logits = self.module.classifier(z)
-    
-            # Explicitly combine learned logits with log priors
-            logits_with_prior = logits + torch.log(prior_probs + eps)
-            probs = F.softmax(logits_with_prior, dim=-1)
+            clone_cov_posterior = p_ct[ct_indices]  # (batch_size_local, P)
+
+            # Use pure latent representation (no phenotype embedding here)
+            z_loc, _, _ = self.module.encoder(tensors[REGISTRY_KEYS.X_KEY].to(device),
+                                            tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device))
+
+            logits = self.module.classifier(z_loc)
+            cell_level_likelihood = F.softmax(logits, dim=-1)
+
+            # Bayesian posterior explicitly (prior * likelihood)
+            posterior_unnormalized = clone_cov_posterior * cell_level_likelihood
+            probs = posterior_unnormalized / (posterior_unnormalized.sum(dim=-1, keepdim=True) + eps)
+
             all_probs.append(probs.cpu())
-    
             current_idx += batch_size_local
-    
+
         return torch.cat(all_probs, dim=0).numpy()
 
