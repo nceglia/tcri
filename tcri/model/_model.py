@@ -228,7 +228,7 @@ class TCRIModule(PyroBaseModuleClass):
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
-    
+        ct_array = self.ct_array
         # Top-level hierarchical priors (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
@@ -256,7 +256,9 @@ class TCRIModule(PyroBaseModuleClass):
                 z = pyro.sample("latent", latent_prior.to_event(1))
     
             # Phenotype classification from the phenotype-conditioned latent mean
-            local_logits = self.classifier(z_loc)
+            #local_logits = self.classifier(z_loc)
+            local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
+
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
@@ -286,6 +288,7 @@ class TCRIModule(PyroBaseModuleClass):
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
+        ct_array = self.ct_array
     
         # Guide distributions for top-level hierarchical parameters (unchanged)
         with pyro.plate("clonotypes", self.c_count):
@@ -326,7 +329,7 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("latent", latent_posterior.to_event(1))
     
             # Phenotype classification from new_z_loc for consistency
-            local_logits = self.classifier(z_loc)
+            local_logits = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
             pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
@@ -457,7 +460,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # classification
         cls_val = 0.0
         if self.cls_loss_scale > 0.0:
-            # cls_logits = self.module.classifier(z_batch)
             # Retrieve indices for cell-level clonotype-timepoint mapping
             ct_indices = self.module.ct_array[idx].to(device)
 
@@ -511,7 +513,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         
         with torch.no_grad():
             if self.cls_loss_scale > 0.0:
-                preds = cls_logits.argmax(dim=1)
+                preds = cls_logits_with_prior.argmax(dim=1)
                 acc = (preds == target_phen).float().mean().item()
             else:
                 acc = 0.0
