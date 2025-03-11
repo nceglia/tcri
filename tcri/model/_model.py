@@ -382,6 +382,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         n_steps_kl_warmup: int = 1000,
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
+        consistency_scale = 0.1,
         optimizer_config: dict = None,
         **kwargs
     ):
@@ -412,6 +413,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
                 "weight_decay": 1e-4,
             }
         self.optimizer_config = optimizer_config
+        self.consistency_scale = consistency_scale
 
     @property
     def loss(self):
@@ -518,6 +520,14 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             else:
                 acc = 0.0
 
+        consistency_loss = F.kl_div(
+            F.log_softmax(cls_logits_with_prior, dim=-1),
+            prior_probs,
+            reduction='batchmean'
+        )
+
+        loss_dict["loss"] += self.consistency_scale * consistency_loss
+
         cont_loss_val = continuity_loss(z_batch, target_phen)
         cont_loss_scale = 0.1  # moderate continuity encouragement
         loss_dict["loss"] += cont_loss_scale * cont_loss_val
@@ -533,22 +543,21 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
     # ------------ VALIDATION STEP for scvi early stopping --------------
     def validation_step(self, batch, batch_idx):
-        """Log 'elbo_validation' so scvi's early stopping can track it."""
         with torch.no_grad():
             self.module.eval()
             val_dict = super().training_step(batch, batch_idx)
             self.module.train()
-        # ---- ADD THIS BLOCK ----
+
         device = next(self.module.parameters()).device
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
         else:
             val_dict["loss"] = val_dict["loss"].to(device)
-        # ------------------------
-        # The name must match your early_stopping_monitor
-        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
-        return val_dict
 
+        # Explicitly ensure metric is always logged as "elbo_validation"
+        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True, sync_dist=True)
+
+        return val_dict
 ###############################################################################
 # 4) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
@@ -597,6 +606,7 @@ class TCRIModel(BaseModelClass):
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
+        consistency_scale=0.1,
         **kwargs
     ):
         super().__init__(adata)
@@ -606,6 +616,8 @@ class TCRIModel(BaseModelClass):
         covariate_col = self.adata_manager.registry["covariate_col"]
         batch_col = self.adata_manager.registry["batch_col"]
 
+
+        self.consistency_scale = consistency_scale
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
         target_codes = torch.tensor(ph_series.cat.codes.values, dtype=torch.long)
@@ -712,6 +724,7 @@ class TCRIModel(BaseModelClass):
             n_steps_kl_warmup=n_steps_kl_warmup,
             adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
+            consistency_scale=self.consistency_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
