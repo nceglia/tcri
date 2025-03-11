@@ -772,8 +772,15 @@ class TCRIModel(BaseModelClass):
             z_loc, _, _ = self.module.encoder(tensors[REGISTRY_KEYS.X_KEY].to(device),
                                             tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device))
 
-            logits = self.module.classifier(z_loc)
-            cell_level_likelihood = F.softmax(logits, dim=-1)
+            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+
+            # Compute the classifier logits
+            cls_logits = self.module.classifier(z_loc)
+
+            # Explicitly incorporate log-priors into the logits
+            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+            cell_level_likelihood = F.softmax(cls_logits_with_prior, dim=-1)
 
             # Bayesian posterior explicitly (prior * likelihood)
             posterior_unnormalized = clone_cov_posterior * cell_level_likelihood
