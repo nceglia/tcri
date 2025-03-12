@@ -435,125 +435,43 @@ class TCRIModule(PyroBaseModuleClass):
 # 3) Unified Training Plan with Validation Step for scvi Early Stopping
 ###############################################################################
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
-import torch
-import numpy as np
-import pyro
-import torch.nn.functional as F
 from scvi.train import PyroTrainingPlan
 
 class UnifiedTrainingPlan(PyroTrainingPlan):
-    """
-    Example training plan that logs custom arguments (margin_scale, etc.) but
-    does NOT pass them to PyroTrainingPlan's __init__.
-    """
     def __init__(
         self,
-        module,                     # TCRIModule
+        module,  # TCRIModule
+        n_steps_kl_warmup: int = 1000,
+        # Additional custom args:
         margin_scale: float = 0.0,
         margin_value: float = 2.0,
-        cls_loss_scale: float = 0.0,
-        label_smoothing: float = 0.0,
-        n_steps_kl_warmup: int = 1000,
-        adaptive_margin: bool = False,
-        reconstruction_loss_scale: float = 1e-2,
-        consistency_scale: float = 0.1,
-        optimizer_config: dict = None,
+        # etc...
         **kwargs
     ):
-        # Decide on ELBO based on enumeration
+        # Build your custom loss_fn
         if module.use_enumeration:
             print("Using Enumeration")
             self._loss_fn = TraceEnum_ELBO(max_plate_nesting=module.ct_count + module.c_count)
         else:
             self._loss_fn = Trace_ELBO()
 
-        # Now call the base constructor WITHOUT passing your extra arguments:
-        super().__init__(
-            module=module,
-            n_steps_kl_warmup=n_steps_kl_warmup,
-            **kwargs
-        )
-
-        # Store your extra arguments as instance attributes
+        # store your custom arguments
         self.margin_scale = margin_scale
         self.margin_value = margin_value
-        self.cls_loss_scale = cls_loss_scale
-        self.label_smoothing = label_smoothing
-        self.adaptive_margin = adaptive_margin
-        self.reconstruction_loss_scale = reconstruction_loss_scale
-        self.consistency_scale = consistency_scale
+        # etc...
 
-        # Example logistic schedule parameters
+        # now call PyroTrainingPlan constructor
+        super().__init__(
+            pyro_module=module,                # not 'module=module'
+            loss_fn=self._loss_fn,
+            n_steps_kl_warmup=n_steps_kl_warmup,
+            **kwargs                           # pass the rest if needed
+        )
+
+        # set up other stuff if desired
         self._my_global_step = 0
-        self.kl_sigmoid_midpoint = 4000
-        self.kl_sigmoid_speed = 0.001
+        ...
 
-        # Default optimizer config
-        if optimizer_config is None:
-            optimizer_config = {
-                "lr": 1e-3,
-                "betas": (0.9, 0.999),
-                "eps": 1e-5,
-                "weight_decay": 1e-4,
-            }
-        self.optimizer_config = optimizer_config
-
-    @property
-    def loss(self):
-        return self._loss_fn
-
-    def configure_optimizers(self):
-        # Create your optimizer using self.optimizer_config
-        return {
-            "optimizer": torch.optim.Adam(
-                self.module.parameters(),
-                **self.optimizer_config
-            )
-        }
-
-    def training_step(self, batch, batch_idx):
-        """
-        1) Possibly update self.module.kl_weight
-        2) Let PyroTrainingPlan handle the SVI step
-        3) Optionally log metrics
-        """
-        kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
-        self.module.kl_weight = kl_weight
-
-        # SVI pass
-        loss_dict = super().training_step(batch, batch_idx)
-        device = next(self.module.parameters()).device
-
-        # ensure on device
-        if not isinstance(loss_dict["loss"], torch.Tensor):
-            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device)
-        else:
-            loss_dict["loss"] = loss_dict["loss"].to(device)
-
-        # You can log your extra metrics here if you like (in no_grad)
-        # or incorporate them in the Pyro model for gradient effect.
-
-        self._my_global_step += 1
-        return loss_dict
-
-    def validation_step(self, batch, batch_idx):
-        """
-        1) Evaluate model in no_grad mode
-        2) log "elbo_validation" for scvi
-        """
-        with torch.no_grad():
-            self.module.eval()
-            val_dict = super().training_step(batch, batch_idx)
-            self.module.train()
-
-        device = next(self.module.parameters()).device
-        if not isinstance(val_dict["loss"], torch.Tensor):
-            val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
-        else:
-            val_dict["loss"] = val_dict["loss"].to(device)
-
-        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True, sync_dist=True)
-        return val_dict
 
 
 ###############################################################################
