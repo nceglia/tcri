@@ -503,7 +503,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # classification
         with torch.no_grad():
             cls_val = 0.0
-            if self.cls_loss_scale > 0.0:
+            if False:
                 # Retrieve indices for cell-level clonotype-timepoint mapping
                 ct_indices = self.module.ct_array[idx].to(device)
 
