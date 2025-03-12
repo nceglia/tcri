@@ -430,47 +430,76 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
 
-
-###############################################################################
-# 3) Unified Training Plan with Validation Step for scvi Early Stopping
-###############################################################################
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
 from scvi.train import PyroTrainingPlan
 
 class UnifiedTrainingPlan(PyroTrainingPlan):
     def __init__(
         self,
-        module,  # TCRIModule
-        n_steps_kl_warmup: int = 1000,
-        # Additional custom args:
+        pyro_module,  # e.g. your TCRIModule
         margin_scale: float = 0.0,
         margin_value: float = 2.0,
-        # etc...
+        n_steps_kl_warmup: int = 1000,
+        # ... any other custom arguments
+        optimizer_config: dict = None,
         **kwargs
     ):
-        # Build your custom loss_fn
-        if module.use_enumeration:
+        # 1) Construct the ELBO or enumerated ELBO if needed
+        if pyro_module.use_enumeration:
             print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=module.ct_count + module.c_count)
+            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=pyro_module.ct_count + pyro_module.c_count)
         else:
             self._loss_fn = Trace_ELBO()
 
-        # store your custom arguments
-        self.margin_scale = margin_scale
-        self.margin_value = margin_value
-        # etc...
-
-        # now call PyroTrainingPlan constructor
+        # 2) Call PyroTrainingPlan's constructor with the correct argument name:
         super().__init__(
-            pyro_module=module,                # not 'module=module'
+            pyro_module=pyro_module,            # <--- note "pyro_module=..."
             loss_fn=self._loss_fn,
             n_steps_kl_warmup=n_steps_kl_warmup,
-            **kwargs                           # pass the rest if needed
+            **kwargs
         )
 
-        # set up other stuff if desired
+        # 3) Store custom arguments in instance attributes
+        self.margin_scale = margin_scale
+        self.margin_value = margin_value
+
+        # optional example
+        if optimizer_config is None:
+            optimizer_config = {
+                "lr": 1e-3,
+                "betas": (0.9, 0.999),
+                "eps": 1e-5,
+                "weight_decay": 1e-4,
+            }
+        self.optimizer_config = optimizer_config
+
+        # optional: track a step counter
         self._my_global_step = 0
-        ...
+
+    # 4) Override configure_optimizers (or pass optim config via scvi style)
+    def configure_optimizers(self):
+        return {
+            "optimizer": torch.optim.Adam(
+                self.pyro_module.parameters(),
+                **self.optimizer_config
+            )
+        }
+
+    def training_step(self, batch, batch_idx):
+        # e.g. do your custom logic
+        loss_dict = super().training_step(batch, batch_idx)
+        self._my_global_step += 1
+        return loss_dict
+
+    def validation_step(self, batch, batch_idx):
+        with torch.no_grad():
+            self.pyro_module.eval()
+            val_dict = super().training_step(batch, batch_idx)
+            self.pyro_module.train()
+
+        self.log("elbo_validation", val_dict["loss"])
+        return val_dict
+
 
 
 
