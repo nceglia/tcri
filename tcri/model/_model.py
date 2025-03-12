@@ -573,12 +573,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         )
         
         # Compute negative log-likelihood reconstruction loss
-        reconstruction_loss_val = -x_dist.log_prob(x).mean()
+        # reconstruction_loss_val = -x_dist.log_prob(x).mean()
         
-        # Scale and update loss
-        total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
-        loss_dict["loss"] += total_recon_loss
-        recon_val = reconstruction_loss_val.item()
+        # # Scale and update loss
+        # total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
+        # loss_dict["loss"] += total_recon_loss
+        # recon_val = reconstruction_loss_val.item()
 
         
         # with torch.no_grad():
@@ -605,6 +605,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         cls_val = 0.0
         acc = 0.0
         consistency_loss = 0.0
+        recon_val = 0.0
 
         loss_dict["margin_loss"] = margin_val
         loss_dict["cls_loss"] = cls_val
