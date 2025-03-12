@@ -594,7 +594,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         #     reduction='batchmean'
         # )
 
-        loss_dict["loss"] += self.consistency_scale * consistency_loss
+        # loss_dict["loss"] += self.consistency_scale * consistency_loss
 
         cont_loss_val = continuity_loss(z_batch, target_phen)
         cont_loss_scale = 0.1  # moderate continuity encouragement
