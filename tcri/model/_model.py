@@ -235,7 +235,7 @@ class TCRIModule(PyroBaseModuleClass):
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
             if self.sharpness_penalty_scale > 0:
                 ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=True)
+                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=False)
 
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
@@ -243,7 +243,7 @@ class TCRIModule(PyroBaseModuleClass):
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
             if self.sharpness_penalty_scale > 0:
                 ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=True)
+                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=False)
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
@@ -307,7 +307,7 @@ class TCRIModule(PyroBaseModuleClass):
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=True)
+                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=False)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
     
         with pyro.plate("ct_plate", self.ct_count):
@@ -321,7 +321,7 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=True)
+                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=False)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
     
         # Encoder
