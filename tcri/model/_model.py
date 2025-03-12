@@ -184,7 +184,13 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
-    
+
+        self.confusion_matrix_param = pyro.param(
+            "confusion_matrix_param",
+            torch.eye(P),
+            constraint=dist.constraints.simplex
+        )
+
     def prepare_two_level_params(
         self,
         c_count: int,
@@ -222,20 +228,34 @@ class TCRIModule(PyroBaseModuleClass):
         batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
         return (x, batch_idx, log_library), {}
-    
+
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
+        """
+        Noisy-label model implementation:
+        - Sample top-level Dirichlet params p_c, p_ct
+        - For each cell, sample z ~ Normal(z_loc, z_scale)
+        - Sample y_i (latent phenotype) ~ Categorical(...) from classifier logits + p_ct
+        - Observed label is 'target_phenotypes' but we incorporate it through a confusion matrix
+        """
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
-        # Top-level hierarchical priors (unchanged)
+
+        # ------------------------------
+        # 1) Hierarchical Priors
+        # ------------------------------
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
             if self.sharpness_penalty_scale > 0:
                 ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=False)
+                pyro.factor(
+                    "sharpness_penalty_top",
+                    self.sharpness_penalty_scale * ent_c.sum(),
+                    has_rsample=False
+                )
 
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
@@ -243,43 +263,70 @@ class TCRIModule(PyroBaseModuleClass):
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
             if self.sharpness_penalty_scale > 0:
                 ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=False)
-        # Encoder
+                pyro.factor(
+                    "sharpness_penalty_ct",
+                    self.sharpness_penalty_scale * ent_ct.sum(),
+                    has_rsample=False
+                )
+
+        # ------------------------------
+        # 2) Encoder + Latent Variables per Cell
+        # ------------------------------
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-    
+
         with pyro.plate("data", batch_size) as idx:
-            target_pheno = self._target_phenotypes[idx].long()
-            ph_emb = self.phenotype_embedding(target_pheno)
-    
-            new_z_loc = z_loc + ph_emb
-    
-            # Flexible prior centered at new_z_loc, moderate variance
-            latent_prior = dist.Normal(new_z_loc, torch.ones_like(z_scale))
-            
-            with poutine.scale(scale=kl_weight):
-                z = pyro.sample("latent", latent_prior.to_event(1))
-    
-            # Phenotype classification from the phenotype-conditioned latent mean
-            #local_logits = self.classifier(z_loc)
+
+            # (a) "true" latent label y_i ~ Categorical
+            # Combine classifier(z_loc) with p_ct prior
             local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
 
-            z_i_phen = pyro.sample(
-                "z_i_phen",
+            y_i = pyro.sample(
+                "y_i",
                 dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
-    
-            # Decoder conditioned on sampled latent and phenotype embedding
-            ph_emb_sample = self.phenotype_embedding(z_i_phen)
+
+            # (b) No longer forcibly shift z_loc by the observed label
+            # Instead, we let z be ~ Normal(z_loc, z_scale)
+            with poutine.scale(scale=kl_weight):
+                z = pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
+
+            # ------------------------------
+            # 3) Noisy Label Observation
+            # ------------------------------
+            # Observed label (the "target phen") is in self._target_phenotypes
+            # We'll incorporate it via confusion_matrix_param
+            target_pheno = self._target_phenotypes[idx].long()
+
+            # confusion_matrix_param is shape [P, P]; if y_i = j, we pick row j
+            label_probs = self.confusion_matrix_param[y_i]  # shape [batch_size, P] after indexing
+
+            pyro.sample(
+                "label_obs",
+                dist.Categorical(probs=label_probs),
+                obs=target_pheno
+            )
+
+            # ------------------------------
+            # 4) Decoder for gene expression
+            # ------------------------------
+            # Condition on y_i by embedding it
+            ph_emb_sample = self.phenotype_embedding(y_i)
             combined = torch.cat([z, ph_emb_sample], dim=1)
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
-    
+
+            px_scale, px_r_out, px_rate, px_dropout = self.decoder(
+                "gene",
+                combined,
+                log_library,
+                batch_idx
+            )
+
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
-    
+
             x_dist = dist.ZeroInflatedNegativeBinomial(
                 gate=gate_probs,
                 total_count=total_count,
@@ -287,15 +334,20 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
-    
+
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
+        """
+        Minimal guide for noisy-label approach:
+        - Guides p_c, p_ct same as before
+        - Approx posterior for each cell's y_i and z
+        """
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
-    
-        # Guide distributions for top-level hierarchical parameters (unchanged)
+
+        # Guide for top-level hierarchical parameters
         with pyro.plate("clonotypes", self.c_count):
             q_p_c_raw = pyro.param(
                 "q_p_c_raw",
@@ -307,9 +359,11 @@ class TCRIModule(PyroBaseModuleClass):
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_top",
+                            self.sharpness_penalty_scale * entropy_c_guide.sum(),
+                            has_rsample=False)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
-    
+
         with pyro.plate("ct_plate", self.ct_count):
             q_p_ct_raw = pyro.param(
                 "q_p_ct_raw",
@@ -321,32 +375,32 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_ct",
+                            self.sharpness_penalty_scale * entropy_ct_guide.sum(),
+                            has_rsample=False)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
-    
-        # Encoder
+
+        # Guide for per-cell variables
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-    
+
         with pyro.plate("data", batch_size) as idx:
-            target_pheno = self._target_phenotypes[idx].long()
-            ph_emb = self.phenotype_embedding(target_pheno)
-    
-            new_z_loc = z_loc + ph_emb
-    
+            # Approx posterior for z
             with poutine.scale(scale=kl_weight):
-                # Flexible posterior distribution around new_z_loc
-                latent_posterior = dist.Normal(new_z_loc, z_scale)
-                pyro.sample("latent", latent_posterior.to_event(1))
-    
-            # Phenotype classification from new_z_loc for consistency
-            local_logits = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
+                pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
+
+            # Approx posterior for y_i
+            # We can do the same "local_logits" as in the model, or a new network
+            q_p_ct_for_cells = q_p_ct_sharp[ct_array[idx]]
+            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_for_cells + 1e-8)
+
             pyro.sample(
-                "z_i_phen",
-                dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel", 'is_auxiliary': True} if self.use_enumeration else {}
+                "y_i",
+                dist.Categorical(logits=local_logits_guide),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
-    
+
+        
         
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -458,41 +512,41 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
-        # margin
-        margin_val = 0.0
-        if self.margin_scale > 0.0:
-            margin_loss_val = pairwise_centroid_margin_loss(
-                z_batch, target_phen,
-                margin=self.margin_value,
-                adaptive_margin=self.adaptive_margin
-            ).to(device)
-            margin_loss = self.margin_scale * margin_loss_val
-            loss_dict["loss"] += margin_loss
-            margin_val = margin_loss_val.item()
+        # # margin
+        # margin_val = 0.0
+        # if self.margin_scale > 0.0:
+        #     margin_loss_val = pairwise_centroid_margin_loss(
+        #         z_batch, target_phen,
+        #         margin=self.margin_value,
+        #         adaptive_margin=self.adaptive_margin
+        #     ).to(device)
+        #     margin_loss = self.margin_scale * margin_loss_val
+        #     loss_dict["loss"] += margin_loss
+        #     margin_val = margin_loss_val.item()
 
         # classification
-        cls_val = 0.0
-        if self.cls_loss_scale > 0.0:
-            # Retrieve indices for cell-level clonotype-timepoint mapping
-            ct_indices = self.module.ct_array[idx].to(device)
+        # cls_val = 0.0
+        # if self.cls_loss_scale > 0.0:
+        #     # Retrieve indices for cell-level clonotype-timepoint mapping
+        #     ct_indices = self.module.ct_array[idx].to(device)
 
-            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
-            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+        #     # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+        #     prior_probs = self.module.get_p_ct()[ct_indices].to(device)
 
-            # Compute the classifier logits
-            cls_logits = self.module.classifier(z_batch)
+        #     # Compute the classifier logits
+        #     cls_logits = self.module.classifier(z_batch)
 
-            # Explicitly incorporate log-priors into the logits
-            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+        #     # Explicitly incorporate log-priors into the logits
+        #     cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
 
-            cls_loss_val = F.cross_entropy(
-                cls_logits_with_prior, target_phen,
-                label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
-            ).to(device)
+        #     cls_loss_val = F.cross_entropy(
+        #         cls_logits_with_prior, target_phen,
+        #         label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
+        #     ).to(device)
 
-            cls_loss = self.cls_loss_scale * cls_loss_val
-            loss_dict["loss"] += cls_loss
-            cls_val = cls_loss_val.item()
+        #     cls_loss = self.cls_loss_scale * cls_loss_val
+        #     loss_dict["loss"] += cls_loss
+        #     cls_val = cls_loss_val.item()
 
         # reconstruction
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
