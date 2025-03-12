@@ -184,13 +184,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
-
-        self.confusion_matrix_param = pyro.param(
-            "confusion_matrix_param",
-            torch.eye(P),
-            constraint=dist.constraints.simplex
-        )
-
+    
     def prepare_two_level_params(
         self,
         c_count: int,
@@ -231,31 +225,18 @@ class TCRIModule(PyroBaseModuleClass):
 
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
-        """
-        Noisy-label model implementation:
-        - Sample top-level Dirichlet params p_c, p_ct
-        - For each cell, sample z ~ Normal(z_loc, z_scale)
-        - Sample y_i (latent phenotype) ~ Categorical(...) from classifier logits + p_ct
-        - Observed label is 'target_phenotypes' but we incorporate it through a confusion matrix
-        """
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
 
-        # ------------------------------
-        # 1) Hierarchical Priors
-        # ------------------------------
+        # Top-level hierarchical priors (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
             if self.sharpness_penalty_scale > 0:
                 ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor(
-                    "sharpness_penalty_top",
-                    self.sharpness_penalty_scale * ent_c.sum(),
-                    has_rsample=False
-                )
+                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=False)
 
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
@@ -263,67 +244,52 @@ class TCRIModule(PyroBaseModuleClass):
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
             if self.sharpness_penalty_scale > 0:
                 ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor(
-                    "sharpness_penalty_ct",
-                    self.sharpness_penalty_scale * ent_ct.sum(),
-                    has_rsample=False
-                )
+                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=False)
 
-        # ------------------------------
-        # 2) Encoder + Latent Variables per Cell
-        # ------------------------------
+        # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
         with pyro.plate("data", batch_size) as idx:
-
-            # (a) "true" latent label y_i ~ Categorical
-            # Combine classifier(z_loc) with p_ct prior
-            local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
-
-            y_i = pyro.sample(
-                "y_i",
-                dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {}
-            )
-
-            # (b) No longer forcibly shift z_loc by the observed label
-            # Instead, we let z be ~ Normal(z_loc, z_scale)
-            with poutine.scale(scale=kl_weight):
-                z = pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
-
-            # ------------------------------
-            # 3) Noisy Label Observation
-            # ------------------------------
-            # Observed label (the "target phen") is in self._target_phenotypes
-            # We'll incorporate it via confusion_matrix_param
             target_pheno = self._target_phenotypes[idx].long()
 
-            conf_mat = self.confusion_matrix_param.to(y_i.device)
-            label_probs = conf_mat[y_i]
+            # ---------------------------
+            # REMOVED:  ph_emb = self.phenotype_embedding(target_pheno)
+            # REMOVED:  new_z_loc = z_loc + ph_emb
+            #
+            # REPLACED:  We no longer shift z_loc by the observed label.
+            # Instead we define the latent prior directly on z_loc:
+            # ---------------------------
+            latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
 
-            # # confusion_matrix_param is shape [P, P]; if y_i = j, we pick row j
-            # label_probs = self.confusion_matrix_param[y_i]  # shape [batch_size, P] after indexing
+            with poutine.scale(scale=kl_weight):
+                z = pyro.sample("latent", latent_prior.to_event(1))
 
+            # Phenotype classification from z_loc (unchanged)
+            local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
+
+            z_i_phen = pyro.sample(
+                "z_i_phen",
+                dist.Categorical(logits=local_logits),
+                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
+            )
+
+            # ---------------------------
+            # ADDED: The "noisy label" line
+            # We treat target_pheno as an observation with some confusion
+            # matrix. If z_i_phen = j, then label_probs = confusion_matrix_param[j]
+            # ---------------------------
+            label_probs = self.confusion_matrix_param[z_i_phen]
             pyro.sample(
                 "label_obs",
                 dist.Categorical(probs=label_probs),
                 obs=target_pheno
             )
 
-            # ------------------------------
-            # 4) Decoder for gene expression
-            # ------------------------------
-            # Condition on y_i by embedding it
-            ph_emb_sample = self.phenotype_embedding(y_i)
+            # Decoder conditioned on z + phenotype embedding from z_i_phen
+            ph_emb_sample = self.phenotype_embedding(z_i_phen)  # unchanged
             combined = torch.cat([z, ph_emb_sample], dim=1)
-
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder(
-                "gene",
-                combined,
-                log_library,
-                batch_idx
-            )
+            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
 
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
@@ -340,17 +306,12 @@ class TCRIModule(PyroBaseModuleClass):
 
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
-        """
-        Minimal guide for noisy-label approach:
-        - Guides p_c, p_ct same as before
-        - Approx posterior for each cell's y_i and z
-        """
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
 
-        # Guide for top-level hierarchical parameters
+        # Guide for top-level hierarchical parameters (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             q_p_c_raw = pyro.param(
                 "q_p_c_raw",
@@ -362,9 +323,7 @@ class TCRIModule(PyroBaseModuleClass):
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top",
-                            self.sharpness_penalty_scale * entropy_c_guide.sum(),
-                            has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=False)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
 
         with pyro.plate("ct_plate", self.ct_count):
@@ -378,32 +337,35 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct",
-                            self.sharpness_penalty_scale * entropy_ct_guide.sum(),
-                            has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=False)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
-        # Guide for per-cell variables
+        # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
         with pyro.plate("data", batch_size) as idx:
-            # Approx posterior for z
+            # ---------------------------
+            # REMOVED: The line that adds the observed label to z_loc
+            # (the old "ph_emb = self.phenotype_embedding(target_pheno)"
+            #  new_z_loc = z_loc + ph_emb)
+            #
+            # REPLACED: we use z_loc directly
+            # ---------------------------
             with poutine.scale(scale=kl_weight):
-                pyro.sample("latent", dist.Normal(z_loc, z_scale).to_event(1))
+                latent_posterior = dist.Normal(z_loc, z_scale)
+                pyro.sample("latent", latent_posterior.to_event(1))
 
-            # Approx posterior for y_i
-            # We can do the same "local_logits" as in the model, or a new network
-            q_p_ct_for_cells = q_p_ct_sharp[ct_array[idx]]
-            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_for_cells + 1e-8)
+            # Phenotype classification from z_loc
+            q_p_ct_sharp_for_cells = q_p_ct_sharp[ct_array[idx]]
+            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp_for_cells + 1e-8)
 
             pyro.sample(
-                "y_i",
+                "z_i_phen",
                 dist.Categorical(logits=local_logits_guide),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {}
+                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
             )
 
-        
         
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -430,40 +392,49 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
 
-from pyro.infer import TraceEnum_ELBO, Trace_ELBO
-from scvi.train import PyroTrainingPlan
 
+###############################################################################
+# 3) Unified Training Plan with Validation Step for scvi Early Stopping
+###############################################################################
 class UnifiedTrainingPlan(PyroTrainingPlan):
+    """
+    Training plan that includes margin, classification, reconstruction losses,
+    KL warmup, plus a validation_step that logs 'elbo_validation' so scvi's
+    early stopping can monitor it.
+    """
     def __init__(
         self,
-        pyro_module,  # e.g. your TCRIModule
+        module: TCRIModule,
         margin_scale: float = 0.0,
         margin_value: float = 2.0,
+        cls_loss_scale: float = 0.0,
+        label_smoothing: float = 0.0,
         n_steps_kl_warmup: int = 1000,
-        # ... any other custom arguments
+        adaptive_margin: bool = False,
+        reconstruction_loss_scale: float = 1e-2,
+        consistency_scale = 0.1,
         optimizer_config: dict = None,
         **kwargs
     ):
-        # 1) Construct the ELBO or enumerated ELBO if needed
-        if pyro_module.use_enumeration:
+        if module.use_enumeration:
             print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=pyro_module.ct_count + pyro_module.c_count)
+            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=module.ct_count + module.c_count)
         else:
             self._loss_fn = Trace_ELBO()
 
-        # 2) Call PyroTrainingPlan's constructor with the correct argument name:
-        super().__init__(
-            pyro_module=pyro_module,            # <--- note "pyro_module=..."
-            loss_fn=self._loss_fn,
-            n_steps_kl_warmup=n_steps_kl_warmup,
-            **kwargs
-        )
+        super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
 
-        # 3) Store custom arguments in instance attributes
         self.margin_scale = margin_scale
         self.margin_value = margin_value
+        self.cls_loss_scale = cls_loss_scale
+        self.label_smoothing = label_smoothing
+        self.adaptive_margin = adaptive_margin
+        self.reconstruction_loss_scale = reconstruction_loss_scale
 
-        # optional example
+        self._my_global_step = 0
+        self.kl_sigmoid_midpoint = 4000
+        self.kl_sigmoid_speed = 0.001
+
         if optimizer_config is None:
             optimizer_config = {
                 "lr": 1e-3,
@@ -472,38 +443,151 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
                 "weight_decay": 1e-4,
             }
         self.optimizer_config = optimizer_config
+        self.consistency_scale = consistency_scale
 
-        # optional: track a step counter
-        self._my_global_step = 0
-        self.pyro_module = pyro_module
-
-    # 4) Override configure_optimizers (or pass optim config via scvi style)
+    @property
+    def loss(self):
+        return self._loss_fn
+    
     def configure_optimizers(self):
-        return {
-            "optimizer": torch.optim.Adam(
-                self.pyro_module.parameters(),
-                **self.optimizer_config
-            )
-        }
-
+        optimizer = torch.optim.Adam(
+            self.module.parameters(),
+            lr=self.optimizer_config["lr"],
+            betas=self.optimizer_config["betas"],
+            eps=self.optimizer_config["eps"],
+            weight_decay=self.optimizer_config["weight_decay"],
+        )
+        return {"optimizer": optimizer}
+    
     def training_step(self, batch, batch_idx):
-        # e.g. do your custom logic
+        kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
+
+        self.module.kl_weight = kl_weight
+
         loss_dict = super().training_step(batch, batch_idx)
+        device = next(self.module.parameters()).device
+
+        # Ensure loss is on correct device
+        if not isinstance(loss_dict["loss"], torch.Tensor):
+            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
+        else:
+            loss_dict["loss"] = loss_dict["loss"].to(device)
+
+        z_batch = self.module.get_latent(batch).to(device)
+        idx = batch["indices"].long().view(-1).to(device)
+        target_phen = self.module._target_phenotypes[idx].to(device)
+
+        # margin
+        margin_val = 0.0
+        if self.margin_scale > 0.0:
+            margin_loss_val = pairwise_centroid_margin_loss(
+                z_batch, target_phen,
+                margin=self.margin_value,
+                adaptive_margin=self.adaptive_margin
+            ).to(device)
+            margin_loss = self.margin_scale * margin_loss_val
+            loss_dict["loss"] += margin_loss
+            margin_val = margin_loss_val.item()
+
+        # classification
+        cls_val = 0.0
+        if self.cls_loss_scale > 0.0:
+            # Retrieve indices for cell-level clonotype-timepoint mapping
+            ct_indices = self.module.ct_array[idx].to(device)
+
+            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+
+            # Compute the classifier logits
+            cls_logits = self.module.classifier(z_batch)
+
+            # Explicitly incorporate log-priors into the logits
+            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+
+            cls_loss_val = F.cross_entropy(
+                cls_logits_with_prior, target_phen,
+                label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
+            ).to(device)
+
+            cls_loss = self.cls_loss_scale * cls_loss_val
+            loss_dict["loss"] += cls_loss
+            cls_val = cls_loss_val.item()
+
+        # reconstruction
+        x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
+        batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+        log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
+        ph_emb_sample = self.module.phenotype_embedding(target_phen)
+        combined = torch.cat([z_batch, ph_emb_sample], dim=1)
+        px_scale, px_r_out, px_rate, px_dropout = self.module.decoder("gene", combined, log_library, batch_idx_tensor)
+
+        gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
+        nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
+        nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
+        total_count = self.module.px_r.exp().clamp(max=1e4)
+        
+        # Define ZINB distribution
+        x_dist = dist.ZeroInflatedNegativeBinomial(
+            gate=gate_probs,
+            total_count=total_count,
+            logits=nb_logits,
+            validate_args=False
+        )
+        
+        # Compute negative log-likelihood reconstruction loss
+        reconstruction_loss_val = -x_dist.log_prob(x).mean()
+        
+        # Scale and update loss
+        total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
+        loss_dict["loss"] += total_recon_loss
+        recon_val = reconstruction_loss_val.item()
+
+        
+        with torch.no_grad():
+            if self.cls_loss_scale > 0.0:
+                preds = cls_logits_with_prior.argmax(dim=1)
+                acc = (preds == target_phen).float().mean().item()
+            else:
+                acc = 0.0
+
+        consistency_loss = F.kl_div(
+            F.log_softmax(cls_logits_with_prior, dim=-1),
+            prior_probs,
+            reduction='batchmean'
+        )
+
+        loss_dict["loss"] += self.consistency_scale * consistency_loss
+
+        cont_loss_val = continuity_loss(z_batch, target_phen)
+        cont_loss_scale = 0.1  # moderate continuity encouragement
+        loss_dict["loss"] += cont_loss_scale * cont_loss_val
+        loss_dict["continuity_loss"] = cont_loss_val.item()
+        
+        loss_dict["margin_loss"] = margin_val
+        loss_dict["cls_loss"] = cls_val
+        loss_dict["reconstruction_loss"] = recon_val
+        loss_dict["classification_accuracy"] = acc
+
         self._my_global_step += 1
         return loss_dict
 
+    # ------------ VALIDATION STEP for scvi early stopping --------------
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
-            self.pyro_module.eval()
+            self.module.eval()
             val_dict = super().training_step(batch, batch_idx)
-            self.pyro_module.train()
+            self.module.train()
 
-        self.log("elbo_validation", val_dict["loss"])
+        device = next(self.module.parameters()).device
+        if not isinstance(val_dict["loss"], torch.Tensor):
+            val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
+        else:
+            val_dict["loss"] = val_dict["loss"].to(device)
+
+        # Explicitly ensure metric is always logged as "elbo_validation"
+        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True, sync_dist=True)
+
         return val_dict
-
-
-
-
 ###############################################################################
 # 4) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
@@ -662,10 +746,15 @@ class TCRIModel(BaseModelClass):
         )
 
         plan = UnifiedTrainingPlan(
-            pyro_module=self.module,
+            module=self.module,
             margin_scale=margin_scale,
             margin_value=margin_value,
+            cls_loss_scale=cls_loss_scale,
+            label_smoothing=label_smoothing,
             n_steps_kl_warmup=n_steps_kl_warmup,
+            adaptive_margin=adaptive_margin,
+            reconstruction_loss_scale=reconstruction_loss_scale,
+            consistency_scale=self.consistency_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
@@ -744,4 +833,3 @@ class TCRIModel(BaseModelClass):
             current_idx += batch_size_local
 
         return torch.cat(all_probs, dim=0).numpy()
-
