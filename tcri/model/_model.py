@@ -475,6 +475,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         # optional: track a step counter
         self._my_global_step = 0
+        self.pyro_module = pyro_module
 
     # 4) Override configure_optimizers (or pass optim config via scvi style)
     def configure_optimizers(self):
