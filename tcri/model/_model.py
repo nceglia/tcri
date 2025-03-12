@@ -436,25 +436,18 @@ class TCRIModule(PyroBaseModuleClass):
 ###############################################################################
 class UnifiedTrainingPlan(PyroTrainingPlan):
     """
-    Training plan that includes a KL warmup, logs 'elbo_validation' for scvi's
-    early stopping, and optionally can log a continuity metric without
-    introducing a second backward pass.
+    Minimal example avoiding double backward:
+    - Pyro's reconstruction handled in model/guide
+    - Possibly logs a continuity metric (no grad).
     """
     def __init__(
         self,
         module: TCRIModule,
-        margin_scale: float = 0.0,
-        margin_value: float = 2.0,
-        cls_loss_scale: float = 0.0,
-        label_smoothing: float = 0.0,
         n_steps_kl_warmup: int = 1000,
-        adaptive_margin: bool = False,
-        reconstruction_loss_scale: float = 1e-2,
-        consistency_scale=0.1,
         optimizer_config: dict = None,
         **kwargs
     ):
-        # If using enumeration:
+        # Use TraceEnum_ELBO if enumerating; else Trace_ELBO
         if module.use_enumeration:
             print("Using Enumeration")
             self._loss_fn = TraceEnum_ELBO(max_plate_nesting=module.ct_count + module.c_count)
@@ -463,19 +456,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
 
-        self.margin_scale = margin_scale
-        self.margin_value = margin_value
-        self.cls_loss_scale = cls_loss_scale
-        self.label_smoothing = label_smoothing
-        self.adaptive_margin = adaptive_margin
-        self.reconstruction_loss_scale = reconstruction_loss_scale
-        self.consistency_scale = consistency_scale
-
         self._my_global_step = 0
+        # Example logistic schedule parameters
         self.kl_sigmoid_midpoint = 4000
         self.kl_sigmoid_speed = 0.001
 
-        # Default optimizer config
         if optimizer_config is None:
             optimizer_config = {
                 "lr": 1e-3,
@@ -490,62 +475,50 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         return self._loss_fn
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            self.module.parameters(),
-            lr=self.optimizer_config["lr"],
-            betas=self.optimizer_config["betas"],
-            eps=self.optimizer_config["eps"],
-            weight_decay=self.optimizer_config["weight_decay"],
-        )
-        return {"optimizer": optimizer}
+        return {
+            "optimizer": torch.optim.Adam(
+                self.module.parameters(),
+                **self.optimizer_config
+            )
+        }
 
     def training_step(self, batch, batch_idx):
         """
-        1. Update kl_weight (for warmup schedule).
-        2. Call super() to do Pyro SVI in one backward pass.
-        3. Compute additional metrics like continuity or margin *without*
-           re-running backward, to avoid 'Trying to backward through graph
-           a second time' errors.
+        1. Update kl_weight if you want a custom schedule
+        2. Run super().training_step(...) => single Pyro SVI pass
+        3. Optionally log metrics without adding them to the final loss
         """
-        # Example logistic KL warmup
+        # Example logistic KL schedule
         kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
         self.module.kl_weight = kl_weight
 
-        # 1) Let PyroTrainingPlan / SVI handle the model and guide in one pass.
-        #    This returns a dictionary with {"loss": <tensor>, ...}.
+        # Step 1: Let scvi/Pyro do the model/guide in a single pass
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
-        # Ensure the returned loss is on the correct device
+        # Move the returned loss to the correct device
         if not isinstance(loss_dict["loss"], torch.Tensor):
             loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
             loss_dict["loss"] = loss_dict["loss"].to(device)
 
-        # 2) We can compute continuity or margin purely as a logged metric
-        #    without backprop. We'll do it under no_grad so we don't
-        #    accidentally create a second graph.
+        # Step 2: Log metrics under no_grad
         with torch.no_grad():
+            # for example continuity
             z_batch = self.module.get_latent(batch).to(device)
             idx = batch["indices"].long().view(-1).to(device)
             target_phen = self.module._target_phenotypes[idx].to(device)
 
-            # Example continuity metric (logged only, no backward)
             cont_loss_val = continuity_loss(z_batch, target_phen)
-            loss_dict["continuity_loss"] = cont_loss_val.item()
-
-            # If you want to do margin or classification metrics for logging:
-            # margin_val = ...
-            # loss_dict["margin_loss"] = margin_val.item()
+            loss_dict["continuity_metric"] = cont_loss_val.item()
 
         self._my_global_step += 1
         return loss_dict
 
     def validation_step(self, batch, batch_idx):
         """
-        1. Switch to eval mode (no gradients).
-        2. Call super().training_step(...) to get the Pyro ELBO on the val set.
-        3. Log 'elbo_validation' so scvi's early stopping can monitor it.
+        This just runs the same pyro forward pass in eval mode.
+        We log 'elbo_validation' for scvi's early stopping.
         """
         with torch.no_grad():
             self.module.eval()
@@ -558,10 +531,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         else:
             val_dict["loss"] = val_dict["loss"].to(device)
 
-        # scvi expects to see "elbo_validation" for early stopping
+        # Log for scvi's early stopping
         self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True, sync_dist=True)
 
         return val_dict
+
 ###############################################################################
 # 4) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
