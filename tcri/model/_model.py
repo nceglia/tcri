@@ -664,12 +664,7 @@ class TCRIModel(BaseModelClass):
             pyro_module=self.module,
             margin_scale=margin_scale,
             margin_value=margin_value,
-            cls_loss_scale=cls_loss_scale,
-            label_smoothing=label_smoothing,
             n_steps_kl_warmup=n_steps_kl_warmup,
-            adaptive_margin=adaptive_margin,
-            reconstruction_loss_scale=reconstruction_loss_scale,
-            consistency_scale=self.consistency_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
