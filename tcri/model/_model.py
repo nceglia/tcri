@@ -476,51 +476,53 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
-        # Ensure loss is on correct device
-        if not isinstance(loss_dict["loss"], torch.Tensor):
-            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
-        else:
-            loss_dict["loss"] = loss_dict["loss"].to(device)
+        # # Ensure loss is on correct device
+        # if not isinstance(loss_dict["loss"], torch.Tensor):
+        #     loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
+        # else:
+        #     loss_dict["loss"] = loss_dict["loss"].to(device)
 
         z_batch = self.module.get_latent(batch).to(device)
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
         # margin
-        margin_val = 0.0
-        if self.margin_scale > 0.0:
-            margin_loss_val = pairwise_centroid_margin_loss(
-                z_batch, target_phen,
-                margin=self.margin_value,
-                adaptive_margin=self.adaptive_margin
-            ).to(device)
-            margin_loss = self.margin_scale * margin_loss_val
-            loss_dict["loss"] += margin_loss
-            margin_val = margin_loss_val.item()
+        with torch.no_grad():
+            margin_val = 0.0
+            if self.margin_scale > 0.0:
+                margin_loss_val = pairwise_centroid_margin_loss(
+                    z_batch, target_phen,
+                    margin=self.margin_value,
+                    adaptive_margin=self.adaptive_margin
+                ).to(device)
+                margin_loss = self.margin_scale * margin_loss_val
+                loss_dict["loss"] += margin_loss
+                margin_val = margin_loss_val.item()
 
         # classification
-        cls_val = 0.0
-        if self.cls_loss_scale > 0.0:
-            # Retrieve indices for cell-level clonotype-timepoint mapping
-            ct_indices = self.module.ct_array[idx].to(device)
+        with torch.no_grad():
+            cls_val = 0.0
+            if self.cls_loss_scale > 0.0:
+                # Retrieve indices for cell-level clonotype-timepoint mapping
+                ct_indices = self.module.ct_array[idx].to(device)
 
-            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
-            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+                # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+                prior_probs = self.module.get_p_ct()[ct_indices].to(device)
 
-            # Compute the classifier logits
-            cls_logits = self.module.classifier(z_batch)
+                # Compute the classifier logits
+                cls_logits = self.module.classifier(z_batch)
 
-            # Explicitly incorporate log-priors into the logits
-            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+                # Explicitly incorporate log-priors into the logits
+                cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
 
-            cls_loss_val = F.cross_entropy(
-                cls_logits_with_prior, target_phen,
-                label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
-            ).to(device)
+                cls_loss_val = F.cross_entropy(
+                    cls_logits_with_prior, target_phen,
+                    label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
+                ).to(device)
 
-            cls_loss = self.cls_loss_scale * cls_loss_val
-            loss_dict["loss"] += cls_loss
-            cls_val = cls_loss_val.item()
+                cls_loss = self.cls_loss_scale * cls_loss_val
+                loss_dict["loss"] += cls_loss
+                cls_val = cls_loss_val.item()
 
         # reconstruction
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
@@ -544,12 +546,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         )
         
         # Compute negative log-likelihood reconstruction loss
-        reconstruction_loss_val = -x_dist.log_prob(x).mean()
         
-        # Scale and update loss
-        total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
-        loss_dict["loss"] += total_recon_loss
-        recon_val = reconstruction_loss_val.item()
+        with torch.no_grad():
+            reconstruction_loss_val = -x_dist.log_prob(x).mean()
+            # Scale and update loss
+            total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
+            loss_dict["loss"] += total_recon_loss
+            recon_val = reconstruction_loss_val.item()
 
         
         with torch.no_grad():
@@ -559,23 +562,23 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             else:
                 acc = 0.0
 
-        consistency_loss = F.kl_div(
-            F.log_softmax(cls_logits_with_prior, dim=-1),
-            prior_probs,
-            reduction='batchmean'
-        )
+            consistency_loss = F.kl_div(
+                F.log_softmax(cls_logits_with_prior, dim=-1),
+                prior_probs,
+                reduction='batchmean'
+            )
 
-        loss_dict["loss"] += self.consistency_scale * consistency_loss
+            loss_dict["loss"] += self.consistency_scale * consistency_loss
 
-        cont_loss_val = continuity_loss(z_batch, target_phen)
-        cont_loss_scale = 0.1  # moderate continuity encouragement
-        loss_dict["loss"] += cont_loss_scale * cont_loss_val
-        loss_dict["continuity_loss"] = cont_loss_val.item()
-        
-        loss_dict["margin_loss"] = margin_val
-        loss_dict["cls_loss"] = cls_val
-        loss_dict["reconstruction_loss"] = recon_val
-        loss_dict["classification_accuracy"] = acc
+            cont_loss_val = continuity_loss(z_batch, target_phen)
+            cont_loss_scale = 0.1  # moderate continuity encouragement
+            loss_dict["loss"] += cont_loss_scale * cont_loss_val
+            loss_dict["continuity_loss"] = cont_loss_val.item()
+            
+            loss_dict["margin_loss"] = margin_val
+            loss_dict["cls_loss"] = cls_val
+            loss_dict["reconstruction_loss"] = recon_val
+            loss_dict["classification_accuracy"] = acc
 
         self._my_global_step += 1
         return loss_dict
