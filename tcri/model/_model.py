@@ -184,6 +184,13 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
+
+        self.confusion_matrix_param = pyro.param(
+            "confusion_matrix_param",
+            lambda: torch.eye(self.P),
+            constraint=dist.constraints.simplex
+        )
+
     
     def prepare_two_level_params(
         self,
