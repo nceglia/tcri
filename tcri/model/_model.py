@@ -476,11 +476,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
-        # # Ensure loss is on correct device
-        # if not isinstance(loss_dict["loss"], torch.Tensor):
-        #     loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
-        # else:
-        #     loss_dict["loss"] = loss_dict["loss"].to(device)
+        # Ensure loss is on correct device
+        with torch.no_grad():
+            if not isinstance(loss_dict["loss"], torch.Tensor):
+                loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
+            else:
+                loss_dict["loss"] = loss_dict["loss"].to(device)
 
         z_batch = self.module.get_latent(batch).to(device)
         idx = batch["indices"].long().view(-1).to(device)
