@@ -503,7 +503,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # classification
         with torch.no_grad():
             cls_val = 0.0
-            if False:
+            if self.cls_loss_scale > 0.0:
                 # Retrieve indices for cell-level clonotype-timepoint mapping
                 ct_indices = self.module.ct_array[idx].to(device)
 
@@ -563,11 +563,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             else:
                 acc = 0.0
 
-            consistency_loss = F.kl_div(
-                F.log_softmax(cls_logits_with_prior, dim=-1),
-                prior_probs,
-                reduction='batchmean'
-            )
+            # consistency_loss = F.kl_div(
+            #     F.log_softmax(cls_logits_with_prior, dim=-1),
+            #     prior_probs,
+            #     reduction='batchmean'
+            # )
+            consistency_loss = 0.
 
             loss_dict["loss"] += self.consistency_scale * consistency_loss
 
