@@ -661,7 +661,7 @@ class TCRIModel(BaseModelClass):
         )
 
         plan = UnifiedTrainingPlan(
-            module=self.module,
+            pyro_module=self.module,
             margin_scale=margin_scale,
             margin_value=margin_value,
             cls_loss_scale=cls_loss_scale,
