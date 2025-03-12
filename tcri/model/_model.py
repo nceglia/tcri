@@ -299,8 +299,11 @@ class TCRIModule(PyroBaseModuleClass):
             # We'll incorporate it via confusion_matrix_param
             target_pheno = self._target_phenotypes[idx].long()
 
-            # confusion_matrix_param is shape [P, P]; if y_i = j, we pick row j
-            label_probs = self.confusion_matrix_param[y_i]  # shape [batch_size, P] after indexing
+            conf_mat = self.confusion_matrix_param.to(y_i.device)
+            label_probs = conf_mat[y_i]
+
+            # # confusion_matrix_param is shape [P, P]; if y_i = j, we pick row j
+            # label_probs = self.confusion_matrix_param[y_i]  # shape [batch_size, P] after indexing
 
             pyro.sample(
                 "label_obs",
@@ -578,18 +581,18 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         recon_val = reconstruction_loss_val.item()
 
         
-        with torch.no_grad():
-            if self.cls_loss_scale > 0.0:
-                preds = cls_logits_with_prior.argmax(dim=1)
-                acc = (preds == target_phen).float().mean().item()
-            else:
-                acc = 0.0
+        # with torch.no_grad():
+        #     if self.cls_loss_scale > 0.0:
+        #         preds = cls_logits_with_prior.argmax(dim=1)
+        #         acc = (preds == target_phen).float().mean().item()
+        #     else:
+        #         acc = 0.0
 
-        consistency_loss = F.kl_div(
-            F.log_softmax(cls_logits_with_prior, dim=-1),
-            prior_probs,
-            reduction='batchmean'
-        )
+        # consistency_loss = F.kl_div(
+        #     F.log_softmax(cls_logits_with_prior, dim=-1),
+        #     prior_probs,
+        #     reduction='batchmean'
+        # )
 
         loss_dict["loss"] += self.consistency_scale * consistency_loss
 
