@@ -286,7 +286,9 @@ class TCRIModule(PyroBaseModuleClass):
             # We treat target_pheno as an observation with some confusion
             # matrix. If z_i_phen = j, then label_probs = confusion_matrix_param[j]
             # ---------------------------
-            label_probs = self.confusion_matrix_param[z_i_phen]
+            conf_mat = self.confusion_matrix_param.to(z_i_phen.device)
+            label_probs = conf_mat[z_i_phen]
+
             pyro.sample(
                 "label_obs",
                 dist.Categorical(probs=label_probs),
