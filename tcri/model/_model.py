@@ -390,7 +390,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     ):
         if module.use_enumeration:
             print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=module.ct_count + module.c_count)
+            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=3, num_particles=8)
         else:
             self._loss_fn = Trace_ELBO()
 
@@ -415,6 +415,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
                 "weight_decay": 1e-4,
             }
         self.optimizer_config = optimizer_config
+
 
     @property
     def loss(self):
