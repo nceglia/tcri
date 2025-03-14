@@ -10,6 +10,7 @@ import pyro.poutine as poutine
 
 from typing import Dict
 from anndata import AnnData
+import os
 
 # scvi-tools imports
 from scvi.data.fields import CategoricalObsField, LayerField
@@ -239,7 +240,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
-        
+
         # Top-level hierarchical priors (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
