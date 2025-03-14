@@ -232,7 +232,7 @@ class TCRIModule(PyroBaseModuleClass):
         confusion_matrix = pyro.param(
             "confusion_matrix",
             torch.eye(self.P),
-            constraint=dist.constraints.simplex(dim=-1),
+            constraint=dist.constraints.simplex,
         )
 
         kl_weight = self.kl_weight
