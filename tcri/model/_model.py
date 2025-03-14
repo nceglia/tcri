@@ -141,8 +141,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.eps = 1e-6
 
         # kl_weight updated each step
-        self.kl_weight =5
-
+        self.kl_weight = 5
 
         # Phenotype Embedding
         self.phenotype_embedding = torch.nn.Embedding(num_embeddings=P, embedding_dim=n_latent)
@@ -171,6 +170,12 @@ class TCRIModule(PyroBaseModuleClass):
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
         self.classifier = torch.nn.Linear(n_latent, P)
+        # Introduce the confusion matrix as a learnable parameter.
+        self.confusion_matrix = pyro.param(
+            "confusion_matrix",
+            torch.eye(self.P),
+            constraint=dist.constraints.simplex,
+        )
 
         # Buffers for hierarchical priors
         self.register_buffer("clone_phen_prior", torch.empty(0))
@@ -184,6 +189,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
+
     
     def prepare_two_level_params(
         self,
@@ -244,7 +250,7 @@ class TCRIModule(PyroBaseModuleClass):
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
     
         with pyro.plate("data", batch_size) as idx:
-            # Use z_loc directly for latent prior (without adding phenotype embedding)
+            # Define latent prior without conditioning on phenotype embedding
             latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
             with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
@@ -252,12 +258,16 @@ class TCRIModule(PyroBaseModuleClass):
             # Explicit phenotype enumeration using clonotype-timepoint priors
             ct_idx = self.ct_array[idx]
             prior_probs = p_ct[ct_idx]  # shape: (batch_size, num_phenotypes)
-    
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(prior_probs),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
+            
+            # Introduce the confusion matrix likelihood: p(obs_label | z_i_phen)
+            target_pheno = self._target_phenotypes[idx].long()
+            label_probs = self.confusion_matrix[z_i_phen]  # Shape (batch_size, num_phenotypes)
+            pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
     
             # Decoder conditioned on sampled latent and phenotype embedding
             ph_emb_sample = self.phenotype_embedding(z_i_phen)
@@ -276,6 +286,7 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
+
 
 
     @auto_move_data
