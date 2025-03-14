@@ -23,35 +23,36 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
 @torch.no_grad()
-def register_model(adata, model,
-                        phenotype_prob_slot="X_tcri_phenotypes",
-                        phenotype_assignment_obs="tcri_phenotype",
-                        latent_slot="X_tcri",
-                        batch_size=256):
+def register_model(
+    adata,
+    model,
+    phenotype_prob_slot="X_tcri_phenotypes",
+    phenotype_assignment_obs="tcri_phenotype",
+    latent_slot="X_tcri",
+    batch_size=256
+):
     # --- Store core model outputs ---
-    adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()  # (num_ct_pairs, num_phenotypes)
-    adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()  # (num_ct_pairs,)
-    adata.uns["tcri_ct_to_c"] = model.module.ct_to_c.cpu().numpy()  # (num_ct_pairs,)
-    # adata.uns["tcri_p_c"] = model.module.get_p_c.cpu().numpy()  # (num_ct_pairs,)
+    adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
+    adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
+    adata.uns["tcri_ct_to_c"] = model.module.ct_to_c.cpu().numpy()
 
     # Store category labels explicitly
     cov_col = model.adata_manager.registry["covariate_col"]
     clone_col = model.adata_manager.registry["clonotype_col"]
-    pheno_col = model.adata_manager.registry["phenotype_col"]
+    phenotype_col = model.adata_manager.registry["phenotype_col"]
 
     adata.uns["tcri_covariate_categories"] = adata.obs[cov_col].astype("category").cat.categories.tolist()
     adata.uns["tcri_clonotype_categories"] = adata.obs[clone_col].astype("category").cat.categories.tolist()
-    adata.uns["tcri_phenotype_categories"] = adata.obs[pheno_col].astype("category").cat.categories.tolist()
+    adata.uns["tcri_phenotype_categories"] = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
 
     # Store metadata keys for easy reference
     adata.uns["tcri_metadata"] = {
         "covariate_col": cov_col,
-        "clonotype_col": clone_col,
-        "phenotype_col": pheno_col,
-        "timestamp": str(datetime.datetime.now())
+        "clone_col": clone_col,
+        "phenotype_col": phenotype_col,
     }
-    
-    # --- Store the local scale for Dirichlet concentration (needed for posterior sampling) ---
+
+    # Store local_scale
     adata.uns["tcri_local_scale"] = model.module.local_scale
 
     # --- Compute and store per-cell phenotype probabilities ---
@@ -59,12 +60,12 @@ def register_model(adata, model,
     adata.obsm[phenotype_prob_slot] = phenotype_probs
 
     # --- Compute and store phenotype assignments ---
-    assignments = np.argmax(phenotype_probs, axis=1)
-    phenotype_categories = adata.obs[pheno_col].astype("category").cat.categories
-    assignment_labels = [phenotype_categories[i] for i in assignments]
-    adata.obs[phenotype_assignment_obs] = assignment_labels
+    assignments = phenotype_probs.argmax(axis=1)
+    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
+        assignments, categories=adata.uns["tcri_phenotype_categories"]
+    )
 
-    # --- Compute and store latent representation and UMAP embedding ---
+    # --- Compute and store latent representation ---
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
 
