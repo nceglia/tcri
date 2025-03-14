@@ -460,10 +460,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
-        # Use phenotype embedding of observed labels for reconstruction here
-        ph_emb_sample = self.module.phenotype_embedding(target_phen)
-        combined = torch.cat([z_batch, ph_emb_sample], dim=1)
-        px_scale, px_r_out, px_rate, px_dropout = self.module.decoder("gene", combined, log_library, batch_idx_tensor)
+
+        # We no longer concatenate phenotype embeddings, using z_batch alone:
+        px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
+            "gene", z_batch, log_library, batch_idx_tensor
+        )
 
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
         nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
