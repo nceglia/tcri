@@ -225,7 +225,6 @@ class TCRIModule(PyroBaseModuleClass):
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
 
-        # Define and initialize confusion matrix
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
@@ -238,7 +237,7 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
-        # Top-level hierarchical priors
+        # Hierarchical priors
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
@@ -252,26 +251,27 @@ class TCRIModule(PyroBaseModuleClass):
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
-        with pyro.plate("data", x.shape[0]) as idx:
+        with pyro.plate("data", batch_size) as idx:
             latent_prior = dist.Normal(
                 torch.zeros_like(z_loc),
                 torch.ones_like(z_scale)
             )
-            with poutine.scale(scale=self.kl_weight):
+            with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
 
             ct_idx = self.ct_array[idx]
             prior_probs = p_ct[ct_idx]
+
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(prior_probs),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
 
-            # **Modified to use covariate-specific clone-to-phenotype distribution instead of user-defined annotation**
             target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
             target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
+            # Fix: Keep the indexing tensor as categorical integer tensor (z_i_phen)
             label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
             label_probs = label_probs / (label_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
@@ -281,7 +281,7 @@ class TCRIModule(PyroBaseModuleClass):
                 obs=target_pheno_probs
             )
 
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z_loc, log_library, batch_idx)
+            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
 
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
@@ -295,7 +295,6 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
-
 
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
@@ -324,6 +323,7 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
+        # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
@@ -334,14 +334,14 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            predicted_probs_guide = F.softmax(local_logits_guide, dim=-1)
-            alpha_guide = torch.clamp(predicted_probs_guide * self.local_scale, min=1e-3)
 
-            # **Modified to use Dirichlet posterior**
+            # FIX: Restore categorical distribution
             pyro.sample(
                 "z_i_phen",
-                dist.Dirichlet(alpha_guide)
+                dist.Categorical(logits=local_logits_guide),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
+
 
 
     @auto_move_data
