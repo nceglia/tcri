@@ -238,34 +238,31 @@ class TCRIModule(PyroBaseModuleClass):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
-
+    
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
     
         with pyro.plate("data", batch_size) as idx:
+            # Removed phenotype embedding addition for latent prior
             target_pheno = self._target_phenotypes[idx].long()
-            ph_emb = self.phenotype_embedding(target_pheno)
     
-            new_z_loc = z_loc + ph_emb
-    
-            # Flexible prior centered at new_z_loc, moderate variance
-            latent_prior = dist.Normal(new_z_loc, torch.ones_like(z_scale))
+            # Flexible prior centered at z_loc (without adding phenotype embedding)
+            latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
             
             with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
     
-            # Phenotype classification from the phenotype-conditioned latent mean
-            #local_logits = self.classifier(z_loc)
+            # Phenotype classification (unchanged)
             local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
-
+    
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
                 infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
             )
     
-            # Decoder conditioned on sampled latent and phenotype embedding
+            # Decoder conditioned on sampled latent and phenotype embedding (unchanged)
             ph_emb_sample = self.phenotype_embedding(z_i_phen)
             combined = torch.cat([z, ph_emb_sample], dim=1)
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
@@ -282,7 +279,7 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
-    
+
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
@@ -319,22 +316,20 @@ class TCRIModule(PyroBaseModuleClass):
     
         with pyro.plate("data", batch_size) as idx:
             target_pheno = self._target_phenotypes[idx].long()
-            ph_emb = self.phenotype_embedding(target_pheno)
-    
-            new_z_loc = z_loc + ph_emb
-    
+            # Removed phenotype embedding addition for latent posterior
             with poutine.scale(scale=kl_weight):
-                # Flexible posterior distribution around new_z_loc
-                latent_posterior = dist.Normal(new_z_loc, z_scale)
+                # Flexible posterior distribution centered at z_loc
+                latent_posterior = dist.Normal(z_loc, z_scale)
                 pyro.sample("latent", latent_posterior.to_event(1))
     
-            # Phenotype classification from new_z_loc for consistency
+            # Phenotype classification (unchanged)
             local_logits = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
             pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel", 'is_auxiliary': True} if self.use_enumeration else {}
+                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
             )
+
     
         
     @auto_move_data
