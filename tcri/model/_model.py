@@ -494,7 +494,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # loss_dict["continuity_loss"] = cont_loss_val.item()
 
         loss_dict["margin_loss"] = margin_val
-        loss_dict["cls_loss"] = cls_val
+        loss_dict["cls_loss"] = 0.
         loss_dict["reconstruction_loss"] = recon_val
         loss_dict["classification_accuracy"] = acc
 
