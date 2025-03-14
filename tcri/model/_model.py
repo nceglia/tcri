@@ -496,7 +496,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict["margin_loss"] = margin_val
         loss_dict["cls_loss"] = 0.
         loss_dict["reconstruction_loss"] = recon_val
-        loss_dict["classification_accuracy"] = acc
+        loss_dict["classification_accuracy"] = 0
 
         self._my_global_step += 1
         return loss_dict
