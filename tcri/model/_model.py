@@ -171,11 +171,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
         self.classifier = torch.nn.Linear(n_latent, P)
         # Introduce the confusion matrix as a learnable parameter.
-        self.confusion_matrix = pyro.param(
-            "confusion_matrix",
-            torch.eye(self.P),
-            constraint=dist.constraints.simplex,
-        )
+
 
         # Buffers for hierarchical priors
         self.register_buffer("clone_phen_prior", torch.empty(0))
@@ -233,6 +229,13 @@ class TCRIModule(PyroBaseModuleClass):
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
+
+        confusion_matrix = pyro.param(
+            "confusion_matrix",
+            torch.eye(self.P),
+            constraint=dist.constraints.simplex,
+        )
+
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
@@ -268,7 +271,7 @@ class TCRIModule(PyroBaseModuleClass):
             # Introduce the confusion matrix likelihood: p(obs_label | z_i_phen)
             target_pheno = self._target_phenotypes[idx].long()
             # Minimal change: move confusion_matrix to the same device as z_i_phen
-            label_probs = self.confusion_matrix.to(z_i_phen.device)[z_i_phen]  # Shape (batch_size, num_phenotypes)
+            label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]  # Shape (batch_size, num_phenotypes)
             pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
     
             # Decoder conditioned on sampled latent and phenotype embedding
@@ -338,8 +341,6 @@ class TCRIModule(PyroBaseModuleClass):
                 dist.Categorical(logits=local_logits),
                 infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
             )
-
-    
         
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
