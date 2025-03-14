@@ -8,7 +8,6 @@ import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
 
-from pyro.distributions.kl import kl_divergence
 from typing import Dict
 from anndata import AnnData
 
@@ -25,7 +24,6 @@ from scvi.dataloaders import DataSplitter
 from torch.nn.functional import cosine_similarity
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
 
-import os
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 warnings.filterwarnings("ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*")
@@ -229,15 +227,19 @@ class TCRIModule(PyroBaseModuleClass):
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
 
+        initial_confusion = torch.eye(self.P) + 1e-3
+        initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
+
         confusion_matrix = pyro.param(
             "confusion_matrix",
-            torch.eye(self.P),
-            constraint=dist.constraints.simplex,
+            initial_confusion,
+            constraint=dist.constraints.simplex
         )
+
 
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
-        ct_array = self.ct_array
+        
         # Top-level hierarchical priors (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
@@ -487,11 +489,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
         loss_dict["loss"] += total_recon_loss
         recon_val = reconstruction_loss_val.item()
-
-        # cont_loss_val = continuity_loss(z_batch, target_phen)
-        # cont_loss_scale = 0.1  # moderate continuity encouragement
-        # loss_dict["loss"] += cont_loss_scale * cont_loss_val
-        # loss_dict["continuity_loss"] = cont_loss_val.item()
 
         loss_dict["margin_loss"] = margin_val
         loss_dict["cls_loss"] = 0.
