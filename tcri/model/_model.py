@@ -225,6 +225,7 @@ class TCRIModule(PyroBaseModuleClass):
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
 
+        # Define and initialize confusion matrix
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
@@ -234,55 +235,59 @@ class TCRIModule(PyroBaseModuleClass):
             constraint=dist.constraints.simplex
         )
 
-
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
-        # Top-level hierarchical priors (unchanged)
+        # Top-level hierarchical priors
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
-    
+
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
-    
+
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-    
-        with pyro.plate("data", batch_size) as idx:
-            # Define latent prior without conditioning on phenotype embedding
+
+        with pyro.plate("data", x.shape[0]) as idx:
             latent_prior = dist.Normal(
                 torch.zeros_like(z_loc),
                 torch.ones_like(z_scale)
             )
-            with poutine.scale(scale=kl_weight):
+            with poutine.scale(scale=self.kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
-    
-            # Explicit phenotype enumeration using clonotype-timepoint priors
+
             ct_idx = self.ct_array[idx]
-            prior_probs = p_ct[ct_idx]  # shape: (batch_size, num_phenotypes)
+            prior_probs = p_ct[ct_idx]
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(prior_probs),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
-            
-            # Introduce the confusion matrix likelihood: p(obs_label | z_i_phen)
-            target_pheno = self._target_phenotypes[idx].long()
-            label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]  # Shape (batch_size, num_phenotypes)
-            pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
-    
-            # Decoder conditioned on sampled latent and enumerated phenotype embedding
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
-    
+
+            # **Modified to use covariate-specific clone-to-phenotype distribution instead of user-defined annotation**
+            target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
+            target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
+
+            label_probs = confusion_matrix[z_i_phen]
+            label_probs = label_probs / (label_probs.sum(dim=-1, keepdim=True) + 1e-8)
+
+            pyro.sample(
+                "obs_label",
+                dist.Multinomial(probs=label_probs, validate_args=False),
+                obs=target_pheno_probs
+            )
+
+            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z_loc, log_library, batch_idx)
+
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
-    
+
             x_dist = dist.ZeroInflatedNegativeBinomial(
                 gate=gate_probs,
                 total_count=total_count,
@@ -291,14 +296,12 @@ class TCRIModule(PyroBaseModuleClass):
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
 
+
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
-        kl_weight = self.kl_weight
         batch_size = x.shape[0]
-        ct_array = self.ct_array
 
-        # Guide distributions for top-level hierarchical parameters (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             q_p_c_raw = pyro.param(
                 "q_p_c_raw",
@@ -309,7 +312,7 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
-    
+
         with pyro.plate("ct_plate", self.ct_count):
             q_p_ct_raw = pyro.param(
                 "q_p_ct_raw",
@@ -320,25 +323,26 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
-    
-        # Encoder
+
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-    
+
         with pyro.plate("data", batch_size) as idx:
-            target_pheno = self._target_phenotypes[idx].long()
-            with poutine.scale(scale=kl_weight):
-                # Flexible posterior distribution centered at z_loc
-                latent_posterior = dist.Normal(z_loc, z_scale)
+            latent_posterior = dist.Normal(z_loc, z_scale)
+            with poutine.scale(scale=self.kl_weight):
                 pyro.sample("latent", latent_posterior.to_event(1))
-    
-            # Explicit phenotype assignment in the guide using classifier logits
-            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
+
+            ct_idx = self.ct_array[idx]
+            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            predicted_probs_guide = F.softmax(local_logits_guide, dim=-1)
+            alpha_guide = torch.clamp(predicted_probs_guide * self.local_scale, min=1e-3)
+
+            # **Modified to use Dirichlet posterior**
             pyro.sample(
                 "z_i_phen",
-                dist.Categorical(logits=local_logits_guide),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {}
+                dist.Dirichlet(alpha_guide)
             )
+
 
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -464,7 +468,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # We no longer concatenate phenotype embeddings, using z_batch alone:
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
-        )
+            )
 
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
         nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
