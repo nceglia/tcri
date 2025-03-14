@@ -233,17 +233,12 @@ class TCRIModule(PyroBaseModuleClass):
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
-            if self.sharpness_penalty_scale > 0:
-                ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=True)
-
+    
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
-            if self.sharpness_penalty_scale > 0:
-                ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=True)
+
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
@@ -305,9 +300,6 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
-            if self.sharpness_penalty_scale > 0:
-                entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=True)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
     
         with pyro.plate("ct_plate", self.ct_count):
@@ -319,9 +311,6 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
-            if self.sharpness_penalty_scale > 0:
-                entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=True)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
     
         # Encoder
@@ -393,7 +382,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         n_steps_kl_warmup: int = 1000,
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
-        consistency_scale = 0.1,
         optimizer_config: dict = None,
         **kwargs
     ):
@@ -424,7 +412,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
                 "weight_decay": 1e-4,
             }
         self.optimizer_config = optimizer_config
-        self.consistency_scale = consistency_scale
 
     @property
     def loss(self):
@@ -531,14 +518,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             else:
                 acc = 0.0
 
-        consistency_loss = F.kl_div(
-            F.log_softmax(cls_logits_with_prior, dim=-1),
-            prior_probs,
-            reduction='batchmean'
-        )
-
-        loss_dict["loss"] += self.consistency_scale * consistency_loss
-
         cont_loss_val = continuity_loss(z_batch, target_phen)
         cont_loss_scale = 0.1  # moderate continuity encouragement
         loss_dict["loss"] += cont_loss_scale * cont_loss_val
@@ -554,21 +533,22 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
     # ------------ VALIDATION STEP for scvi early stopping --------------
     def validation_step(self, batch, batch_idx):
+        """Log 'elbo_validation' so scvi's early stopping can track it."""
         with torch.no_grad():
             self.module.eval()
             val_dict = super().training_step(batch, batch_idx)
             self.module.train()
-
+        # ---- ADD THIS BLOCK ----
         device = next(self.module.parameters()).device
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
         else:
             val_dict["loss"] = val_dict["loss"].to(device)
-
-        # Explicitly ensure metric is always logged as "elbo_validation"
-        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True, sync_dist=True)
-
+        # ------------------------
+        # The name must match your early_stopping_monitor
+        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
         return val_dict
+
 ###############################################################################
 # 4) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
@@ -617,7 +597,6 @@ class TCRIModel(BaseModelClass):
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
-        consistency_scale=0.1,
         **kwargs
     ):
         super().__init__(adata)
@@ -627,8 +606,6 @@ class TCRIModel(BaseModelClass):
         covariate_col = self.adata_manager.registry["covariate_col"]
         batch_col = self.adata_manager.registry["batch_col"]
 
-
-        self.consistency_scale = consistency_scale
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
         target_codes = torch.tensor(ph_series.cat.codes.values, dtype=torch.long)
@@ -735,7 +712,6 @@ class TCRIModel(BaseModelClass):
             n_steps_kl_warmup=n_steps_kl_warmup,
             adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
-            consistency_scale=self.consistency_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
