@@ -184,13 +184,6 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
-
-        self.confusion_matrix_param = pyro.param(
-            "confusion_matrix_param",
-            lambda: torch.eye(self.P),
-            constraint=dist.constraints.simplex
-        )
-
     
     def prepare_two_level_params(
         self,
@@ -229,21 +222,20 @@ class TCRIModule(PyroBaseModuleClass):
         batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
         return (x, batch_idx, log_library), {}
-
+    
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
-
         # Top-level hierarchical priors (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
             p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
             if self.sharpness_penalty_scale > 0:
                 ent_c = dist.Dirichlet(conc_c).entropy()
-                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=False)
+                pyro.factor("sharpness_penalty_top", self.sharpness_penalty_scale * ent_c.sum(), has_rsample=True)
 
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
@@ -251,28 +243,25 @@ class TCRIModule(PyroBaseModuleClass):
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
             if self.sharpness_penalty_scale > 0:
                 ent_ct = dist.Dirichlet(conc_ct).entropy()
-                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=False)
-
+                pyro.factor("sharpness_penalty_ct", self.sharpness_penalty_scale * ent_ct.sum(), has_rsample=True)
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
+    
         with pyro.plate("data", batch_size) as idx:
             target_pheno = self._target_phenotypes[idx].long()
-
-            # ---------------------------
-            # REMOVED:  ph_emb = self.phenotype_embedding(target_pheno)
-            # REMOVED:  new_z_loc = z_loc + ph_emb
-            #
-            # REPLACED:  We no longer shift z_loc by the observed label.
-            # Instead we define the latent prior directly on z_loc:
-            # ---------------------------
-            latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
-
+            ph_emb = self.phenotype_embedding(target_pheno)
+    
+            new_z_loc = z_loc + ph_emb
+    
+            # Flexible prior centered at new_z_loc, moderate variance
+            latent_prior = dist.Normal(new_z_loc, torch.ones_like(z_scale))
+            
             with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
-
-            # Phenotype classification from z_loc (unchanged)
+    
+            # Phenotype classification from the phenotype-conditioned latent mean
+            #local_logits = self.classifier(z_loc)
             local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
 
             z_i_phen = pyro.sample(
@@ -280,31 +269,17 @@ class TCRIModule(PyroBaseModuleClass):
                 dist.Categorical(logits=local_logits),
                 infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
             )
-
-            # ---------------------------
-            # ADDED: The "noisy label" line
-            # We treat target_pheno as an observation with some confusion
-            # matrix. If z_i_phen = j, then label_probs = confusion_matrix_param[j]
-            # ---------------------------
-            conf_mat = self.confusion_matrix_param.to(z_i_phen.device)
-            label_probs = conf_mat[z_i_phen]
-
-            pyro.sample(
-                "label_obs",
-                dist.Categorical(probs=label_probs),
-                obs=target_pheno
-            )
-
-            # Decoder conditioned on z + phenotype embedding from z_i_phen
-            ph_emb_sample = self.phenotype_embedding(z_i_phen)  # unchanged
+    
+            # Decoder conditioned on sampled latent and phenotype embedding
+            ph_emb_sample = self.phenotype_embedding(z_i_phen)
             combined = torch.cat([z, ph_emb_sample], dim=1)
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
-
+    
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
-
+    
             x_dist = dist.ZeroInflatedNegativeBinomial(
                 gate=gate_probs,
                 total_count=total_count,
@@ -312,15 +287,15 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
-
+    
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
-
-        # Guide for top-level hierarchical parameters (unchanged)
+    
+        # Guide distributions for top-level hierarchical parameters (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             q_p_c_raw = pyro.param(
                 "q_p_c_raw",
@@ -332,9 +307,9 @@ class TCRIModule(PyroBaseModuleClass):
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_c_guide = dist.Dirichlet(conc_c_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_top", self.sharpness_penalty_scale * entropy_c_guide.sum(), has_rsample=True)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
-
+    
         with pyro.plate("ct_plate", self.ct_count):
             q_p_ct_raw = pyro.param(
                 "q_p_ct_raw",
@@ -346,35 +321,32 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             if self.sharpness_penalty_scale > 0:
                 entropy_ct_guide = dist.Dirichlet(conc_ct_guide).entropy()
-                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=False)
+                pyro.factor("sharpness_penalty_guide_ct", self.sharpness_penalty_scale * entropy_ct_guide.sum(), has_rsample=True)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
-
+    
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
+    
         with pyro.plate("data", batch_size) as idx:
-            # ---------------------------
-            # REMOVED: The line that adds the observed label to z_loc
-            # (the old "ph_emb = self.phenotype_embedding(target_pheno)"
-            #  new_z_loc = z_loc + ph_emb)
-            #
-            # REPLACED: we use z_loc directly
-            # ---------------------------
+            target_pheno = self._target_phenotypes[idx].long()
+            ph_emb = self.phenotype_embedding(target_pheno)
+    
+            new_z_loc = z_loc + ph_emb
+    
             with poutine.scale(scale=kl_weight):
-                latent_posterior = dist.Normal(z_loc, z_scale)
+                # Flexible posterior distribution around new_z_loc
+                latent_posterior = dist.Normal(new_z_loc, z_scale)
                 pyro.sample("latent", latent_posterior.to_event(1))
-
-            # Phenotype classification from z_loc
-            q_p_ct_sharp_for_cells = q_p_ct_sharp[ct_array[idx]]
-            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp_for_cells + 1e-8)
-
+    
+            # Phenotype classification from new_z_loc for consistency
+            local_logits = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
             pyro.sample(
                 "z_i_phen",
-                dist.Categorical(logits=local_logits_guide),
-                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
+                dist.Categorical(logits=local_logits),
+                infer={"enumerate": "parallel", 'is_auxiliary': True} if self.use_enumeration else {}
             )
-
+    
         
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -474,113 +446,108 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.module.kl_weight = kl_weight
 
         loss_dict = super().training_step(batch, batch_idx)
-        # device = next(self.module.parameters()).device
+        device = next(self.module.parameters()).device
 
-        # # Ensure loss is on correct device
-        # with torch.no_grad():
-        #     if not isinstance(loss_dict["loss"], torch.Tensor):
-        #         loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
-        #     else:
-        #         loss_dict["loss"] = loss_dict["loss"].to(device)
+        # Ensure loss is on correct device
+        if not isinstance(loss_dict["loss"], torch.Tensor):
+            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
+        else:
+            loss_dict["loss"] = loss_dict["loss"].to(device)
 
-        # z_batch = self.module.get_latent(batch).to(device)
-        # idx = batch["indices"].long().view(-1).to(device)
-        # target_phen = self.module._target_phenotypes[idx].to(device)
+        z_batch = self.module.get_latent(batch).to(device)
+        idx = batch["indices"].long().view(-1).to(device)
+        target_phen = self.module._target_phenotypes[idx].to(device)
 
-        # # margin
-        # with torch.no_grad():
-        #     margin_val = 0.0
-        #     if self.margin_scale > 0.0:
-        #         margin_loss_val = pairwise_centroid_margin_loss(
-        #             z_batch, target_phen,
-        #             margin=self.margin_value,
-        #             adaptive_margin=self.adaptive_margin
-        #         ).to(device)
-        #         margin_loss = self.margin_scale * margin_loss_val
-        #         loss_dict["loss"] += margin_loss
-        #         margin_val = margin_loss_val.item()
+        # margin
+        margin_val = 0.0
+        if self.margin_scale > 0.0:
+            margin_loss_val = pairwise_centroid_margin_loss(
+                z_batch, target_phen,
+                margin=self.margin_value,
+                adaptive_margin=self.adaptive_margin
+            ).to(device)
+            margin_loss = self.margin_scale * margin_loss_val
+            loss_dict["loss"] += margin_loss
+            margin_val = margin_loss_val.item()
 
-        # # classification
-        # with torch.no_grad():
-        #     cls_val = 0.0
-        #     if self.cls_loss_scale > 0.0:
-        #         # Retrieve indices for cell-level clonotype-timepoint mapping
-        #         ct_indices = self.module.ct_array[idx].to(device)
+        # classification
+        cls_val = 0.0
+        if self.cls_loss_scale > 0.0:
+            # Retrieve indices for cell-level clonotype-timepoint mapping
+            ct_indices = self.module.ct_array[idx].to(device)
 
-        #         # Retrieve the prior clonotype-to-phenotype probabilities for this batch
-        #         prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
+            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
 
-        #         # Compute the classifier logits
-        #         cls_logits = self.module.classifier(z_batch)
+            # Compute the classifier logits
+            cls_logits = self.module.classifier(z_batch)
 
-        #         # Explicitly incorporate log-priors into the logits
-        #         cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+            # Explicitly incorporate log-priors into the logits
+            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
 
-        #         cls_loss_val = F.cross_entropy(
-        #             cls_logits_with_prior, target_phen,
-        #             label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
-        #         ).to(device)
+            cls_loss_val = F.cross_entropy(
+                cls_logits_with_prior, target_phen,
+                label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
+            ).to(device)
 
-        #         cls_loss = self.cls_loss_scale * cls_loss_val
-        #         loss_dict["loss"] += cls_loss
-        #         cls_val = cls_loss_val.item()
+            cls_loss = self.cls_loss_scale * cls_loss_val
+            loss_dict["loss"] += cls_loss
+            cls_val = cls_loss_val.item()
 
-        # # reconstruction
-        # x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
-        # batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-        # log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
-        # ph_emb_sample = self.module.phenotype_embedding(target_phen)
-        # combined = torch.cat([z_batch, ph_emb_sample], dim=1)
-        # px_scale, px_r_out, px_rate, px_dropout = self.module.decoder("gene", combined, log_library, batch_idx_tensor)
+        # reconstruction
+        x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
+        batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+        log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
+        ph_emb_sample = self.module.phenotype_embedding(target_phen)
+        combined = torch.cat([z_batch, ph_emb_sample], dim=1)
+        px_scale, px_r_out, px_rate, px_dropout = self.module.decoder("gene", combined, log_library, batch_idx_tensor)
 
-        # gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
-        # nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
-        # nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
-        # total_count = self.module.px_r.exp().clamp(max=1e4)
+        gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
+        nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
+        nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
+        total_count = self.module.px_r.exp().clamp(max=1e4)
         
-        # # Define ZINB distribution
-        # x_dist = dist.ZeroInflatedNegativeBinomial(
-        #     gate=gate_probs,
-        #     total_count=total_count,
-        #     logits=nb_logits,
-        #     validate_args=False
-        # )
+        # Define ZINB distribution
+        x_dist = dist.ZeroInflatedNegativeBinomial(
+            gate=gate_probs,
+            total_count=total_count,
+            logits=nb_logits,
+            validate_args=False
+        )
         
-        # # Compute negative log-likelihood reconstruction loss
+        # Compute negative log-likelihood reconstruction loss
+        reconstruction_loss_val = -x_dist.log_prob(x).mean()
         
-        # with torch.no_grad():
-        #     reconstruction_loss_val = -x_dist.log_prob(x).mean()
-        #     # Scale and update loss
-        #     total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
-        #     loss_dict["loss"] += total_recon_loss
-        #     recon_val = reconstruction_loss_val.item()
+        # Scale and update loss
+        total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
+        loss_dict["loss"] += total_recon_loss
+        recon_val = reconstruction_loss_val.item()
 
         
-        # with torch.no_grad():
-        #     if self.cls_loss_scale > 0.0:
-        #         preds = cls_logits_with_prior.argmax(dim=1)
-        #         acc = (preds == target_phen).float().mean().item()
-        #     else:
-        #         acc = 0.0
+        with torch.no_grad():
+            if self.cls_loss_scale > 0.0:
+                preds = cls_logits_with_prior.argmax(dim=1)
+                acc = (preds == target_phen).float().mean().item()
+            else:
+                acc = 0.0
 
-        #     # consistency_loss = F.kl_div(
-        #     #     F.log_softmax(cls_logits_with_prior, dim=-1),
-        #     #     prior_probs,
-        #     #     reduction='batchmean'
-        #     # )
-        #     consistency_loss = 0.
+        consistency_loss = F.kl_div(
+            F.log_softmax(cls_logits_with_prior, dim=-1),
+            prior_probs,
+            reduction='batchmean'
+        )
 
-        #     loss_dict["loss"] += self.consistency_scale * consistency_loss
+        loss_dict["loss"] += self.consistency_scale * consistency_loss
 
-        #     cont_loss_val = continuity_loss(z_batch, target_phen)
-        #     cont_loss_scale = 0.1  # moderate continuity encouragement
-        #     loss_dict["loss"] += cont_loss_scale * cont_loss_val
-        #     loss_dict["continuity_loss"] = cont_loss_val.item()
-            
-        #     loss_dict["margin_loss"] = margin_val
-        #     loss_dict["cls_loss"] = cls_val
-        #     loss_dict["reconstruction_loss"] = recon_val
-        #     loss_dict["classification_accuracy"] = acc
+        cont_loss_val = continuity_loss(z_batch, target_phen)
+        cont_loss_scale = 0.1  # moderate continuity encouragement
+        loss_dict["loss"] += cont_loss_scale * cont_loss_val
+        loss_dict["continuity_loss"] = cont_loss_val.item()
+        
+        loss_dict["margin_loss"] = margin_val
+        loss_dict["cls_loss"] = cls_val
+        loss_dict["reconstruction_loss"] = recon_val
+        loss_dict["classification_accuracy"] = acc
 
         self._my_global_step += 1
         return loss_dict
