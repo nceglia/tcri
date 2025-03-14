@@ -296,7 +296,7 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
         ct_array = self.ct_array
-    
+
         # Guide distributions for top-level hierarchical parameters (unchanged)
         with pyro.plate("clonotypes", self.c_count):
             q_p_c_raw = pyro.param(
@@ -326,19 +326,19 @@ class TCRIModule(PyroBaseModuleClass):
     
         with pyro.plate("data", batch_size) as idx:
             target_pheno = self._target_phenotypes[idx].long()
-            # Removed phenotype embedding addition for latent posterior
             with poutine.scale(scale=kl_weight):
                 # Flexible posterior distribution centered at z_loc
                 latent_posterior = dist.Normal(z_loc, z_scale)
                 pyro.sample("latent", latent_posterior.to_event(1))
     
-            # Phenotype classification (unchanged)
-            local_logits = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
+            # Explicit phenotype assignment in the guide using classifier logits
+            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_array[idx]] + 1e-8)
             pyro.sample(
                 "z_i_phen",
-                dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
+                dist.Categorical(logits=local_logits_guide),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
+
         
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
