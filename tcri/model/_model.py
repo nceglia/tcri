@@ -430,10 +430,9 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             weight_decay=self.optimizer_config["weight_decay"],
         )
         return {"optimizer": optimizer}
-    
+
     def training_step(self, batch, batch_idx):
         kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
-
         self.module.kl_weight = kl_weight
 
         loss_dict = super().training_step(batch, batch_idx)
@@ -449,7 +448,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
-        # margin
+        # margin loss
         margin_val = 0.0
         if self.margin_scale > 0.0:
             margin_loss_val = pairwise_centroid_margin_loss(
@@ -461,34 +460,26 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["loss"] += margin_loss
             margin_val = margin_loss_val.item()
 
-        # classification
+        # classification loss
         cls_val = 0.0
         if self.cls_loss_scale > 0.0:
-            # Retrieve indices for cell-level clonotype-timepoint mapping
             ct_indices = self.module.ct_array[idx].to(device)
-
-            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
             prior_probs = self.module.get_p_ct()[ct_indices].to(device)
-
-            # Compute the classifier logits
             cls_logits = self.module.classifier(z_batch)
-
-            # Explicitly incorporate log-priors into the logits
             cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
-
             cls_loss_val = F.cross_entropy(
                 cls_logits_with_prior, target_phen,
                 label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
             ).to(device)
-
             cls_loss = self.cls_loss_scale * cls_loss_val
             loss_dict["loss"] += cls_loss
             cls_val = cls_loss_val.item()
 
-        # reconstruction
+        # reconstruction loss
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
+        # Use phenotype embedding of observed labels for reconstruction here
         ph_emb_sample = self.module.phenotype_embedding(target_phen)
         combined = torch.cat([z_batch, ph_emb_sample], dim=1)
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder("gene", combined, log_library, batch_idx_tensor)
@@ -497,24 +488,18 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
         nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
         total_count = self.module.px_r.exp().clamp(max=1e4)
-        
-        # Define ZINB distribution
         x_dist = dist.ZeroInflatedNegativeBinomial(
             gate=gate_probs,
             total_count=total_count,
             logits=nb_logits,
             validate_args=False
         )
-        
-        # Compute negative log-likelihood reconstruction loss
+
         reconstruction_loss_val = -x_dist.log_prob(x).mean()
-        
-        # Scale and update loss
         total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
         loss_dict["loss"] += total_recon_loss
         recon_val = reconstruction_loss_val.item()
 
-        
         with torch.no_grad():
             if self.cls_loss_scale > 0.0:
                 preds = cls_logits_with_prior.argmax(dim=1)
@@ -522,11 +507,15 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             else:
                 acc = 0.0
 
+        # Consistency loss removed (previously computed as a KL-divergence)
+        # consistency_loss = F.kl_div(...)
+        # loss_dict["loss"] += self.consistency_scale * consistency_loss
+
         cont_loss_val = continuity_loss(z_batch, target_phen)
         cont_loss_scale = 0.1  # moderate continuity encouragement
         loss_dict["loss"] += cont_loss_scale * cont_loss_val
         loss_dict["continuity_loss"] = cont_loss_val.item()
-        
+
         loss_dict["margin_loss"] = margin_val
         loss_dict["cls_loss"] = cls_val
         loss_dict["reconstruction_loss"] = recon_val
@@ -534,6 +523,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         self._my_global_step += 1
         return loss_dict
+
 
     # ------------ VALIDATION STEP for scvi early stopping --------------
     def validation_step(self, batch, batch_idx):
