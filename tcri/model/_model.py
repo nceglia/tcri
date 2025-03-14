@@ -229,6 +229,7 @@ class TCRIModule(PyroBaseModuleClass):
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
         return (x, batch_idx, log_library), {}
 
+
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
@@ -266,7 +267,8 @@ class TCRIModule(PyroBaseModuleClass):
             
             # Introduce the confusion matrix likelihood: p(obs_label | z_i_phen)
             target_pheno = self._target_phenotypes[idx].long()
-            label_probs = self.confusion_matrix[z_i_phen]  # Shape (batch_size, num_phenotypes)
+            # Minimal change: move confusion_matrix to the same device as z_i_phen
+            label_probs = self.confusion_matrix.to(z_i_phen.device)[z_i_phen]  # Shape (batch_size, num_phenotypes)
             pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
     
             # Decoder conditioned on sampled latent and phenotype embedding
@@ -286,8 +288,6 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
-
-
 
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
