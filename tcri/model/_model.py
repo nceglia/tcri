@@ -463,23 +463,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["loss"] += margin_loss
             margin_val = margin_loss_val.item()
 
-        # classification loss
-        # cls_val = 0.0
-        # if self.cls_loss_scale > 0.0:
-        #     ct_indices = self.module.ct_array[idx].to(device)
-        #     prior_probs = self.module.get_p_ct()[ct_indices].to(device)
-        #     cls_logits = self.module.classifier(z_batch)
-        #     cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
-        #     cls_loss_val = F.cross_entropy(
-        #         cls_logits_with_prior, target_phen,
-        #         label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
-        #     ).to(device)
-        #     cls_loss = self.cls_loss_scale * cls_loss_val
-        #     loss_dict["loss"] += cls_loss
-        #     cls_val = cls_loss_val.item()
-
-
-
         # reconstruction loss
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
@@ -505,21 +488,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict["loss"] += total_recon_loss
         recon_val = reconstruction_loss_val.item()
 
-        # with torch.no_grad():
-        #     if self.cls_loss_scale > 0.0:
-        #         preds = cls_logits_with_prior.argmax(dim=1)
-        #         acc = (preds == target_phen).float().mean().item()
-        #     else:
-        #         acc = 0.0
-
-        # Consistency loss removed (previously computed as a KL-divergence)
-        # consistency_loss = F.kl_div(...)
-        # loss_dict["loss"] += self.consistency_scale * consistency_loss
-
-        cont_loss_val = continuity_loss(z_batch, target_phen)
-        cont_loss_scale = 0.1  # moderate continuity encouragement
-        loss_dict["loss"] += cont_loss_scale * cont_loss_val
-        loss_dict["continuity_loss"] = cont_loss_val.item()
+        # cont_loss_val = continuity_loss(z_batch, target_phen)
+        # cont_loss_scale = 0.1  # moderate continuity encouragement
+        # loss_dict["loss"] += cont_loss_scale * cont_loss_val
+        # loss_dict["continuity_loss"] = cont_loss_val.item()
 
         loss_dict["margin_loss"] = margin_val
         loss_dict["cls_loss"] = cls_val
