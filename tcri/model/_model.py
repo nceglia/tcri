@@ -272,7 +272,7 @@ class TCRIModule(PyroBaseModuleClass):
             target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
             target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
-            label_probs = confusion_matrix[z_i_phen]
+            label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
             label_probs = label_probs / (label_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
             pyro.sample(
