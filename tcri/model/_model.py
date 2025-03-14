@@ -142,9 +142,6 @@ class TCRIModule(PyroBaseModuleClass):
         # kl_weight updated each step
         self.kl_weight = 5
 
-        # Phenotype Embedding
-        self.phenotype_embedding = torch.nn.Embedding(num_embeddings=P, embedding_dim=n_latent)
-
         # Encoder
         self.encoder = Encoder(
             n_input=n_input,
@@ -156,7 +153,7 @@ class TCRIModule(PyroBaseModuleClass):
         )
 
         # Decoder
-        self.decoder_input_dim = self.n_latent + self.phenotype_embedding.embedding_dim
+        self.decoder_input_dim = self.n_latent
         self.decoder = DecoderSCVI(
             self.decoder_input_dim,
             n_input,
@@ -279,9 +276,7 @@ class TCRIModule(PyroBaseModuleClass):
             pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
     
             # Decoder conditioned on sampled latent and enumerated phenotype embedding
-            ph_emb_sample = self.phenotype_embedding(z_i_phen)
-            combined = torch.cat([z, ph_emb_sample], dim=-1)
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
+            px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
     
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
@@ -345,20 +340,15 @@ class TCRIModule(PyroBaseModuleClass):
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
 
-        
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
         batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
-        indices = tensor_dict["indices"].long()
-        target_pheno = self._target_phenotypes[indices].long()
-        ph_emb = self.phenotype_embedding(target_pheno)
         z_loc, _, _ = self.encoder(x, batch_idx)
-        new_z_loc = z_loc + ph_emb
-        if new_z_loc.ndim == 3:
-            new_z_loc = new_z_loc.mean(dim=1)
-        return new_z_loc.cpu()
-        
+        if z_loc.ndim == 3:
+            z_loc = z_loc.mean(dim=1)
+        return z_loc.cpu()        
+
     @torch.no_grad()
     def get_p_ct(self):
         from pyro import get_param_store
