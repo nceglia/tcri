@@ -270,32 +270,18 @@ class TCRIModule(PyroBaseModuleClass):
 
             # target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
             # target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
-
-            # # Fix: Keep the indexing tensor as categorical integer tensor (z_i_phen)
+            # pseudo_obs_labels = torch.argmax(target_pheno_probs, dim=-1).long()
             # label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-            # label_probs = label_probs / (label_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
             # pyro.sample(
             #     "obs_label",
-            #     dist.Multinomial(probs=label_probs, validate_args=False),
-            #     obs=target_pheno_probs
+            #     dist.Categorical(probs=label_probs),
+            #     obs=pseudo_obs_labels
             # )
-            target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
-            target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
-
-            # Convert probabilistic "observations" to discrete labels (pseudo-observations)
-            # Recommended: take the most probable phenotype (argmax)
-            pseudo_obs_labels = torch.argmax(target_pheno_probs, dim=-1).long()
-
-            # Confusion matrix indexed by latent sampled phenotype
+            target_pheno = self._target_phenotypes[idx].long()
             label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-
-            pyro.sample(
-                "obs_label",
-                dist.Categorical(probs=label_probs),
-                obs=pseudo_obs_labels
-            )
-
+            pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
+            
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
 
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
