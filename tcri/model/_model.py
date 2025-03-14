@@ -222,7 +222,7 @@ class TCRIModule(PyroBaseModuleClass):
         batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
         return (x, batch_idx, log_library), {}
-    
+
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
@@ -244,25 +244,22 @@ class TCRIModule(PyroBaseModuleClass):
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
     
         with pyro.plate("data", batch_size) as idx:
-            # Removed phenotype embedding addition for latent prior
-            target_pheno = self._target_phenotypes[idx].long()
-    
-            # Flexible prior centered at z_loc (without adding phenotype embedding)
+            # Use z_loc directly for latent prior (without adding phenotype embedding)
             latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
-            
             with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
     
-            # Phenotype classification (unchanged)
-            local_logits = self.classifier(z_loc) + torch.log(p_ct[ct_array[idx]] + 1e-8)
+            # Explicit phenotype enumeration using clonotype-timepoint priors
+            ct_idx = self.ct_array[idx]
+            prior_probs = p_ct[ct_idx]  # shape: (batch_size, num_phenotypes)
     
             z_i_phen = pyro.sample(
                 "z_i_phen",
-                dist.Categorical(logits=local_logits),
-                infer={"enumerate": "parallel", "is_auxiliary": True} if self.use_enumeration else {}
+                dist.Categorical(prior_probs),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
     
-            # Decoder conditioned on sampled latent and phenotype embedding (unchanged)
+            # Decoder conditioned on sampled latent and phenotype embedding
             ph_emb_sample = self.phenotype_embedding(z_i_phen)
             combined = torch.cat([z, ph_emb_sample], dim=1)
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", combined, log_library, batch_idx)
@@ -279,6 +276,7 @@ class TCRIModule(PyroBaseModuleClass):
                 validate_args=False
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
+
 
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
