@@ -232,7 +232,7 @@ class TCRIModule(PyroBaseModuleClass):
         confusion_matrix = pyro.param(
             "confusion_matrix",
             torch.eye(self.P),
-            constraint=dist.constraints.simplex,
+            constraint=dist.constraints.simplex(dim=-1),
         )
 
         kl_weight = self.kl_weight
@@ -254,7 +254,10 @@ class TCRIModule(PyroBaseModuleClass):
     
         with pyro.plate("data", batch_size) as idx:
             # Define latent prior without conditioning on phenotype embedding
-            latent_prior = dist.Normal(z_loc, torch.ones_like(z_scale))
+            latent_prior = dist.Normal(
+                torch.zeros_like(z_loc),
+                torch.ones_like(z_scale)
+            )
             with poutine.scale(scale=kl_weight):
                 z = pyro.sample("latent", latent_prior.to_event(1))
     
@@ -461,19 +464,21 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             margin_val = margin_loss_val.item()
 
         # classification loss
-        cls_val = 0.0
-        if self.cls_loss_scale > 0.0:
-            ct_indices = self.module.ct_array[idx].to(device)
-            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
-            cls_logits = self.module.classifier(z_batch)
-            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
-            cls_loss_val = F.cross_entropy(
-                cls_logits_with_prior, target_phen,
-                label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
-            ).to(device)
-            cls_loss = self.cls_loss_scale * cls_loss_val
-            loss_dict["loss"] += cls_loss
-            cls_val = cls_loss_val.item()
+        # cls_val = 0.0
+        # if self.cls_loss_scale > 0.0:
+        #     ct_indices = self.module.ct_array[idx].to(device)
+        #     prior_probs = self.module.get_p_ct()[ct_indices].to(device)
+        #     cls_logits = self.module.classifier(z_batch)
+        #     cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
+        #     cls_loss_val = F.cross_entropy(
+        #         cls_logits_with_prior, target_phen,
+        #         label_smoothing=self.label_smoothing if self.label_smoothing > 0 else 0.0
+        #     ).to(device)
+        #     cls_loss = self.cls_loss_scale * cls_loss_val
+        #     loss_dict["loss"] += cls_loss
+        #     cls_val = cls_loss_val.item()
+
+
 
         # reconstruction loss
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
@@ -500,12 +505,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict["loss"] += total_recon_loss
         recon_val = reconstruction_loss_val.item()
 
-        with torch.no_grad():
-            if self.cls_loss_scale > 0.0:
-                preds = cls_logits_with_prior.argmax(dim=1)
-                acc = (preds == target_phen).float().mean().item()
-            else:
-                acc = 0.0
+        # with torch.no_grad():
+        #     if self.cls_loss_scale > 0.0:
+        #         preds = cls_logits_with_prior.argmax(dim=1)
+        #         acc = (preds == target_phen).float().mean().item()
+        #     else:
+        #         acc = 0.0
 
         # Consistency loss removed (previously computed as a KL-divergence)
         # consistency_loss = F.kl_div(...)
