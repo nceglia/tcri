@@ -12,7 +12,6 @@ from typing import Dict
 from anndata import AnnData
 import os
 
-# scvi-tools imports
 from scvi.data.fields import CategoricalObsField, LayerField
 from scvi.data import AnnDataManager
 from scvi.model.base import BaseModelClass
@@ -112,10 +111,8 @@ class TCRIModule(PyroBaseModuleClass):
         self.use_enumeration = use_enumeration
         self.eps = 1e-6
 
-        # kl_weight updated each step
         self.kl_weight = 5
 
-        # Encoder
         self.encoder = Encoder(
             n_input=n_input,
             n_output=n_latent,
@@ -125,7 +122,6 @@ class TCRIModule(PyroBaseModuleClass):
             use_layer_norm=True
         )
 
-        # Decoder
         self.decoder_input_dim = self.n_latent
         self.decoder = DecoderSCVI(
             self.decoder_input_dim,
@@ -139,10 +135,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
         self.classifier = torch.nn.Linear(n_latent, P)
-        # Introduce the confusion matrix as a learnable parameter.
 
-
-        # Buffers for hierarchical priors
         self.register_buffer("clone_phen_prior", torch.empty(0))
         self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))
         self.register_buffer("c_array", torch.empty(0, dtype=torch.long))
@@ -152,7 +145,6 @@ class TCRIModule(PyroBaseModuleClass):
         self.ct_count = 0
         self.n_cells = 0
 
-        # Phenotypes
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
 
     
@@ -296,7 +288,6 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
-        # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
@@ -313,15 +304,6 @@ class TCRIModule(PyroBaseModuleClass):
                 dist.Categorical(logits=local_logits_guide),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
-
-    # @auto_move_data
-    # def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
-    #     x = tensor_dict[REGISTRY_KEYS.X_KEY]
-    #     batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
-    #     z_loc, _, _ = self.encoder(x, batch_idx)
-    #     if z_loc.ndim == 3:
-    #         z_loc = z_loc.mean(dim=1)
-    #     return z_loc.cpu()        
     
     @torch.no_grad()
     @auto_move_data
@@ -359,17 +341,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         module: TCRIModule,
         margin_scale: float = 0.0,
         margin_value: float = 2.0,
-        cls_loss_scale: float = 0.0,
-        label_smoothing: float = 0.0,
         n_steps_kl_warmup: int = 1000,
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
+        num_particles: int = 8,
         optimizer_config: dict = None,
         **kwargs
     ):
+        self.num_particles = num_particles
         if module.use_enumeration:
             print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=3, num_particles=8)
+            self._loss_fn = TraceEnum_ELBO(max_plate_nesting=3, num_particles=self.num_particles)
         else:
             self._loss_fn = Trace_ELBO()
 
@@ -377,8 +359,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         self.margin_scale = margin_scale
         self.margin_value = margin_value
-        self.cls_loss_scale = cls_loss_scale
-        self.label_smoothing = label_smoothing
         self.adaptive_margin = adaptive_margin
         self.reconstruction_loss_scale = reconstruction_loss_scale
 
@@ -394,7 +374,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
                 "weight_decay": 1e-4,
             }
         self.optimizer_config = optimizer_config
-
 
     @property
     def loss(self):
@@ -417,7 +396,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
-        # Ensure loss is on correct device
         if not isinstance(loss_dict["loss"], torch.Tensor):
             loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
@@ -427,7 +405,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
-        # margin loss
         margin_val = 0.0
         if self.margin_scale > 0.0:
             margin_loss_val = pairwise_centroid_margin_loss(
@@ -439,12 +416,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["loss"] += margin_loss
             margin_val = margin_loss_val.item()
 
-        # reconstruction loss
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
 
-        # We no longer concatenate phenotype embeddings, using z_batch alone:
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
             )
@@ -466,29 +441,21 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         recon_val = reconstruction_loss_val.item()
 
         loss_dict["margin_loss"] = margin_val
-        loss_dict["cls_loss"] = 0.
         loss_dict["reconstruction_loss"] = recon_val
-        loss_dict["classification_accuracy"] = 0
 
         self._my_global_step += 1
         return loss_dict
 
-
-    # ------------ VALIDATION STEP for scvi early stopping --------------
     def validation_step(self, batch, batch_idx):
-        """Log 'elbo_validation' so scvi's early stopping can track it."""
         with torch.no_grad():
             self.module.eval()
             val_dict = super().training_step(batch, batch_idx)
             self.module.train()
-        # ---- ADD THIS BLOCK ----
         device = next(self.module.parameters()).device
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
         else:
             val_dict["loss"] = val_dict["loss"].to(device)
-        # ------------------------
-        # The name must match your early_stopping_monitor
         self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
         return val_dict
 
@@ -641,7 +608,7 @@ class TCRIModel(BaseModelClass):
         # Create a train/val split
         splitter = DataSplitter(
             self.adata_manager,
-            train_size=0.9,        # e.g. 90% train, 10% validation
+            train_size=0.9,
             validation_size=None,
             batch_size=batch_size,
         )
@@ -663,19 +630,17 @@ class TCRIModel(BaseModelClass):
             },
         )
 
-        # Use scvi's TrainRunner with built-in early stopping
         runner = TrainRunner(
             self,
             training_plan=plan,
             data_splitter=splitter,
             max_epochs=max_epochs,
-            # Pass scvi early stopping arguments:
             early_stopping=True,
             early_stopping_monitor="elbo_validation",
             early_stopping_patience=30,
             early_stopping_mode="min",
             check_val_every_n_epoch=5,
-            accelerator="auto",  # if GPU available, use it
+            accelerator="auto",
             devices="auto",
             **kwargs
         )
@@ -710,25 +675,14 @@ class TCRIModel(BaseModelClass):
 
             ct_indices = ct_array[current_idx: current_idx + batch_size_local]
             clone_cov_posterior = p_ct[ct_indices]  # (batch_size_local, P)
-
-            # Use pure latent representation (no phenotype embedding here)
             z_loc, _, _ = self.module.encoder(tensors[REGISTRY_KEYS.X_KEY].to(device),
                                             tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device))
-
-            # Retrieve the prior clonotype-to-phenotype probabilities for this batch
             prior_probs = self.module.get_p_ct()[ct_indices].to(device)
-
-            # Compute the classifier logits
             cls_logits = self.module.classifier(z_loc)
-
-            # Explicitly incorporate log-priors into the logits
             cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
             cell_level_likelihood = F.softmax(cls_logits_with_prior, dim=-1)
-
-            # Bayesian posterior explicitly (prior * likelihood)
             posterior_unnormalized = clone_cov_posterior * cell_level_likelihood
             probs = posterior_unnormalized / (posterior_unnormalized.sum(dim=-1, keepdim=True) + eps)
-
             all_probs.append(probs.cpu())
             current_idx += batch_size_local
 
