@@ -76,33 +76,6 @@ def pairwise_centroid_margin_loss(
     penalty = torch.clamp(margin - dists, min=0.0).mean()
     return penalty
 
-import torch
-from torch.nn.functional import cosine_similarity
-
-def continuity_loss(z, labels, temperature=0.1, num_samples=10000):
-    batch_size = z.size(0)
-
-    num_samples = min(num_samples, batch_size * (batch_size - 1))
-    idx = torch.combinations(torch.arange(batch_size, device=z.device), r=2)
-    perm = torch.randperm(idx.size(0), device=z.device)[:num_samples]
-    idx_i, idx_j = idx[perm, 0], idx[perm, 1]
-
-    # Compute cosine similarities for selected pairs
-    sim = cosine_similarity(z[idx_i], z[idx_j], dim=-1) / temperature
-
-    # Labels for selected pairs
-    labels_equal = labels[idx_i] == labels[idx_j]
-
-    if labels_equal.sum() == 0 or (~labels_equal).sum() == 0:
-        # Prevent division by zero if sampling misses positive or negative pairs
-        return torch.tensor(0.0, device=z.device, requires_grad=True)
-
-    positives = sim[labels_equal]
-    negatives = sim[~labels_equal]
-
-    loss = -positives.mean() + negatives.mean()
-    return loss
-
 ###############################################################################
 # 2) Pyro Module with CVAE + Hierarchical Priors
 ###############################################################################
@@ -281,21 +254,6 @@ class TCRIModule(PyroBaseModuleClass):
                 obs=pseudo_obs_labels
             )
 
-            # target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
-            # target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
-            # pseudo_obs_labels = torch.argmax(target_pheno_probs, dim=-1).long()
-            # label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-
-            # pyro.sample(
-            #     "obs_label",
-            #     dist.Categorical(probs=label_probs),
-            #     obs=pseudo_obs_labels
-            # )
-
-            # target_pheno = self._target_phenotypes[idx].long()
-            # label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-            # pyro.sample("obs_label", dist.Categorical(label_probs), obs=target_pheno)
-
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
 
             gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
@@ -356,14 +314,23 @@ class TCRIModule(PyroBaseModuleClass):
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
 
+    # @auto_move_data
+    # def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
+    #     x = tensor_dict[REGISTRY_KEYS.X_KEY]
+    #     batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
+    #     z_loc, _, _ = self.encoder(x, batch_idx)
+    #     if z_loc.ndim == 3:
+    #         z_loc = z_loc.mean(dim=1)
+    #     return z_loc.cpu()        
+    
+    @torch.no_grad()
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
-        x = tensor_dict[REGISTRY_KEYS.X_KEY]
-        batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
+        x, batch_idx, _ = self._get_fn_args_from_batch(tensor_dict)
         z_loc, _, _ = self.encoder(x, batch_idx)
         if z_loc.ndim == 3:
             z_loc = z_loc.mean(dim=1)
-        return z_loc.cpu()        
+        return z_loc.cpu()
 
     @torch.no_grad()
     def get_p_ct(self):
