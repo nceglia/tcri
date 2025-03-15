@@ -304,15 +304,15 @@ class TCRIModule(PyroBaseModuleClass):
                 dist.Categorical(logits=local_logits_guide),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
-    
-    @torch.no_grad()
+
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
-        x, batch_idx, _ = self._get_fn_args_from_batch(tensor_dict)
+        x = tensor_dict[REGISTRY_KEYS.X_KEY]
+        batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
         z_loc, _, _ = self.encoder(x, batch_idx)
         if z_loc.ndim == 3:
             z_loc = z_loc.mean(dim=1)
-        return z_loc.cpu()
+        return z_loc.cpu()      
 
     @torch.no_grad()
     def get_p_ct(self):
