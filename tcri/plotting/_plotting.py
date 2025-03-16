@@ -539,6 +539,10 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     clone_col = adata.uns["tcri_metadata"]["clonotype_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
+    cov_col = model.adata_manager.registry["covariate_col"]
+    clone_col = model.adata_manager.registry["clonotype_col"]
+    phenotype_col = model.adata_manager.registry["phenotype_col"]
+    batch_col = model.adata_manager.registry["batch_col"]
 
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
     clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
@@ -557,13 +561,21 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
             subt = sub[sub.obs[cov_col] == t]
             clones = list(set(subt.obs[clone_col]))
             for ph in phenotypes:
-                mi.append(clonotypic_entropy(subt,t,ph, temperature=temperature, clones=clones,n_samples=n_samples, normalized=normalized))
-                ps.append(p)
-                ts.append(t)
-                phs.append(ph)
-                if splitby != None:
-                    res = "_".join(list(set(subt.obs[splitby])))
-                    cl.append(res)
+                if splitby == None:
+                    vclones = list(set(subt.obs[clone_col]))
+                    mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                    ps.append(p)
+                    ts.append(t)
+                    phs.append(ph)
+                else:
+                    for s in set(subt.obs[splitby]):
+                        subts = subt[subt.obs[cov_col] == t]
+                        vclones = list(set(subts.obs[clone_col]))
+                        mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                        ps.append(p)
+                        ts.append(t)
+                        cl.append(s)
+                        phs.append(ph)
     fig,ax = plt.subplots(1,1,figsize=figsize)
     if splitby != None:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi, splitby:cl, phenotype_col:phs})
@@ -626,14 +638,22 @@ def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
             subt = sub[sub.obs[cov_col] == t]
             vclones = list(set(subt.obs[clone_col]))
             if len(vclones) == 0: continue
-            for ph in vclones:
-                mi.append(pentropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
-                ps.append(p)
-                ts.append(t)
-                phs.append(ph)
-                if splitby != None:
-                    res = "_".join(list(set(subt.obs[splitby])))
-                    cl.append(res)
+            for ph in phenotypes:
+                if splitby == None:
+                    vclones = list(set(subt.obs[clone_col]))
+                    mi.append(pentropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                    ps.append(p)
+                    ts.append(t)
+                    phs.append(ph)
+                else:
+                    for s in set(subt.obs[splitby]):
+                        subts = subt[subt.obs[cov_col] == t]
+                        vclones = list(set(subts.obs[clone_col]))
+                        mi.append(pentropy(subts,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                        ps.append(p)
+                        ts.append(t)
+                        cl.append(s)
+                        phs.append(ph)
     fig,ax = plt.subplots(1,1,figsize=figsize)
     if splitby != None:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi, splitby:cl, clonotype_col:phs})
@@ -727,7 +747,6 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
     clone_col = adata.uns["tcri_metadata"]["clonotype_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
-
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
     clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
     phenotypes = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
@@ -742,13 +761,19 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
         sub = adata[adata.obs[batch_col] == p].copy()
         for t in covs:
             subt = sub[sub.obs[cov_col] == t]
-            clones = list(set(subt.obs[clone_col]))
-            mi.append(tcri.tl.mutual_information(subt,t,temperature=temperature, clones=clones,n_samples=n_samples))
-            ps.append(p)
-            ts.append(t)
-            if splitby != None:
-                res = "_".join(list(set(subt.obs[splitby])))
-                cl.append(res)
+            if splitby == None:
+                vclones = list(set(subt.obs[clone_col]))
+                mi.append(mutual_information_tl(subt,t,temperature=temperature, clones=vclones,n_samples=n_samples))
+                ps.append(p)
+                ts.append(t)
+            else:
+                for s in set(subt.obs[splitby]):
+                    subts = subt[subt.obs[cov_col] == t]
+                    vclones = list(set(subts.obs[clone_col]))
+                    mi.append(mutual_information_tl(subt,t,temperature=temperature, clones=vclones,n_samples=n_samples))
+                    ps.append(p)
+                    ts.append(t)
+                    cl.append(s)
     fig,ax = plt.subplots(1,1,figsize=figsize)
     if splitby != None:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Mutual Information":mi, splitby:cl})
@@ -759,10 +784,9 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
         sns.boxplot(data=df,x=cov_col,y="Mutual Information",color="#999999")
         sns.stripplot(data=df,x=cov_col,y="Mutual Information",palette=palette,dodge=False)
     plt.xticks(rotation=rotation)
-    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=5)
     fig.tight_layout()
-    if save:
-        fig.savefig(save)
+
 
 def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15, color_dict=None):
     joint_distribution(adata,method=method )
