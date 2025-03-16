@@ -40,6 +40,7 @@ def register_model(
     cov_col = model.adata_manager.registry["covariate_col"]
     clone_col = model.adata_manager.registry["clonotype_col"]
     phenotype_col = model.adata_manager.registry["phenotype_col"]
+    batch_col = model.adata_manager.registry["batch_col"]
 
     adata.uns["tcri_covariate_categories"] = adata.obs[cov_col].astype("category").cat.categories.tolist()
     adata.uns["tcri_clonotype_categories"] = adata.obs[clone_col].astype("category").cat.categories.tolist()
@@ -50,6 +51,7 @@ def register_model(
         "covariate_col": cov_col,
         "clone_col": clone_col,
         "phenotype_col": phenotype_col,
+        "batch_col": batch_col,
     }
 
     # Store local_scale
