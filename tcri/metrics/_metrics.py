@@ -26,18 +26,18 @@ def get_largest_clonotypes(adata, n=20):
     df = adata.obs[[adata.uns["tcri_clone_key"],"clone_size"]]
     return df.sort_values("clone_size",ascending=False)[adata.uns['tcri_clone_key']].unique().tolist()[:n]
 
-def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, temperature=1., n_samples=0):
+def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, temperature=1., clones=None, n_samples=0):
     logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata,covariate,temperature=temperature, n_samples=n_samples).T
+    jd = joint_distribution(adata,covariate,temperature=temperature, n_samples=n_samples,clones=clones).T
     res = jd.loc[phenotype].to_numpy()
     cent = entropy(res,base=base)
     if normalized:
         cent = cent / logf(len(res))
     return cent
 
-def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1., n_samples=0):
+def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1., n_samples=0, clones=None):
     logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata,covariate, temperature=temperature, n_samples=n_samples)
+    jd = joint_distribution(adata,covariate, temperature=temperature, n_samples=n_samples, clones=clones)
     res = jd.loc[clonotype].to_numpy()
     pent = entropy(res,base=base)
     if normalized:
@@ -98,8 +98,8 @@ def clone_fraction(adata, groupby):
 
 def flux(adata, from_this, to_that, clones=None, temperature=1., distance_metric="l1", n_samples=0):
     distances = dict()
-    jd_this = joint_distribution(adata,from_this,temperature=temperature,n_samples=n_samples)
-    jd_that = joint_distribution(adata,to_that,temperature=temperature,n_samples=n_samples)
+    jd_this = joint_distribution(adata,from_this,temperature=temperature,n_samples=n_samples,clones=clones)
+    jd_that = joint_distribution(adata,to_that,temperature=temperature,n_samples=n_samples,clones=clones)
     common_indices = jd_this.index.intersection(jd_that.index)
     if distance_metric == "l1":
         distances = (jd_this.loc[common_indices] - jd_that.loc[common_indices]).abs().sum(axis=1)
