@@ -536,13 +536,9 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     if palette == None:
         palette=tcri_colors
     cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clonotype_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
-    cov_col = model.adata_manager.registry["covariate_col"]
-    clone_col = model.adata_manager.registry["clonotype_col"]
-    phenotype_col = model.adata_manager.registry["phenotype_col"]
-    batch_col = model.adata_manager.registry["batch_col"]
 
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
     clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
@@ -617,7 +613,7 @@ def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     if palette == None:
         palette=tcri_colors
     cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clonotype_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
 
@@ -744,7 +740,7 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
     if palette == None:
         palette=tcri_colors
     cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clonotype_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
