@@ -73,19 +73,66 @@ def register_model(
 
     return adata
 
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from typing import Optional
+
 def joint_distribution(
     adata, 
     covariate_label: str, 
     temperature: float = 1.0, 
     n_samples: int = 0, 
-    clones=None
+    clones=None,
+    weighted: bool = False,
 ) -> pd.DataFrame:
-    # Retrieve stored tensors and metadata
+    """
+    Returns a DataFrame whose rows are local phenotype distributions for each
+    clonotype in the specified covariate, with optional weighting by clone size.
+    
+    If weighted=True, each row is multiplied by (# cells in that clonotype+covariate).
+    Then the entire matrix is normalized to sum to 1, giving a "joint" distribution
+    where large clones have more mass.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        Must contain certain fields in `adata.uns`, including:
+        - "tcri_p_ct" -> local distributions p_ct
+        - "tcri_ct_to_cov" -> array mapping ct index -> covariate index
+        - "tcri_ct_to_c" -> array mapping ct index -> clone index
+        - "tcri_covariate_categories" -> list of covariate labels
+        - "tcri_phenotype_categories" -> list of phenotype labels
+        - "tcri_clonotype_categories" -> list of clonotype labels
+        - "tcri_ct_array_for_cells" -> ct index per cell
+        - "tcri_cov_array_for_cells" -> covariate index per cell
+        - "tcri_metadata" -> includes keys "clone_col", "covariate_col", etc.
+    covariate_label : str
+        A label in `adata.uns["tcri_covariate_categories"]` that specifies
+        which covariate we want the local distributions for.
+    temperature : float
+        Temperature to use when scaling p_ct via softmax(log(...)/temperature).
+    n_samples : int
+        If > 0, we sample from the Dirichlet. Otherwise, we return point estimates.
+    clones : list of str
+        If given, we filter to only those clonotype IDs.
+    weighted : bool
+        If True, multiply each row by the #cells in that clone+covariate, then do a
+        global normalization so large clones have more total mass.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns = phenotype categories, each row = distribution for a clonotype (or sample).
+        If weighted=True and n_samples=0, the row sums will NOT necessarily be 1—only
+        the entire DataFrame sums to 1 across all rows.
+    """
+    # A) Retrieve stored tensors and metadata
     p_ct = torch.tensor(adata.uns["tcri_p_ct"])  # shape: (num_ct_pairs, num_phenotypes)
     ct_to_cov = torch.tensor(adata.uns["tcri_ct_to_cov"])  # shape: (num_ct_pairs,)
-    ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])  # shape: (num_ct_pairs,)
+    ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])      # shape: (num_ct_pairs,)
 
-    # Retrieve categorical mappings
     covariate_categories = adata.uns["tcri_covariate_categories"]
     phenotype_categories = adata.uns["tcri_phenotype_categories"]
     clonotype_categories = adata.uns["tcri_clonotype_categories"]
@@ -93,73 +140,121 @@ def joint_distribution(
     metadata = adata.uns["tcri_metadata"]
     covariate_col = metadata["covariate_col"]
 
-    # A) Convert covariate_label to an integer index
+    # B) Convert covariate_label to index
     try:
         cov_value = covariate_categories.index(covariate_label)
     except ValueError:
-        raise ValueError(f"Covariate label '{covariate_label}' not found in stored categories.")
+        raise ValueError(f"Covariate label '{covariate_label}' not found among: {covariate_categories}")
 
-    # B) Retrieve p_ct for that covariate
+    # C) Mask to rows for this covariate
     chosen_mask = (ct_to_cov == cov_value)
     chosen_idx = chosen_mask.nonzero(as_tuple=True)[0]
-    p_ct_for_cov = p_ct[chosen_mask]
+    p_ct_for_cov = p_ct[chosen_mask]  # shape (num_chosen, num_phenotypes)
 
-    # C) Apply temperature scaling
-    eps = 1e-8  # stability constant
+    # D) Apply temperature scaling to get distributions
+    eps = 1e-8
     p_ct_for_cov = F.softmax(torch.log(p_ct_for_cov + eps) / temperature, dim=-1)
 
-    # D) Map each row to its clonotype index
-    clone_indices = ct_to_c[chosen_idx].numpy()
+    # E) Get clonotype indices for each chosen ct
+    clone_indices = ct_to_c[chosen_idx].numpy()  # shape (num_chosen,)
 
-    # E) Build DataFrame for point estimates (if method is "point" or no sampling requested)
-    p_ct_arr = p_ct_for_cov.numpy()
+    # F) [Optional] If weighted=True, compute #cells in each ct index
+    #    Then multiply each row by that count. We'll do the final normalization at the end.
+    ct_array_for_cells = adata.uns["tcri_ct_array_for_cells"]  # shape (#cells,)
+    cov_array_for_cells = adata.uns["tcri_cov_array_for_cells"]  # shape (#cells,)
+
+    # Count how many cells in each ct for this covariate
+    from collections import Counter
+    cell_mask = (cov_array_for_cells == cov_value)
+    cts_in_cov = ct_array_for_cells[cell_mask].numpy()
+    ct_counts_dict = Counter(cts_in_cov.tolist())
+
+    # G) Distinguish between no-sampling vs. sampling
+    p_ct_arr = p_ct_for_cov.numpy()  # shape (num_chosen, num_phenotypes)
+
     if n_samples == 0:
+        # (1) No-sampling, point estimates
         df = pd.DataFrame(p_ct_arr, columns=phenotype_categories)
         df["clonotype_index"] = clone_indices
         df["clonotype_id"] = [clonotype_categories[i] for i in clone_indices]
-        if clones!=None:
+
+        # Filter clones if needed
+        if clones is not None:
             df = df[df["clonotype_id"].isin(clones)]
-        # Set the index as the clonotype_id (it will be unique in this case)
+
+        # If weighted, multiply each row by # cells and do a single global normalization
+        if weighted:
+            # Multiply each row
+            counts = []
+            for i, row in df.iterrows():
+                ct_i = row["clonotype_index"]
+                c_count = ct_counts_dict.get(ct_i, 0)  # # cells in that ct+cov
+                counts.append(c_count)
+
+            counts = np.array(counts, dtype=float)
+            # Multiply distribution columns
+            df.loc[:, phenotype_categories] = df[phenotype_categories].values * counts[:, None]
+
+            # Now sum all elements across the entire matrix to get a global normalizer
+            total_mass = df[phenotype_categories].sum().sum()
+            if total_mass > 0:
+                df.loc[:, phenotype_categories] = df[phenotype_categories] / total_mass
+
+        # Set the index to clonotype_id
         df.index = df["clonotype_id"]
-        # Remove the extra columns if desired
+        # Optionally remove clonotype columns
         df = df[[col for col in df.columns if "clonotype" not in col]]
         return df
 
-    # F) For "posterior" method, sample from the Dirichlet posterior and expand rows
     else:
-        if n_samples <= 0:
-            raise ValueError("n_samples must be > 0 when method is 'posterior'")
-        # Retrieve stored local_scale (set in store_model_outputs)
+        # (2) We have n_samples>0, so sample from Dirichlet
         local_scale = adata.uns.get("tcri_local_scale", 1.0)
-        # Form Dirichlet concentration parameters using temperature-scaled probabilities
         conc = local_scale * p_ct_for_cov  # shape: (num_chosen, num_phenotypes)
-        # Sample n_samples draws for each clonotype
-        samples = dist.Dirichlet(conc).sample((n_samples,))  # shape: (n_samples, num_chosen, num_phenotypes)
-        # Convert samples to numpy and reshape so each row corresponds to one sample draw
-        samples_np = samples.cpu().numpy() if samples.device.type != "cpu" else samples.numpy()
-        num_chosen, num_pheno = samples_np.shape[1], samples_np.shape[2]
-        # Transpose so shape becomes (num_chosen, n_samples, num_pheno) then reshape to (num_chosen*n_samples, num_pheno)
+        from pyro.distributions import Dirichlet
+        samples = Dirichlet(conc).sample((n_samples,))  # shape: (n_samples, num_chosen, num_phenotypes)
+        samples_np = samples.cpu().numpy()
+
+        # Reshape to (num_chosen * n_samples, num_phenotypes)
+        # so each row is a single sample from that ct
+        num_chosen, num_pheno = p_ct_arr.shape
         samples_expanded = samples_np.transpose(1, 0, 2).reshape(-1, num_pheno)
-        
-        # Expand clonotype indices accordingly: repeat each clonotype n_samples times
+
+        # Make repeated arrays for clonotype indices
         clonotype_indices_expanded = np.repeat(clone_indices, n_samples)
         clonotype_ids_expanded = [clonotype_categories[i] for i in clonotype_indices_expanded]
-        
-        # Optionally, add a sample identifier per clonotype
         sample_ids = np.tile(np.arange(n_samples), num_chosen)
-        
-        # Build the expanded DataFrame
+
         df_samples = pd.DataFrame(samples_expanded, columns=phenotype_categories)
         df_samples["clonotype_index"] = clonotype_indices_expanded
         df_samples["clonotype_id"] = clonotype_ids_expanded
         df_samples["sample_id"] = sample_ids
-        if clones!=None:
+
+        if clones is not None:
             df_samples = df_samples[df_samples["clonotype_id"].isin(clones)]
-        # Set a new index that combines clonotype_id and sample_id to ensure uniqueness
-        df_samples.index = df_samples["clonotype_id"].astype(str) + "_" + df_samples["sample_id"].astype(str)
-        del df_samples["sample_id"]
-        df_samples = df_samples[[col for col in df_samples.columns if "clonotype" not in col]]
+
+        # If weighted, multiply each row by the # cells in that ct, then globally normalize
+        if weighted:
+            counts = []
+            for i, row in df_samples.iterrows():
+                ct_i = row["clonotype_index"]
+                c_count = ct_counts_dict.get(ct_i, 0)
+                counts.append(c_count)
+            counts = np.array(counts, dtype=float)
+            df_samples.loc[:, phenotype_categories] = (
+                df_samples[phenotype_categories].values * counts[:, None]
+            )
+            total_mass = df_samples[phenotype_categories].sum().sum()
+            if total_mass > 0:
+                df_samples.loc[:, phenotype_categories] /= total_mass
+
+        # Set a unique index for each (clonotype_id, sample_id)
+        df_samples.index = [
+            f"{cid}_{sid}" for cid, sid in zip(df_samples["clonotype_id"], df_samples["sample_id"])
+        ]
+        # Remove columns if desired
+        df_samples = df_samples[[col for col in df_samples.columns if col not in ["clonotype_id","clonotype_index","sample_id"]]]
         return df_samples
+
 
 
 def global_joint_distribution(
