@@ -555,10 +555,9 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
         sub = adata[adata.obs[batch_col] == p].copy()
         for t in covs:
             subt = sub[sub.obs[cov_col] == t]
-            clones = list(set(subt.obs[clone_col]))
+            vclones = list(set(subt.obs[clone_col]))
             for ph in phenotypes:
                 if splitby == None:
-                    vclones = list(set(subt.obs[clone_col]))
                     mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
                     ps.append(p)
                     ts.append(t)
@@ -575,8 +574,9 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     fig,ax = plt.subplots(1,1,figsize=figsize)
     if splitby != None:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi, splitby:cl, phenotype_col:phs})
-        sns.boxplot(data=df,x=cov_col,y="Clonotypic Entropy",hue=splitby,color="#999999")
-        sns.stripplot(data=df,x=cov_col,y="Clonotypic Entropy",hue=splitby,palette=palette, dodge=True)
+        sns.boxplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col,palette=palette)
+        palette_black = {level: "black" for level in df[cov_col].unique()}
+        sns.stripplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col, dodge=True, palette=palette_black)
     else:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi,phenotype_col:phs})
         sns.boxplot(data=df,x=phenotype_col,hue=cov_col,y="Clonotypic Entropy",color="#999999")
@@ -652,11 +652,12 @@ def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
                         phs.append(ph)
     fig,ax = plt.subplots(1,1,figsize=figsize)
     if splitby != None:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi, splitby:cl, clonotype_col:phs})
-        sns.boxplot(data=df,x=cov_col,y="Phenotypic Entropy",hue=splitby,color="#999999")
-        sns.stripplot(data=df,x=cov_col,y="Phenotypic Entropy",hue=splitby,palette=palette, dodge=True)
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi, splitby:cl, clone_col:phs})
+        sns.boxplot(data=df,x=splitby,y="Phenotypic Entropy",hue=cov_col,palette=palette)
+        palette_black = {level: "black" for level in df[cov_col].unique()}
+        sns.stripplot(data=df,x=splitby,y="Phenotypic Entropy",hue=cov_col, dodge=True, palette=palette_black)
     else:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi,clonotype_col:phs})
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi,clone_col:phs})
         sns.boxplot(data=df,x=cov_col,y="Phenotypic Entropy",color="#999999")
         sns.stripplot(data=df,x=cov_col,y="Phenotypic Entropy",palette=palette,dodge=False)
     plt.xticks(rotation=rotation)
@@ -775,6 +776,9 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Mutual Information":mi, splitby:cl})
         sns.boxplot(data=df,x=cov_col,y="Mutual Information",hue=splitby,color="#999999")
         sns.stripplot(data=df,x=cov_col,y="Mutual Information",hue=splitby,palette=palette, dodge=True)
+        sns.boxplot(data=df,x=splitby,y="Mutual Information",hue=cov_col,palette=palette)
+        palette_black = {level: "black" for level in df[cov_col].unique()}
+        sns.stripplot(data=df,x=splitby,y="Mutual Information",hue=cov_col, dodge=True, palette=palette_black)
     else:
         df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Mutual Information":mi})
         sns.boxplot(data=df,x=cov_col,y="Mutual Information",color="#999999")

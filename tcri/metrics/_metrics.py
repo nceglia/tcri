@@ -37,7 +37,7 @@ def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, tem
 
 def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1., n_samples=0, clones=None):
     logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata,covariate, temperature=temperature, n_samples=n_samples, clones=clones)
+    jd = joint_distribution(adata,covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
     res = jd.loc[clonotype].to_numpy()
     pent = entropy(res,base=base)
     if normalized:
