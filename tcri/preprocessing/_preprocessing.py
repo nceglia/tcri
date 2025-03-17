@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import datetime
 import pyro.distributions as dist
+from pyro.distributions import Dirichlet
 
 
 import numpy as np
@@ -202,7 +203,7 @@ def joint_distribution(
     # Count how many cells in each ct for this covariate
     from collections import Counter
     cell_mask = (cov_array_for_cells == cov_value)
-    cts_in_cov = ct_array_for_cells[cell_mask].numpy()
+    cts_in_cov = ct_array_for_cells[cell_mask]
     ct_counts_dict = Counter(cts_in_cov.tolist())
 
     # G) Distinguish between no-sampling vs. sampling
@@ -246,7 +247,7 @@ def joint_distribution(
         # (2) We have n_samples>0, so sample from Dirichlet
         local_scale = adata.uns.get("tcri_local_scale", 1.0)
         conc = local_scale * p_ct_for_cov  # shape: (num_chosen, num_phenotypes)
-        from pyro.distributions import Dirichlet
+        
         samples = Dirichlet(conc).sample((n_samples,))  # shape: (n_samples, num_chosen, num_phenotypes)
         samples_np = samples.cpu().numpy()
 
