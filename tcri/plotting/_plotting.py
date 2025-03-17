@@ -737,55 +737,99 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
-    if palette == None:
-        palette=tcri_colors
+def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90, weighted=True):
+    """
+    Compute and plot mutual information for each batch and covariate,
+    optionally weighting large clones more in the MI calculation.
+    """
+    if palette is None:
+        palette = {}  # your default palette or tcri_colors
+
+    # Retrieve metadata from adata
     cov_col = adata.uns["tcri_metadata"]["covariate_col"]
     clone_col = adata.uns["tcri_metadata"]["clone_col"]
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     batch_col = adata.uns["tcri_metadata"]["batch_col"]
-    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
-    clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
-    phenotypes = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
-    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
     
-    mi = []
+    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
+    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
+
+    mi_vals = []
     ps = []
     ts = []
-    rs = []
     cl = []
-    for p in tqdm.tqdm(batches):
+
+    for p in tqdm.tqdm(batches, desc="Computing mutual information"):
         sub = adata[adata.obs[batch_col] == p].copy()
         for t in covs:
             subt = sub[sub.obs[cov_col] == t]
-            if splitby == None:
-                vclones = list(set(subt.obs[clone_col]))
-                mi.append(mutual_information_tl(subt,t,temperature=temperature, clones=vclones,n_samples=n_samples))
+            # figure out which clones are actually present
+            vclones = list(set(subt.obs[clone_col]))
+            
+            if splitby is None:
+                # Compute MI for all clones in cov t, batch p
+                val = mutual_information_tl(
+                    subt, t, 
+                    temperature=temperature, 
+                    clones=vclones,
+                    n_samples=n_samples,
+                    weighted=weighted
+                )
+                mi_vals.append(val)
                 ps.append(p)
                 ts.append(t)
+
             else:
-                for s in set(subt.obs[splitby]):
-                    subts = subt[subt.obs[cov_col] == t]
-                    vclones = list(set(subts.obs[clone_col]))
-                    mi.append(mutual_information_tl(subt,t,temperature=temperature, clones=vclones,n_samples=n_samples))
+                # If you want to split further by some obs column
+                for s in sorted(subt.obs[splitby].unique()):
+                    subts = subt[subt.obs[splitby] == s]
+                    vclones2 = list(set(subts.obs[clone_col]))
+                    val = mutual_information_tl(
+                        subts, t,
+                        temperature=temperature,
+                        clones=vclones2,
+                        n_samples=n_samples,
+                        weighted=weighted
+                    )
+                    mi_vals.append(val)
                     ps.append(p)
                     ts.append(t)
                     cl.append(s)
-    fig,ax = plt.subplots(1,1,figsize=figsize)
-    if splitby != None:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Mutual Information":mi, splitby:cl})
-        sns.boxplot(data=df,x=cov_col,y="Mutual Information",hue=splitby,color="#999999")
-        sns.stripplot(data=df,x=cov_col,y="Mutual Information",hue=splitby,palette=palette, dodge=True)
-        sns.boxplot(data=df,x=splitby,y="Mutual Information",hue=cov_col,palette=palette)
-        palette_black = {level: "black" for level in df[cov_col].unique()}
-        sns.stripplot(data=df,x=splitby,y="Mutual Information",hue=cov_col, dodge=True, palette=palette_black)
+
+    # Build a DataFrame for plotting
+    if splitby is None:
+        df = pd.DataFrame({
+            cov_col: ts,
+            batch_col: ps,
+            "Mutual Information": mi_vals
+        })
     else:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Mutual Information":mi})
-        sns.boxplot(data=df,x=cov_col,y="Mutual Information",color="#999999")
-        sns.stripplot(data=df,x=cov_col,y="Mutual Information",palette=palette,dodge=False)
+        df = pd.DataFrame({
+            cov_col: ts,
+            batch_col: ps,
+            "Mutual Information": mi_vals,
+            splitby: cl
+        })
+
+    # Plot
+    fig, ax = plt.subplots(1,1, figsize=figsize)
+    if splitby is None:
+        sns.boxplot(data=df, x=cov_col, y="Mutual Information", color="#999999", ax=ax)
+        sns.stripplot(data=df, x=cov_col, y="Mutual Information", palette=palette, dodge=False, ax=ax)
+    else:
+        sns.boxplot(data=df, x=cov_col, y="Mutual Information", hue=splitby, color="#999999", ax=ax)
+        sns.stripplot(data=df, x=cov_col, y="Mutual Information", hue=splitby, palette=palette, dodge=True, ax=ax)
+        ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+
     plt.xticks(rotation=rotation)
-    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=5)
+    plt.title("Mutual Information" + (" (Weighted)" if weighted else ""))
     fig.tight_layout()
+
+    if save:
+        plt.savefig(save, dpi=150)
+    plt.show()
+
+    return df
 
 
 def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15, color_dict=None):
