@@ -297,8 +297,8 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("latent", latent_posterior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-
+            #local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            local_logits_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
             pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits_guide),
