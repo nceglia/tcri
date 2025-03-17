@@ -743,7 +743,7 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
     optionally weighting large clones more in the MI calculation.
     """
     if palette is None:
-        palette = {}  # your default palette or tcri_colors
+        palette = tcri_colors#{}  # your default palette or tcri_colors
 
     # Retrieve metadata from adata
     cov_col = adata.uns["tcri_metadata"]["covariate_col"]
