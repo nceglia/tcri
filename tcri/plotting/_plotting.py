@@ -15,8 +15,8 @@ import itertools
 
 from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
 from ..preprocessing._preprocessing import clone_size, joint_distribution
-from ..metrics._metrics import clonotypic_entropies as centropy
-from ..metrics._metrics import phenotypic_entropies as pentropy
+from ..metrics._metrics import clonotypic_entropy as centropy
+from ..metrics._metrics import phenotypic_entropy as pentropy
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
 from ..metrics._metrics import mutual_information as mutual_information_tl
