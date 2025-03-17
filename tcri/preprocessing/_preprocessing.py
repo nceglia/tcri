@@ -9,6 +9,14 @@ import torch.nn.functional as F
 import datetime
 import pyro.distributions as dist
 
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from typing import Optional
+
+
 warnings.filterwarnings('ignore')
 
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
@@ -21,6 +29,9 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
         else:
             return candidate
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
+
+import torch
+import pandas as pd
 
 @torch.no_grad()
 def register_model(
@@ -42,9 +53,15 @@ def register_model(
     phenotype_col = model.adata_manager.registry["phenotype_col"]
     batch_col = model.adata_manager.registry["batch_col"]
 
-    adata.uns["tcri_covariate_categories"] = adata.obs[cov_col].astype("category").cat.categories.tolist()
-    adata.uns["tcri_clonotype_categories"] = adata.obs[clone_col].astype("category").cat.categories.tolist()
-    adata.uns["tcri_phenotype_categories"] = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
+    adata.uns["tcri_covariate_categories"] = (
+        adata.obs[cov_col].astype("category").cat.categories.tolist()
+    )
+    adata.uns["tcri_clonotype_categories"] = (
+        adata.obs[clone_col].astype("category").cat.categories.tolist()
+    )
+    adata.uns["tcri_phenotype_categories"] = (
+        adata.obs[phenotype_col].astype("category").cat.categories.tolist()
+    )
 
     # Store metadata keys for easy reference
     adata.uns["tcri_metadata"] = {
@@ -57,27 +74,46 @@ def register_model(
     # Store local_scale
     adata.uns["tcri_local_scale"] = model.module.local_scale
 
-    # --- Compute and store per-cell phenotype probabilities ---
+    # ------------------------------------------------------------------------
+    #  A) Per-cell arrays that some downstream functions need
+    # ------------------------------------------------------------------------
+    #  1) ct_array_for_cells: for each cell, which ct index it belongs to
+    ct_array_for_cells = model.module.ct_array.cpu().numpy()
+    adata.uns["tcri_ct_array_for_cells"] = ct_array_for_cells
+
+    #  2) cov_array_for_cells: for each cell, which covariate index it has
+    #     This is simply ct_to_cov[ct_array_for_cells].
+    ct_to_cov = model.module.ct_to_cov.cpu().numpy()
+    cov_array_for_cells = ct_to_cov[ct_array_for_cells]
+    adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
+
+    #  If you also want the global clone index per cell, you can similarly do:
+    #     c_array_for_cells = model.module.c_array.cpu().numpy()
+    #     adata.uns["tcri_c_array_for_cells"] = c_array_for_cells
+    #
+    #  Just make sure 'c_array' is defined in the module (like 'module.ct_array').
+
+    # ------------------------------------------------------------------------
+    #  B) Compute and store per-cell phenotype probabilities
+    # ------------------------------------------------------------------------
     phenotype_probs = model.get_cell_phenotype_probs(batch_size=batch_size)
     adata.obsm[phenotype_prob_slot] = phenotype_probs
 
-    # --- Compute and store phenotype assignments ---
+    # ------------------------------------------------------------------------
+    #  C) Compute and store phenotype assignments (argmax of probabilities)
+    # ------------------------------------------------------------------------
     assignments = phenotype_probs.argmax(axis=1)
     adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
         assignments, categories=adata.uns["tcri_phenotype_categories"]
     )
 
-    # --- Compute and store latent representation ---
+    # ------------------------------------------------------------------------
+    #  D) Compute and store latent representation (z)
+    # ------------------------------------------------------------------------
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
 
     return adata
-
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
-from typing import Optional
 
 def joint_distribution(
     adata, 
