@@ -114,6 +114,10 @@ def register_model(
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
 
+    adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
+    adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
+    adata.uns["tcri_confusion_matrix"] = pyro.param("confusion_matrix").detach().cpu().numpy()
+
     return adata
 
 def joint_distribution(
