@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import datetime
 import pyro.distributions as dist
 from pyro.distributions import Dirichlet
-
+import pyro
 
 import numpy as np
 import pandas as pd
