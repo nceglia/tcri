@@ -133,8 +133,24 @@ class TCRIModule(PyroBaseModuleClass):
             use_layer_norm=True
         )
 
+        self.gate_nn = torch.nn.Sequential(
+            torch.nn.Linear(self.n_latent, 128),
+            torch.nn.ReLU(),
+            torch.nn.Linear(128, 1),
+        )
+
+
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
-        self.classifier = torch.nn.Linear(n_latent, P)
+        
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(self.n_latent, 128),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(p=0.1),      # optional
+            torch.nn.Linear(128, 64),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(p=0.1),      # optional
+            torch.nn.Linear(64, self.P),
+        )
 
         self.register_buffer("clone_phen_prior", torch.empty(0))
         self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))
@@ -225,14 +241,23 @@ class TCRIModule(PyroBaseModuleClass):
                 z = pyro.sample("latent", latent_prior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            prior_probs =  torch.log(p_ct[ct_idx] + 1e-8) + self.classifier(z_loc) 
+            prior_log = torch.log(p_ct[ct_idx] + 1e-8)       # log of local p_ct
+            cls_logits = self.classifier(z_loc)                  # linear classifier output
+            gate_logits = self.gate_nn(z_loc)                    # shape [batch_size, 1]
 
+            gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
+            # Expand gate_probs to match shape [batch_size, P]
+            gate_probs = gate_probs.expand(-1, self.P)
+
+            # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
+            local_logits_model = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
+
+            # sample the discrete phenotype from these logits
             z_i_phen = pyro.sample(
                 "z_i_phen",
-                dist.Categorical(prior_probs),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {}
+                dist.Categorical(logits=local_logits_model),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {},
             )
-
             target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
             target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
@@ -248,13 +273,13 @@ class TCRIModule(PyroBaseModuleClass):
 
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
 
-            gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
+            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
 
             x_dist = dist.ZeroInflatedNegativeBinomial(
-                gate=gate_probs,
+                gate=zi_gate_probs,
                 total_count=total_count,
                 logits=nb_logits,
                 validate_args=False
@@ -297,7 +322,14 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("latent", latent_posterior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            local_logits_guide = self.classifier(z_loc) + torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            cls_logits = self.classifier(z_loc)
+
+            gate_logits = self.gate_nn(z_loc)         # shared network!
+            gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
+
+            local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
+
             pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits_guide),
@@ -656,28 +688,65 @@ class TCRIModel(BaseModelClass):
 
     @torch.no_grad()
     def get_cell_phenotype_probs(self, adata=None, batch_size: int = 256, eps: float = 1e-8):
+        """
+        Computes the cell-level phenotype probabilities by applying the same gating MLP
+        logic used in the model/guide. For each cell i:
+
+            local_logits[i] = gate_probs[i] * classifier_logits[i]
+                            + (1 - gate_probs[i]) * log(clonotype_prior[i])
+
+        Then we take a softmax across phenotypes.
+
+        Parameters
+        ----------
+        adata
+            AnnData object. If None, defaults to the AnnData used during training.
+        batch_size : int
+            Mini-batch size for data loader.
+        eps : float
+            Small epsilon for numerical stability in logs and divisions.
+
+        Returns
+        -------
+        probs : np.ndarray
+            Array of shape (n_cells, P) with the cell-level phenotype probabilities.
+        """
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
         device = next(self.module.parameters()).device
 
-        p_ct = self.module.get_p_ct().to(device)          # Learned clonotype-covariate posterior
-        ct_array = self.module.ct_array.to(device)        # Cell clonotype-covariate indices
+        # p_ct is the learned clonotype-covariate posterior -> shape (ct_count, P)
+        p_ct = self.module.get_p_ct().to(device)
+        # ct_array tells us which (c, t) index each cell belongs to -> shape (n_cells,)
+        ct_array = self.module.ct_array.to(device)
 
         all_probs = []
         current_idx = 0
-        for tensors in scdl:
-            batch_size_local = tensors[REGISTRY_KEYS.X_KEY].shape[0]
 
-            ct_indices = ct_array[current_idx: current_idx + batch_size_local]
-            clone_cov_posterior = p_ct[ct_indices]  # (batch_size_local, P)
-            z_loc, _, _ = self.module.encoder(tensors[REGISTRY_KEYS.X_KEY].to(device),
-                                            tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device))
-            prior_probs = self.module.get_p_ct()[ct_indices].to(device)
-            cls_logits = self.module.classifier(z_loc)
-            cls_logits_with_prior = cls_logits + torch.log(prior_probs + 1e-8)
-            cell_level_likelihood = F.softmax(cls_logits_with_prior, dim=-1)
-            posterior_unnormalized = clone_cov_posterior * cell_level_likelihood
-            probs = posterior_unnormalized / (posterior_unnormalized.sum(dim=-1, keepdim=True) + eps)
+        for tensors in scdl:
+            x = tensors[REGISTRY_KEYS.X_KEY].to(device)
+            b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+            batch_size_local = x.shape[0]
+
+            # Identify which clonotype-covariate each cell belongs to
+            ct_indices = ct_array[current_idx : current_idx + batch_size_local]
+            clone_cov_posterior = p_ct[ct_indices]  # shape (batch_size_local, P)
+
+            # Encoder + classifier + gating
+            z_loc, _, _ = self.module.encoder(x, b)
+            cls_logits = self.module.classifier(z_loc)          # shape (batch_size_local, P)
+
+            # Gating MLP
+            gate_logits = self.module.gate_nn(z_loc)            # shape (batch_size_local, 1)
+            gate_probs = torch.sigmoid(gate_logits)
+            gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
+
+            # Combine classifier logits with local prior in log space
+            local_logits = gate_probs * cls_logits + \
+                        (1 - gate_probs) * torch.log(clone_cov_posterior + eps)
+            # Softmax across phenotypes to get probabilities
+            probs = F.softmax(local_logits, dim=-1)
+
             all_probs.append(probs.cpu())
             current_idx += batch_size_local
 
