@@ -110,26 +110,43 @@ def flux(adata, from_this, to_that, clones=None, temperature=1., distance_metric
         )
     return distances
 
-def mutual_information(adata, covariate, temperature=1.0, weighted=False):
-    """Calculate mutual information between clonotypes and phenotypes for a given covariate."""
-    jd = joint_distribution(adata, covariate, temperature=temperature)
-    mi = 0.0
-    total_weight = 0.0
-    
-    for clonotype in jd.index:
-        p = jd.loc[clonotype].to_numpy()
-        p = p[p > 0]  # Remove zeros
-        if len(p) == 0:
-            continue
-            
-        weight = 1.0
-        if weighted:
-            weight = np.sum(p)
-            total_weight += weight
-            
-        mi += weight * entropy(p, base=2)
-    
-    if weighted and total_weight > 0:
-        mi = mi / total_weight
-        
-    return mi / np.log2(len(jd.columns))
+
+def mutual_information(
+    adata, 
+    covariate,
+    temperature=1,
+    n_samples=0,
+    clones=None,
+    weighted=False
+):
+    """
+    Compute mutual information from the joint distribution returned by joint_distribution.
+    If weighted=True, large clones contribute more to MI.
+    """
+    # Retrieve the distribution as a DataFrame
+    pxy_df = joint_distribution(
+        adata=adata,
+        covariate_label=covariate,
+        temperature=temperature,
+        n_samples=n_samples,
+        clones=clones,
+        weighted=weighted
+    )
+    # Convert to numpy
+    pxy = pxy_df.to_numpy()
+    # Ensure total sums to 1
+    total = pxy.sum()
+    if total < 1e-15:
+        return 0.0
+    pxy /= total
+
+    # Marginals
+    px = pxy.sum(axis=1, keepdims=True)  # sum over phenotypes
+    py = pxy.sum(axis=0, keepdims=True)  # sum over clonotypes
+
+    px_py = px @ py
+    # Avoid zeros
+    eps = 1e-15
+    mask = (pxy > eps)
+    mi = np.sum(pxy[mask] * np.log2((pxy[mask] + eps) / (px_py[mask] + eps)))
+    return mi
