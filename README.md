@@ -192,18 +192,6 @@ tcri.pl.mutual_information(adata, splitby="timepoint")
 tcri.pl.polar_plot(adata, statistic="entropy")
 ```
 
-## Dependencies
-
-- scanpy
-- numpy
-- pandas
-- torch
-- pyro
-- scvi
-- matplotlib
-- seaborn
-- scipy
-
 ## Citation
 
 If you use TCRi in your research, please cite:
@@ -215,41 +203,4 @@ If you use TCRi in your research, please cite:
   year={2022}
 }
 ```
-
-
-Example code found in /examples.
-
-### Basics
-
-#### Compute joint distribution with TCRi on anndata processed with GeneVector.
-```
-import tcri
-
-sample_column="sample"
-condition_column="source"
-phenotype_column="genevector"
-
-tcri.pp.joint_distribution(adata,
-                           sample_column=sample_column, 
-                           condition_column=condition_column, 
-                           phenotype_column=phenotype_column)
-```
-                
-#### Each metric has an associated plotting function
-1. Clonotypic Entropy
-    ```
-    tcri.metrics.clonotypic_entropy(adata)
-    tcri.pl.clonotypic_entropy(adata)
-    ```
-2. Phenotypic Entropy
-    ```
-    tcri.metrics.phenotypic_entropy(adata)
-    tcri.pl.phenotypic_entropy(adata)
-    ```
-3. Phenotypic Flux
-    ```
-    tcri.metrics.phenotypic_flux(adata,from_this="TP1",to_that="TP2")
-    tcri.pl.phenotypic_flux(adata,from_this="TP1",to_that="TP2")
-    ```
-
 
