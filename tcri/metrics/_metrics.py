@@ -1,17 +1,17 @@
-from scipy.stats import entropy
-import numpy as np
-import operator
-from scipy.spatial import distance
-import pandas as pd
+# Standard library imports
 import warnings
-import gseapy as gp
-import math
+import numpy as np
 import pandas as pd
 import torch
-from scipy.stats import entropy
-import numpy
 import torch.nn.functional as F
 import scanpy as sc
+
+# Third-party imports
+from scipy.stats import entropy
+from scipy.spatial import distance
+import gseapy as gp
+
+# Local imports
 from ..preprocessing._preprocessing import joint_distribution
 
 warnings.filterwarnings('ignore')
@@ -22,49 +22,50 @@ def dkl(p, q):
     q = np.clip(q, epsilon, 1)
     return entropy(p, q) 
 
-def get_largest_clonotypes(adata, n=20):
-    df = adata.obs[[adata.uns["tcri_clone_key"],"clone_size"]]
-    return df.sort_values("clone_size",ascending=False)[adata.uns['tcri_clone_key']].unique().tolist()[:n]
+def clonotypic_entropy(adata, covariate, phenotype, temperature=1.0):
+    """Calculate clonotypic entropy for a given covariate and phenotype."""
+    jd = joint_distribution(adata, covariate, temperature=temperature)
+    if phenotype not in jd.columns:
+        return 0.0
+    res = jd[phenotype].to_numpy()
+    res = res[res > 0]  # Remove zeros
+    if len(res) == 0:
+        return 0.0
+    return entropy(res, base=2) / np.log2(len(res))
 
-def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, temperature=1., clones=None, n_samples=0):
-    logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata,covariate,temperature=temperature, n_samples=n_samples,clones=clones).T
-    res = jd.loc[phenotype].to_numpy()
-    cent = entropy(res,base=base)
-    if normalized:
-        cent = cent / logf(len(res))
-    return cent
-
-def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1., n_samples=0, clones=None):
-    logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata,covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
+def phenotypic_entropy(adata, covariate, clonotype, temperature=1.0):
+    """Calculate phenotypic entropy for a given covariate and clonotype."""
+    jd = joint_distribution(adata, covariate, temperature=temperature)
+    if clonotype not in jd.index:
+        return 0.0
     res = jd.loc[clonotype].to_numpy()
-    pent = entropy(res,base=base)
-    if normalized:
-        pent = pent / logf(len(res))
-    return pent
+    res = res[res > 0]  # Remove zeros
+    if len(res) == 0:
+        return 0.0
+    return entropy(res, base=2) / np.log2(len(res))
 
 def phenotypic_entropies(adata, covariate, base=2, normalized=True, temperature=1., n_samples=0):
     tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
     unique_tcrs = np.unique(tcr_sequences)
-    jd = joint_distribution(adata,covariate, temperature=temperature).to_numpy().T
-    clonotype_entropies = np.zeros(jd.shape[1])
-    max_entropy = np.log2(jd.shape[0])
-    for i, clonotype_distribution in enumerate(jd.T):
-        normalized_distribution = clonotype_distribution / np.sum(clonotype_distribution)
-        epsilon = np.finfo(float).eps
-        if normalized:
-            clonotype_entropies[i] = -np.sum(normalized_distribution * np.log2(normalized_distribution + epsilon)) / max_entropy
-        else:
-            clonotype_entropies[i] = -np.sum(normalized_distribution * np.log2(normalized_distribution + epsilon))
-    tcr_to_entropy_dict = dict(zip(unique_tcrs, clonotype_entropies))
+    tcr_to_entropy_dict = {
+        tcr: phenotypic_entropy(
+            adata, 
+            covariate, 
+            tcr, 
+            base=base, 
+            normalized=normalized, 
+            temperature=temperature,
+            n_samples=n_samples
+        ) 
+        for tcr in unique_tcrs
+    }
     return tcr_to_entropy_dict
 
 def clonotypic_entropies(adata, covariate, normalized=True, base=2, temperature=1., decimals=5, n_samples=0):
     unique_phenotypes = adata.uns["tcri_phenotype_categories"]
     phenotype_entropies = dict()
     for phenotype in unique_phenotypes:
-        cent = clonotypic_entropy(adata, covariate, phenotype, base=base, normalized=normalized, temperature=temperature)
+        cent = clonotypic_entropy(adata, covariate, phenotype, temperature=temperature)
         phenotype_entropies[phenotype] = np.round(cent,decimals=decimals)
     return phenotype_entropies
 
@@ -81,8 +82,8 @@ def clonality(adata):
         for tcr in unique_clonotypes:
             tcrs = pheno_df[pheno_df[adata.uns["tcri_clone_key"]]==tcr]
             nums.append(len(tcrs))
-        clonality = 1 - entropy(numpy.array(nums),base=2) / numpy.log2(len(nums))
-        entropys[phenotype] = numpy.nan_to_num(clonality)
+        clonality = 1 - entropy(np.array(nums),base=2) / np.log2(len(nums))
+        entropys[phenotype] = np.nan_to_num(clonality)
     return entropys
 
 def clone_fraction(adata, groupby):
@@ -109,42 +110,26 @@ def flux(adata, from_this, to_that, clones=None, temperature=1., distance_metric
         )
     return distances
 
-def mutual_information(
-    adata, 
-    covariate,
-    temperature=1,
-    n_samples=0,
-    clones=None,
-    weighted=False
-):
-    """
-    Compute mutual information from the joint distribution returned by joint_distribution.
-    If weighted=True, large clones contribute more to MI.
-    """
-    # Retrieve the distribution as a DataFrame
-    pxy_df = joint_distribution(
-        adata=adata,
-        covariate_label=covariate,
-        temperature=temperature,
-        n_samples=n_samples,
-        clones=clones,
-        weighted=weighted
-    )
-    # Convert to numpy
-    pxy = pxy_df.to_numpy()
-    # Ensure total sums to 1
-    total = pxy.sum()
-    if total < 1e-15:
-        return 0.0
-    pxy /= total
-
-    # Marginals
-    px = pxy.sum(axis=1, keepdims=True)  # sum over phenotypes
-    py = pxy.sum(axis=0, keepdims=True)  # sum over clonotypes
-
-    px_py = px @ py
-    # Avoid zeros
-    eps = 1e-15
-    mask = (pxy > eps)
-    mi = np.sum(pxy[mask] * np.log2((pxy[mask] + eps) / (px_py[mask] + eps)))
-    return mi
+def mutual_information(adata, covariate, temperature=1.0, weighted=False):
+    """Calculate mutual information between clonotypes and phenotypes for a given covariate."""
+    jd = joint_distribution(adata, covariate, temperature=temperature)
+    mi = 0.0
+    total_weight = 0.0
+    
+    for clonotype in jd.index:
+        p = jd.loc[clonotype].to_numpy()
+        p = p[p > 0]  # Remove zeros
+        if len(p) == 0:
+            continue
+            
+        weight = 1.0
+        if weighted:
+            weight = np.sum(p)
+            total_weight += weight
+            
+        mi += weight * entropy(p, base=2)
+    
+    if weighted and total_weight > 0:
+        mi = mi / total_weight
+        
+    return mi / np.log2(len(jd.columns))
