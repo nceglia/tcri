@@ -817,8 +817,8 @@ def mutual_information(adata, splitby=None, temperature=1, n_samples=0, palette=
         sns.boxplot(data=df, x=cov_col, y="Mutual Information", color="#999999", ax=ax)
         sns.stripplot(data=df, x=cov_col, y="Mutual Information", palette=palette, dodge=False, ax=ax)
     else:
-        sns.boxplot(data=df, x=cov_col, y="Mutual Information", hue=splitby, color="#999999", ax=ax)
-        sns.stripplot(data=df, x=cov_col, y="Mutual Information", hue=splitby, palette=palette, dodge=True, ax=ax)
+        sns.boxplot(data=df, x=splitby, y="Mutual Information", hue=cov_col, color="#999999", ax=ax)
+        sns.stripplot(data=df, x=splitby, y="Mutual Information", hue=cov_col, palette=palette, dodge=True, ax=ax)
         ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
 
     plt.xticks(rotation=rotation)
