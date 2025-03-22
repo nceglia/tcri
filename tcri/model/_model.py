@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 import torch
-
+import matplotlib.pyplot as plt
 import torch.nn.functional as F
 import pyro
 import pyro.distributions as dist
@@ -751,3 +751,16 @@ class TCRIModel(BaseModelClass):
             current_idx += batch_size_local
 
         return torch.cat(all_probs, dim=0).numpy()
+
+    def plot_loss(self, log_scale=False):
+        loss_history = self.history_["elbo_train"]
+        loss_validation = self.history_["elbo_validation"]
+        plt.figure(figsize=(8, 4))
+        plt.plot(loss_history, label="Training Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss Over Epochs")
+        if log_scale:
+            plt.yscale('log')
+        plt.legend()
+        plt.show()
