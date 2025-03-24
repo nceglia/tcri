@@ -4,6 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from statannot import add_stat_annotation
 import matplotlib.patches as mpatches
+from scipy.cluster.hierarchy import dendrogram, linkage
 
 from gseapy import dotplot
 import tqdm
@@ -12,15 +13,13 @@ import collections
 import operator
 import itertools
 
-from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities
+from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities, set_ternary_corner_label, ternary_plot_projection
 from ..preprocessing._preprocessing import clone_size, joint_distribution
-from ..metrics._metrics import clonotypic_entropies as centropies
-from ..metrics._metrics import phenotypic_entropies as pentropies
+from ..metrics._metrics import clonotypic_entropy as centropy
+from ..metrics._metrics import phenotypic_entropy as pentropy
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
-from ..metrics._metrics import probability_distribution as pdistribution
 from ..metrics._metrics import mutual_information as mutual_information_tl
-from ..metrics._metrics import phenotypic_entropy_delta as phenotypic_entropy_delta_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
 
 
@@ -63,11 +62,118 @@ tcri_colors = [
 sns.set_palette(sns.color_palette(tcri_colors))
 
 
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True, method="probabilistic", phenotype_colors=None, save=None, figsize=(6,3), show_legend=True):
-    joint_distribution(adata, method=method)
-    phenotypes = Phenotypes(adata.obs[adata.uns["tcri_phenotype_key"]].unique())
-    if method == "probabilistic":
-        cell_probabilities = probabilities(adata)
+def compare_phenotypes(adata, variable1, variable2):
+    df = adata.obs[[variable1,variable2]]
+    df=pd.crosstab(df[variable1],df[variable2],normalize='index')
+    return sns.heatmap(df)
+
+def compare_joint_distribution(adata, temperature=1):
+    # -----------------------------
+    # 1. Get Model-Inferred Distributions
+    # -----------------------------
+    # Create a dictionary mapping each tissue (treatment group) to its clone phenotype DataFrame
+    covariate_col = adata.uns["tcri_metadata"]["covariate_col"]
+    model_dists = dict()
+    for tissue in set(adata.obs[covariate_col]):
+        # Use your function to get the inferred p_ct distribution (with temperature scaling)
+        df_tissue = joint_distribution(adata,tissue, temperature=temperature)
+        df_tissue[covariate_col] = tissue
+        # Set clonotype_id as index for easier merging/comparison later
+        #df_tissue.set_index("clonotype_id", inplace=True)
+        model_dists[tissue] = df_tissue
+    
+    # Concatenate the inferred distributions from all tissues into a single DataFrame
+    df_model = pd.concat(model_dists.values(), axis=0)
+    
+    empirical_dists = dict()
+    clonotype_col = model.adata_manager.registry["clonotype_col"]
+    phenotype_col = model.adata_manager.registry["phenotype_col"]
+    
+    for tissue in set(adata.obs[covariate_col]):
+        # Filter for cells in the given tissue
+        adata_tissue = adata[adata.obs[covariate_col] == tissue].copy()
+        # Group by clonotype and compute normalized counts of each phenotype
+        emp = (
+            adata_tissue.obs.groupby(clonotype_col)[phenotype_col]
+            .value_counts(normalize=True)
+            .unstack(fill_value=0)
+        )
+        # Ensure that the DataFrame uses the actual phenotype category names as columns.
+        # If some phenotype categories are missing in a tissue, add them with 0.
+        phenotype_categories = list(adata.obs[phenotype_col].astype("category").cat.categories)
+        for ph in phenotype_categories:
+            if ph not in emp.columns:
+                emp[ph] = 0.0
+        # Reorder columns
+        emp = emp[phenotype_categories]
+        emp[covariate_col] = tissue
+        # Use clonotype ID (from the index) as a column if needed
+        emp.index.name = "clonotype_id"
+        empirical_dists[tissue] = emp
+    
+    # Concatenate the empirical distributions from all tissues into one DataFrame.
+    df_empirical = pd.concat(empirical_dists.values(), axis=0)
+    
+    # -----------------------------
+    # 3. Compare Distributions: Plotting Side-by-Side
+    # -----------------------------
+    # We'll loop over the unique tissues and for each, plot the inferred (model) and empirical distributions.
+    unique_tissues = df_model[covariate_col].unique()
+    n_tissues = len(unique_tissues)
+    
+    fig, axes = plt.subplots(n_tissues, 4, figsize=(20, 4 * n_tissues),
+                             gridspec_kw={'width_ratios': [1, 4, 1, 4]})
+    
+    # In case there's only one tissue, ensure axes is 2D.
+    if n_tissues == 1:
+        axes = np.expand_dims(axes, axis=0)
+    
+    for i, tissue in enumerate(unique_tissues):
+        # Select the rows for the current tissue for both distributions
+        model_data = df_model[df_model[covariate_col] == tissue]
+        empirical_data = df_empirical[df_empirical[covariate_col] == tissue]
+        
+        # Determine the phenotype columns (assumed to be common to both)
+        phenotype_cols = [col for col in model_data.columns if col not in ["clonotype_index", covariate_col]]
+        
+        # --- Model-Inferred Distribution ---
+        # Compute hierarchical clustering for the model distribution.
+        Z_model = linkage(model_data[phenotype_cols], method='average')
+        dendro_model = dendrogram(Z_model, orientation='left', ax=axes[i, 0], no_labels=True)
+        # Order the data
+        ordered_model = model_data.iloc[dendro_model['leaves']]
+        sns.heatmap(ordered_model[phenotype_cols], ax=axes[i, 1], cmap="viridis", cbar=True)
+        axes[i, 1].set_title(f"Model-Inferred: {tissue}")
+        axes[i, 0].set_title("Dendrogram")
+        axes[i, 0].set_xticks([])
+        axes[i, 0].set_yticks([])
+        axes[i, 1].set_yticklabels([])
+        
+        # --- Empirical Distribution ---
+        # Compute hierarchical clustering for the empirical distribution.
+        Z_emp = linkage(empirical_data[phenotype_cols], method='average')
+        dendro_emp = dendrogram(Z_emp, orientation='left', ax=axes[i, 2], no_labels=True)
+        ordered_emp = empirical_data.iloc[dendro_emp['leaves']]
+        sns.heatmap(ordered_emp[phenotype_cols], ax=axes[i, 3], cmap="viridis", cbar=True)
+        axes[i, 3].set_title(f"Empirical: {tissue}")
+        axes[i, 2].set_title("Dendrogram")
+        axes[i, 2].set_xticks([])
+        axes[i, 2].set_yticks([])
+        axes[i, 3].set_yticklabels([])
+    
+    plt.tight_layout()
+    plt.show()
+
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False, n_samples=0, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
+    phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
+    cell_probabilities = collections.defaultdict(dict)
+    for s in order:
+        jd = joint_distribution(adata,s,n_samples=n_samples,temperature=temperature)
+        if n_samples > 0:
+            jd["clonotype_id"] = ["_".join(x.split("_")[:-1]) for x in jd.index]
+            jd = jd.groupby("clonotype_id").mean()
+        for x in jd.T:
+            cell_probabilities[s][x] = jd.T[x].to_dict()
     repertoires = dict()
     times = list(range(len(order)))
     if nt:
@@ -87,11 +193,8 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=True,
                                          adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
                                          adata.obs[adata.uns["tcri_phenotype_key"]]):
-        if str(seq) != "nan" and condition in repertoires:
-            if method == "probabilistic":
-                phenotypes_and_counts = cell_probabilities[bc]
-            elif method == "empirical":
-                phenotypes_and_counts = {phenotype: 1}
+        if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
+            phenotypes_and_counts = cell_probabilities[condition][seq]
             if nt:
                 t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
                                                           TRB = dict(ntseq = seq), 
@@ -141,74 +244,47 @@ def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], s
         else:
             ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
 
-def probability_ternary(adata, phenotype_names, splitby, conditions, method="probabilistic", nt=False, top_n=None, scale_function=None,color="k",save=None):
-    if scale_function == None:
-        scale_function = freq_to_size_scaling
-    phenotypes = Phenotypes(phenotype_names)
-    cell_probabilities = probabilities(adata)
-    repertoires = dict()
-    if nt:
-        chains_to_use = "ntseq"
-    else:
-        chains_to_use = "aaseq"
-    for s in set(adata.obs[splitby]):
-        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
-                                        phenotypes = phenotypes, 
-                                        use_genes = False, 
-                                        use_chain = False,
-                                        seq_type = chains_to_use,
-                                        chains_to_use = ['TRB'],
-                                        name = s)
-    for bc, condition, seq, phenotype in zip(adata.obs.index,
-                                         adata.obs[splitby],
-                                         adata.obs[adata.uns["tcri_clone_key"]],
-                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
-        if str(seq) != "nan" and condition in repertoires:
-            if method == "probabilistic":
-                phenotypes_and_counts = cell_probabilities[bc]
-            elif method == "empirical":
-                phenotypes_and_counts = {phenotype: 1}
-            if nt:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(ntseq = seq), 
-                                                          use_genes = False)
-            else:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(aaseq = seq), 
-                                                          use_genes = False)
-            repertoires[condition].cell_list.append(t)
-    for condition, rep in repertoires.items():
-        rep._set_consistency()
-    phenotype_names_dict = {p: p for p in phenotype_names}
-    if type(conditions) == list:
-        if len(conditions) == 1:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = None
-        elif len(conditions) == 2:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = repertoires[conditions[1]]
-        else:
-            raise ValueError("Only two conditions supported.")
-    else:
-        start_clones_and_phenos = repertoires[conditions]
-        end_clones_and_phenos = None
-    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
-    if top_n == None:
-        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
-    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
+def setup_ternary_plot():
+    """Set up a ternary plot with proper axes and labels."""
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.set_aspect('equal')
+    ax.set_axis_off()
+    return fig, ax
 
-    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
-                                            end_clones_and_phenotypes = end_clones_and_phenos,
-                                            phenotypes = phenotype_names, 
-                                            phenotype_names = phenotype_names_dict,
-                                            clones = c_clones,
-                                            line_type = 'arrows', 
-                                            kwargs_for_plots={"color":color},
-                                            s_dict = s_dict,
-                                            return_axes  = True)
-    freq_to_size_legend(ax)
-    if save != None:
-        fig.savefig(save)
+def probability_ternary(adata, phenotype_names, splitby=None, conditions=None, top_n=None):
+    """Create a ternary plot showing phenotype probabilities."""
+    if splitby is None:
+        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+    
+    if conditions is None:
+        conditions = adata.obs[splitby].unique()
+    
+    # Get joint distribution for each condition
+    jds = {}
+    for cond in conditions:
+        jd = joint_distribution(adata, cond, temperature=1.0)
+        if top_n is not None:
+            jd = jd.nlargest(top_n, phenotype_names[0])
+        jds[cond] = jd
+    
+    # Create the plot
+    fig, ax = setup_ternary_plot()
+    
+    # Plot points for each condition
+    for i, (cond, jd) in enumerate(jds.items()):
+        # Convert to ternary coordinates
+        x = jd[phenotype_names[0]].values
+        y = jd[phenotype_names[1]].values
+        z = jd[phenotype_names[2]].values
+        
+        # Plot points
+        ax.scatter(x, y, z, label=cond, alpha=0.6)
+    
+    # Add legend
+    ax.legend()
+    
+    plt.tight_layout()
+    return fig, ax
 
 def probability_distribution(adata, phenotype_order=None, color="#000000", rotation=90, splitby=None, order=None, figsize=(7,5), save=None):
     columns = []
@@ -231,86 +307,6 @@ def probability_distribution(adata, phenotype_order=None, color="#000000", rotat
     if save != None:
         fig.savefig(save)
 
-def expression_ternary(adata, gene_symbols, splitby, conditions, temperature=0.001, nt=False, top_n=None, color="k",save=None, scale_function=None):
-    def get_expression(gene):
-        return adata.X[:,adata.var.index.tolist().index(gene)].T.todense().tolist()[0]
-    assert len(gene_symbols) == 3, "Must select three genes."
-    def normalized_exponential(values):
-        assert temperature > 0, "Temperature must be positive"
-        exps = np.exp(values / temperature)
-        dist = exps / np.sum(exps)
-        return np.nan_to_num(dist,nan=1)
-    expression_matrix = []
-    for gene in gene_symbols:
-        expression = get_expression(gene)
-        expression_matrix.append(expression)
-    matrix = np.array(expression_matrix).T
-    cell_probabilities = dict()
-    for bc, exp in zip(adata.obs.index.tolist(), matrix):
-        probs = normalized_exponential(exp)
-        cell_probabilities[bc] = dict(zip(gene_symbols,probs))
-    if scale_function == None:
-        scale_function = freq_to_size_scaling
-    phenotypes = Phenotypes(gene_symbols)
-    repertoires = dict()
-    if nt:
-        chains_to_use = "ntseq"
-    else:
-        chains_to_use = "aaseq"
-    for s in set(adata.obs[splitby]):
-        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
-                                        phenotypes = phenotypes, 
-                                        use_genes = False, 
-                                        use_chain = False,
-                                        seq_type = chains_to_use,
-                                        chains_to_use = ['TRB'],
-                                        name = s)
-    for bc, condition, seq, phenotype in zip(adata.obs.index,
-                                         adata.obs[splitby],
-                                         adata.obs[adata.uns["tcri_clone_key"]],
-                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
-        if str(seq) != "nan" and condition in repertoires:
-            phenotypes_and_counts = cell_probabilities[bc]
-            if nt:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(ntseq = seq), 
-                                                          use_genes = False)
-            else:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(aaseq = seq), 
-                                                          use_genes = False)
-            repertoires[condition].cell_list.append(t)
-    for condition, rep in repertoires.items():
-        rep._set_consistency()
-    phenotype_names_dict = {p: p for p in gene_symbols}
-    if type(conditions) == list:
-        if len(conditions) == 1:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = None
-        elif len(conditions) == 2:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = repertoires[conditions[1]]
-        else:
-            raise ValueError("Only two conditions supported.")
-    else:
-        start_clones_and_phenos = repertoires[conditions]
-        end_clones_and_phenos = None
-    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
-    if top_n == None:
-        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
-    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
-    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
-                                            end_clones_and_phenotypes = end_clones_and_phenos,
-                                            phenotypes = gene_symbols, 
-                                            phenotype_names = phenotype_names_dict,
-                                            clones = c_clones,
-                                            line_type = 'arrows', 
-                                            kwargs_for_plots={"color":color},
-                                            s_dict = s_dict,
-                                            return_axes  = True)
-    freq_to_size_legend(ax)
-    if save != None:
-        fig.savefig(save)
 
 def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, bg_size=0.1, bg_alpha=0.6, figsize=(12,5), return_df=False,save=None):
     df = adata.obs
@@ -361,15 +357,6 @@ def top_clone_umap(adata, reduction="umap", top_n=10, fg_alpha=0.9, fg_size=25, 
     elif save != None:
         plt.savefig(save)
 
-def phenotypic_entropy_delta(adata, groupby, key, from_this, to_that, palette=None, figsize=(7,5),save=None):
-    df = phenotypic_entropy_delta_tl(adata, groupby, key, from_this, to_that)
-    if palette==None:
-        print("hit")
-        palette=tcri_colors
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df, y='Delta Phenotypic Entropy', x=groupby, palette=palette,ax=ax)
-    if save != None:
-        fig.savefig(save)
 
 def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(8,4),s=20,order=None, palette=None):
     if palette == None:
@@ -437,9 +424,61 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
 def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5), palette=None):
     return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order, palette=palette)
 
-def clonotypic_entropy(adata, method="probabilistic", normalized=True, groupby=None, splitby=None, s=10, figsize=(12,5), order=None, palette=None):
-    func = lambda x : centropies(x, normalized=normalized, method=method)
-    return tcri_boxplot(adata, func, groupby=groupby, ylabel="Clonotypic Entropy", splitby=splitby, s=s, figsize=figsize, order=order, palette=palette)
+    
+def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
+    if palette == None:
+        palette=tcri_colors
+    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
+    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
+    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+
+    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
+    clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
+    phenotypes = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
+    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
+    
+    mi = []
+    ps = []
+    ts = []
+    rs = []
+    cl = []
+    phs = []
+    for p in tqdm.tqdm(batches):
+        sub = adata[adata.obs[batch_col] == p].copy()
+        for t in covs:
+            subt = sub[sub.obs[cov_col] == t]
+            vclones = list(set(subt.obs[clone_col]))
+            for ph in phenotypes:
+                if splitby == None:
+                    mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                    ps.append(p)
+                    ts.append(t)
+                    phs.append(ph)
+                else:
+                    for s in set(subt.obs[splitby]):
+                        subts = subt[subt.obs[cov_col] == t]
+                        vclones = list(set(subts.obs[clone_col]))
+                        mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                        ps.append(p)
+                        ts.append(t)
+                        cl.append(s)
+                        phs.append(ph)
+    fig,ax = plt.subplots(1,1,figsize=figsize)
+    if splitby != None:
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi, splitby:cl, phenotype_col:phs})
+        sns.boxplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col,palette=palette)
+        palette_black = {level: "black" for level in df[cov_col].unique()}
+        sns.stripplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col, dodge=True, palette=palette_black)
+    else:
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi,phenotype_col:phs})
+        sns.boxplot(data=df,x=phenotype_col,hue=cov_col,y="Clonotypic Entropy",color="#999999")
+        sns.stripplot(data=df,x=phenotype_col,hue=cov_col,y="Clonotypic Entropy",palette=palette,dodge=True)
+    plt.xticks(rotation=rotation)
+    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+    fig.tight_layout()
+    if save:
+        fig.savefig(save)
 
 def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,palette="coolwarm",save=None):
     clone_size(adata)
@@ -462,34 +501,63 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,pale
         fig.savefig(save)
     return ax
 
-def phenotypic_entropy(adata, groupby, splitby, method="probabilistic", return_df=False, normalized=True, decimals=5, figsize=(5,4), save=None, order=None, rotation=0, minimum_clone_size=1, palette=None):
-    ps = []
-    rs = []
-    r2 = []
-    ts = []
-    for r in set(adata.obs[groupby]):
-        rdata = adata[adata.obs[groupby] == r]
-        clone_size(rdata)
-        rdata = rdata[rdata.obs["clone_size"] >= minimum_clone_size]
-        for p in set(rdata.obs[splitby]):
-            pdata = rdata[rdata.obs[splitby] == p]
-            for clone, ent in pentropies(pdata,method=method,normalized=normalized,decimals=decimals).items():
-                rs.append(p)
-                r2.append(ent)
-                ts.append(clone)
-                ps.append(r)
-    df = pd.DataFrame.from_dict({groupby:ps,splitby:rs,"Phenotypic Entropy":r2,"Clone":ts})
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    if order == None:
-        order = list(set(rs))
+    
+def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
     if palette == None:
-        palette = tcri_colors
-    sns.boxplot(data=df, x=splitby,y="Phenotypic Entropy",ax=ax,order=order,palette=palette)
+        palette=tcri_colors
+    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
+    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
+    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+
+    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
+    clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
+    phenotypes = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
+    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
+
+    mi = []
+    ps = []
+    ts = []
+    rs = []
+    cl = []
+    phs = []
+    for p in tqdm.tqdm(batches):
+        sub = adata[adata.obs[batch_col] == p].copy()
+        for t in covs:
+            subt = sub[sub.obs[cov_col] == t]
+            vclones = list(set(subt.obs[clone_col]))
+            if len(vclones) == 0: continue
+            for ph in phenotypes:
+                if splitby == None:
+                    vclones = list(set(subt.obs[clone_col]))
+                    mi.append(pentropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                    ps.append(p)
+                    ts.append(t)
+                    phs.append(ph)
+                else:
+                    for s in set(subt.obs[splitby]):
+                        subts = subt[subt.obs[cov_col] == t]
+                        vclones = list(set(subts.obs[clone_col]))
+                        mi.append(pentropy(subts,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
+                        ps.append(p)
+                        ts.append(t)
+                        cl.append(s)
+                        phs.append(ph)
+    fig,ax = plt.subplots(1,1,figsize=figsize)
+    if splitby != None:
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi, splitby:cl, clone_col:phs})
+        sns.boxplot(data=df,x=splitby,y="Phenotypic Entropy",hue=cov_col,palette=palette)
+        palette_black = {level: "black" for level in df[cov_col].unique()}
+        sns.stripplot(data=df,x=splitby,y="Phenotypic Entropy",hue=cov_col, dodge=True, palette=palette_black)
+    else:
+        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Phenotypic Entropy":mi,clone_col:phs})
+        sns.boxplot(data=df,x=cov_col,y="Phenotypic Entropy",color="#999999")
+        sns.stripplot(data=df,x=cov_col,y="Phenotypic Entropy",palette=palette,dodge=False)
     plt.xticks(rotation=rotation)
-    if save!=None:
+    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+    fig.tight_layout()
+    if save:
         fig.savefig(save)
-    if return_df:
-        return df
 
 def set_color_palette(adata, columns):
     i = 0
@@ -504,18 +572,6 @@ def set_color_palette(adata, columns):
             main_color_map[val] = c
         adata.uns["{}_colors".format(x)] = ct
     return main_color_map
-
-def probability_distribution_bar(adata, phenotypes=None, method="probabilistic", save=None, figsize=(6,2)):
-    pdist = pdistribution(adata, method=method)
-    if phenotypes == None:
-        phenotypes = adata.uns["joint_distribution"].index
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.barplot(data=pdist,ax=ax,order=phenotypes,color="#000000")
-    ax.set_xticklabels(ax[1].get_xticklabels(), rotation=45)
-    ax.set_title("BCC CD8 Post")
-    fig.tight_layout()
-    if save:
-        fig.savefig(save)
 
 def clone_fraction(adata, groupby):
     fractions = clone_fraction_tl(adata,groupby=groupby)
@@ -562,79 +618,211 @@ def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", pa
     fig.tight_layout()
     return ax
 
-def mutual_information(adata, groupby, splitby=None, method="probabilistic", box_color="#999999", size=10, figsize=(6,5), colors=None, minimum_clone_size=1, rotation=90,return_df=False,bbox_to_anchor=(1.15, 1.), order=None):
-    mis = []
-    groups = []
-    splits = []
-    for group in set(adata.obs[groupby]):
-        gdata = adata[adata.obs[groupby] == group]
-        clone_size(gdata)
-        gdata = gdata[gdata.obs["clone_size"] >= minimum_clone_size]
-        if splitby != None:
-            for split in set(gdata.obs[splitby]):
-                sdata = gdata[gdata.obs[splitby] == split]
-                mi = mutual_information_tl(sdata, method=method)
-                mis.append(mi)
-                groups.append(group)
-                splits.append(split)
-        else:
-            joint_distribution(gdata)
-            mi = mutual_information_tl(gdata,method=method)
-            mis.append(mi)
-            groups.append(group)
-    df = pd.DataFrame.from_dict({"MI":mis, groupby: groups})
-    if splitby != None:
-        df[splitby] = splits
-    if order == None:
-        order = list(set(adata.obs[splitby]))
-    if colors == None:
-        colors = tcri_colors
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sns.boxplot(data=df,x=splitby,y="MI",ax=ax,order=order, color=box_color)
-    sns.swarmplot(data=df,x=splitby,y="MI",order=order ,s=size, hue=groupby, palette=colors)
-    fig.tight_layout()
-    plt.xticks(rotation=rotation)
-    _ = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor)
-    if return_df:
-        return df
-    else:
-        return ax
+def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90, weighted=True, return_plot=True):
+    """
+    Compute and plot mutual information between clonotypes and phenotypes.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object containing the data
+    splitby : str, optional
+        Column name to split the data by. If None, uses the covariate column.
+    temperature : float, optional
+        Temperature parameter for the joint distribution calculation
+    n_samples : int, optional
+        Number of samples to use for Monte Carlo estimation
+    normalized : bool, optional
+        Whether to normalize the mutual information values
+    palette : list, optional
+        Color palette for the plot
+    save : str, optional
+        Path to save the plot
+    legend_fontsize : int, optional
+        Font size for the legend
+    bbox_to_anchor : tuple, optional
+        Position of the legend box
+    figsize : tuple, optional
+        Figure size
+    rotation : int, optional
+        Rotation angle for x-axis labels
+    weighted : bool, optional
+        Whether to weight the mutual information by clone size
+    return_plot : bool, optional
+        Whether to return the plot axis. If False, returns only the DataFrame.
+        
+    Returns
+    -------
+    Union[matplotlib.axes.Axes, pd.DataFrame]
+        If return_plot is True, returns the plot axis. Otherwise returns a DataFrame with MI values.
+    """
+    if palette is None:
+        palette = tcri_colors
 
-def polar_plot(adata, phenotypes=None, statistic="entropy", method="probabilistic", save=None, figsize=(6,6), title=None, alpha=0.6, fontsize=15, splitby=None, bbox_to_anchor=(1.15,1.), linewidth=5., legend_fontsize=15, color_dict=None):
-    joint_distribution(adata,method=method )
-    plt.figure(figsize=figsize)
-    ax = plt.subplot(111, projection='polar')
+    # Retrieve metadata from adata
+    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
+    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
+    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+    
+    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
+    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
+
+    mi_vals = []
+    ps = []
+    ts = []
+    cl = []
+
+    for p in tqdm.tqdm(batches, desc="Computing mutual information"):
+        sub = adata[adata.obs[batch_col] == p].copy()
+        for t in covs:
+            subt = sub[sub.obs[cov_col] == t]
+            # figure out which clones are actually present
+            vclones = list(set(subt.obs[clone_col]))
+            
+            if splitby is None:
+                # Compute MI for all clones in cov t, batch p
+                val = mutual_information_tl(
+                    subt, t, 
+                    temperature=temperature, 
+                    clones=vclones,
+                    n_samples=n_samples,
+                    weighted=weighted
+                )
+                mi_vals.append(val)
+                ps.append(p)
+                ts.append(t)
+
+            else:
+                # If you want to split further by some obs column
+                for s in sorted(subt.obs[splitby].unique()):
+                    subts = subt[subt.obs[splitby] == s]
+                    vclones2 = list(set(subts.obs[clone_col]))
+                    val = mutual_information_tl(
+                        subts, t,
+                        temperature=temperature,
+                        clones=vclones2,
+                        n_samples=n_samples,
+                        weighted=weighted
+                    )
+                    mi_vals.append(val)
+                    ps.append(p)
+                    ts.append(t)
+                    cl.append(s)
+
+    # Build a DataFrame for plotting
     if splitby is None:
-        splits = ['All']
+        df = pd.DataFrame({
+            cov_col: ts,
+            batch_col: ps,
+            "Mutual Information": mi_vals
+        })
     else:
-        splits = list(set(adata.obs[splitby]))
-    if phenotypes is None:
-        phenotypes = adata.uns["joint_distribution"].index
-    N = len(phenotypes)
-    theta = np.linspace(0.0, 2 * np.pi, N, endpoint=False)
-    plot_theta = np.append(theta, theta[0])
-    subset = adata[adata.obs[adata.uns["tcri_phenotype_key"]].isin(phenotypes)]
-    for i, split in enumerate(splits): 
-        if color_dict == None:
-            colorx = tcri_colors[i]
-        else:
-            colorx = color_dict[split]
-        psubset = adata[adata.obs[splitby] == split]
-        if statistic == "entropy":
-            pdist = pd.Series(centropies(psubset))
-        else:    
-            pdist = pdistribution(psubset, method=method)
-        pdist = pdist.tolist()
-        pdist.append(pdist[0])
-        ax.plot(plot_theta, pdist, color=colorx, alpha=alpha, label=split, linewidth=linewidth)
-        ax.fill_between(plot_theta, 0, pdist, color=colorx, alpha=alpha)
-    ax.set_xticks(theta)
-    ax.set_xticklabels(phenotypes, fontsize=fontsize)
-    ax.grid(True)
-    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
-    for line in leg.get_lines():
-        line.set_linewidth(8.0)  # Set the line width
-    if title:
-        plt.title(title, va='bottom', fontsize=fontsize, fontweight="bold")
+        df = pd.DataFrame({
+            cov_col: ts,
+            batch_col: ps,
+            "Mutual Information": mi_vals,
+            splitby: cl
+        })
+
+    if not return_plot:
+        return df
+
+    # Create the plot
+    fig, ax = plt.subplots(1,1, figsize=figsize)
+    if splitby is None:
+        sns.boxplot(data=df, x=cov_col, y="Mutual Information", color="#999999", ax=ax)
+        sns.stripplot(data=df, x=cov_col, y="Mutual Information", palette=palette, dodge=False, ax=ax)
+    else:
+        sns.boxplot(data=df, x=splitby, y="Mutual Information", hue=cov_col, color="#999999", ax=ax)
+        sns.stripplot(data=df, x=splitby, y="Mutual Information", hue=cov_col, palette=palette, dodge=True, ax=ax)
+        ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+
+    plt.xticks(rotation=rotation)
+    plt.title("Mutual Information" + (" (Weighted)" if weighted else ""))
+    fig.tight_layout()
+
     if save:
-        plt.savefig(save)
+        plt.savefig(save, dpi=150)
+    plt.show()
+
+    return ax
+
+def mutual_information_plot(adata, splitby=None, temperature=1.0):
+    """Create a plot showing mutual information between clonotypes and phenotypes."""
+    if splitby is None:
+        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+    
+    # Calculate mutual information for each split
+    splits = adata.obs[splitby].unique()
+    mi_values = []
+    
+    for split in splits:
+        subset = adata[adata.obs[splitby] == split]
+        mi = mutual_information_tl(subset, split, temperature=temperature)
+        mi_values.append(mi)
+    
+    # Create DataFrame for plotting
+    df = pd.DataFrame({
+        splitby: splits,
+        "Mutual Information": mi_values
+    })
+    
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.barplot(data=df, x=splitby, y="Mutual Information", ax=ax)
+    
+    plt.tight_layout()
+    return ax
+
+def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_distribution", splitby=None, color_dict=None, temperature=1.0):
+    """Create a polar plot showing phenotype distributions or entropies."""
+    if phenotypes is None:
+        phenotypes = adata.uns["tcri_metadata"]["phenotype_col"]
+    
+    if splitby is None:
+        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+    
+    # Get unique splits
+    splits = adata.obs[splitby].unique()
+    
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'projection': 'polar'})
+    
+    # Calculate angles for each phenotype
+    angles = np.linspace(0, 2*np.pi, len(phenotypes), endpoint=False)
+    
+    # Plot for each split
+    for i, split in enumerate(splits):
+        if statistic == "distribution":
+            if method == "joint_distribution":
+                jd = joint_distribution(adata, split, temperature=temperature)
+                values = jd.mean().values
+            else:
+                subset = adata[adata.obs[splitby] == split]
+                values = np.zeros(len(phenotypes))
+                for j, pheno in enumerate(phenotypes):
+                    mask = subset.obs[adata.uns["tcri_metadata"]["phenotype_col"]] == pheno
+                    values[j] = np.sum(mask) / len(subset)
+        else:  # entropy
+            values = np.zeros(len(phenotypes))
+            for j, pheno in enumerate(phenotypes):
+                values[j] = clonotypic_entropy(adata, split, pheno, temperature=temperature)
+        
+        # Normalize values
+        values = values / np.sum(values)
+        
+        # Plot values
+        color = color_dict[split] if color_dict else None
+        ax.plot(angles, values, 'o-', linewidth=2, label=split, color=color)
+        ax.fill(angles, values, alpha=0.25, color=color)
+    
+    # Set the labels
+    ax.set_xticks(angles)
+    ax.set_xticklabels(phenotypes)
+    
+    # Add legend
+    ax.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+    
+    plt.tight_layout()
+    return ax
