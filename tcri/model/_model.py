@@ -373,7 +373,9 @@ class TCRIModule(PyroBaseModuleClass):
 
         # second level
         with pyro.plate("ct_plate", self.ct_count):
-            base_guide = torch.clamp(p_c_guide[self.ct_to_c], min=1e-3)
+            # base_guide = torch.clamp(p_c_guide[self.ct_to_c], min=1e-3)
+            ct_to_c_ondevice = self.ct_to_c.to(p_c_guide.device)
+            base_guide = torch.clamp(p_c_guide[ct_to_c_ondevice], min=1e-3)
             conc_ct_guide = self.local_scale * base_guide
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
