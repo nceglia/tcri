@@ -423,66 +423,6 @@ class TCRIModule(PyroBaseModuleClass):
                 infer={"enumerate": "parallel"} if self.use_enumeration else {}
             )
 
-
-    @auto_move_data
-    def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
-        pyro.module("scvi", self)
-        batch_size = x.shape[0]
-
-        with pyro.plate("clonotypes", self.c_count):
-            mix_logits_guide = pyro.param(
-                "mix_logits_guide",
-                torch.zeros(self.c_count, self.K, device=x.device),
-                constraint=dist.constraints.real
-            )
-            w_guide = torch.softmax(mix_logits_guide, dim=-1)
-            arch_conc_guide = pyro.param(
-                "arch_conc_guide",
-                self.archetype_mat * self.global_scale + 1e-3,
-                constraint=dist.constraints.positive
-            )
-            comps_guide = dist.Dirichlet(arch_conc_guide)
-            
-        with pyro.plate("ct_plate", self.ct_count):
-            init_mat = self.clone_phen_prior[self.ct_to_c, :]
-            init_mat = init_mat * 10.0 + 1e-3
-            init_mat = init_mat.to(x.device)
-            if "q_p_ct_raw" not in pyro.get_param_store():
-                q_p_ct_raw = pyro.param(
-                    "q_p_ct_raw",
-                    init_mat.clone().detach(),  # Make sure it’s not a leaf
-                    constraint=dist.constraints.positive
-                )
-            else:
-                q_p_ct_raw = pyro.param("q_p_ct_raw")
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
-            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
-            pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
-
-        z_loc, z_scale, _ = self.encoder(x, batch_idx)
-        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
-        with pyro.plate("data", batch_size) as idx:
-            latent_posterior = dist.Normal(z_loc, z_scale)
-            with poutine.scale(scale=self.kl_weight):
-                pyro.sample("latent", latent_posterior.to_event(1))
-
-            ct_idx = self.ct_array[idx]
-            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            cls_logits = self.classifier(z_loc)
-
-            gate_logits = self.gate_nn(z_loc)         # shared network!
-            gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
-
-            local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
-
-            pyro.sample(
-                "z_i_phen",
-                dist.Categorical(logits=local_logits_guide),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {}
-            )
-
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
