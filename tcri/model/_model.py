@@ -630,7 +630,7 @@ class TCRIModel(BaseModelClass):
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 1000,
-        patience: int = 30,
+        early_stopping_patience: int = 30,
         **kwargs
     ):
         """
@@ -668,7 +668,7 @@ class TCRIModel(BaseModelClass):
             max_epochs=max_epochs,
             early_stopping=True,
             early_stopping_monitor="elbo_validation",
-            early_stopping_patience=patience,
+            early_stopping_patience=early_stopping_patience,
             early_stopping_mode="min",
             check_val_every_n_epoch=5,
             accelerator="auto",
