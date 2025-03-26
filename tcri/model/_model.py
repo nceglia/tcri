@@ -310,11 +310,17 @@ class TCRIModule(PyroBaseModuleClass):
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
 
         with pyro.plate("ct_plate", self.ct_count):
-            q_p_ct_raw = pyro.param(
-                "q_p_ct_raw",
-                torch.ones(self.ct_count, self.P, device=x.device),
-                constraint=dist.constraints.positive
-            )
+            init_mat = self.clone_phen_prior[self.ct_to_c, :]
+            init_mat = init_mat * 10.0 + 1e-3
+            init_mat = init_mat.to(x.device)
+            if "q_p_ct_raw" not in pyro.get_param_store():
+                q_p_ct_raw = pyro.param(
+                    "q_p_ct_raw",
+                    init_mat.clone().detach(),  # Make sure it’s not a leaf
+                    constraint=dist.constraints.positive
+                )
+            else:
+                q_p_ct_raw = pyro.param("q_p_ct_raw")
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
