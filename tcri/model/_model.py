@@ -583,6 +583,7 @@ class TCRIModel(BaseModelClass):
             c2p_mat[c_array_np[i], pvals_np[i]] += 1
         c2p_mat += 1e-6
         c2p_mat = c2p_mat / c2p_mat.sum(axis=1, keepdims=True)
+        self.c2p_mat = c2p_mat
         
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
