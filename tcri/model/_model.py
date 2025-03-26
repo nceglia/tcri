@@ -23,6 +23,7 @@ from scvi.utils import setup_anndata_dsp
 from scvi.dataloaders import DataSplitter
 from torch.nn.functional import cosine_similarity
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
+from sklearn.cluster import KMeans
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
@@ -35,6 +36,29 @@ pyro.clear_param_store()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def build_archetypes(c2p_mat, K=10):
+    """
+    c2p_mat: shape (c_count, P)
+        Each row is the global distribution of phenotypes for that clone
+        (already row-stochastic).
+
+    K: number of archetypes to find.
+
+    Returns
+    -------
+    centers: shape (K, P)
+        Each row is the centroid distribution of a cluster (archetype).
+    labels: shape (c_count,)
+        Which archetype each clone ended up in.
+    """
+    kmeans = KMeans(n_clusters=K, random_state=42)
+    labels = kmeans.fit_predict(c2p_mat)
+    centers = kmeans.cluster_centers_
+    # Ensure the centers are positive and row-stochastic
+    centers = np.clip(centers, 1e-8, None)
+    centers = centers / centers.sum(axis=1, keepdims=True)
+    return centers, labels
+
 ###############################################################################
 # 1) Pairwise Margin Loss Helper
 ###############################################################################
@@ -44,11 +68,6 @@ def pairwise_centroid_margin_loss(
     margin: float = 1.0,
     adaptive_margin: bool = False,
 ) -> torch.Tensor:
-    """
-    Margin-based separation penalty on latent z for different phenotype groups.
-    If adaptive_margin=True, we scale the 'margin' by the standard deviation of
-    the phenotype centroids.
-    """
     phenotypes = phenotypes.view(-1)
     unique_phen = phenotypes.unique()
     if len(unique_phen) < 2:
@@ -83,17 +102,20 @@ class TCRIModule(PyroBaseModuleClass):
     Two-level model that incorporates hierarchical priors (clonotype-level)
     and a CVAE structure that explicitly conditions gene expression on the 
     observed cell-level phenotype.
+    
+    Now replaced the top-level "global" distribution with a Mixture of K Dirichlet
+    archetypes in p_c, then a local Dirichlet in p_ct.
     """
     def __init__(
         self,
         n_input: int,
         n_latent: int,
         P: int,
+        archetype_distributions: np.ndarray,  # pass in the K x P array
         n_batch: int,
         global_scale: float = 10.0,
         local_scale: float = 5.0,
         sharp_temperature: float = 1.0,
-        sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
@@ -117,6 +139,12 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_dropout = classifier_dropout
         self.kl_weight = 5
 
+        # Convert archetype_distributions to a Torch tensor
+        # shape: (K, P). We'll define self.K accordingly:
+        self.archetype_mat = torch.tensor(archetype_distributions, dtype=torch.float32)
+        self.K = self.archetype_mat.shape[0]
+
+        # Encoder
         self.encoder = Encoder(
             n_input=n_input,
             n_output=n_latent,
@@ -142,7 +170,6 @@ class TCRIModule(PyroBaseModuleClass):
             torch.nn.ReLU(),
             torch.nn.Linear(self.gate_nn_hidden, 1),
         )
-
         with torch.no_grad():
             self.gate_nn[-1].bias.fill_(0.0)
             self.gate_nn[-1].weight.fill_(0.0)
@@ -152,13 +179,14 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.n_latent, self.classifier_hidden),
             torch.nn.ReLU(),
-            torch.nn.Dropout(p=self.classifier_dropout),      # optional
+            torch.nn.Dropout(p=self.classifier_dropout),
             torch.nn.Linear(self.classifier_hidden, self.classifier_hidden),
             torch.nn.ReLU(),
-            torch.nn.Dropout(p=self.classifier_dropout),      # optional
+            torch.nn.Dropout(p=self.classifier_dropout),
             torch.nn.Linear(self.classifier_hidden, self.P),
         )
 
+        # We'll keep these buffers for later usage
         self.register_buffer("clone_phen_prior", torch.empty(0))
         self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))
         self.register_buffer("c_array", torch.empty(0, dtype=torch.long))
@@ -193,6 +221,7 @@ class TCRIModule(PyroBaseModuleClass):
             prior_mat = prior_mat ** (1.0 / self.sharp_temperature)
             prior_mat = prior_mat / prior_mat.sum(dim=1, keepdim=True)
 
+        # We'll store it but not necessarily use it for a direct Dirichlet
         self.register_buffer("clone_phen_prior", prior_mat)
         self.register_buffer("ct_to_c", ct_to_c_array)
         self.register_buffer("c_array", c_array_for_cells)
@@ -213,6 +242,7 @@ class TCRIModule(PyroBaseModuleClass):
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
 
+        # Possibly you keep your confusion matrix for labeling
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
@@ -225,11 +255,33 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
-        # Hierarchical priors
-        with pyro.plate("clonotypes", self.c_count):
-            conc_c = torch.clamp(self.global_scale * self.clone_phen_prior, min=1e-3)
-            p_c = pyro.sample("p_c", dist.Dirichlet(conc_c))
+        # Mixture for p_c => mixture of K Dirichlet archetypes
+        mix_logits = pyro.param(
+            "mix_logits",
+            torch.zeros(self.c_count, self.K),   # or random init
+            constraint=dist.constraints.real
+        )
+        mix_weights = torch.softmax(mix_logits, dim=-1)  # shape (c_count, K)
 
+        # "arch_conc" => shape (K,P)
+        arch_conc = torch.clamp(self.archetype_mat * self.global_scale, min=1e-3)
+        comps = dist.Dirichlet(arch_conc)  # shape(K,P)
+
+        p_c_list = []
+        with pyro.plate("clonotypes_loop", self.c_count, dim=-1) as cl_indices:
+            for clone_i in cl_indices:
+                w_i = mix_weights[clone_i]  # shape(K,)
+                mixture_i = dist.MixtureSameFamily(
+                    dist.Categorical(probs=w_i),
+                    comps
+                )
+                # Each sample => shape(P,)
+                p_c_i = pyro.sample(f"p_c_{clone_i}", mixture_i)
+                p_c_list.append(p_c_i)
+
+        p_c = torch.stack(p_c_list, dim=0)  # shape (c_count, P)
+
+        # second level => p_ct
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
@@ -248,39 +300,32 @@ class TCRIModule(PyroBaseModuleClass):
                 z = pyro.sample("latent", latent_prior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            prior_log = torch.log(p_ct[ct_idx] + 1e-8)       # log of local p_ct
-            cls_logits = self.classifier(z_loc)                  # linear classifier output
-            gate_logits = self.gate_nn(z_loc)                    # shape [batch_size, 1]
+            prior_log = torch.log(p_ct[ct_idx] + 1e-8)
+            cls_logits = self.classifier(z_loc)
+            gate_logits = self.gate_nn(z_loc)
+            gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
 
-            gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
-            # Expand gate_probs to match shape [batch_size, P]
-            gate_probs = gate_probs.expand(-1, self.P)
-
-            # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
             local_logits_model = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
-            # sample the discrete phenotype from these logits
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits_model),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {},
             )
-            target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
-            target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
-
-            pseudo_obs_labels = dist.Categorical(probs=target_pheno_probs).sample()
+            # If you produce pseudo_obs_labels from the stored prior, do:
+            # pseudo_obs_labels = dist.Categorical(probs=self.clone_phen_prior[self.ct_to_c[ct_idx]]).sample()
+            pseudo_obs_labels = dist.Categorical(probs=self.clone_phen_prior[self.ct_to_c[ct_idx]]).sample()
 
             label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-
             pyro.sample(
                 "obs_label",
                 dist.Categorical(probs=label_probs),
                 obs=pseudo_obs_labels
             )
 
+            # Decoder
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
-
-            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
+            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1-1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
@@ -298,54 +343,53 @@ class TCRIModule(PyroBaseModuleClass):
         pyro.module("scvi", self)
         batch_size = x.shape[0]
 
-        with pyro.plate("clonotypes", self.c_count):
-            init_mat_c = self.clone_phen_prior * 10.0 + 1e-3
-            init_mat_c = init_mat_c.to(x.device)
-            if "q_p_c_raw" not in pyro.get_param_store():
-                q_p_c_raw = pyro.param(
-                    "q_p_c_raw",
-                    init_mat_c.clone().detach(),
-                    constraint=dist.constraints.positive
-                )
-            else:
-                q_p_c_raw = pyro.param("q_p_c_raw")
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
-            q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
-            pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
+        # Mixture for p_c in guide
+        mix_logits_guide = pyro.param(
+            "mix_logits_guide",
+            torch.zeros(self.c_count, self.K),
+            constraint=dist.constraints.real
+        )
+        w_guide = torch.softmax(mix_logits_guide, dim=-1)
 
-        with pyro.plate("ct_plate", self.ct_count):
-            init_mat = self.clone_phen_prior[self.ct_to_c, :]
-            init_mat = init_mat * 10.0 + 1e-3
-            init_mat = init_mat.to(x.device)
-            if "q_p_ct_raw" not in pyro.get_param_store():
-                q_p_ct_raw = pyro.param(
-                    "q_p_ct_raw",
-                    init_mat.clone().detach(),  # Make sure it’s not a leaf
-                    constraint=dist.constraints.positive
+        arch_conc_guide = pyro.param(
+            "arch_conc_guide",
+            self.archetype_mat * self.global_scale + 1e-3,
+            constraint=dist.constraints.positive
+        )
+        comps_guide = dist.Dirichlet(arch_conc_guide)
+
+        p_c_list_guide = []
+        with pyro.plate("clonotypes_loop", self.c_count, dim=-1) as cl_indices:
+            for clone_i in cl_indices:
+                w_i_guide = w_guide[clone_i]
+                mixture_i_guide = dist.MixtureSameFamily(
+                    dist.Categorical(probs=w_i_guide),
+                    comps_guide
                 )
-            else:
-                q_p_ct_raw = pyro.param("q_p_ct_raw")
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
-            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
+                p_c_i_guide = pyro.sample(f"p_c_{clone_i}", mixture_i_guide)
+                p_c_list_guide.append(p_c_i_guide)
+
+        p_c_guide = torch.stack(p_c_list_guide, dim=0)
+
+        # second level
+        with pyro.plate("ct_plate", self.ct_count):
+            base_guide = torch.clamp(p_c_guide[self.ct_to_c], min=1e-3)
+            conc_ct_guide = self.local_scale * base_guide
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
+        # latent z
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
         with pyro.plate("data", batch_size) as idx:
             latent_posterior = dist.Normal(z_loc, z_scale)
             with poutine.scale(scale=self.kl_weight):
                 pyro.sample("latent", latent_posterior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            prior_log_guide = torch.log(p_c_guide[ct_idx] + 1e-8)
             cls_logits = self.classifier(z_loc)
-
-            gate_logits = self.gate_nn(z_loc)         # shared network!
+            gate_logits = self.gate_nn(z_loc)
             gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
-
             local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
 
             pyro.sample(
@@ -361,12 +405,17 @@ class TCRIModule(PyroBaseModuleClass):
         z_loc, _, _ = self.encoder(x, batch_idx)
         if z_loc.ndim == 3:
             z_loc = z_loc.mean(dim=1)
-        return z_loc.cpu()      
+        return z_loc.cpu()
 
     @torch.no_grad()
     def get_p_ct(self):
+        # This only applies if you're still using q_p_ct_raw for partial init
+        # or you have a direct param approach
         from pyro import get_param_store
         param_store = get_param_store()
+        if "q_p_ct_raw" not in param_store:
+            print("No q_p_ct_raw found in param store.")
+            return None
         q_p_ct_raw = param_store["q_p_ct_raw"]
         if self.sharp_temperature != 1.0:
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
@@ -374,7 +423,6 @@ class TCRIModule(PyroBaseModuleClass):
         else:
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
-
 
 ###############################################################################
 # 3) Unified Training Plan with Validation Step for scvi Early Stopping
@@ -472,12 +520,14 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
-            )
+        )
         gate_logits = self.module.gate_nn(z_batch)  # shape (batch_size, 1)
         gate_probs_class = torch.sigmoid(gate_logits).clamp(1e-3, 1-1e-3)
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
+
         if self.gate_saturation_weight > 0.0:
             eps = 1e-8
+            # negative entropy style => penalize saturating gating
             entropy = -(gate_probs_class*torch.log(gate_probs_class+eps)
                         + (1-gate_probs_class)*torch.log(1-gate_probs_class+eps))
             penalty = entropy.mean()
@@ -565,13 +615,13 @@ class TCRIModel(BaseModelClass):
         global_scale: float = 10.0,
         local_scale: float = 5.0,
         sharp_temperature: float = 1.0,
-        sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
         patience: int = 50,
         gate_saturation_weight: float = 0.0,
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
+        K_archetypes: int = 10,   # <-- New param to define # archetypes
         **kwargs
     ):
         super().__init__(adata)
@@ -589,12 +639,19 @@ class TCRIModel(BaseModelClass):
         c_count = len(cvals.cat.categories)
         c_array_np = cvals.cat.codes.values
         pvals_np = ph_series.cat.codes.values
+
+        # Build c2p_mat
         c2p_mat = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
             c2p_mat[c_array_np[i], pvals_np[i]] += 1
         c2p_mat += 1e-6
         c2p_mat = c2p_mat / c2p_mat.sum(axis=1, keepdims=True)
         self.c2p_mat = c2p_mat
+
+        # Build archetypes, shape(K_archetypes, P)
+        archetypes, labels = build_archetypes(c2p_mat, K=K_archetypes)
+        self.archetypes = archetypes
+        self.labels = labels
         
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
@@ -616,16 +673,18 @@ class TCRIModel(BaseModelClass):
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
         
+        # Now create TCRIModule with "archetype_distributions"=archetypes
+        # so the module can do the mixture approach
         self.module = TCRIModule(
             n_input=n_vars,
             n_latent=n_latent,
             P=P,
+            archetype_distributions=archetypes,    # pass them here
             n_batch=n_batch,
             n_hidden=n_hidden,
             global_scale=global_scale,
             local_scale=local_scale,
             sharp_temperature=sharp_temperature,
-            sharpness_penalty_scale=sharpness_penalty_scale,
             use_enumeration=use_enumeration,
             gate_nn_hidden=gate_nn_hidden,
             classifier_hidden=classifier_hidden,
@@ -639,6 +698,7 @@ class TCRIModel(BaseModelClass):
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
         self.patience = patience
+
         self.module.prepare_two_level_params(
             c_count=c_count,
             ct_count=ct_count,
@@ -652,7 +712,7 @@ class TCRIModel(BaseModelClass):
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
             f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
-            f"sharp_temperature={sharp_temperature}, sharpness_penalty_scale={sharpness_penalty_scale}."
+            f"sharp_temperature={sharp_temperature}."
         )
 
     def train(
@@ -667,12 +727,6 @@ class TCRIModel(BaseModelClass):
         n_steps_kl_warmup: int = 1000,
         **kwargs
     ):
-        """
-        We split the data into train/val, define a UnifiedTrainingPlan with
-        validation_step, and let scvi handle early stopping automatically
-        by passing early_stopping parameters to TrainRunner.
-        """
-        # Create a train/val split
         splitter = DataSplitter(
             self.adata_manager,
             train_size=0.9,
@@ -710,7 +764,6 @@ class TCRIModel(BaseModelClass):
             devices="auto",
             **kwargs
         )
-
         runner()
         return
 
@@ -727,36 +780,11 @@ class TCRIModel(BaseModelClass):
 
     @torch.no_grad()
     def get_cell_phenotype_probs(self, adata=None, batch_size: int = 256, eps: float = 1e-8):
-        """
-        Computes the cell-level phenotype probabilities by applying the same gating MLP
-        logic used in the model/guide. For each cell i:
-
-            local_logits[i] = gate_probs[i] * classifier_logits[i]
-                            + (1 - gate_probs[i]) * log(clonotype_prior[i])
-
-        Then we take a softmax across phenotypes.
-
-        Parameters
-        ----------
-        adata
-            AnnData object. If None, defaults to the AnnData used during training.
-        batch_size : int
-            Mini-batch size for data loader.
-        eps : float
-            Small epsilon for numerical stability in logs and divisions.
-
-        Returns
-        -------
-        probs : np.ndarray
-            Array of shape (n_cells, P) with the cell-level phenotype probabilities.
-        """
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
         device = next(self.module.parameters()).device
 
-        # p_ct is the learned clonotype-covariate posterior -> shape (ct_count, P)
         p_ct = self.module.get_p_ct().to(device)
-        # ct_array tells us which (c, t) index each cell belongs to -> shape (n_cells,)
         ct_array = self.module.ct_array.to(device)
 
         all_probs = []
@@ -767,23 +795,18 @@ class TCRIModel(BaseModelClass):
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
             batch_size_local = x.shape[0]
 
-            # Identify which clonotype-covariate each cell belongs to
             ct_indices = ct_array[current_idx : current_idx + batch_size_local]
             clone_cov_posterior = p_ct[ct_indices]  # shape (batch_size_local, P)
 
-            # Encoder + classifier + gating
             z_loc, _, _ = self.module.encoder(x, b)
-            cls_logits = self.module.classifier(z_loc)          # shape (batch_size_local, P)
+            cls_logits = self.module.classifier(z_loc)
 
-            # Gating MLP
-            gate_logits = self.module.gate_nn(z_loc)            # shape (batch_size_local, 1)
+            gate_logits = self.module.gate_nn(z_loc)
             gate_probs = torch.sigmoid(gate_logits)
-            gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
+            gate_probs = gate_probs.expand(-1, self.module.P)
 
-            # Combine classifier logits with local prior in log space
             local_logits = gate_probs * cls_logits + \
-                        (1 - gate_probs) * torch.log(clone_cov_posterior + eps)
-            # Softmax across phenotypes to get probabilities
+                           (1 - gate_probs) * torch.log(clone_cov_posterior + eps)
             probs = F.softmax(local_logits, dim=-1)
 
             all_probs.append(probs.cpu())
