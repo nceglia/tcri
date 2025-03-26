@@ -138,7 +138,7 @@ class TCRIModule(PyroBaseModuleClass):
             torch.nn.ReLU(),
             torch.nn.Linear(128, 1),
         )
-        
+
         with torch.no_grad():
             self.gate_nn[-1].bias.fill_(0.0)
             self.gate_nn[-1].weight.fill_(0.0)
@@ -630,6 +630,7 @@ class TCRIModel(BaseModelClass):
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 1000,
+        patience: int = 30,
         **kwargs
     ):
         """
@@ -667,7 +668,7 @@ class TCRIModel(BaseModelClass):
             max_epochs=max_epochs,
             early_stopping=True,
             early_stopping_monitor="elbo_validation",
-            early_stopping_patience=30,
+            early_stopping_patience=patience,
             early_stopping_mode="min",
             check_val_every_n_epoch=5,
             accelerator="auto",
