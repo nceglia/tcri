@@ -283,12 +283,12 @@ class TCRIModule(PyroBaseModuleClass):
 
         # stack => p_c: shape (c_count, P)
         p_c = torch.stack(p_c_list, dim=0)
-
+        self.ct_to_c = self.ct_to_c.to(p_c.device)
         # ------------------------------------------------------
         # 2) Second level => p_ct
         # ------------------------------------------------------
         with pyro.plate("ct_plate", self.ct_count):
-            self.ct_to_c = self.ct_to_c.to(p_c.device)
+            
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
