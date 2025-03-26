@@ -458,7 +458,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
             )
-
+        gate_logits = self.module.gate_nn(z_batch)  # shape (batch_size, 1)
+        gate_probs_class = torch.sigmoid(gate_logits).clamp(1e-3, 1-1e-3)
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
         if self.gate_saturation_weight > 0.0:
             penalty = ((gate_probs_class - 0.5)**2).mean()
