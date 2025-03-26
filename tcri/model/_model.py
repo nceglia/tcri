@@ -138,7 +138,10 @@ class TCRIModule(PyroBaseModuleClass):
             torch.nn.ReLU(),
             torch.nn.Linear(128, 1),
         )
-
+        
+        with torch.no_grad():
+            self.gate_nn[-1].bias.fill_(0.0)
+            self.gate_nn[-1].weight.fill_(0.0)
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
         
