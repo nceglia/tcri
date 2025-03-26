@@ -668,7 +668,6 @@ class TCRIModel(BaseModelClass):
             max_epochs=max_epochs,
             early_stopping=True,
             early_stopping_monitor="elbo_validation",
-            early_stopping_patience=early_stopping_patience,
             early_stopping_mode="min",
             check_val_every_n_epoch=5,
             accelerator="auto",
