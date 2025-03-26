@@ -95,6 +95,9 @@ class TCRIModule(PyroBaseModuleClass):
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
+        gate_nn_hidden: int = 32,
+        classifier_hidden: int = 32,
+        classifier_dropout: float = 0.1,
         n_hidden: int = 128,
         n_layers: int = 3,
     ):
@@ -107,10 +110,11 @@ class TCRIModule(PyroBaseModuleClass):
         self.global_scale = global_scale
         self.local_scale = local_scale
         self.sharp_temperature = sharp_temperature
-        self.sharpness_penalty_scale = sharpness_penalty_scale
         self.use_enumeration = use_enumeration
         self.eps = 1e-6
-
+        self.gate_nn_hidden = gate_nn_hidden
+        self.classifier_hidden = classifier_hidden
+        self.classifier_dropout = classifier_dropout
         self.kl_weight = 5
 
         self.encoder = Encoder(
@@ -134,9 +138,9 @@ class TCRIModule(PyroBaseModuleClass):
         )
 
         self.gate_nn = torch.nn.Sequential(
-            torch.nn.Linear(self.n_latent, 128),
+            torch.nn.Linear(self.n_latent, self.gate_nn_hidden),
             torch.nn.ReLU(),
-            torch.nn.Linear(128, 1),
+            torch.nn.Linear(self.gate_nn_hidden, 1),
         )
 
         with torch.no_grad():
@@ -146,13 +150,13 @@ class TCRIModule(PyroBaseModuleClass):
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
         
         self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(self.n_latent, 128),
+            torch.nn.Linear(self.n_latent, self.classifier_hidden),
             torch.nn.ReLU(),
-            torch.nn.Dropout(p=0.1),      # optional
-            torch.nn.Linear(128, 64),
+            torch.nn.Dropout(p=self.classifier_dropout),      # optional
+            torch.nn.Linear(self.classifier_hidden, self.classifier_hidden),
             torch.nn.ReLU(),
-            torch.nn.Dropout(p=0.1),      # optional
-            torch.nn.Linear(64, self.P),
+            torch.nn.Dropout(p=self.classifier_dropout),      # optional
+            torch.nn.Linear(self.classifier_hidden, self.P),
         )
 
         self.register_buffer("clone_phen_prior", torch.empty(0))
@@ -554,6 +558,9 @@ class TCRIModel(BaseModelClass):
         use_enumeration: bool = False,
         patience: int = 50,
         gate_saturation_weight: float = 0.0,
+        gate_nn_hidden: int = 32,
+        classifier_hidden: int = 32,
+        classifier_dropout: float = 0.1,
         **kwargs
     ):
         super().__init__(adata)
@@ -608,6 +615,9 @@ class TCRIModel(BaseModelClass):
             sharp_temperature=sharp_temperature,
             sharpness_penalty_scale=sharpness_penalty_scale,
             use_enumeration=use_enumeration,
+            gate_nn_hidden=gate_nn_hidden,
+            classifier_hidden=classifier_hidden,
+            classifier_dropout=classifier_dropout,
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
