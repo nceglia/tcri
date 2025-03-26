@@ -550,6 +550,7 @@ class TCRIModel(BaseModelClass):
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
         patience: int = 50,
+        gate_saturation_weight: float = 0.0,
         **kwargs
     ):
         super().__init__(adata)
@@ -606,7 +607,7 @@ class TCRIModel(BaseModelClass):
             use_enumeration=use_enumeration,
         )
         self.init_params_ = self._get_init_params(locals())
-        
+        self.gate_saturation_weight = gate_saturation_weight
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
         c_array_torch = torch.tensor(c_array_np, dtype=torch.long)
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
@@ -661,6 +662,7 @@ class TCRIModel(BaseModelClass):
             n_steps_kl_warmup=n_steps_kl_warmup,
             adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
+            gate_saturation_weight=self.gate_saturation_weight,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
