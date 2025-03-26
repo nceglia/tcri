@@ -36,6 +36,17 @@ pyro.clear_param_store()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def _move_all_pyro_params_to_device(device):
+    """
+    Loops over all parameters in pyro.get_param_store()
+    and forcibly moves them to `device`.
+    """
+    store = pyro.get_param_store()
+    for name in list(store.keys()):
+        p = store[name]
+        # p is a Tensor in param store. Force it to the same device:
+        store[name] = p.to(device)
+
 def build_archetypes(c2p_mat, K=10):
     """
     c2p_mat: shape (c_count, P)
@@ -241,7 +252,11 @@ class TCRIModule(PyroBaseModuleClass):
     @auto_move_data
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
+        device = x.device
 
+        # Force all existing pyro params to device
+        _move_all_pyro_params_to_device(device)
+        self.archetype_mat = self.archetype_mat.to(device)
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
@@ -352,6 +367,8 @@ class TCRIModule(PyroBaseModuleClass):
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         device = x.device  # Use the same device as x
+        _move_all_pyro_params_to_device(device)
+        self.archetype_mat = self.archetype_mat.to(device)
         batch_size = x.shape[0]
 
         with pyro.plate("clonotypes", self.c_count):
