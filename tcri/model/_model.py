@@ -255,7 +255,7 @@ class TCRIModule(PyroBaseModuleClass):
         device = x.device
 
         # Force all existing pyro params to device
-        _move_all_pyro_params_to_device(device)
+        # _move_all_pyro_params_to_device(device)
         self.archetype_mat = self.archetype_mat.to(device)
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
@@ -367,7 +367,7 @@ class TCRIModule(PyroBaseModuleClass):
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         device = x.device  # Use the same device as x
-        _move_all_pyro_params_to_device(device)
+        # _move_all_pyro_params_to_device(device)
         self.archetype_mat = self.archetype_mat.to(device)
         batch_size = x.shape[0]
 
