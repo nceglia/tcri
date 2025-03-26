@@ -380,6 +380,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 8,
         optimizer_config: dict = None,
+        gate_saturation_weight: float = 0.0,
         **kwargs
     ):
         self.num_particles = num_particles
@@ -399,7 +400,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self._my_global_step = 0
         self.kl_sigmoid_midpoint = 4000
         self.kl_sigmoid_speed = 0.001
-
+        self.gate_saturation_weight = gate_saturation_weight
         if optimizer_config is None:
             optimizer_config = {
                 "lr": 1e-3,
@@ -459,6 +460,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             )
 
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
+        if self.gate_saturation_weight > 0.0:
+            penalty = ((gate_probs - 0.5)**2).mean()
+            gate_penalty = self.gate_saturation_weight * penalty
+
+            # step 4: add it to the final loss
+            loss_dict["loss"] += gate_penalty
+            loss_dict["gate_saturation_penalty"] = gate_penalty.item()
         nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
         nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
         total_count = self.module.px_r.exp().clamp(max=1e4)
