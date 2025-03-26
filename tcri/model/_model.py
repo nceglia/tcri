@@ -299,11 +299,16 @@ class TCRIModule(PyroBaseModuleClass):
         batch_size = x.shape[0]
 
         with pyro.plate("clonotypes", self.c_count):
-            q_p_c_raw = pyro.param(
-                "q_p_c_raw",
-                torch.ones(self.c_count, self.P, device=x.device),
-                constraint=dist.constraints.positive
-            )
+            init_mat_c = self.clone_phen_prior * 10.0 + 1e-3
+            init_mat_c = init_mat_c.to(x.device)
+            if "q_p_c_raw" not in pyro.get_param_store():
+                q_p_c_raw = pyro.param(
+                    "q_p_c_raw",
+                    init_mat_c.clone().detach(),
+                    constraint=dist.constraints.positive
+                )
+            else:
+                q_p_c_raw = pyro.param("q_p_c_raw")
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
