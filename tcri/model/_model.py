@@ -242,7 +242,6 @@ class TCRIModule(PyroBaseModuleClass):
     def model(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
 
-        # Possibly you keep your confusion matrix for labeling
         initial_confusion = torch.eye(self.P) + 1e-3
         initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
@@ -255,39 +254,47 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
-        # Mixture for p_c => mixture of K Dirichlet archetypes
-        mix_logits = pyro.param(
-            "mix_logits",
-            torch.zeros(self.c_count, self.K),   # or random init
-            constraint=dist.constraints.real
-        )
-        mix_weights = torch.softmax(mix_logits, dim=-1)  # shape (c_count, K)
+        # ------------------------------------------------------
+        # 1) Mixture for p_c => mixture of K Dirichlet archetypes
+        #    (Remove the nested "clonotypes_loop" plate.)
+        # ------------------------------------------------------
+        with pyro.plate("clonotypes", self.c_count):
+            # define mixture parameters, shape (c_count, K)
+            mix_logits = pyro.param(
+                "mix_logits",
+                torch.zeros(self.c_count, self.K),   # or random init
+                constraint=dist.constraints.real
+            )
+            mix_weights = torch.softmax(mix_logits, dim=-1)  # shape (c_count, K)
 
-        # "arch_conc" => shape (K,P)
-        arch_conc = torch.clamp(self.archetype_mat * self.global_scale, min=1e-3)
-        comps = dist.Dirichlet(arch_conc)  # shape(K,P)
+            arch_conc = torch.clamp(self.archetype_mat * self.global_scale, min=1e-3)  # shape(K,P)
+            comps = dist.Dirichlet(arch_conc)  # K Dirichlet components (batch_shape=K)
 
+        # plain Python for-loop to sample p_c_i for each clone
         p_c_list = []
-        with pyro.plate("clonotypes_loop", self.c_count, dim=-1) as cl_indices:
-            for clone_i in cl_indices:
-                w_i = mix_weights[clone_i]  # shape(K,)
-                mixture_i = dist.MixtureSameFamily(
-                    dist.Categorical(probs=w_i),
-                    comps
-                )
-                # Each sample => shape(P,)
-                p_c_i = pyro.sample(f"p_c_{clone_i}", mixture_i)
-                p_c_list.append(p_c_i)
+        for clone_i in range(self.c_count):
+            w_i = mix_weights[clone_i]                     # shape (K,)
+            mixture_i = dist.MixtureSameFamily(
+                dist.Categorical(probs=w_i),
+                comps
+            )
+            p_c_i = pyro.sample(f"p_c_{clone_i}", mixture_i)  # shape (P,)
+            p_c_list.append(p_c_i)
 
-        p_c = torch.stack(p_c_list, dim=0)  # shape (c_count, P)
+        # stack => p_c: shape (c_count, P)
+        p_c = torch.stack(p_c_list, dim=0)
 
-        # second level => p_ct
+        # ------------------------------------------------------
+        # 2) Second level => p_ct
+        # ------------------------------------------------------
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
 
-        # Encoder
+        # ------------------------------------------------------
+        # 3) Encoder + sampling latent
+        # ------------------------------------------------------
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
@@ -307,14 +314,16 @@ class TCRIModule(PyroBaseModuleClass):
 
             local_logits_model = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
+            # sample discrete phenotype
             z_i_phen = pyro.sample(
                 "z_i_phen",
                 dist.Categorical(logits=local_logits_model),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {},
             )
-            # If you produce pseudo_obs_labels from the stored prior, do:
-            # pseudo_obs_labels = dist.Categorical(probs=self.clone_phen_prior[self.ct_to_c[ct_idx]]).sample()
-            pseudo_obs_labels = dist.Categorical(probs=self.clone_phen_prior[self.ct_to_c[ct_idx]]).sample()
+            # synthetic pseudo-labels (if needed)
+            target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
+            target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
+            pseudo_obs_labels = dist.Categorical(probs=target_pheno_probs).sample()
 
             label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
             pyro.sample(
@@ -323,9 +332,8 @@ class TCRIModule(PyroBaseModuleClass):
                 obs=pseudo_obs_labels
             )
 
-            # Decoder
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
-            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1-1e-3)
+            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
             nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
             nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total_count = self.px_r.exp().clamp(max=1e4)
@@ -338,45 +346,57 @@ class TCRIModule(PyroBaseModuleClass):
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
 
+
+    # ------------------------------------------------------------------------------
+
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         batch_size = x.shape[0]
 
-        # Mixture for p_c in guide
-        mix_logits_guide = pyro.param(
-            "mix_logits_guide",
-            torch.zeros(self.c_count, self.K),
-            constraint=dist.constraints.real
-        )
-        w_guide = torch.softmax(mix_logits_guide, dim=-1)
+        # same top-level plate
+        with pyro.plate("clonotypes", self.c_count):
+            mix_logits_guide = pyro.param(
+                "mix_logits_guide",
+                torch.zeros(self.c_count, self.K, device=x.device),
+                constraint=dist.constraints.real
+            )
+            w_guide = torch.softmax(mix_logits_guide, dim=-1)
+            arch_conc_guide = pyro.param(
+                "arch_conc_guide",
+                self.archetype_mat * self.global_scale + 1e-3,
+                constraint=dist.constraints.positive
+            )
+            comps_guide = dist.Dirichlet(arch_conc_guide)
 
-        arch_conc_guide = pyro.param(
-            "arch_conc_guide",
-            self.archetype_mat * self.global_scale + 1e-3,
-            constraint=dist.constraints.positive
-        )
-        comps_guide = dist.Dirichlet(arch_conc_guide)
-
+        # For-loop (no second plate) to sample p_c_i in the guide
         p_c_list_guide = []
-        with pyro.plate("clonotypes_loop", self.c_count, dim=-1) as cl_indices:
-            for clone_i in cl_indices:
-                w_i_guide = w_guide[clone_i]
-                mixture_i_guide = dist.MixtureSameFamily(
-                    dist.Categorical(probs=w_i_guide),
-                    comps_guide
-                )
-                p_c_i_guide = pyro.sample(f"p_c_{clone_i}", mixture_i_guide)
-                p_c_list_guide.append(p_c_i_guide)
+        for clone_i in range(self.c_count):
+            w_i_guide = w_guide[clone_i]
+            mixture_i_guide = dist.MixtureSameFamily(
+                dist.Categorical(probs=w_i_guide),
+                comps_guide
+            )
+            p_c_i_guide = pyro.sample(f"p_c_{clone_i}", mixture_i_guide)
+            p_c_list_guide.append(p_c_i_guide)
 
         p_c_guide = torch.stack(p_c_list_guide, dim=0)
 
         # second level
         with pyro.plate("ct_plate", self.ct_count):
-            # base_guide = torch.clamp(p_c_guide[self.ct_to_c], min=1e-3)
-            ct_to_c_ondevice = self.ct_to_c.to(p_c_guide.device)
-            base_guide = torch.clamp(p_c_guide[ct_to_c_ondevice], min=1e-3)
-            conc_ct_guide = self.local_scale * base_guide
+            init_mat = self.clone_phen_prior[self.ct_to_c, :].to(x.device)
+            init_mat = init_mat * 10.0 + 1e-3
+            if "q_p_ct_raw" not in pyro.get_param_store():
+                q_p_ct_raw = pyro.param(
+                    "q_p_ct_raw",
+                    init_mat.clone().detach(),
+                    constraint=dist.constraints.positive
+                )
+            else:
+                q_p_ct_raw = pyro.param("q_p_ct_raw")
+            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
+            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
+            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
         # latent z
@@ -388,10 +408,71 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("latent", latent_posterior.to_event(1))
 
             ct_idx = self.ct_array[idx]
-            prior_log_guide = torch.log(p_c_guide[ct_idx] + 1e-8)
+            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
             cls_logits = self.classifier(z_loc)
+
             gate_logits = self.gate_nn(z_loc)
             gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
+            local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
+
+            pyro.sample(
+                "z_i_phen",
+                dist.Categorical(logits=local_logits_guide),
+                infer={"enumerate": "parallel"} if self.use_enumeration else {}
+            )
+
+
+    @auto_move_data
+    def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
+        pyro.module("scvi", self)
+        batch_size = x.shape[0]
+
+        with pyro.plate("clonotypes", self.c_count):
+            mix_logits_guide = pyro.param(
+                "mix_logits_guide",
+                torch.zeros(self.c_count, self.K, device=x.device),
+                constraint=dist.constraints.real
+            )
+            w_guide = torch.softmax(mix_logits_guide, dim=-1)
+            arch_conc_guide = pyro.param(
+                "arch_conc_guide",
+                self.archetype_mat * self.global_scale + 1e-3,
+                constraint=dist.constraints.positive
+            )
+            comps_guide = dist.Dirichlet(arch_conc_guide)
+            
+        with pyro.plate("ct_plate", self.ct_count):
+            init_mat = self.clone_phen_prior[self.ct_to_c, :]
+            init_mat = init_mat * 10.0 + 1e-3
+            init_mat = init_mat.to(x.device)
+            if "q_p_ct_raw" not in pyro.get_param_store():
+                q_p_ct_raw = pyro.param(
+                    "q_p_ct_raw",
+                    init_mat.clone().detach(),  # Make sure it’s not a leaf
+                    constraint=dist.constraints.positive
+                )
+            else:
+                q_p_ct_raw = pyro.param("q_p_ct_raw")
+            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
+            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
+            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
+            pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
+
+        z_loc, z_scale, _ = self.encoder(x, batch_idx)
+        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
+
+        with pyro.plate("data", batch_size) as idx:
+            latent_posterior = dist.Normal(z_loc, z_scale)
+            with poutine.scale(scale=self.kl_weight):
+                pyro.sample("latent", latent_posterior.to_event(1))
+
+            ct_idx = self.ct_array[idx]
+            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            cls_logits = self.classifier(z_loc)
+
+            gate_logits = self.gate_nn(z_loc)         # shared network!
+            gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
+
             local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
 
             pyro.sample(
