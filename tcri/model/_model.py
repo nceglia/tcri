@@ -283,12 +283,12 @@ class TCRIModule(PyroBaseModuleClass):
 
         # stack => p_c: shape (c_count, P)
         p_c = torch.stack(p_c_list, dim=0)
-        self.ct_to_c = self.ct_to_c.to(p_c.device)
+        
         # ------------------------------------------------------
         # 2) Second level => p_ct
         # ------------------------------------------------------
         with pyro.plate("ct_plate", self.ct_count):
-            
+            self.ct_to_c = self.ct_to_c.to(p_c.device)
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
@@ -322,6 +322,7 @@ class TCRIModule(PyroBaseModuleClass):
                 infer={"enumerate": "parallel"} if self.use_enumeration else {},
             )
             # synthetic pseudo-labels (if needed)
+            self.clone_phen_prior = self.clone_phen_prior.to(self.ct_to_c.device)
             target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
             target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
             pseudo_obs_labels = dist.Categorical(probs=target_pheno_probs).sample()
