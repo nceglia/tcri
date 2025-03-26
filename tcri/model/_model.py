@@ -348,15 +348,11 @@ class TCRIModule(PyroBaseModuleClass):
             )
             pyro.sample("obs", x_dist.to_event(1), obs=x)
 
-
-    # ------------------------------------------------------------------------------
-
     @auto_move_data
     def guide(self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor):
         pyro.module("scvi", self)
         batch_size = x.shape[0]
 
-        # same top-level plate
         with pyro.plate("clonotypes", self.c_count):
             mix_logits_guide = pyro.param(
                 "mix_logits_guide",
@@ -364,27 +360,32 @@ class TCRIModule(PyroBaseModuleClass):
                 constraint=dist.constraints.real
             )
             w_guide = torch.softmax(mix_logits_guide, dim=-1)
+
+            # <-- Key Fix: Move archetype_mat to x.device so everything is on GPU
+            arch_init = self.archetype_mat.to(x.device) * self.global_scale + 1e-3
+
             arch_conc_guide = pyro.param(
                 "arch_conc_guide",
-                self.archetype_mat * self.global_scale + 1e-3,
+                arch_init.clone().detach(),
                 constraint=dist.constraints.positive
             )
             comps_guide = dist.Dirichlet(arch_conc_guide)
 
-        # For-loop (no second plate) to sample p_c_i in the guide
+        # Now do your for-loop to sample from mixture_i_guide
         p_c_list_guide = []
         for clone_i in range(self.c_count):
-            w_i_guide = w_guide[clone_i]
+            w_i_guide = w_guide[clone_i]  # shape(K,)
             mixture_i_guide = dist.MixtureSameFamily(
-                dist.Categorical(probs=w_i_guide),
-                comps_guide
+                dist.Categorical(probs=w_i_guide),  # should be GPU
+                comps_guide                         # also GPU
             )
+            # sampling from mixture_i_guide now won't cause a device mismatch
             p_c_i_guide = pyro.sample(f"p_c_{clone_i}", mixture_i_guide)
             p_c_list_guide.append(p_c_i_guide)
 
         p_c_guide = torch.stack(p_c_list_guide, dim=0)
 
-        # second level
+        # second-level p_ct, etc. (unchanged):
         with pyro.plate("ct_plate", self.ct_count):
             init_mat = self.clone_phen_prior[self.ct_to_c, :].to(x.device)
             init_mat = init_mat * 10.0 + 1e-3
@@ -400,6 +401,7 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
+
 
         # latent z
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
