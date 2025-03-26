@@ -461,12 +461,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
         if self.gate_saturation_weight > 0.0:
-            penalty = ((gate_probs - 0.5)**2).mean()
+            penalty = ((gate_probs_class - 0.5)**2).mean()
             gate_penalty = self.gate_saturation_weight * penalty
-
-            # step 4: add it to the final loss
             loss_dict["loss"] += gate_penalty
-            loss_dict["gate_saturation_penalty"] = gate_penalty.item()
+            loss_dict["classification_gate_penalty"] = gate_penalty.item()
+    
         nb_logits = (px_rate + self.module.eps).log() - (self.module.px_r.exp() + self.module.eps).log()
         nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
         total_count = self.module.px_r.exp().clamp(max=1e4)
