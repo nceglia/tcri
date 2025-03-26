@@ -541,6 +541,7 @@ class TCRIModel(BaseModelClass):
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
+        patience: int = 50,
         **kwargs
     ):
         super().__init__(adata)
@@ -603,7 +604,7 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
-        
+        self.patience = patience
         self.module.prepare_two_level_params(
             c_count=c_count,
             ct_count=ct_count,
@@ -630,7 +631,6 @@ class TCRIModel(BaseModelClass):
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 1000,
-        # early_stopping_patience: int = 500,
         **kwargs
     ):
         """
@@ -669,7 +669,7 @@ class TCRIModel(BaseModelClass):
             early_stopping=True,
             early_stopping_monitor="elbo_validation",
             early_stopping_mode="min",
-            early_stopping_patience=500,
+            early_stopping_patience=self.patience,
             check_val_every_n_epoch=5,
             accelerator="auto",
             devices="auto",
