@@ -516,14 +516,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             
             unique_ct = ct_idx_batch.unique()
             kl_terms = []
+
+            eps = 1e-8
             for ct in unique_ct:
                 ct_mask = ct_idx_batch == ct
                 if ct_mask.sum() < 2:  # Avoid singleton groups
                     continue
                 classifier_probs_ct = classifier_probs[ct_mask].mean(dim=0)  # (P,)
                 prior_ct = p_ct[ct]
+
                 kl_ct = F.kl_div(
-                    classifier_probs_ct.log(), 
+                    (classifier_probs_ct + eps).log(), 
                     prior_ct, 
                     reduction='batchmean'
                 )
