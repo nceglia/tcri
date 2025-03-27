@@ -682,13 +682,6 @@ class TCRIModel(BaseModelClass):
         covariate_col = self.adata_manager.registry["covariate_col"]
         batch_col = self.adata_manager.registry["batch_col"]
 
-        self.K = K  # number of archetypes; adjust as needed
-        kmeans = KMeans(n_clusters=K, random_state=42)
-        labels = kmeans.fit_predict(self.c2p_mat)
-        centers = kmeans.cluster_centers_
-        centers = np.clip(centers, 1e-8, None)
-        centers /= centers.sum(axis=1, keepdims=True)
-
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
         target_codes = torch.tensor(ph_series.cat.codes.values, dtype=torch.long)
@@ -704,6 +697,15 @@ class TCRIModel(BaseModelClass):
         c2p_mat = c2p_mat / c2p_mat.sum(axis=1, keepdims=True)
         self.c2p_mat = c2p_mat
         
+
+        self.K = K  # number of archetypes; adjust as needed
+        kmeans = KMeans(n_clusters=K, random_state=42)
+        labels = kmeans.fit_predict(self.c2p_mat)
+        centers = kmeans.cluster_centers_
+        centers = np.clip(centers, 1e-8, None)
+        centers /= centers.sum(axis=1, keepdims=True)
+
+
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
