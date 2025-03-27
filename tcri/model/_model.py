@@ -519,7 +519,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
             eps = 1e-8
             for ct in unique_ct:
-                ct_mask = ct_idx_batch == ct
+                ct_mask = (ct_idx_batch == ct).squeeze()
                 if ct_mask.sum() < 2:  # Avoid singleton groups
                     continue
                 classifier_probs_ct = classifier_probs[ct_mask].mean(dim=0)  # (P,)
