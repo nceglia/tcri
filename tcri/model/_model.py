@@ -750,7 +750,7 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
-        centers = torch.tensor(centers, dtype=torch.long)
+        centers = torch.tensor(centers, dtype=torch.float32)
         self.patience = patience
         self.module.prepare_two_level_params(
             c_count=c_count,
