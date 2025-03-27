@@ -142,7 +142,10 @@ class TCRIModule(PyroBaseModuleClass):
             torch.nn.ReLU(),
             torch.nn.Linear(self.gate_nn_hidden, 1),
         )
-
+        self.phenotype_decoder = torch.nn.Linear(self.n_latent, self.P)
+        with torch.no_grad():
+            self.phenotype_decoder.weight *= 0.01
+            self.phenotype_decoder.bias.fill_(0.0)
         with torch.no_grad():
             self.gate_nn[-1].bias.fill_(0.0)
             self.gate_nn[-1].weight.fill_(0.0)
@@ -249,7 +252,7 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)       # log of local p_ct
-            cls_logits = self.classifier(z_loc)                  # linear classifier output
+            cls_logits = self.classifier(z_loc) + self.phenotype_decoder(z)
             gate_logits = self.gate_nn(z_loc)                    # shape [batch_size, 1]
 
             gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
@@ -341,7 +344,7 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            cls_logits = self.classifier(z_loc)
+            cls_logits = self.classifier(z_loc) + self.phenotype_decoder(z_loc)
 
             gate_logits = self.gate_nn(z_loc)         # shared network!
             gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
