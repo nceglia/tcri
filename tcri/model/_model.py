@@ -547,10 +547,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["clone_alignment_loss"] = clone_alignment_loss.item()
         # --- END OF CLONE ALIGNMENT REGULARIZATION ---
 
-
-
         loss_dict["margin_loss"] = margin_val
-        loss_dict["reconstruction_loss"] = recon_val
 
         self._my_global_step += 1
         return loss_dict
