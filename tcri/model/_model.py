@@ -396,6 +396,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         num_particles: int = 8,
         optimizer_config: dict = None,
         gate_saturation_weight: float = 0.0,
+        clone_alignment_scale: float = 1.0,
         **kwargs
     ):
         self.num_particles = num_particles
@@ -411,7 +412,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.margin_value = margin_value
         self.adaptive_margin = adaptive_margin
         self.reconstruction_loss_scale = reconstruction_loss_scale
-
+        self.clone_alignment_scale = clone_alignment_scale 
         self._my_global_step = 0
         self.kl_sigmoid_midpoint = 4000
         self.kl_sigmoid_speed = 0.001
@@ -499,6 +500,43 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
         loss_dict["loss"] += total_recon_loss
         recon_val = reconstruction_loss_val.item()
+
+        # --- START OF CLONE ALIGNMENT REGULARIZATION ---
+        clone_alignment_loss = 0.0
+        if self.clone_alignment_scale > 0.0:
+            device = next(self.module.parameters()).device
+            p_ct = self.module.get_p_ct().to(device)  # (ct_count, P)
+            ct_idx_batch = self.module.ct_array[batch["indices"].long().to(device)]  # (batch_size,)
+            
+            # Compute phenotype probabilities from the classifier directly (without gating for simplicity)
+            z_loc, _, _ = self.module.encoder(batch[REGISTRY_KEYS.X_KEY].float().to(device),
+                                            batch[REGISTRY_KEYS.BATCH_KEY].long().to(device))
+            cls_logits = self.module.classifier(z_loc)
+            classifier_probs = F.softmax(cls_logits, dim=-1)  # (batch_size, P)
+            
+            unique_ct = ct_idx_batch.unique()
+            kl_terms = []
+            for ct in unique_ct:
+                ct_mask = ct_idx_batch == ct
+                if ct_mask.sum() < 2:  # Avoid singleton groups
+                    continue
+                classifier_probs_ct = classifier_probs[ct_mask].mean(dim=0)  # (P,)
+                prior_ct = p_ct[ct]
+                kl_ct = F.kl_div(
+                    classifier_probs_ct.log(), 
+                    prior_ct, 
+                    reduction='batchmean'
+                )
+                kl_terms.append(kl_ct)
+            
+            if kl_terms:
+                clone_alignment_loss = torch.stack(kl_terms).mean()
+                loss_dict["loss"] += self.clone_alignment_scale * clone_alignment_loss
+
+            loss_dict["clone_alignment_loss"] = clone_alignment_loss.item()
+        # --- END OF CLONE ALIGNMENT REGULARIZATION ---
+
+
 
         loss_dict["margin_loss"] = margin_val
         loss_dict["reconstruction_loss"] = recon_val
@@ -665,6 +703,7 @@ class TCRIModel(BaseModelClass):
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 1000,
+        clone_alignment_scale: float = 0.0,
         **kwargs
     ):
         """
@@ -688,6 +727,7 @@ class TCRIModel(BaseModelClass):
             adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
             gate_saturation_weight=self.gate_saturation_weight,
+            clone_alignment_scale=clone_alignment_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
