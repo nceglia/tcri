@@ -509,11 +509,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             validate_args=False
         )
 
-        reconstruction_loss_val = -x_dist.log_prob(x).mean()
-        total_recon_loss = self.reconstruction_loss_scale * reconstruction_loss_val
-        loss_dict["loss"] += total_recon_loss
-        recon_val = reconstruction_loss_val.item()
-
         # --- START OF CLONE ALIGNMENT REGULARIZATION ---
         clone_alignment_loss = 0.0
         if self.clone_alignment_scale > 0.0:
