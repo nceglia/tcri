@@ -38,6 +38,30 @@ pyro.clear_param_store()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def build_archetypes(c2p_mat, K=10):
+    """
+    c2p_mat: shape (c_count, P)
+        Each row is the global distribution of phenotypes for that clone
+        (already row-stochastic).
+
+    K: number of archetypes to find.
+
+    Returns
+    -------
+    centers: shape (K, P)
+        Each row is the centroid distribution of a cluster (archetype).
+    labels: shape (c_count,)
+        Which archetype each clone ended up in.
+    """
+    kmeans = KMeans(n_clusters=K, random_state=42)
+    labels = kmeans.fit_predict(c2p_mat)
+    centers = kmeans.cluster_centers_
+    # Ensure the centers are positive and row-stochastic
+    centers = np.clip(centers, 1e-8, None)
+    centers = centers / centers.sum(axis=1, keepdims=True)
+    return centers, labels
+
 ###############################################################################
 # 1) Pairwise Margin Loss Helper
 ###############################################################################
