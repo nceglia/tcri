@@ -211,7 +211,8 @@ class TCRIModule(PyroBaseModuleClass):
         ct_array_for_cells: torch.Tensor,
         target_phenotypes: torch.Tensor,
         ct_to_cov_array: torch.Tensor = None,
-        centers: torch.Tensor = None,
+        archetype_centers: torch.Tensor = None,
+        archetype_labels: torch.Tensor = None,
     ):
         self.c_count = c_count
         self.ct_count = ct_count
@@ -229,7 +230,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.register_buffer("c_array", c_array_for_cells)
         self.register_buffer("ct_array", ct_array_for_cells)
         self.register_buffer("_target_phenotypes", target_phenotypes)
-        self.register_buffer("archetype_centers", centers)
+        self.register_buffer("archetype_centers", archetype_centers)
 
         if ct_to_cov_array is not None:
             self.register_buffer("ct_to_cov", ct_to_cov_array)
@@ -704,7 +705,8 @@ class TCRIModel(BaseModelClass):
         centers = kmeans.cluster_centers_
         centers = np.clip(centers, 1e-8, None)
         centers /= centers.sum(axis=1, keepdims=True)
-
+        self.centers = centers
+        self.labels = labels
 
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
@@ -759,6 +761,8 @@ class TCRIModel(BaseModelClass):
             ct_array_for_cells=ct_array_torch,
             target_phenotypes=target_codes,
             ct_to_cov_array=ct_to_cov_torch,
+            archetype_centers=centers,
+            archetype_labels=labels,
         )
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
