@@ -253,12 +253,12 @@ class TCRIModule(PyroBaseModuleClass):
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)       # log of local p_ct
             cls_logits = self.classifier(z) + self.phenotype_decoder(z)
-            gate_logits = self.gate_nn(z)                    # shape [batch_size, 1]
+            # gate_logits = self.gate_nn(z)                    # shape [batch_size, 1]
 
-            gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
-            # Expand gate_probs to match shape [batch_size, P]
-            gate_probs = gate_probs.expand(-1, self.P)
-
+            # gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
+            # # Expand gate_probs to match shape [batch_size, P]
+            # gate_probs = gate_probs.expand(-1, self.P)
+            gate_probs = torch.full((batch_size, self.P), 0.5, device=x.device)
             # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
             local_logits_model = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
@@ -356,8 +356,7 @@ class TCRIModule(PyroBaseModuleClass):
             prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
             cls_logits = self.classifier(z) + self.phenotype_decoder(z)
 
-            gate_logits = self.gate_nn(z)         # shared network!
-            gate_probs = torch.sigmoid(gate_logits).expand(-1, self.P)
+            gate_probs = torch.full((batch_size, self.P), 0.5, device=x.device)
 
             local_logits_guide = gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
 
@@ -824,9 +823,10 @@ class TCRIModel(BaseModelClass):
             cls_logits = self.module.classifier(z_loc)          # shape (batch_size_local, P)
 
             # Gating MLP
-            gate_logits = self.module.gate_nn(z_loc)            # shape (batch_size_local, 1)
-            gate_probs = torch.sigmoid(gate_logits)
-            gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
+            # gate_logits = self.module.gate_nn(z_loc)            # shape (batch_size_local, 1)
+            # gate_probs = torch.sigmoid(gate_logits)
+            # gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
+            gate_probs = torch.full((batch_size_local, self.module.P), 0.5, device=x.device)
 
             # Combine classifier logits with local prior in log space
             local_logits = gate_probs * cls_logits + \
