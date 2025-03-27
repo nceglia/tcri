@@ -268,19 +268,29 @@ class TCRIModule(PyroBaseModuleClass):
                 dist.Categorical(logits=local_logits_model),
                 infer={"enumerate": "parallel"} if self.use_enumeration else {},
             )
-            target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
-            target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
+            # target_pheno_probs = self.clone_phen_prior[self.ct_to_c[ct_idx]]
+            # target_pheno_probs = target_pheno_probs / (target_pheno_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
-            pseudo_obs_labels = dist.Categorical(probs=target_pheno_probs).sample()
+            # pseudo_obs_labels = dist.Categorical(probs=target_pheno_probs).sample()
 
+            # label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
+
+            # pyro.sample(
+            #     "obs_label",
+            #     dist.Categorical(probs=label_probs),
+            #     obs=pseudo_obs_labels
+            # )
+            obs_phen = self._target_phenotypes[idx]  # This is your true label for each cell
+            
+            # Convert from z_i_phen -> distribution over final “observed” labels:
             label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
-
+            
+            # Now condition on the *actual* labels by passing them into obs=...:
             pyro.sample(
                 "obs_label",
                 dist.Categorical(probs=label_probs),
-                obs=pseudo_obs_labels
+                obs=obs_phen,
             )
-
             px_scale, px_r_out, px_rate, px_dropout = self.decoder("gene", z, log_library, batch_idx)
 
             zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
