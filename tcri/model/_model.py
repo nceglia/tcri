@@ -24,6 +24,9 @@ from scvi.dataloaders import DataSplitter
 from torch.nn.functional import cosine_similarity
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
 
+from sklearn.cluster import KMeans
+
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 warnings.filterwarnings("ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*")
@@ -184,6 +187,7 @@ class TCRIModule(PyroBaseModuleClass):
         ct_array_for_cells: torch.Tensor,
         target_phenotypes: torch.Tensor,
         ct_to_cov_array: torch.Tensor = None,
+        centers: torch.Tensor = None,
     ):
         self.c_count = c_count
         self.ct_count = ct_count
@@ -201,6 +205,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.register_buffer("c_array", c_array_for_cells)
         self.register_buffer("ct_array", ct_array_for_cells)
         self.register_buffer("_target_phenotypes", target_phenotypes)
+        self.register_buffer("archetype_centers", centers)
 
         if ct_to_cov_array is not None:
             self.register_buffer("ct_to_cov", ct_to_cov_array)
@@ -387,6 +392,15 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
 
+    @torch.no_grad()
+    def get_p_c(self):
+        q_p_c_raw = pyro.param("q_p_c_raw")
+        if self.sharp_temperature != 1.0:
+            q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
+            q_p_c_sharp /= q_p_c_sharp.sum(dim=1, keepdim=True)
+        else:
+            q_p_c_sharp = q_p_c_raw / q_p_c_raw.sum(dim=1, keepdim=True)
+        return q_p_c_sharp
 
 ###############################################################################
 # 3) Unified Training Plan with Validation Step for scvi Early Stopping
@@ -409,6 +423,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         optimizer_config: dict = None,
         gate_saturation_weight: float = 0.0,
         clone_alignment_scale: float = 1.0,
+        archetype_penalty_scale: float = 1.0, 
         **kwargs
     ):
         self.num_particles = num_particles
@@ -429,6 +444,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.kl_sigmoid_midpoint = 4000
         self.kl_sigmoid_speed = 0.001
         self.gate_saturation_weight = gate_saturation_weight
+        self.archetype_penalty_scale = archetype_penalty_scale
         if optimizer_config is None:
             optimizer_config = {
                 "lr": 1e-3,
@@ -545,7 +561,22 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
             loss_dict["clone_alignment_loss"] = clone_alignment_loss.item()
         # --- END OF CLONE ALIGNMENT REGULARIZATION ---
-
+        if self.archetype_penalty_scale > 0:
+            p_c = self.module.get_p_c().to(device)  # (c_count, P)
+            archetype_centers = self.module.archetype_centers.to(device)  # (K, P)
+            
+            # Compute distance to nearest archetype for each clonotype
+            distances = torch.cdist(p_c, archetype_centers, p=2)  # (c_count, K)
+            nearest_dists, _ = distances.min(dim=1)  # (c_count,)
+            
+            # Compute mean penalty across clonotypes
+            archetype_penalty = nearest_dists.mean()
+            
+            # Add penalty to loss
+            loss_dict["loss"] += self.archetype_penalty_scale * archetype_penalty
+            
+            # Log penalty for tracking
+            loss_dict["archetype_penalty"] = archetype_penalty.item()
         loss_dict["margin_loss"] = margin_val
 
         self._my_global_step += 1
@@ -617,6 +648,7 @@ class TCRIModel(BaseModelClass):
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
+        K: int = 10,
         **kwargs
     ):
         super().__init__(adata)
@@ -625,6 +657,13 @@ class TCRIModel(BaseModelClass):
         phenotype_col = self.adata_manager.registry["phenotype_col"]
         covariate_col = self.adata_manager.registry["covariate_col"]
         batch_col = self.adata_manager.registry["batch_col"]
+
+        self.K = K  # number of archetypes; adjust as needed
+        kmeans = KMeans(n_clusters=K, random_state=42)
+        labels = kmeans.fit_predict(self.c2p_mat)
+        centers = kmeans.cluster_centers_
+        centers = np.clip(centers, 1e-8, None)
+        centers /= centers.sum(axis=1, keepdims=True)
 
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
@@ -683,6 +722,7 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
+        centers = torch.tensor(centers, dtype=torch.long)
         self.patience = patience
         self.module.prepare_two_level_params(
             c_count=c_count,
@@ -711,6 +751,7 @@ class TCRIModel(BaseModelClass):
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 1000,
         clone_alignment_scale: float = 0.0,
+        archetype_penalty_scale: float = 0.0,
         **kwargs
     ):
         """
@@ -735,6 +776,7 @@ class TCRIModel(BaseModelClass):
             reconstruction_loss_scale=reconstruction_loss_scale,
             gate_saturation_weight=self.gate_saturation_weight,
             clone_alignment_scale=clone_alignment_scale,
+            archetype_penalty_scale=archetype_penalty_scale,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
