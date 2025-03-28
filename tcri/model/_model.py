@@ -329,12 +329,12 @@ class TCRIModule(PyroBaseModuleClass):
     ):
         pyro.module("scvi", self)
 
-        initial_confusion = torch.eye(self.P) + 1e-3
-        initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
+        # initial_confusion = torch.eye(self.P) + 1e-3
+        # initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
 
-        confusion_matrix = pyro.param(
-            "confusion_matrix", initial_confusion, constraint=dist.constraints.simplex
-        )
+        # confusion_matrix = pyro.param(
+        #     "confusion_matrix", initial_confusion, constraint=dist.constraints.simplex
+        # )
 
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
@@ -390,24 +390,22 @@ class TCRIModule(PyroBaseModuleClass):
                 gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
             )
 
-            # sample the discrete phenotype from these logits
-            z_i_phen = pyro.sample(
-                "z_i_phen",
-                dist.Categorical(logits=local_logits_model),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {},
-            )
+            # # sample the discrete phenotype from these logits
+            # z_i_phen = pyro.sample(
+            #     "z_i_phen",
+            #     dist.Categorical(logits=local_logits_model),
+            #     infer={"enumerate": "parallel"} if self.use_enumeration else {},
+            # )
             
             obs_phen = self._target_phenotypes[
                 idx
             ]  # This is your true label for each cell
 
-            # Convert from z_i_phen -> distribution over final “observed” labels:
-            label_probs = confusion_matrix.to(z_i_phen.device)[z_i_phen]
+            obs_phen = self._target_phenotypes[idx]
 
-            # Now condition on the *actual* labels by passing them into obs=...:
             pyro.sample(
                 "obs_label",
-                dist.Categorical(probs=label_probs),
+                dist.Categorical(logits=local_logits_model),
                 obs=obs_phen,
             )
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
@@ -502,11 +500,11 @@ class TCRIModule(PyroBaseModuleClass):
                 gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
             )
 
-            pyro.sample(
-                "z_i_phen",
-                dist.Categorical(logits=local_logits_guide),
-                infer={"enumerate": "parallel"} if self.use_enumeration else {},
-            )
+            # pyro.sample(
+            #     "z_i_phen",
+            #     dist.Categorical(logits=local_logits_guide),
+            #     infer={"enumerate": "parallel"} if self.use_enumeration else {},
+            # )
 
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
