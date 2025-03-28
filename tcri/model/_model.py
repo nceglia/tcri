@@ -108,30 +108,25 @@ class MixtureDirichlet(dist.TorchDistribution):
         return flat_samples.reshape(full_shape + (self.K,))
 
     def log_prob(self, value):
-        """
-        Computes the log probability of 'value', which is assumed to have shape:
-          sample_shape + batch_shape + (K,).
-        For each value, computes:
-          log_prob = logsumexp(log(mixture_weights) + log_prob(component))
-        over the mixture components.
-        """
-        # Add a mixture dimension: shape becomes ... + (1, K).
-        value_expanded = value.unsqueeze(-2)
-        # Expand concentration to match: shape ... + (B, K).
+        device = value.device  # get the device from input tensor
+        
+        # Move tensors explicitly to the same device
+        value_expanded = value.unsqueeze(-2).to(device)
         expanded_concentration = self.concentration.expand(
             value.shape[:-1] + (self.B, self.K)
-        )
-        # Create Dirichlet distributions for each component.
+        ).to(device)
+        
         d = dist.Dirichlet(expanded_concentration)
-        # Compute component log probabilities; shape: sample_shape + batch_shape + (B,).
+        
         component_log_probs = d.log_prob(
             value_expanded.expand(expanded_concentration.shape)
         )
-        # Expand mixture_weights to shape: sample_shape + batch_shape + (B,).
-        expanded_weights = self.mixture_weights.expand(value.shape[:-1] + (self.B,))
+        
+        expanded_weights = self.mixture_weights.expand(value.shape[:-1] + (self.B,)).to(device)
         mixture_log = torch.log(expanded_weights)
-        # Sum via logsumexp over the mixture components.
+        
         return torch.logsumexp(mixture_log + component_log_probs, dim=-1)
+
 
     def score_parts(self, value):
         # Compute log probability.
