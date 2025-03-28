@@ -848,7 +848,7 @@ class TCRIModel(BaseModelClass):
             n_hidden=n_hidden,
             global_scale=global_scale,
             local_scale=local_scale,
-            mixture_concentration=self.mixture_concentration,
+            mixture_concentration=self.centers,
             sharp_temperature=sharp_temperature,
             sharpness_penalty_scale=sharpness_penalty_scale,
             use_enumeration=use_enumeration,
