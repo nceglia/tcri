@@ -24,7 +24,7 @@ from scvi.dataloaders import DataSplitter
 from torch.nn.functional import cosine_similarity
 from pyro.infer import TraceEnum_ELBO, Trace_ELBO
 from torch.distributions import Categorical, Dirichlet, MixtureSameFamily
-
+from sklearn.cluster import KMeans
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
@@ -40,6 +40,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def build_archetypes(c2p_mat, K=4):
+    """
+    c2p_mat: shape (c_count, P)
+        Each row is the global distribution of phenotypes for that clone
+        (already row-stochastic).
+
+    K: number of archetypes to find.
+
+    Returns
+    -------
+    centers: shape (K, P)
+        Each row is the centroid distribution of a cluster (archetype).
+    labels: shape (c_count,)
+        Which archetype each clone ended up in.
+    """
+    kmeans = KMeans(n_clusters=K, random_state=42)
+    labels = kmeans.fit_predict(c2p_mat)
+    centers = kmeans.cluster_centers_
+    # Ensure the centers are positive and row-stochastic
+    centers = np.clip(centers, 1e-8, None)
+    centers = centers / centers.sum(axis=1, keepdims=True)
+    return centers, labels
 
 ###############################################################################
 # 0) Mixture of Dirichlet Distributions - TODO: Refactor
@@ -765,7 +787,6 @@ class TCRIModel(BaseModelClass):
         n_hidden: int = 128,
         global_scale: float = 10.0,
         local_scale: float = 5.0,
-        mixture_concentration: torch.Tensor = None,
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
@@ -774,6 +795,7 @@ class TCRIModel(BaseModelClass):
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
+        K: int = 10,
         **kwargs,
     ):
         super().__init__(adata)
@@ -797,7 +819,7 @@ class TCRIModel(BaseModelClass):
         c2p_mat += 1e-6
         c2p_mat = c2p_mat / c2p_mat.sum(axis=1, keepdims=True)
         self.c2p_mat = c2p_mat
-
+        self.centers, self.labels = build_archetypes(self.c2p_mat, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
@@ -826,13 +848,14 @@ class TCRIModel(BaseModelClass):
             n_hidden=n_hidden,
             global_scale=global_scale,
             local_scale=local_scale,
-            mixture_concentration=mixture_concentration,
+            mixture_concentration=self.mixture_concentration,
             sharp_temperature=sharp_temperature,
             sharpness_penalty_scale=sharpness_penalty_scale,
             use_enumeration=use_enumeration,
             gate_nn_hidden=gate_nn_hidden,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
+            
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
