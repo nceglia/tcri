@@ -116,7 +116,6 @@ def register_model(
 
     adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
     adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
-    adata.uns["tcri_confusion_matrix"] = pyro.param("confusion_matrix").detach().cpu().numpy()
 
     return adata
 
