@@ -131,3 +131,10 @@ dmypy.json
 #Figures
 example/*.png
 example/*.pdf
+
+
+# MacOS
+
+.DS_Store
+
+
