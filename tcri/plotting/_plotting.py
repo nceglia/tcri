@@ -252,7 +252,53 @@ def setup_ternary_plot():
     return fig, ax
 
 def probability_ternary(adata, phenotype_names, splitby=None, conditions=None, top_n=None):
-    """Create a ternary plot showing phenotype probabilities."""
+    """
+    Create a ternary plot showing phenotype probabilities.
+    
+    This function creates a ternary (triangular) plot that visualizes the distribution of
+    three phenotypes across different clonotypes. Each point represents a clonotype, with
+    its position indicating the relative probabilities of the three specified phenotypes.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object containing the data with TCR and phenotype information
+    phenotype_names : list
+        List of exactly three phenotype names to include in the plot, corresponding to
+        the three corners of the triangle
+    splitby : str, optional
+        Column name to split the data by. If None, uses the covariate column stored
+        in adata.uns["tcri_metadata"]["covariate_col"]
+    conditions : list, optional
+        List of conditions to include in the plot. If None, includes all unique values
+        in the splitby column
+    top_n : int, optional
+        If provided, only includes the top N clonotypes with the highest probability
+        for the first specified phenotype
+        
+    Returns
+    -------
+    tuple
+        A tuple containing (fig, ax) for the created plot
+        
+    Examples
+    --------
+    >>> import tcri
+    >>> # Create a ternary plot for three phenotypes
+    >>> fig, ax = tcri.pl.probability_ternary(
+    ...     adata, 
+    ...     phenotype_names=["CD8_naive", "CD8_effector", "CD8_memory"],
+    ...     splitby="timepoint"
+    ... )
+    >>> 
+    >>> # Focus on top clonotypes
+    >>> fig, ax = tcri.pl.probability_ternary(
+    ...     adata, 
+    ...     phenotype_names=["CD8_naive", "CD8_effector", "CD8_memory"],
+    ...     conditions=["Day0", "Day14"],
+    ...     top_n=50
+    ... )
+    """
     if splitby is None:
         splitby = adata.uns["tcri_metadata"]["covariate_col"]
     
@@ -622,39 +668,53 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
     """
     Compute and plot mutual information between clonotypes and phenotypes.
     
+    This function calculates mutual information between TCR clonotypes and cell phenotypes,
+    which quantifies how much information one variable provides about the other. The function
+    can optionally split the calculation by a specified categorical variable (e.g., timepoint,
+    condition). Results are displayed as a box plot with individual data points.
+    
     Parameters
     ----------
     adata : AnnData
-        AnnData object containing the data
+        AnnData object containing the data with TCR and phenotype information
     splitby : str, optional
-        Column name to split the data by. If None, uses the covariate column.
-    temperature : float, optional
-        Temperature parameter for the joint distribution calculation
-    n_samples : int, optional
-        Number of samples to use for Monte Carlo estimation
-    normalized : bool, optional
-        Whether to normalize the mutual information values
+        Column name to split the data by. If None, uses the covariate column stored in adata.uns["tcri_metadata"]
+    temperature : float, default=1.0
+        Temperature parameter for softening/sharpening distributions in the joint distribution calculation
+    n_samples : int, default=0
+        Number of samples to use for Monte Carlo estimation of mutual information
+    normalized : bool, default=True
+        Whether to normalize the mutual information values to [0,1] range
     palette : list, optional
-        Color palette for the plot
+        Color palette for the plot. If None, uses tcri_colors
     save : str, optional
-        Path to save the plot
-    legend_fontsize : int, optional
-        Font size for the legend
-    bbox_to_anchor : tuple, optional
+        Path to save the plot figure
+    legend_fontsize : int, default=6
+        Font size for the plot legend
+    bbox_to_anchor : tuple, default=(1.15,1.)
         Position of the legend box
-    figsize : tuple, optional
-        Figure size
-    rotation : int, optional
+    figsize : tuple, default=(8,4)
+        Size of the figure in inches (width, height)
+    rotation : int, default=90
         Rotation angle for x-axis labels
-    weighted : bool, optional
+    weighted : bool, default=True
         Whether to weight the mutual information by clone size
-    return_plot : bool, optional
-        Whether to return the plot axis. If False, returns only the DataFrame.
+    return_plot : bool, default=True
+        Whether to return the plot axis. If False, returns only the DataFrame with MI values
         
     Returns
     -------
     Union[matplotlib.axes.Axes, pd.DataFrame]
         If return_plot is True, returns the plot axis. Otherwise returns a DataFrame with MI values.
+        
+    Examples
+    --------
+    >>> import tcri
+    >>> # Calculate and plot mutual information
+    >>> ax = tcri.pl.mutual_information(adata, splitby="timepoint", temperature=1.0)
+    >>> 
+    >>> # Get the mutual information values as a DataFrame without plotting
+    >>> mi_df = tcri.pl.mutual_information(adata, splitby="condition", return_plot=False)
     """
     if palette is None:
         palette = tcri_colors
@@ -776,7 +836,48 @@ def mutual_information_plot(adata, splitby=None, temperature=1.0):
     return ax
 
 def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_distribution", splitby=None, color_dict=None, temperature=1.0):
-    """Create a polar plot showing phenotype distributions or entropies."""
+    """
+    Create a polar plot showing phenotype distributions or entropies.
+    
+    This function creates a radar/polar chart that visualizes either the distribution of phenotypes
+    or entropy values across different conditions. It's useful for comparing phenotype proportions
+    or entropy patterns across experimental groups.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object containing the data with TCR and phenotype information
+    phenotypes : list, optional
+        List of phenotype names to include in the plot. If None, uses all phenotypes
+        defined in adata.uns["tcri_metadata"]["phenotype_col"]
+    statistic : str, default="distribution"
+        Type of statistic to plot, one of "distribution" or "entropy"
+    method : str, default="joint_distribution"
+        Method to compute phenotype distributions, either "joint_distribution" (model-based)
+        or "empirical" (raw cell counts)
+    splitby : str, optional
+        Column name to split the data by. If None, uses the covariate column stored
+        in adata.uns["tcri_metadata"]["covariate_col"]
+    color_dict : dict, optional
+        Dictionary mapping split categories to colors
+    temperature : float, default=1.0
+        Temperature parameter for softening/sharpening distributions
+        
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The polar plot axis
+        
+    Examples
+    --------
+    >>> import tcri
+    >>> # Basic phenotype distribution polar plot
+    >>> ax = tcri.pl.polar_plot(adata, statistic="distribution")
+    >>> 
+    >>> # Entropy polar plot with custom colors
+    >>> color_dict = {"Day0": "#FF5733", "Day7": "#33FF57", "Day14": "#3357FF"}
+    >>> ax = tcri.pl.polar_plot(adata, statistic="entropy", color_dict=color_dict)
+    """
     if phenotypes is None:
         phenotypes = adata.uns["tcri_metadata"]["phenotype_col"]
     

@@ -43,12 +43,67 @@ def register_model(
     latent_slot="X_tcri",
     batch_size=256
 ):
-    # --- Store core model outputs ---
+    """
+    Register TCRi model outputs in the AnnData object.
+    
+    This function takes a trained TCRi model and stores all relevant model outputs
+    and metadata in the AnnData object for downstream analysis. It stores the model's
+    latent representations, phenotype probabilities, and other model-derived data.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        AnnData object to register model outputs in
+    model : TCRIModel
+        Trained TCRIModel object
+    phenotype_prob_slot : str, default="X_tcri_phenotypes"
+        Key in adata.obsm where phenotype probabilities will be stored
+    phenotype_assignment_obs : str, default="tcri_phenotype"
+        Key in adata.obs where the discrete phenotype assignments will be stored
+    latent_slot : str, default="X_tcri"
+        Key in adata.obsm where latent representations will be stored
+    batch_size : int, default=256
+        Batch size for model inference
+        
+    Returns
+    -------
+    AnnData
+        The input AnnData object with model outputs registered
+        
+    Notes
+    -----
+    The function stores multiple items in adata.uns for use by downstream functions:
+    - "tcri_p_ct": Clonotype-covariate phenotype distributions
+    - "tcri_ct_to_cov": Mapping from clonotype-covariate indices to covariate indices
+    - "tcri_ct_to_c": Mapping from clonotype-covariate indices to clonotype indices
+    - "tcri_covariate_categories": List of covariate category names
+    - "tcri_clonotype_categories": List of clonotype category names
+    - "tcri_phenotype_categories": List of phenotype category names
+    - "tcri_metadata": Dictionary of column names for different data types
+    - "tcri_ct_array_for_cells": For each cell, which clonotype-covariate index it belongs to
+    - "tcri_cov_array_for_cells": For each cell, which covariate index it has
+    
+    Examples
+    --------
+    >>> import tcri
+    >>> # Train a model
+    >>> model = tcri.TCRIModel(adata)
+    >>> model.train()
+    >>> 
+    >>> # Register model outputs
+    >>> adata = tcri.pp.register_model(
+    ...     adata, 
+    ...     model, 
+    ...     phenotype_prob_slot="X_tcri_phenotypes",
+    ...     phenotype_assignment_obs="tcri_phenotype"
+    ... )
+    """
+    # Store model outputs
     adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
     adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
     adata.uns["tcri_ct_to_c"] = model.module.ct_to_c.cpu().numpy()
 
-    # Store category labels explicitly
+    # Get category labels from the model
     cov_col = model.adata_manager.registry["covariate_col"]
     clone_col = model.adata_manager.registry["clonotype_col"]
     phenotype_col = model.adata_manager.registry["phenotype_col"]
@@ -64,53 +119,33 @@ def register_model(
         adata.obs[phenotype_col].astype("category").cat.categories.tolist()
     )
 
-    # Store metadata keys for easy reference
     adata.uns["tcri_metadata"] = {
         "covariate_col": cov_col,
         "clone_col": clone_col,
         "phenotype_col": phenotype_col,
         "batch_col": batch_col,
     }
-
-    # Store local_scale
     adata.uns["tcri_local_scale"] = model.module.local_scale
 
-    # ------------------------------------------------------------------------
-    #  A) Per-cell arrays that some downstream functions need
-    # ------------------------------------------------------------------------
-    #  1) ct_array_for_cells: for each cell, which ct index it belongs to
+    # Store per-cell arrays needed by downstream functions
     ct_array_for_cells = model.module.ct_array.cpu().numpy()
     adata.uns["tcri_ct_array_for_cells"] = ct_array_for_cells
 
-    #  2) cov_array_for_cells: for each cell, which covariate index it has
-    #     This is simply ct_to_cov[ct_array_for_cells].
     ct_to_cov = model.module.ct_to_cov.cpu().numpy()
     cov_array_for_cells = ct_to_cov[ct_array_for_cells]
     adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
 
-    #  If you also want the global clone index per cell, you can similarly do:
-    #     c_array_for_cells = model.module.c_array.cpu().numpy()
-    #     adata.uns["tcri_c_array_for_cells"] = c_array_for_cells
-    #
-    #  Just make sure 'c_array' is defined in the module (like 'module.ct_array').
-
-    # ------------------------------------------------------------------------
-    #  B) Compute and store per-cell phenotype probabilities
-    # ------------------------------------------------------------------------
+    # Store per-cell phenotype probabilities
     phenotype_probs = model.get_cell_phenotype_probs(batch_size=batch_size)
     adata.obsm[phenotype_prob_slot] = phenotype_probs
 
-    # ------------------------------------------------------------------------
-    #  C) Compute and store phenotype assignments (argmax of probabilities)
-    # ------------------------------------------------------------------------
+    # Store phenotype assignments (argmax of probabilities)
     assignments = phenotype_probs.argmax(axis=1)
     adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
         assignments, categories=adata.uns["tcri_phenotype_categories"]
     )
 
-    # ------------------------------------------------------------------------
-    #  D) Compute and store latent representation (z)
-    # ------------------------------------------------------------------------
+    # Store latent representation
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
 
@@ -128,50 +163,58 @@ def joint_distribution(
     weighted: bool = False,
 ) -> pd.DataFrame:
     """
-    Returns a DataFrame whose rows are local phenotype distributions for each
-    clonotype in the specified covariate, with optional weighting by clone size.
+    Calculate joint distribution of phenotypes and TCR clonotypes for a given covariate.
     
-    If weighted=True, each row is multiplied by (# cells in that clonotype+covariate).
-    Then the entire matrix is normalized to sum to 1, giving a "joint" distribution
-    where large clones have more mass.
+    This function retrieves phenotype probability distributions for each clonotype in a
+    specified covariate condition (e.g., timepoint, tissue type). The resulting distribution
+    shows how different clonotypes are associated with different phenotypes. Optionally,
+    distributions can be weighted by clone size to give more influence to larger clones.
     
     Parameters
     ----------
     adata : AnnData
-        Must contain certain fields in `adata.uns`, including:
-        - "tcri_p_ct" -> local distributions p_ct
-        - "tcri_ct_to_cov" -> array mapping ct index -> covariate index
-        - "tcri_ct_to_c" -> array mapping ct index -> clone index
-        - "tcri_covariate_categories" -> list of covariate labels
-        - "tcri_phenotype_categories" -> list of phenotype labels
-        - "tcri_clonotype_categories" -> list of clonotype labels
-        - "tcri_ct_array_for_cells" -> ct index per cell
-        - "tcri_cov_array_for_cells" -> covariate index per cell
-        - "tcri_metadata" -> includes keys "clone_col", "covariate_col", etc.
+        AnnData object containing TCRi model outputs. Must contain certain fields in
+        adata.uns that are created by the register_model function
     covariate_label : str
-        A label in `adata.uns["tcri_covariate_categories"]` that specifies
-        which covariate we want the local distributions for.
-    temperature : float
-        Temperature to use when scaling p_ct via softmax(log(...)/temperature).
-    n_samples : int
-        If > 0, we sample from the Dirichlet. Otherwise, we return point estimates.
-    clones : list of str
-        If given, we filter to only those clonotype IDs.
-    weighted : bool
-        If True, multiply each row by the #cells in that clone+covariate, then do a
-        global normalization so large clones have more total mass.
+        The covariate label (e.g., "Day0", "tumor") to calculate the joint distribution for
+    temperature : float, default=1.0
+        Temperature parameter for softening/sharpening distributions. Lower values make
+        distributions more peaked, higher values make them more uniform
+    n_samples : int, default=0
+        If > 0, samples from the Dirichlet distribution n_samples times for uncertainty
+        estimation. If 0, returns point estimates
+    clones : list, optional
+        List of clone IDs to restrict the analysis to. If None, uses all clones
+    weighted : bool, default=False
+        If True, weights each distribution by the number of cells in that clonotype and
+        covariate, giving more influence to larger clones in the final distribution
 
     Returns
     -------
     pd.DataFrame
-        Columns = phenotype categories, each row = distribution for a clonotype (or sample).
-        If weighted=True and n_samples=0, the row sums will NOT necessarily be 1—only
-        the entire DataFrame sums to 1 across all rows.
+        DataFrame where each row is a clonotype and each column is a phenotype.
+        Each row contains the probability distribution over phenotypes for that clonotype.
+        If weighted=True, large clones contribute more to the overall distribution.
+        
+    Examples
+    --------
+    >>> import tcri
+    >>> # Get joint distribution for Day0
+    >>> jd = tcri.pp.joint_distribution(adata, "Day0")
+    >>> 
+    >>> # Get joint distribution with sampling for uncertainty estimation
+    >>> jd_samples = tcri.pp.joint_distribution(adata, "tumor", n_samples=100)
+    >>> 
+    >>> # Get weighted joint distribution for specific clones
+    >>> my_clones = ["CASSQETQYF", "CASSLGQAYEQYF"]
+    >>> jd_weighted = tcri.pp.joint_distribution(
+    ...     adata, "Day14", temperature=0.5, clones=my_clones, weighted=True
+    ... )
     """
-    # A) Retrieve stored tensors and metadata
-    p_ct = torch.tensor(adata.uns["tcri_p_ct"])  # shape: (num_ct_pairs, num_phenotypes)
-    ct_to_cov = torch.tensor(adata.uns["tcri_ct_to_cov"])  # shape: (num_ct_pairs,)
-    ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])      # shape: (num_ct_pairs,)
+    # Retrieve stored tensors and metadata
+    p_ct = torch.tensor(adata.uns["tcri_p_ct"])
+    ct_to_cov = torch.tensor(adata.uns["tcri_ct_to_cov"])
+    ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])
 
     covariate_categories = adata.uns["tcri_covariate_categories"]
     phenotype_categories = adata.uns["tcri_phenotype_categories"]
@@ -180,99 +223,93 @@ def joint_distribution(
     metadata = adata.uns["tcri_metadata"]
     covariate_col = metadata["covariate_col"]
 
-    # B) Convert covariate_label to index
+    # Convert covariate_label to index
     try:
         cov_value = covariate_categories.index(covariate_label)
     except ValueError:
         raise ValueError(f"Covariate label '{covariate_label}' not found among: {covariate_categories}")
 
-    # C) Mask to rows for this covariate
+    # Get data specific to this covariate
     chosen_mask = (ct_to_cov == cov_value)
     chosen_idx = chosen_mask.nonzero(as_tuple=True)[0]
-    p_ct_for_cov = p_ct[chosen_mask]  # shape (num_chosen, num_phenotypes)
+    p_ct_for_cov = p_ct[chosen_mask]
 
-    # D) Apply temperature scaling to get distributions
+    # Apply temperature scaling
     eps = 1e-8
     p_ct_for_cov = F.softmax(torch.log(p_ct_for_cov + eps) / temperature, dim=-1)
 
-    # E) Get clonotype indices for each chosen ct
-    clone_indices = ct_to_c[chosen_idx].numpy()  # shape (num_chosen,)
+    # Get clonotype indices for each chosen ct
+    clone_indices = ct_to_c[chosen_idx].numpy()
 
-    # F) [Optional] If weighted=True, compute #cells in each ct index
-    #    Then multiply each row by that count. We'll do the final normalization at the end.
-    ct_array_for_cells = adata.uns["tcri_ct_array_for_cells"]  # shape (#cells,)
-    cov_array_for_cells = adata.uns["tcri_cov_array_for_cells"]  # shape (#cells,)
+    # Get cell counts for each clonotype-covariate pair (for weighting)
+    ct_array_for_cells = adata.uns["tcri_ct_array_for_cells"]
+    cov_array_for_cells = adata.uns["tcri_cov_array_for_cells"]
 
-    # Count how many cells in each ct for this covariate
     from collections import Counter
     cell_mask = (cov_array_for_cells == cov_value)
     cts_in_cov = ct_array_for_cells[cell_mask]
     ct_counts_dict = Counter(cts_in_cov.tolist())
 
-    # G) Distinguish between no-sampling vs. sampling
-    p_ct_arr = p_ct_for_cov.numpy()  # shape (num_chosen, num_phenotypes)
+    p_ct_arr = p_ct_for_cov.numpy()
 
     if n_samples == 0:
-        # (1) No-sampling, point estimates
+        # Build dataframe with point estimates (no sampling)
         df = pd.DataFrame(p_ct_arr, columns=phenotype_categories)
         df["clonotype_index"] = clone_indices
         df["clonotype_id"] = [clonotype_categories[i] for i in clone_indices]
 
-        # Filter clones if needed
+        # Filter to requested clones
         if clones is not None:
             df = df[df["clonotype_id"].isin(clones)]
 
-        # If weighted, multiply each row by # cells and do a single global normalization
+        # Apply clone size weighting if requested
         if weighted:
-            # Multiply each row
             counts = []
             for i, row in df.iterrows():
                 ct_i = row["clonotype_index"]
-                c_count = ct_counts_dict.get(ct_i, 0)  # # cells in that ct+cov
+                c_count = ct_counts_dict.get(ct_i, 0)
                 counts.append(c_count)
 
             counts = np.array(counts, dtype=float)
-            # Multiply distribution columns
             df.loc[:, phenotype_categories] = df[phenotype_categories].values * counts[:, None]
 
-            # Now sum all elements across the entire matrix to get a global normalizer
             total_mass = df[phenotype_categories].sum().sum()
             if total_mass > 0:
                 df.loc[:, phenotype_categories] = df[phenotype_categories] / total_mass
 
-        # Set the index to clonotype_id
+        # Set the index and clean up columns
         df.index = df["clonotype_id"]
-        # Optionally remove clonotype columns
         df = df[[col for col in df.columns if "clonotype" not in col]]
         return df
 
     else:
-        # (2) We have n_samples>0, so sample from Dirichlet
+        # Sample from Dirichlet distribution
         local_scale = adata.uns.get("tcri_local_scale", 1.0)
-        conc = local_scale * p_ct_for_cov  # shape: (num_chosen, num_phenotypes)
+        conc = local_scale * p_ct_for_cov
         
-        samples = Dirichlet(conc).sample((n_samples,))  # shape: (n_samples, num_chosen, num_phenotypes)
+        samples = Dirichlet(conc).sample((n_samples,))
         samples_np = samples.cpu().numpy()
 
-        # Reshape to (num_chosen * n_samples, num_phenotypes)
-        # so each row is a single sample from that ct
+        # Reshape samples for DataFrame creation
         num_chosen, num_pheno = p_ct_arr.shape
         samples_expanded = samples_np.transpose(1, 0, 2).reshape(-1, num_pheno)
 
-        # Make repeated arrays for clonotype indices
+        # Create arrays for sample tracking
         clonotype_indices_expanded = np.repeat(clone_indices, n_samples)
         clonotype_ids_expanded = [clonotype_categories[i] for i in clonotype_indices_expanded]
         sample_ids = np.tile(np.arange(n_samples), num_chosen)
 
+        # Build dataframe
         df_samples = pd.DataFrame(samples_expanded, columns=phenotype_categories)
         df_samples["clonotype_index"] = clonotype_indices_expanded
         df_samples["clonotype_id"] = clonotype_ids_expanded
         df_samples["sample_id"] = sample_ids
 
+        # Filter to requested clones
         if clones is not None:
             df_samples = df_samples[df_samples["clonotype_id"].isin(clones)]
 
-        # If weighted, multiply each row by the # cells in that ct, then globally normalize
+        # Apply clone size weighting if requested
         if weighted:
             counts = []
             for i, row in df_samples.iterrows():
@@ -287,11 +324,10 @@ def joint_distribution(
             if total_mass > 0:
                 df_samples.loc[:, phenotype_categories] /= total_mass
 
-        # Set a unique index for each (clonotype_id, sample_id)
+        # Set the index and clean up columns
         df_samples.index = [
             f"{cid}_{sid}" for cid, sid in zip(df_samples["clonotype_id"], df_samples["sample_id"])
         ]
-        # Remove columns if desired
         df_samples = df_samples[[col for col in df_samples.columns if col not in ["clonotype_id","clonotype_index","sample_id"]]]
         return df_samples
 
