@@ -311,7 +311,7 @@ class TCRIModule(PyroBaseModuleClass):
             n_layers=n_layers,
             n_hidden=n_hidden,
             n_cat_list=[n_batch],
-            use_layer_norm=True,ff
+            use_layer_norm=True,
         )
 
         # VampPrior
