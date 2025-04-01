@@ -63,6 +63,58 @@ def build_archetypes(c2p_mat, K=4):
     centers = centers / centers.sum(axis=1, keepdims=True)
     return centers, labels
 
+
+
+
+
+###############################################################################
+# -1) VampPrior
+###############################################################################
+class VampPrior(torch.nn.Module):
+    def __init__(self, pseudo_inputs, encoder):
+        """
+        Args:
+            pseudo_inputs (torch.Tensor): Initial pseudo-inputs of shape (K, input_dim).
+            encoder (torch.nn.Module): Encoder that takes an input and returns (mean, log_var)
+                for the approximate posterior q(z|x).
+        """
+        super(VampPrior, self).__init__()
+        # Learnable pseudo-inputs; these are optimized during training.
+        self.pseudo_inputs = torch.nn.Parameter(pseudo_inputs)
+        self.encoder = encoder
+
+    def get_mixture(self):
+        """
+        Constructs the VampPrior as a uniform mixture of q(z|u_k) for each pseudo-input u_k.
+        """
+        # Compute the approximate posterior parameters for each pseudo-input.
+        # Expected output shapes: means and log_vars: (K, latent_dim)
+        K = self.pseudo_inputs.size(0)
+        # Create a dummy categorical argument; unsqueeze to have shape (K, 1)
+        dummy_batch = torch.zeros(K, dtype=torch.long, device=self.pseudo_inputs.device).unsqueeze(1)
+        means, log_vars, _ = self.encoder(self.pseudo_inputs, dummy_batch)
+        scales = torch.sqrt(torch.exp(log_vars))
+        component_dist = dist.Independent(dist.Normal(means, scales), 1)
+        mixture_weights = torch.ones(K, device=self.pseudo_inputs.device) / K
+        mixture = dist.MixtureSameFamily(
+            dist.Categorical(mixture_weights),
+            component_dist
+        )
+        return mixture
+
+    def log_prob(self, z):
+        """
+        Computes log p(z) under the VampPrior.
+        """
+        return self.get_mixture().log_prob(z)
+
+    def sample(self, sample_shape=torch.Size()):
+        """
+        Draws samples from the VampPrior.
+        """
+        return self.get_mixture().sample(sample_shape)
+
+
 ###############################################################################
 # 0) Mixture of Dirichlet Distributions - TODO: Refactor
 ###############################################################################
@@ -212,7 +264,7 @@ class TCRIModule(PyroBaseModuleClass):
     observed cell-level phenotype.
     """
 
-    def __init__(
+    def __init__(  
         self,
         n_input: int,
         n_latent: int,
@@ -223,6 +275,7 @@ class TCRIModule(PyroBaseModuleClass):
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
         mixture_concentration: torch.Tensor = None,
+        n_pseudo_obs: int = 10,
         use_enumeration: bool = False,
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
@@ -240,6 +293,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.local_scale = local_scale
         self.sharp_temperature = sharp_temperature
         self.mixture_concentration = mixture_concentration
+        self.n_pseudo_obs = n_pseudo_obs
         # Assert that it is not None
         assert (
             self.mixture_concentration is not None
@@ -259,6 +313,10 @@ class TCRIModule(PyroBaseModuleClass):
             n_cat_list=[n_batch],
             use_layer_norm=True,
         )
+
+        # VampPrior
+        pseudo_inputs = torch.randn(self.n_pseudo_obs, self.n_input)
+        self.vamp_prior = VampPrior(pseudo_inputs, self.encoder)
 
         self.decoder_input_dim = self.n_latent
         self.decoder = DecoderSCVI(
@@ -392,11 +450,15 @@ class TCRIModule(PyroBaseModuleClass):
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
         with pyro.plate("data", batch_size) as idx:
-            latent_prior = dist.Normal(
-                torch.zeros_like(z_loc), torch.ones_like(z_scale)
-            )
+            # latent_prior = dist.Normal(
+            #     torch.zeros_like(z_loc), torch.ones_like(z_scale)
+            # )
+            # with poutine.scale(scale=kl_weight):
+            #     z = pyro.sample("latent", latent_prior.to_event(1))
             with poutine.scale(scale=kl_weight):
-                z = pyro.sample("latent", latent_prior.to_event(1))
+                # vamp_mixture = self.vamp_prior.get_mixture().to_event(1)
+                vamp_mixture = self.vamp_prior.get_mixture()
+                z = pyro.sample("latent", vamp_mixture)
 
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
