@@ -1019,7 +1019,7 @@ class TCRIModel(BaseModelClass):
 
     @torch.no_grad()
     def get_cell_phenotype_probs(
-        self, adata=None, batch_size: int = 256, eps: float = 1e-8
+        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: float = 0.5
     ):
         """
         Computes the cell-level phenotype probabilities by applying the same gating MLP
@@ -1074,7 +1074,7 @@ class TCRIModel(BaseModelClass):
             # gate_probs = torch.sigmoid(gate_logits)
             # gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
             gate_probs = torch.full(
-                (batch_size_local, self.module.P), 0.5, device=x.device
+                (batch_size_local, self.module.P), gate_prob, device=x.device
             )
 
             # Combine classifier logits with local prior in log space
