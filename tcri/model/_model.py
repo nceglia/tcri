@@ -979,17 +979,25 @@ class TCRIModel(BaseModelClass):
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
 
-        # Build class weights (by dictionary) if provided
-        if phenotype_weights is not None:
-            # Create an array matching the order of ph_series' categories
+        if phenotype_weights is None:
+            # Automatically compute inverse-frequency weights for each phenotype
+            freq_count = ph_series.value_counts(sort=False) 
             class_weights_arr = []
             for cat_name in ph_series.cat.categories:
-                # Default to weight=1.0 if phenotype missing in dict
-                weight = phenotype_weights.get(cat_name, 1.0)
+                # frequency of this phenotype
+                c = freq_count[cat_name]
+                # inverse-frequency weight
+                weight = 1.0 / c
                 class_weights_arr.append(weight)
             class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
         else:
-            class_weights = None
+            # Use user-provided phenotype_weights
+            class_weights_arr = []
+            for cat_name in ph_series.cat.categories:
+                weight = phenotype_weights.get(cat_name, 1.0)
+                class_weights_arr.append(weight)
+            class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
+
         self.class_weights = class_weights
         self.module = TCRIModule(
             n_input=n_vars,
