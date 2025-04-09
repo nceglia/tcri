@@ -280,6 +280,7 @@ class TCRIModule(PyroBaseModuleClass):
         gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
+        classifier_n_layers: int = 3,
         n_hidden: int = 128,
         n_layers: int = 3,
     ):
@@ -304,6 +305,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout
         self.kl_weight = 5
+        self.classifier_n_layers = classifier_n_layers
 
         self.encoder = Encoder(
             n_input=n_input,
@@ -343,16 +345,30 @@ class TCRIModule(PyroBaseModuleClass):
             self.gate_nn[-1].weight.fill_(0.0)
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
+        # Define the number of layers and other parameters
+        num_layers = self.classifier_n_layers  # Example: make this configurable
+        hidden_size = self.classifier_hidden
+        dropout_prob = self.classifier_dropout
 
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(self.n_latent, self.classifier_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=self.classifier_dropout),  # optional
-            torch.nn.Linear(self.classifier_hidden, self.classifier_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(p=self.classifier_dropout),  # optional
-            torch.nn.Linear(self.classifier_hidden, self.P),
-        )
+        # Create a list to hold the layers
+        layers = []
+
+        # Input layer
+        layers.append(torch.nn.Linear(self.n_latent, hidden_size))
+        layers.append(torch.nn.ReLU())
+        layers.append(torch.nn.Dropout(p=dropout_prob))  # optional
+
+        # Hidden layers
+        for _ in range(num_layers - 1):
+            layers.append(torch.nn.Linear(hidden_size, hidden_size))
+            layers.append(torch.nn.ReLU())
+            layers.append(torch.nn.Dropout(p=dropout_prob))  # optional
+
+        # Output layer
+        layers.append(torch.nn.Linear(hidden_size, self.P))
+
+        # Create the classifier with the specified number of layers
+        self.classifier = torch.nn.Sequential(*layers)
 
         self.register_buffer("clone_phen_prior", torch.empty(0))
         self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))

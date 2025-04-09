@@ -41,7 +41,8 @@ def register_model(
     phenotype_prob_slot="X_tcri_phenotypes",
     phenotype_assignment_obs="tcri_phenotype",
     latent_slot="X_tcri",
-    batch_size=256
+    batch_size=256,
+    gate_prob=0.5
 ):
     """
     Register TCRi model outputs in the AnnData object.
@@ -136,7 +137,7 @@ def register_model(
     adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
 
     # Store per-cell phenotype probabilities
-    phenotype_probs = model.get_cell_phenotype_probs(batch_size=batch_size)
+    phenotype_probs = model.get_cell_phenotype_probs(batch_size=batch_size, gate_prob=gate_prob)
     adata.obsm[phenotype_prob_slot] = phenotype_probs
 
     # Store phenotype assignments (argmax of probabilities)
