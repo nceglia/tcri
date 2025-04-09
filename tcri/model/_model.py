@@ -10,7 +10,7 @@ import pyro.poutine as poutine
 import torch.nn as nn
 
 
-from typing import Dict
+from typing import Dict, Optional
 from anndata import AnnData
 import os
 
@@ -83,18 +83,24 @@ class AttentionLayer(nn.Module):
         return attn_output.permute(1, 0, 2).squeeze(1)  # Remove the dummy dimension
 
 class ResidualBlock(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim, hidden_dim, dropout_rate=0.1):
         super(ResidualBlock, self).__init__()
         self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout_rate)
         self.linear2 = nn.Linear(hidden_dim, input_dim)
+        self.bn2 = nn.BatchNorm1d(input_dim)
 
     def forward(self, x):
         residual = x
         out = self.linear1(x)
+        out = self.bn1(out)
         out = self.relu(out)
+        out = self.dropout(out)
         out = self.linear2(out)
-        return out + residual  # Ad
+        out = self.bn2(out)
+        return out + residual
 
 class PhenotypeClassifier(nn.Module):
     def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2):
@@ -334,6 +340,7 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_num_heads: int = 2,
         n_hidden: int = 128,
         n_layers: int = 3,
+        class_weights: torch.Tensor = None,
     ):
         super().__init__()
         self.n_input = n_input
@@ -416,6 +423,13 @@ class TCRIModule(PyroBaseModuleClass):
         self.n_cells = 0
 
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
+
+        # Store or compute log of class weights if provided
+        if class_weights is not None:
+            # Expect a tensor of shape (P,)
+            self.register_buffer("log_class_weights", torch.log(class_weights))
+        else:
+            self.log_class_weights = None
 
     def prepare_two_level_params(
         self,
@@ -526,6 +540,11 @@ class TCRIModule(PyroBaseModuleClass):
                 gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
             )
 
+            # ======== ADD THIS TO WEIGHT CLASSES ========
+            if self.log_class_weights is not None:
+                local_logits_model = local_logits_model + self.log_class_weights
+            # ===========================================
+
             # # sample the discrete phenotype from these logits
             # z_i_phen = pyro.sample(
             #     "z_i_phen",
@@ -609,7 +628,7 @@ class TCRIModule(PyroBaseModuleClass):
             if "q_p_ct_raw" not in pyro.get_param_store():
                 q_p_ct_raw = pyro.param(
                     "q_p_ct_raw",
-                    init_mat.clone().detach(),  # Make sure it’s not a leaf
+                    init_mat.clone().detach(),  # Make sure it's not a leaf
                     constraint=dist.constraints.positive,
                 )
             else:
@@ -635,6 +654,11 @@ class TCRIModule(PyroBaseModuleClass):
             local_logits_guide = (
                 gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
             )
+
+            # ======== ADD THIS TO WEIGHT CLASSES IN THE GUIDE ========
+            if self.log_class_weights is not None:
+                local_logits_guide = local_logits_guide + self.log_class_weights
+            # =========================================================
 
             # pyro.sample(
             #     "z_i_phen",
@@ -910,6 +934,7 @@ class TCRIModel(BaseModelClass):
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
         K: int = 10,
+        phenotype_weights: Optional[Dict[str, float]] = None,
         **kwargs,
     ):
         super().__init__(adata)
@@ -954,6 +979,18 @@ class TCRIModel(BaseModelClass):
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
 
+        # Build class weights (by dictionary) if provided
+        if phenotype_weights is not None:
+            # Create an array matching the order of ph_series' categories
+            class_weights_arr = []
+            for cat_name in ph_series.cat.categories:
+                # Default to weight=1.0 if phenotype missing in dict
+                weight = phenotype_weights.get(cat_name, 1.0)
+                class_weights_arr.append(weight)
+            class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
+        else:
+            class_weights = None
+        self.class_weights = class_weights
         self.module = TCRIModule(
             n_input=n_vars,
             n_latent=n_latent,
@@ -969,7 +1006,7 @@ class TCRIModel(BaseModelClass):
             gate_nn_hidden=gate_nn_hidden,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
-            
+            class_weights=self.class_weights,
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
