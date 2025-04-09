@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import pyro
 import pyro.distributions as dist
 import pyro.poutine as poutine
+import torch.nn as nn
+
 
 from typing import Dict
 from anndata import AnnData
@@ -64,7 +66,6 @@ def build_archetypes(c2p_mat, K=4):
     return centers, labels
 
 
-import torch.nn as nn
 
 class AttentionLayer(nn.Module):
     def __init__(self, embed_dim, num_heads):
@@ -72,10 +73,14 @@ class AttentionLayer(nn.Module):
         self.attention = nn.MultiheadAttention(embed_dim, num_heads)
 
     def forward(self, x):
-        # Assuming x is of shape (batch_size, seq_length, embed_dim)
-        x = x.permute(1, 0, 2)  # Change to (seq_length, batch_size, embed_dim)
+        # Add a dummy sequence dimension if x is 2D
+        if x.dim() == 2:
+            x = x.unsqueeze(1)  # Shape becomes (batch_size, 1, embed_dim)
+
+        # Permute to (seq_length, batch_size, embed_dim)
+        x = x.permute(1, 0, 2)
         attn_output, _ = self.attention(x, x, x)
-        return attn_output.permute(1, 0, 2)  
+        return attn_output.permute(1, 0, 2).squeeze(1)  # Remove the dummy dimension
 
 class ResidualBlock(nn.Module):
     def __init__(self, input_dim, hidden_dim):
