@@ -64,8 +64,53 @@ def build_archetypes(c2p_mat, K=4):
     return centers, labels
 
 
+import torch.nn as nn
 
+class AttentionLayer(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(AttentionLayer, self).__init__()
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads)
 
+    def forward(self, x):
+        # Assuming x is of shape (batch_size, seq_length, embed_dim)
+        x = x.permute(1, 0, 2)  # Change to (seq_length, batch_size, embed_dim)
+        attn_output, _ = self.attention(x, x, x)
+        return attn_output.permute(1, 0, 2)  
+
+class ResidualBlock(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super(ResidualBlock, self).__init__()
+        self.linear1 = nn.Linear(input_dim, hidden_dim)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_dim, input_dim)
+
+    def forward(self, x):
+        residual = x
+        out = self.linear1(x)
+        out = self.relu(out)
+        out = self.linear2(out)
+        return out + residual  # Ad
+
+class PhenotypeClassifier(nn.Module):
+    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2):
+        super(PhenotypeClassifier, self).__init__()
+        self.attention_layer = AttentionLayer(embed_dim=n_latent, num_heads=num_heads)
+        self.residual_blocks = nn.ModuleList(
+            [ResidualBlock(n_latent, classifier_hidden) for _ in range(num_layers)]
+        )
+        self.output_layer = nn.Linear(n_latent, P)
+
+    def forward(self, x):
+        # Apply attention
+        x = self.attention_layer(x)
+
+        # Apply residual blocks
+        for block in self.residual_blocks:
+            x = block(x)
+
+        # Output layer
+        x = self.output_layer(x)
+        return x
 
 ###############################################################################
 # -1) VampPrior
@@ -281,6 +326,7 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
+        classifier_num_heads: int = 2,
         n_hidden: int = 128,
         n_layers: int = 3,
     ):
@@ -295,6 +341,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.sharp_temperature = sharp_temperature
         self.mixture_concentration = mixture_concentration
         self.n_pseudo_obs = n_pseudo_obs
+        self.classifier_num_heads = classifier_num_heads
         # Assert that it is not None
         assert (
             self.mixture_concentration is not None
@@ -345,30 +392,14 @@ class TCRIModule(PyroBaseModuleClass):
             self.gate_nn[-1].weight.fill_(0.0)
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
-        # Define the number of layers and other parameters
-        num_layers = self.classifier_n_layers  # Example: make this configurable
-        hidden_size = self.classifier_hidden
-        dropout_prob = self.classifier_dropout
 
-        # Create a list to hold the layers
-        layers = []
-
-        # Input layer
-        layers.append(torch.nn.Linear(self.n_latent, hidden_size))
-        layers.append(torch.nn.ReLU())
-        layers.append(torch.nn.Dropout(p=dropout_prob))  # optional
-
-        # Hidden layers
-        for _ in range(num_layers - 1):
-            layers.append(torch.nn.Linear(hidden_size, hidden_size))
-            layers.append(torch.nn.ReLU())
-            layers.append(torch.nn.Dropout(p=dropout_prob))  # optional
-
-        # Output layer
-        layers.append(torch.nn.Linear(hidden_size, self.P))
-
-        # Create the classifier with the specified number of layers
-        self.classifier = torch.nn.Sequential(*layers)
+        self.classifier = PhenotypeClassifier(
+            n_latent=self.n_latent,
+            classifier_hidden=self.classifier_hidden,
+            P=self.P,
+            num_layers=self.classifier_n_layers,  # Use the existing configurable number of layers
+            num_heads=self.classifier_num_heads  # You can make this configurable as well if needed
+        )
 
         self.register_buffer("clone_phen_prior", torch.empty(0))
         self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))
