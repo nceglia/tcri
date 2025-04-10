@@ -65,61 +65,51 @@ def build_archetypes(c2p_mat, K=4):
     centers = centers / centers.sum(axis=1, keepdims=True)
     return centers, labels
 
-
-
 class AttentionLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads):
+    def __init__(self, embed_dim, num_heads, dropout_rate=0.1):
         super(AttentionLayer, self).__init__()
-        self.attention = nn.MultiheadAttention(embed_dim, num_heads)
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout_rate)
 
     def forward(self, x):
-        # Add a dummy sequence dimension if x is 2D
         if x.dim() == 2:
             x = x.unsqueeze(1)  # Shape becomes (batch_size, 1, embed_dim)
-
-        # Permute to (seq_length, batch_size, embed_dim)
         x = x.permute(1, 0, 2)
         attn_output, _ = self.attention(x, x, x)
-        return attn_output.permute(1, 0, 2).squeeze(1)  # Remove the dummy dimension
+        return attn_output.permute(1, 0, 2).squeeze(1)
 
 class ResidualBlock(nn.Module):
     def __init__(self, input_dim, hidden_dim, dropout_rate=0.1):
         super(ResidualBlock, self).__init__()
         self.linear1 = nn.Linear(input_dim, hidden_dim)
-        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.ln1 = nn.LayerNorm(hidden_dim)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.linear2 = nn.Linear(hidden_dim, input_dim)
-        self.bn2 = nn.BatchNorm1d(input_dim)
+        self.ln2 = nn.LayerNorm(input_dim)
 
     def forward(self, x):
         residual = x
         out = self.linear1(x)
-        out = self.bn1(out)
+        out = self.ln1(out)
         out = self.relu(out)
         out = self.dropout(out)
         out = self.linear2(out)
-        out = self.bn2(out)
+        out = self.ln2(out)
         return out + residual
 
 class PhenotypeClassifier(nn.Module):
-    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2):
+    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2, dropout_rate=0.1):
         super(PhenotypeClassifier, self).__init__()
-        self.attention_layer = AttentionLayer(embed_dim=n_latent, num_heads=num_heads)
+        self.attention_layer = AttentionLayer(embed_dim=n_latent, num_heads=num_heads, dropout_rate=dropout_rate)
         self.residual_blocks = nn.ModuleList(
-            [ResidualBlock(n_latent, classifier_hidden) for _ in range(num_layers)]
+            [ResidualBlock(n_latent, classifier_hidden, dropout_rate) for _ in range(num_layers)]
         )
         self.output_layer = nn.Linear(n_latent, P)
 
     def forward(self, x):
-        # Apply attention
         x = self.attention_layer(x)
-
-        # Apply residual blocks
         for block in self.residual_blocks:
             x = block(x)
-
-        # Output layer
         x = self.output_layer(x)
         return x
 
@@ -984,14 +974,13 @@ class TCRIModel(BaseModelClass):
             freq_count = ph_series.value_counts(sort=False) 
             class_weights_arr = []
             for cat_name in ph_series.cat.categories:
-                # frequency of this phenotype
+
                 c = freq_count[cat_name]
                 # inverse-frequency weight
                 weight = 1.0 / c
                 class_weights_arr.append(weight)
             class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
         else:
-            # Use user-provided phenotype_weights
             class_weights_arr = []
             for cat_name in ph_series.cat.categories:
                 weight = phenotype_weights.get(cat_name, 1.0)
