@@ -26,7 +26,16 @@ from ..metrics._metrics import clone_fraction as clone_fraction_tl
 import warnings
 warnings.filterwarnings('ignore')
 
+red = "#cd442a"
+yellow = "#f0bd00"
+green = "#7e9437"
+gray = "#eee"
+
 tcri_colors = [
+    red,
+    yellow,
+    green,
+    gray,
     "#F28E7F",  # Salmon
     "#6A6E75",  # Iron Gray
     "#AE81FF",  # Purple
