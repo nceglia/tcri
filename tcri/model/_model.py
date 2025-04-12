@@ -385,10 +385,10 @@ class TCRIModule(PyroBaseModuleClass):
             torch.nn.ReLU(),
             torch.nn.Linear(self.gate_nn_hidden, 1),
         )
-        self.phenotype_decoder = torch.nn.Linear(self.n_latent, self.P)
-        with torch.no_grad():
-            self.phenotype_decoder.weight *= 0.01
-            self.phenotype_decoder.bias.fill_(0.0)
+        # self.phenotype_decoder = torch.nn.Linear(self.n_latent, self.P)
+        # with torch.no_grad():
+            # self.phenotype_decoder.weight *= 0.01
+            # self.phenotype_decoder.bias.fill_(0.0)
         with torch.no_grad():
             self.gate_nn[-1].bias.fill_(0.0)
             self.gate_nn[-1].weight.fill_(0.0)
@@ -518,7 +518,7 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
-            cls_logits = self.classifier(z) + self.phenotype_decoder(z)
+            cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
             # gate_logits = self.gate_nn(z)                    # shape [batch_size, 1]
 
             # gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
@@ -638,7 +638,7 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            cls_logits = self.classifier(z) + self.phenotype_decoder(z)
+            cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
 
             gate_probs = torch.full((batch_size, self.P), 0.5, device=x.device)
             local_logits_guide = (
@@ -1227,7 +1227,7 @@ class TCRIModel(BaseModelClass):
             z_loc, _, _ = self.module.encoder(x, b)
 
             # ----- 1) Compute classifier logits (same as training) -----
-            cls_logits = self.module.classifier(z_loc) + self.module.phenotype_decoder(z_loc)
+            cls_logits = self.module.classifier(z_loc) #+ self.module.phenotype_decoder(z_loc)
 
             # Optionally add log class weights if defined
             if self.module.log_class_weights is not None:
