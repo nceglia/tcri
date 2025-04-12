@@ -1175,6 +1175,87 @@ class TCRIModel(BaseModelClass):
 
         return torch.cat(all_probs, dim=0).numpy()
 
+    @torch.no_grad()
+    def get_cell_phenotype_probs(
+        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: float = 0.5
+    ) -> np.ndarray:
+        """
+        Computes the cell-level phenotype probabilities in the same way as training,
+        using:
+        cls_logits = classifier(z_loc) + phenotype_decoder(z_loc)
+        if class weights exist, add them
+        gate_probs = sigmoid(gate_nn(z_loc))
+        local_logits = gate_probs*cls_logits + (1 - gate_probs)*log(prior)
+        softmax(local_logits) -> probabilities
+
+        Parameters
+        ----------
+        adata
+            If None, defaults to the AnnData used in training.
+        batch_size : int
+            Mini-batch size for data loader.
+        eps : float
+            Small epsilon for numerical stability in logs.
+
+        Returns
+        -------
+        probs : np.ndarray
+            Array of shape (n_cells, P) of phenotype probabilities.
+        """
+        adata = self._validate_anndata(adata)
+        device = next(self.module.parameters()).device
+        scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
+
+        # The learned posterior p_ct -> shape (ct_count, P)
+        p_ct = self.module.get_p_ct().to(device)
+        # Map each cell to its clonotype-covariate index -> shape (n_cells,)
+        ct_array = self.module.ct_array.to(device)
+
+        all_probs = []
+        current_idx = 0
+
+        for tensors in scdl:
+            x = tensors[REGISTRY_KEYS.X_KEY].to(device)
+            b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+            this_batch_size = x.shape[0]
+
+            # Which (clonotype, covariate) does each cell belong to?
+            ct_indices = ct_array[current_idx : current_idx + this_batch_size]
+            clone_cov_posterior = p_ct[ct_indices]  # (batch_size, P)
+
+            # Encode to get latent z
+            z_loc, _, _ = self.module.encoder(x, b)
+
+            # ----- 1) Compute classifier logits (same as training) -----
+            cls_logits = self.module.classifier(z_loc) + self.module.phenotype_decoder(z_loc)
+
+            # Optionally add log class weights if defined
+            if self.module.log_class_weights is not None:
+                cls_logits = cls_logits + self.module.log_class_weights
+
+            # ----- 2) Gating from gate_nn (rather than fixed 0.5) -----
+            # gate_logits = self.module.gate_nn(z_loc)    # shape (batch_size, 1)
+            # gate_probs = torch.sigmoid(gate_logits)     # in [0,1]
+            # gate_probs = gate_probs.expand(-1, self.module.P)
+            gate_probs = torch.full(
+                (this_batch_size, self.module.P), gate_prob, device=x.device
+            )
+
+            # ----- 3) Combine with local prior in log space -----
+            prior_log = torch.log(clone_cov_posterior + eps)
+            local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
+
+            # ----- 4) Convert to probabilities via softmax -----
+            probs = torch.softmax(local_logits, dim=-1)
+
+            all_probs.append(probs.cpu())
+            current_idx += this_batch_size
+
+        # Concatenate into final array of shape (n_cells, P)
+        return torch.cat(all_probs, dim=0).numpy()
+
+
+
     def plot_loss(self, log_scale=False):
         loss_history = self.history_["elbo_train"]
         loss_validation = self.history_["elbo_validation"]
