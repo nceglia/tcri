@@ -319,7 +319,6 @@ class TCRIModule(PyroBaseModuleClass):
         global_scale: float = 10.0,
         local_scale: float = 5.0,
         sharp_temperature: float = 1.0,
-        sharpness_penalty_scale: float = 0.0,
         gate_prob: float = 0.5,
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
@@ -332,6 +331,7 @@ class TCRIModule(PyroBaseModuleClass):
         n_hidden: int = 128,
         n_layers: int = 3,
         class_weights: torch.Tensor = None,
+        kl_weight: float = 1.0,
     ):
         super().__init__()
         self.n_input = n_input
@@ -355,7 +355,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.gate_nn_hidden = gate_nn_hidden
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout
-        self.kl_weight = 5
+        self.kl_weight = kl_weight
         self.classifier_n_layers = classifier_n_layers
 
         self.encoder = Encoder(
@@ -733,8 +733,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         return {"optimizer": optimizer}
 
     def training_step(self, batch, batch_idx):
-        kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
-        self.module.kl_weight = kl_weight
+        # kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
+        # self.module.kl_weight = kl_weight
 
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
@@ -800,7 +800,15 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         self._my_global_step += 1
         return loss_dict
-
+    
+    # def compute_kl(self, batch):
+    #     fn_args, _ = self.module._get_fn_args_from_batch(batch)
+        
+    #     elbo = Trace_ELBO()
+    #     kl_val = elbo.differentiable_loss(self.module.model, self.module.guide, *fn_args)
+        
+    #     return kl_val
+    
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
             self.module.eval()
@@ -863,7 +871,6 @@ class TCRIModel(BaseModelClass):
         global_scale: float = 10.0,
         local_scale: float = 5.0,
         sharp_temperature: float = 1.0,
-        sharpness_penalty_scale: float = 0.0,
         use_enumeration: bool = False,
         patience: int = 50,
         gate_saturation_weight: float = 0.0,
@@ -873,6 +880,7 @@ class TCRIModel(BaseModelClass):
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
         gate_prob: float = 0.5,
+        kl_weight: float = 1.0,
         **kwargs,
     ):
         super().__init__(adata)
@@ -946,13 +954,13 @@ class TCRIModel(BaseModelClass):
             local_scale=local_scale,
             mixture_concentration=torch.from_numpy(self.centers),
             sharp_temperature=sharp_temperature,
-            sharpness_penalty_scale=sharpness_penalty_scale,
             use_enumeration=use_enumeration,
             gate_nn_hidden=gate_nn_hidden,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             class_weights=self.class_weights,
             gate_prob=gate_prob,
+            kl_weight=kl_weight,
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
@@ -975,7 +983,7 @@ class TCRIModel(BaseModelClass):
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
             f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
-            f"sharp_temperature={sharp_temperature}, sharpness_penalty_scale={sharpness_penalty_scale}."
+            f"sharp_temperature={sharp_temperature}."
         )
 
     def train(
