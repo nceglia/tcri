@@ -785,12 +785,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         )
         alpha = 10.0
         cls_logits = self.module.classifier(z_batch)
-        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights.to(device))
+        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights.to(device), label_smoothing=0.1)
         loss_dict["loss"] += classification_loss * alpha  # try alpha = 1.0 to start
         loss_dict["classification_loss"] = classification_loss.item()
  
-        entropy_penalty_weight = 10.
-        probs = F.softmax(cls_logits, dim=-1)
+        entropy_penalty_weight = 500.
+        T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
+        probs = F.softmax(cls_logits / T, dim=-1)
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
         loss_dict["loss"] += entropy_penalty_weight * entropy  # try 0.1 to 1.0
         loss_dict["classifier_entropy"] = entropy.item()
