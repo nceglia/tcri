@@ -785,7 +785,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         )
         alpha = 10.0
         cls_logits = self.module.classifier(z_batch)
-        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights)
+        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights.to(device))
         loss_dict["loss"] += classification_loss * alpha  # try alpha = 1.0 to start
         loss_dict["classification_loss"] = classification_loss.item()
  
