@@ -320,6 +320,7 @@ class TCRIModule(PyroBaseModuleClass):
         local_scale: float = 5.0,
         sharp_temperature: float = 1.0,
         sharpness_penalty_scale: float = 0.0,
+        gate_prob: float = 0.5,
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
         use_enumeration: bool = False,
@@ -344,6 +345,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.mixture_concentration = mixture_concentration
         self.n_pseudo_obs = n_pseudo_obs
         self.classifier_num_heads = classifier_num_heads
+        self.gate_prob = gate_prob
         # Assert that it is not None
         assert (
             self.mixture_concentration is not None
@@ -379,19 +381,6 @@ class TCRIModule(PyroBaseModuleClass):
             scale_activation="softplus",
             use_layer_norm=True,
         )
-
-        self.gate_nn = torch.nn.Sequential(
-            torch.nn.Linear(self.n_latent, self.gate_nn_hidden),
-            torch.nn.ReLU(),
-            torch.nn.Linear(self.gate_nn_hidden, 1),
-        )
-        # self.phenotype_decoder = torch.nn.Linear(self.n_latent, self.P)
-        # with torch.no_grad():
-            # self.phenotype_decoder.weight *= 0.01
-            # self.phenotype_decoder.bias.fill_(0.0)
-        with torch.no_grad():
-            self.gate_nn[-1].bias.fill_(0.0)
-            self.gate_nn[-1].weight.fill_(0.0)
 
         self.px_r = torch.nn.Parameter(torch.ones(n_input))
 
@@ -519,12 +508,22 @@ class TCRIModule(PyroBaseModuleClass):
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
             cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
+            print(cls_logits.shape)
+            probs = F.softmax(cls_logits, dim=-1)
+            cls = torch.argmax(probs, dim=1)
+            # Get unique values and their counts
+            unique_values, counts = torch.unique(cls, return_counts=True)
+
+            # Calculate the fraction of each unique value
+            total_elements = cls.numel()
+            fractions = counts.float() / total_elements
+            print(fractions)
             # gate_logits = self.gate_nn(z)                    # shape [batch_size, 1]
 
             # gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
             # # Expand gate_probs to match shape [batch_size, P]
             # gate_probs = gate_probs.expand(-1, self.P)
-            gate_probs = torch.full((batch_size, self.P), 0.5, device=x.device)
+            gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
             # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
             local_logits_model = (
                 gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
@@ -577,15 +576,6 @@ class TCRIModule(PyroBaseModuleClass):
         pyro.module("scvi", self)
         batch_size = x.shape[0]
 
-        # with pyro.plate("clonotypes", self.c_count):
-        #     B = self.mixture_concentration.shape[0]
-        #     mixture_weights = torch.ones(B, device=x.device) / B
-        #     expanded_conc = self.mixture_concentration.unsqueeze(0).expand(
-        #         self.c_count, -1, -1
-        #     )
-        #     expanded_weights = mixture_weights.unsqueeze(0).expand(self.c_count, -1)
-        #     mixture_dist = MixtureDirichlet(expanded_weights, expanded_conc)
-        #     pyro.sample("p_c", mixture_dist)
         with pyro.plate("clonotypes", self.c_count):
             # Start from a scaled version of the prior.
             init_mat_c = self.clone_phen_prior * 10.0 + 1e-3
@@ -640,7 +630,7 @@ class TCRIModule(PyroBaseModuleClass):
             prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
             cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
 
-            gate_probs = torch.full((batch_size, self.P), 0.5, device=x.device)
+            gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
             local_logits_guide = (
                 gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
             )
@@ -649,12 +639,6 @@ class TCRIModule(PyroBaseModuleClass):
             if self.log_class_weights is not None:
                 local_logits_guide = local_logits_guide + self.log_class_weights
             # =========================================================
-
-            # pyro.sample(
-            #     "z_i_phen",
-            #     dist.Categorical(logits=local_logits_guide),
-            #     infer={"enumerate": "parallel"} if self.use_enumeration else {},
-            # )
 
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -701,6 +685,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         optimizer_config: dict = None,
         gate_saturation_weight: float = 0.0,
         clone_alignment_scale: float = 1.0,
+        class_weights: torch.Tensor = None,
         **kwargs,
     ):
         self.num_particles = num_particles
@@ -723,6 +708,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.kl_sigmoid_midpoint = 4000
         self.kl_sigmoid_speed = 0.001
         self.gate_saturation_weight = gate_saturation_weight
+        self.class_weights = class_weights
         if optimizer_config is None:
             optimizer_config = {
                 "lr": 1e-3,
@@ -783,19 +769,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
         )
-        gate_logits = self.module.gate_nn(z_batch)  # shape (batch_size, 1)
-        gate_probs_class = torch.sigmoid(gate_logits).clamp(1e-3, 1 - 1e-3)
+
         gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
-        if self.gate_saturation_weight > 0.0:
-            eps = 1e-8
-            entropy = -(
-                gate_probs_class * torch.log(gate_probs_class + eps)
-                + (1 - gate_probs_class) * torch.log(1 - gate_probs_class + eps)
-            )
-            penalty = entropy.mean()
-            gate_penalty = self.gate_saturation_weight * penalty
-            loss_dict["loss"] += gate_penalty
-            loss_dict["classification_gate_penalty"] = gate_penalty.item()
 
         nb_logits = (px_rate + self.module.eps).log() - (
             self.module.px_r.exp() + self.module.eps
@@ -808,46 +783,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             logits=nb_logits,
             validate_args=False,
         )
-
-        # --- START OF CLONE ALIGNMENT REGULARIZATION ---
-        clone_alignment_loss = 0.0
-        if self.clone_alignment_scale > 0.0:
-            device = next(self.module.parameters()).device
-            p_ct = self.module.get_p_ct().to(device)  # (ct_count, P)
-            ct_idx_batch = self.module.ct_array[
-                batch["indices"].long().to(device)
-            ]  # (batch_size,)
-
-            # Compute phenotype probabilities from the classifier directly (without gating for simplicity)
-            z_loc, _, _ = self.module.encoder(
-                batch[REGISTRY_KEYS.X_KEY].float().to(device),
-                batch[REGISTRY_KEYS.BATCH_KEY].long().to(device),
-            )
-            cls_logits = self.module.classifier(z_loc)
-            classifier_probs = F.softmax(cls_logits, dim=-1)  # (batch_size, P)
-
-            unique_ct = ct_idx_batch.unique()
-            kl_terms = []
-
-            eps = 1e-8
-            for ct in unique_ct:
-                ct_mask = (ct_idx_batch == ct).squeeze()
-                if ct_mask.sum() < 2:  # Avoid singleton groups
-                    continue
-                classifier_probs_ct = classifier_probs[ct_mask].mean(dim=0)  # (P,)
-                prior_ct = p_ct[ct]
-
-                kl_ct = F.kl_div(
-                    (classifier_probs_ct + eps).log(), prior_ct, reduction="batchmean"
-                )
-                kl_terms.append(kl_ct)
-
-            if kl_terms:
-                clone_alignment_loss = torch.stack(kl_terms).mean()
-                loss_dict["loss"] += self.clone_alignment_scale * clone_alignment_loss
-
-            loss_dict["clone_alignment_loss"] = clone_alignment_loss.item()
-        # --- END OF CLONE ALIGNMENT REGULARIZATION ---
+        alpha = 10.0
+        cls_logits = self.module.classifier(z_batch)
+        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights)
+        loss_dict["loss"] += classification_loss * alpha  # try alpha = 1.0 to start
+        loss_dict["classification_loss"] = classification_loss.item()
+ 
+        entropy_penalty_weight = 10.
+        probs = F.softmax(cls_logits, dim=-1)
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
+        loss_dict["loss"] += entropy_penalty_weight * entropy  # try 0.1 to 1.0
+        loss_dict["classifier_entropy"] = entropy.item()
 
         loss_dict["margin_loss"] = margin_val
 
@@ -925,6 +871,7 @@ class TCRIModel(BaseModelClass):
         classifier_dropout: float = 0.1,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
+        gate_prob: float = 0.5,
         **kwargs,
     ):
         super().__init__(adata)
@@ -1004,6 +951,7 @@ class TCRIModel(BaseModelClass):
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             class_weights=self.class_weights,
+            gate_prob=gate_prob,
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
@@ -1064,6 +1012,7 @@ class TCRIModel(BaseModelClass):
             reconstruction_loss_scale=reconstruction_loss_scale,
             gate_saturation_weight=self.gate_saturation_weight,
             clone_alignment_scale=clone_alignment_scale,
+            class_weights=self.class_weights,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
