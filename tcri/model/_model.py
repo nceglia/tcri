@@ -331,7 +331,7 @@ class TCRIModule(PyroBaseModuleClass):
         n_hidden: int = 128,
         n_layers: int = 3,
         class_weights: torch.Tensor = None,
-        kl_weight: float = 1.0,
+        kl_weight_max: float = 1.0,
     ):
         super().__init__()
         self.n_input = n_input
@@ -355,7 +355,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.gate_nn_hidden = gate_nn_hidden
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout
-        self.kl_weight = kl_weight
+        self.kl_weight_max = kl_weight_max
         self.classifier_n_layers = classifier_n_layers
 
         self.encoder = Encoder(
@@ -508,21 +508,8 @@ class TCRIModule(PyroBaseModuleClass):
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
             cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
-            print(cls_logits.shape)
-            probs = F.softmax(cls_logits, dim=-1)
-            cls = torch.argmax(probs, dim=1)
-            # Get unique values and their counts
-            unique_values, counts = torch.unique(cls, return_counts=True)
+        
 
-            # Calculate the fraction of each unique value
-            total_elements = cls.numel()
-            fractions = counts.float() / total_elements
-            print(fractions)
-            # gate_logits = self.gate_nn(z)                    # shape [batch_size, 1]
-
-            # gate_probs = torch.sigmoid(gate_logits)          # in [0, 1]
-            # # Expand gate_probs to match shape [batch_size, P]
-            # gate_probs = gate_probs.expand(-1, self.P)
             gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
             # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
             local_logits_model = (
@@ -567,7 +554,8 @@ class TCRIModule(PyroBaseModuleClass):
                 logits=nb_logits,
                 validate_args=False,
             )
-            pyro.sample("obs", x_dist.to_event(1), obs=x)
+            with poutine.scale(scale=self.reconstruction_loss_scale):
+                pyro.sample("obs", x_dist.to_event(1), obs=x)
 
     @auto_move_data
     def guide(
@@ -733,8 +721,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         return {"optimizer": optimizer}
 
     def training_step(self, batch, batch_idx):
-        # kl_weight = 5.0 / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
-        # self.module.kl_weight = kl_weight
+        kl_weight = self.module.kl_weight_max / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
+        self.module.kl_weight = kl_weight
 
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
@@ -785,11 +773,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         )
         alpha = 10.0
         cls_logits = self.module.classifier(z_batch)
-        classification_loss = F.cross_entropy(cls_logits, target_phen, weight=self.class_weights.to(device), label_smoothing=0.1)
-        loss_dict["loss"] += classification_loss * alpha  # try alpha = 1.0 to start
-        loss_dict["classification_loss"] = classification_loss.item()
+        gamma = 2.0
+        alpha = 0.25
+
+        p = F.softmax(cls_logits, dim=-1)
+        ce_loss = F.nll_loss(F.log_softmax(cls_logits, dim=-1), target_phen, reduction="none")
+        focal_loss = alpha * (1 - p[range(len(target_phen)), target_phen]) ** gamma * ce_loss
+        focal_loss = focal_loss.mean()
+        loss_dict["loss"] += focal_loss
+        loss_dict["classification_loss"] = focal_loss.item()
  
-        entropy_penalty_weight = 500.
+        entropy_penalty_weight = 50.0
         T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
         probs = F.softmax(cls_logits / T, dim=-1)
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
@@ -798,16 +792,21 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         loss_dict["margin_loss"] = margin_val
 
+        fn_args, fn_kwargs = self.module._get_fn_args_from_batch(batch)
+        trace = poutine.trace(self.module.model).get_trace(*fn_args, **fn_kwargs)
+        trace.compute_log_prob()
+        recon_log_prob = trace.nodes["obs"]["log_prob_sum"]  # reconstruction site
+        cls_log_prob   = trace.nodes["obs_label"]["log_prob_sum"]  # classification site
+
+        # Negative log-likelihood components:
+        recon_loss = -recon_log_prob.item()
+        cls_loss   = -cls_log_prob.item()
+        print("Reconstruction Loss (batch):", recon_loss)
+        print("Classification Loss (batch):", cls_loss)
+
         self._my_global_step += 1
         return loss_dict
     
-    # def compute_kl(self, batch):
-    #     fn_args, _ = self.module._get_fn_args_from_batch(batch)
-        
-    #     elbo = Trace_ELBO()
-    #     kl_val = elbo.differentiable_loss(self.module.model, self.module.guide, *fn_args)
-        
-    #     return kl_val
     
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
@@ -880,7 +879,7 @@ class TCRIModel(BaseModelClass):
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
         gate_prob: float = 0.5,
-        kl_weight: float = 1.0,
+        kl_weight_max: float = 1.0,
         **kwargs,
     ):
         super().__init__(adata)
@@ -960,7 +959,7 @@ class TCRIModel(BaseModelClass):
             classifier_dropout=classifier_dropout,
             class_weights=self.class_weights,
             gate_prob=gate_prob,
-            kl_weight=kl_weight,
+            kl_weight_max=kl_weight_max,
         )
         self.init_params_ = self._get_init_params(locals())
         self.gate_saturation_weight = gate_saturation_weight
@@ -1005,6 +1004,7 @@ class TCRIModel(BaseModelClass):
         by passing early_stopping parameters to TrainRunner.
         """
         # Create a train/val split
+        self.module.reconstruction_loss_scale = reconstruction_loss_scale
         splitter = DataSplitter(
             self.adata_manager,
             train_size=0.9,
@@ -1060,78 +1060,6 @@ class TCRIModel(BaseModelClass):
     @torch.no_grad()
     def get_p_ct(self):
         return self.module.get_p_ct().cpu().numpy()
-
-    @torch.no_grad()
-    def get_cell_phenotype_probs(
-        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: float = 0.5
-    ):
-        """
-        Computes the cell-level phenotype probabilities by applying the same gating MLP
-        logic used in the model/guide. For each cell i:
-
-            local_logits[i] = gate_probs[i] * classifier_logits[i]
-                            + (1 - gate_probs[i]) * log(clonotype_prior[i])
-
-        Then we take a softmax across phenotypes.
-
-        Parameters
-        ----------
-        adata
-            AnnData object. If None, defaults to the AnnData used during training.
-        batch_size : int
-            Mini-batch size for data loader.
-        eps : float
-            Small epsilon for numerical stability in logs and divisions.
-
-        Returns
-        -------
-        probs : np.ndarray
-            Array of shape (n_cells, P) with the cell-level phenotype probabilities.
-        """
-        adata = self._validate_anndata(adata)
-        scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
-        device = next(self.module.parameters()).device
-
-        # p_ct is the learned clonotype-covariate posterior -> shape (ct_count, P)
-        p_ct = self.module.get_p_ct().to(device)
-        # ct_array tells us which (c, t) index each cell belongs to -> shape (n_cells,)
-        ct_array = self.module.ct_array.to(device)
-
-        all_probs = []
-        current_idx = 0
-
-        for tensors in scdl:
-            x = tensors[REGISTRY_KEYS.X_KEY].to(device)
-            b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-            batch_size_local = x.shape[0]
-
-            # Identify which clonotype-covariate each cell belongs to
-            ct_indices = ct_array[current_idx : current_idx + batch_size_local]
-            clone_cov_posterior = p_ct[ct_indices]  # shape (batch_size_local, P)
-
-            # Encoder + classifier + gating
-            z_loc, _, _ = self.module.encoder(x, b)
-            cls_logits = self.module.classifier(z_loc)  # shape (batch_size_local, P)
-
-            # Gating MLP
-            # gate_logits = self.module.gate_nn(z_loc)            # shape (batch_size_local, 1)
-            # gate_probs = torch.sigmoid(gate_logits)
-            # gate_probs = gate_probs.expand(-1, self.module.P)   # shape (batch_size_local, P)
-            gate_probs = torch.full(
-                (batch_size_local, self.module.P), gate_prob, device=x.device
-            )
-
-            # Combine classifier logits with local prior in log space
-            local_logits = gate_probs * cls_logits + (1 - gate_probs) * torch.log(
-                clone_cov_posterior + eps
-            )
-            # Softmax across phenotypes to get probabilities
-            probs = F.softmax(local_logits, dim=-1)
-
-            all_probs.append(probs.cpu())
-            current_idx += batch_size_local
-
-        return torch.cat(all_probs, dim=0).numpy()
 
     @torch.no_grad()
     def get_cell_phenotype_probs(
