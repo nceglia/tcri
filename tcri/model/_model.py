@@ -831,10 +831,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
-        # Calculate classification logits
         cls_logits = self.module.classifier(z_batch)
-        probs = normalized_exponential_vector(cls_logits, temperature=5.0)
+        ct_idx = self.module.ct_array[idx]
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+        prior_log = torch.log(p_ct_prior + 1e-8)
 
+        local_logits_model = self.module.gate_prob * cls_logits + (1 - self.module.gate_prob) * prior_log
+        probs = F.softmax(local_logits_model, dim=-1)
         # Retrieve the p_ct prior for each sample
         ct_idx = self.module.ct_array[idx]
         p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
