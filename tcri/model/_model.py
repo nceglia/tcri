@@ -539,19 +539,7 @@ class TCRIModule(PyroBaseModuleClass):
             if self.log_class_weights is not None:
                 local_logits_model = local_logits_model + self.log_class_weights
             # ===========================================
-            
-            # obs_phen = self._target_phenotypes[
-            #     idx
-            # ]  # This is your true label for each cell
 
-            # obs_phen = self._target_phenotypes[idx]
-            pseudo_labels = torch.multinomial(p_ct[ct_idx], 1).squeeze(-1)
-
-            pyro.sample(
-                "obs_label",
-                dist.Categorical(logits=local_logits_model),
-                obs=pseudo_labels,
-            )
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
             )
@@ -630,17 +618,7 @@ class TCRIModule(PyroBaseModuleClass):
 
             ct_idx = self.ct_array[idx]
             prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
-
-            gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
-            local_logits_guide = (
-                gate_probs * cls_logits + (1 - gate_probs) * prior_log_guide
-            )
-
-            # ======== ADD THIS TO WEIGHT CLASSES IN THE GUIDE ========
-            if self.log_class_weights is not None:
-                local_logits_guide = local_logits_guide + self.log_class_weights
-            # =========================================================
+            # cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
 
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -733,25 +711,38 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             weight_decay=self.optimizer_config["weight_decay"],
         )
         return {"optimizer": optimizer}
-
+    
     def training_step(self, batch, batch_idx):
+        """
+        1) Let super().training_step(batch, batch_idx) do the normal Pyro forward/back pass.
+        2) Then unify the distribution used in the model(...) with the distribution you penalize here.
+        3) Add your margin, entropy, confidence, and optional KL penalties.
+        """
+
+        # ---------------------------
+        # 0) Basic overhead and set kl_weight
+        # ---------------------------
         kl_weight = self.module.kl_weight_max / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
         self.module.kl_weight = kl_weight
 
+        # The super() call does the standard Pyro training step, returning a dict with "loss"
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
+        # ensure loss is a tensor on the right device
         if not isinstance(loss_dict["loss"], torch.Tensor):
-            loss_dict["loss"] = torch.tensor(
-                loss_dict["loss"], device=device, requires_grad=True
-            )
+            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
             loss_dict["loss"] = loss_dict["loss"].to(device)
 
+        # ---------------------------
+        # 1) Gather data, latent embeddings, margin penalty
+        # ---------------------------
         z_batch = self.module.get_latent(batch).to(device)
         idx = batch["indices"].long().view(-1).to(device)
         target_phen = self.module._target_phenotypes[idx].to(device)
 
+        # Optional margin penalty
         margin_val = 0.0
         if self.margin_scale > 0.0:
             margin_loss_val = pairwise_centroid_margin_loss(
@@ -763,73 +754,71 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             margin_loss = self.margin_scale * margin_loss_val
             loss_dict["loss"] += margin_loss
             margin_val = margin_loss_val.item()
+        loss_dict["margin_loss"] = margin_val
 
+        # ---------------------------
+        # 2) Re-run part of the decode step to see how to unify distributions
+        # ---------------------------
         x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
 
+        # Gene decoding is mostly for reconstruction, already handled by Pyro,
+        # but you can do a forward pass to get e.g. px_scale if you need it
         px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
             "gene", z_batch, log_library, batch_idx_tensor
         )
 
-        gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1 - 1e-3)
+        # The gating used for local_logits_model
 
-        nb_logits = (px_rate + self.module.eps).log() - (
-            self.module.px_r.exp() + self.module.eps
-        ).log()
-        nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
-        total_count = self.module.px_r.exp().clamp(max=1e4)
-        x_dist = dist.ZeroInflatedNegativeBinomial(
-            gate=gate_probs,
-            total_count=total_count,
-            logits=nb_logits,
-            validate_args=False,
-        )
-        alpha = 10.0
-        cls_logits = self.module.classifier(z_batch)
-        gamma = 2.0
-        alpha = 0.25
 
-        probs = normalized_exponential_vector(cls_logits, temperature=5.0)
-        # cls = torch.argmax(probs, dim=1)
+        # ---------------------------
+        # 3) Build the same classification distribution Pyro sees
+        # ---------------------------
+        cls_logits = self.module.classifier(z_batch)  # raw classifier outputs
 
         ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)  # shape (batch_size, P)
+        prior_log = torch.log(p_ct_prior + 1e-8)                # prior in log-space
+
+        # Weighted combination: same as in model(...)
+        # local_logits_model is exactly the distribution Pyro uses for obs_label
+        local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+
+        # Convert to probabilities for your custom penalty
+        probs = F.softmax(local_logits_model, dim=-1)
+
+        # ---------------------------
+        # 4) (Optional) KL to prior
+        # ---------------------------
+        # If you want to push classifier to match p_ct_prior softly:
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
         self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
+        # e.g. scale it or add it to the main loss if you want
+        # loss_dict["loss"] += beta * kl_divergence
 
+        # ---------------------------
+        # 5) Entropy Penalty
+        # ---------------------------
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-
-        # 2) Choose a scale factor. If you want it strong, pick something like 10.0 or 50.0
-        entropy_penalty_scale = 100.0
-
-        # 3) Add it to the final loss
+        entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
         loss_dict["loss"] += entropy_penalty_scale * entropy
-
-        # (Optional) Log it for monitoring
         loss_dict["entropy_penalty"] = entropy.item()
 
-        confidence = (probs**2).sum(dim=-1).mean()  # higher if distribution is spiky
+        # ---------------------------
+        # 6) Confidence (Square-Sum) Penalty
+        # ---------------------------
+        # If you also want to penalize spiky outputs:
+        confidence = (probs**2).sum(dim=-1).mean()
         confidence_penalty_scale = 10.0
         loss_dict["loss"] += confidence_penalty_scale * confidence
+        loss_dict["confidence_penalty"] = confidence.item()
 
-        loss_dict["margin_loss"] = margin_val
-
-        # fn_args, fn_kwargs = self.module._get_fn_args_from_batch(batch)
-        # trace = poutine.trace(self.module.model).get_trace(*fn_args, **fn_kwargs)
-        # trace.compute_log_prob()
-        # recon_log_prob = trace.nodes["obs"]["log_prob_sum"]  # reconstruction site
-        # cls_log_prob   = trace.nodes["obs_label"]["log_prob_sum"]  # classification site
-
-        # # Negative log-likelihood components:
-        # recon_loss = -recon_log_prob.item()
-        # cls_loss   = -cls_log_prob.item()
-        # self.log("recon_loss", recon_loss, prog_bar=True, on_epoch=True)
-        # self.log("cls_loss", cls_loss, prog_bar=True, on_epoch=True)
-
+        # ---------------------------
+        # 7) Done
+        # ---------------------------
         self._my_global_step += 1
         return loss_dict
-    
     
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
