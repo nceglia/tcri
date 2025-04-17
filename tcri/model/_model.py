@@ -764,8 +764,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # Weighted combination: same as in model(...)
         # local_logits_model is exactly the distribution Pyro uses for obs_label
         local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-        if self.module.log_class_weights is not None:
-            local_logits_model = local_logits_model + self.module.log_class_weights
+        # if self.module.log_class_weights is not None:
+        #     local_logits_model = local_logits_model + self.module.log_class_weights
 
         # Convert to probabilities for your custom penalty
         probs = F.softmax(local_logits_model, dim=-1)
@@ -1132,8 +1132,8 @@ class TCRIModel(BaseModelClass):
             # ----- 1) Compute classifier logits (same as training) -----
             cls_logits = self.module.classifier(z_loc)
 
-            if self.module.log_class_weights is not None:
-                cls_logits = cls_logits + self.module.log_class_weights
+            # if self.module.log_class_weights is not None:
+            #     cls_logits = cls_logits + self.module.log_class_weights
 
             gate_probs = torch.full(
                 (this_batch_size, self.module.P), gate_prob, device=x.device
