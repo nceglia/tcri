@@ -529,11 +529,6 @@ class TCRIModule(PyroBaseModuleClass):
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
             cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
 
-            # ======== ADD THIS TO WEIGHT CLASSES ========
-            if self.log_class_weights is not None:
-                local_logits_model = local_logits_model + self.log_class_weights
-            # ===========================================
-
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
             )
