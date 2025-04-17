@@ -783,10 +783,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # 5) Entropy Penalty
         # ---------------------------
-        # entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        # entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
-        # loss_dict["loss"] += entropy_penalty_scale * entropy
-        # loss_dict["entropy_penalty"] = entropy.item()
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
+        entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
+        loss_dict["loss"] += entropy_penalty_scale * entropy
+        loss_dict["entropy_penalty"] = entropy.item()
 
         # ---------------------------
         # 6) Confidence (Square-Sum) Penalty
