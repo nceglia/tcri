@@ -508,7 +508,6 @@ class TCRIModule(PyroBaseModuleClass):
             ct_idx = self.ct_array[idx]
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
             cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
-        
 
             gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
             # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
@@ -777,6 +776,15 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         gamma = 2.0
         alpha = 0.25
 
+        probs = F.softmax(cls_logits, dim=-1)
+        cls = torch.argmax(probs, dim=1)
+
+        # Calculate accuracy
+        correct_predictions = (cls == target_phen).sum().item()
+        accuracy = correct_predictions / target_phen.size(0)
+        self.log("train_accuracy", accuracy, prog_bar=True, on_epoch=True)
+
+
         p = F.softmax(cls_logits, dim=-1)
         ce_loss = F.nll_loss(F.log_softmax(cls_logits, dim=-1), target_phen, reduction="none")
         focal_loss = alpha * (1 - p[range(len(target_phen)), target_phen]) ** gamma * ce_loss
@@ -802,8 +810,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # # Negative log-likelihood components:
         # recon_loss = -recon_log_prob.item()
         # cls_loss   = -cls_log_prob.item()
-        # print("Reconstruction Loss (batch):", recon_loss)
-        # print("Classification Loss (batch):", cls_loss)
+        # self.log("recon_loss", recon_loss, prog_bar=True, on_epoch=True)
+        # self.log("cls_loss", cls_loss, prog_bar=True, on_epoch=True)
 
         self._my_global_step += 1
         return loss_dict
@@ -815,6 +823,20 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             val_dict = super().training_step(batch, batch_idx)
             self.module.train()
         device = next(self.module.parameters()).device
+        z_batch = self.module.get_latent(batch).to(device)
+        idx = batch["indices"].long().view(-1).to(device)
+        target_phen = self.module._target_phenotypes[idx].to(device)
+
+        # Calculate classification logits
+        cls_logits = self.module.classifier(z_batch)
+        probs = F.softmax(cls_logits, dim=-1)
+        cls = torch.argmax(probs, dim=1)
+
+        # Calculate accuracy
+        correct_predictions = (cls == target_phen).sum().item()
+        accuracy = correct_predictions / target_phen.size(0)
+        self.log("val_accuracy", accuracy, prog_bar=True, on_epoch=True)
+
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
         else:
@@ -1141,17 +1163,41 @@ class TCRIModel(BaseModelClass):
         # Concatenate into final array of shape (n_cells, P)
         return torch.cat(all_probs, dim=0).numpy()
 
-
-
     def plot_loss(self, log_scale=False):
-        loss_history = self.history_["elbo_train"]
-        loss_validation = self.history_["elbo_validation"]
-        plt.figure(figsize=(8, 4))
-        plt.plot(loss_history, label="Training Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title("Training Loss Over Epochs")
+        # Retrieve loss and accuracy history
+        loss_history = self.history_.get("elbo_train", [])
+        loss_validation = self.history_.get("elbo_validation", [])
+        reconstruction_loss = self.history_.get("recon_loss_epoch", [])
+        classification_loss = self.history_.get("cls_loss_epoch", [])
+        train_accuracy = self.history_.get("train_accuracy_epoch", [])
+        val_accuracy = self.history_.get("val_accuracy", [])
+
+        # Create subplots
+        fig, axes = plt.subplots(2, 1, figsize=(10, 12))
+
+        # Plot ELBO loss
+        axes[0].plot(loss_history, label="Training ELBO Loss")
+        axes[0].plot(loss_validation, label="Validation ELBO Loss")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("ELBO Loss")
+        axes[0].set_title("ELBO Loss Over Epochs")
+        axes[0].legend()
+
+        # Plot Accuracy
+        if len(train_accuracy) > 0 or len(val_accuracy) > 0:
+            if len(train_accuracy) > 0:
+                axes[1].plot(train_accuracy, label="Training Accuracy")
+            if len(val_accuracy) > 0:
+                axes[1].plot(val_accuracy, label="Validation Accuracy")
+            axes[1].set_xlabel("Epoch")
+            axes[1].set_ylabel("Accuracy")
+            axes[1].set_title("Accuracy Over Epochs")
+            axes[1].legend()
+
+        # Apply log scale if requested
         if log_scale:
-            plt.yscale("log")
-        plt.legend()
+            for ax in axes:
+                ax.set_yscale("log")
+
+        plt.tight_layout()
         plt.show()
