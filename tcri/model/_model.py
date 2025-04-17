@@ -454,20 +454,10 @@ class TCRIModule(PyroBaseModuleClass):
     ):
         pyro.module("scvi", self)
 
-        # initial_confusion = torch.eye(self.P) + 1e-3
-        # initial_confusion = initial_confusion / initial_confusion.sum(-1, keepdim=True)
-
-        # confusion_matrix = pyro.param(
-        #     "confusion_matrix", initial_confusion, constraint=dist.constraints.simplex
-        # )
-
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
-        # Hierarchical priors
-        # Assume self.mixture_concentration is a tensor of shape (B, K) provided as input.
         B = self.mixture_concentration.shape[0]
-        # Create equal weights for each of the B mixture components.
         mixture_weights = torch.ones(B, device=self.mixture_concentration.device) / B
 
         with pyro.plate("clonotypes", self.c_count):
@@ -495,11 +485,7 @@ class TCRIModule(PyroBaseModuleClass):
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
 
         with pyro.plate("data", batch_size) as idx:
-            # latent_prior = dist.Normal(
-            #     torch.zeros_like(z_loc), torch.ones_like(z_scale)
-            # )
-            # with poutine.scale(scale=kl_weight):
-            #     z = pyro.sample("latent", latent_prior.to_event(1))
+
             with poutine.scale(scale=kl_weight):
                 # vamp_mixture = self.vamp_prior.get_mixture().to_event(1)
                 vamp_mixture = self.vamp_prior.get_mixture()
@@ -519,13 +505,6 @@ class TCRIModule(PyroBaseModuleClass):
             if self.log_class_weights is not None:
                 local_logits_model = local_logits_model + self.log_class_weights
             # ===========================================
-
-            # # sample the discrete phenotype from these logits
-            # z_i_phen = pyro.sample(
-            #     "z_i_phen",
-            #     dist.Categorical(logits=local_logits_model),
-            #     infer={"enumerate": "parallel"} if self.use_enumeration else {},
-            # )
             
             obs_phen = self._target_phenotypes[
                 idx
@@ -786,18 +765,18 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
 
         p = F.softmax(cls_logits, dim=-1)
-        ce_loss = F.nll_loss(F.log_softmax(cls_logits, dim=-1), target_phen, reduction="none")
-        focal_loss = alpha * (1 - p[range(len(target_phen)), target_phen]) ** gamma * ce_loss
-        focal_loss = focal_loss.mean()
-        loss_dict["loss"] += focal_loss
-        loss_dict["classification_loss"] = focal_loss.item()
+        q = probs ** 2 / torch.sum(probs, dim=0, keepdim=True)
+        target_distribution = q / torch.sum(q, dim=1, keepdim=True)
+        dkl_loss = F.kl_div(probs.log(), target_distribution, reduction='batchmean')
+        loss_dict["loss"] += dkl_loss
+        loss_dict["classification_loss"] = dkl_loss.item()
  
-        entropy_penalty_weight = 50.0
-        T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
-        probs = F.softmax(cls_logits / T, dim=-1)
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        loss_dict["loss"] += entropy_penalty_weight * entropy  # try 0.1 to 1.0
-        loss_dict["classifier_entropy"] = entropy.item()
+        # entropy_penalty_weight = 50.0
+        # T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
+        # probs = F.softmax(cls_logits / T, dim=-1)
+        # entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
+        # loss_dict["loss"] += entropy_penalty_weight * entropy  # try 0.1 to 1.0
+        # loss_dict["classifier_entropy"] = entropy.item()
 
         loss_dict["margin_loss"] = margin_val
 
@@ -1136,25 +1115,18 @@ class TCRIModel(BaseModelClass):
             z_loc, _, _ = self.module.encoder(x, b)
 
             # ----- 1) Compute classifier logits (same as training) -----
-            cls_logits = self.module.classifier(z_loc) #+ self.module.phenotype_decoder(z_loc)
+            cls_logits = self.module.classifier(z_loc)
 
-            # Optionally add log class weights if defined
             if self.module.log_class_weights is not None:
                 cls_logits = cls_logits + self.module.log_class_weights
 
-            # ----- 2) Gating from gate_nn (rather than fixed 0.5) -----
-            # gate_logits = self.module.gate_nn(z_loc)    # shape (batch_size, 1)
-            # gate_probs = torch.sigmoid(gate_logits)     # in [0,1]
-            # gate_probs = gate_probs.expand(-1, self.module.P)
             gate_probs = torch.full(
                 (this_batch_size, self.module.P), gate_prob, device=x.device
             )
 
-            # ----- 3) Combine with local prior in log space -----
             prior_log = torch.log(clone_cov_posterior + eps)
             local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
-            # ----- 4) Convert to probabilities via softmax -----
             probs = torch.softmax(local_logits, dim=-1)
 
             all_probs.append(probs.cpu())
