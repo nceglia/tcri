@@ -775,7 +775,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # If you want to push classifier to match p_ct_prior softly:
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-        beta = 100.0
+        beta = 5.0
         self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
         # e.g. scale it or add it to the main loss if you want
         loss_dict["loss"] += beta * kl_divergence
@@ -784,7 +784,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # 5) Entropy Penalty
         # ---------------------------
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        entropy_penalty_scale = 1000.0  # large enough to encourage flatter distributions
+        entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
         loss_dict["loss"] += entropy_penalty_scale * entropy
         loss_dict["entropy_penalty"] = entropy.item()
 
@@ -793,7 +793,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # If you also want to penalize spiky outputs:
         confidence = (probs**2).sum(dim=-1).mean()
-        confidence_penalty_scale = 1000.0
+        confidence_penalty_scale = 100.0
         loss_dict["loss"] += confidence_penalty_scale * confidence
         loss_dict["confidence_penalty"] = confidence.item()
 
