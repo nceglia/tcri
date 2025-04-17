@@ -771,7 +771,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
 
         # Log the KL divergence as a measure of alignment with the prior
-        self.log("kl_divergence_with_prior", kl_divergence, prog_bar=True, on_epoch=True)
+        self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
 
 
         # p = F.softmax(cls_logits, dim=-1)
@@ -829,7 +829,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
 
         # Log the KL divergence as a measure of alignment with the prior
-        self.log("kl_divergence_with_prior", kl_divergence, prog_bar=True, on_epoch=True)
+        self.log("kl_divergence_with_prior_val", kl_divergence, prog_bar=True, on_epoch=True)
 
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
