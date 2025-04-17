@@ -529,12 +529,6 @@ class TCRIModule(PyroBaseModuleClass):
             prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
             cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
 
-            gate_probs = torch.full((batch_size, self.P), self.gate_prob, device=x.device)
-            # Weighted combination: gate_probs * classifier + (1 - gate_probs) * local prior
-            local_logits_model = (
-                gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
-            )
-
             # ======== ADD THIS TO WEIGHT CLASSES ========
             if self.log_class_weights is not None:
                 local_logits_model = local_logits_model + self.log_class_weights
@@ -763,15 +757,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
 
-        # Gene decoding is mostly for reconstruction, already handled by Pyro,
-        # but you can do a forward pass to get e.g. px_scale if you need it
-        px_scale, px_r_out, px_rate, px_dropout = self.module.decoder(
-            "gene", z_batch, log_library, batch_idx_tensor
-        )
-
-        # The gating used for local_logits_model
-
-
         # ---------------------------
         # 3) Build the same classification distribution Pyro sees
         # ---------------------------
@@ -784,6 +769,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # Weighted combination: same as in model(...)
         # local_logits_model is exactly the distribution Pyro uses for obs_label
         local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+        if self.module.log_class_weights is not None:
+            local_logits_model = local_logits_model + self.module.log_class_weights
 
         # Convert to probabilities for your custom penalty
         probs = F.softmax(local_logits_model, dim=-1)
@@ -793,15 +780,16 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # If you want to push classifier to match p_ct_prior softly:
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+        beta = 100.0
         self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
         # e.g. scale it or add it to the main loss if you want
-        # loss_dict["loss"] += beta * kl_divergence
+        loss_dict["loss"] += beta * kl_divergence
 
         # ---------------------------
         # 5) Entropy Penalty
         # ---------------------------
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
+        entropy_penalty_scale = 1000.0  # large enough to encourage flatter distributions
         loss_dict["loss"] += entropy_penalty_scale * entropy
         loss_dict["entropy_penalty"] = entropy.item()
 
@@ -810,7 +798,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # If you also want to penalize spiky outputs:
         confidence = (probs**2).sum(dim=-1).mean()
-        confidence_penalty_scale = 10.0
+        confidence_penalty_scale = 1000.0
         loss_dict["loss"] += confidence_penalty_scale * confidence
         loss_dict["confidence_penalty"] = confidence.item()
 
@@ -1159,7 +1147,7 @@ class TCRIModel(BaseModelClass):
             prior_log = torch.log(clone_cov_posterior + eps)
             local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
-            probs = normalized_exponential_vector(local_logits, temperature=5.0)
+            probs = F.softmax(local_logits, dim=-1)
 
             all_probs.append(probs.cpu())
             current_idx += this_batch_size
