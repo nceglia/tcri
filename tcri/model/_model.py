@@ -506,16 +506,17 @@ class TCRIModule(PyroBaseModuleClass):
                 local_logits_model = local_logits_model + self.log_class_weights
             # ===========================================
             
-            obs_phen = self._target_phenotypes[
-                idx
-            ]  # This is your true label for each cell
+            # obs_phen = self._target_phenotypes[
+            #     idx
+            # ]  # This is your true label for each cell
 
-            obs_phen = self._target_phenotypes[idx]
+            # obs_phen = self._target_phenotypes[idx]
+            pseudo_labels = torch.multinomial(p_ct[ct_idx], 1).squeeze(-1)
 
             pyro.sample(
                 "obs_label",
                 dist.Categorical(logits=local_logits_model),
-                obs=obs_phen,
+                obs=pseudo_labels,
             )
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
@@ -756,20 +757,29 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         alpha = 0.25
 
         probs = F.softmax(cls_logits, dim=-1)
-        cls = torch.argmax(probs, dim=1)
+        # cls = torch.argmax(probs, dim=1)
 
-        # Calculate accuracy
-        correct_predictions = (cls == target_phen).sum().item()
-        accuracy = correct_predictions / target_phen.size(0)
-        self.log("train_accuracy", accuracy, prog_bar=True, on_epoch=True)
+        # # Calculate accuracy
+        # correct_predictions = (cls == target_phen).sum().item()
+        # accuracy = correct_predictions / target_phen.size(0)
+        # self.log("train_accuracy", accuracy, prog_bar=True, on_epoch=True)
+
+        ct_idx = self.module.ct_array[idx]
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+
+        # Calculate the similarity between predicted and prior distributions
+        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+
+        # Log the KL divergence as a measure of alignment with the prior
+        self.log("kl_divergence_with_prior", kl_divergence, prog_bar=True, on_epoch=True)
 
 
-        p = F.softmax(cls_logits, dim=-1)
-        q = probs ** 2 / torch.sum(probs, dim=0, keepdim=True)
-        target_distribution = q / torch.sum(q, dim=1, keepdim=True)
-        dkl_loss = F.kl_div(probs.log(), target_distribution, reduction='batchmean')
-        loss_dict["loss"] += dkl_loss
-        loss_dict["classification_loss"] = dkl_loss.item()
+        # p = F.softmax(cls_logits, dim=-1)
+        # q = probs ** 2 / torch.sum(probs, dim=0, keepdim=True)
+        # target_distribution = q / torch.sum(q, dim=1, keepdim=True)
+        # dkl_loss = F.kl_div(probs.log(), target_distribution, reduction='batchmean')
+        # loss_dict["loss"] += dkl_loss
+        # loss_dict["classification_loss"] = dkl_loss.item()
  
         # entropy_penalty_weight = 50.0
         # T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
@@ -801,6 +811,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             self.module.eval()
             val_dict = super().training_step(batch, batch_idx)
             self.module.train()
+
         device = next(self.module.parameters()).device
         z_batch = self.module.get_latent(batch).to(device)
         idx = batch["indices"].long().view(-1).to(device)
@@ -809,12 +820,16 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # Calculate classification logits
         cls_logits = self.module.classifier(z_batch)
         probs = F.softmax(cls_logits, dim=-1)
-        cls = torch.argmax(probs, dim=1)
 
-        # Calculate accuracy
-        correct_predictions = (cls == target_phen).sum().item()
-        accuracy = correct_predictions / target_phen.size(0)
-        self.log("val_accuracy", accuracy, prog_bar=True, on_epoch=True)
+        # Retrieve the p_ct prior for each sample
+        ct_idx = self.module.ct_array[idx]
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+
+        # Calculate the similarity between predicted and prior distributions
+        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+
+        # Log the KL divergence as a measure of alignment with the prior
+        self.log("kl_divergence_with_prior", kl_divergence, prog_bar=True, on_epoch=True)
 
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
