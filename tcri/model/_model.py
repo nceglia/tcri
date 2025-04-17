@@ -784,7 +784,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # 5) Entropy Penalty
         # ---------------------------
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        entropy_penalty_scale = 100.0  # large enough to encourage flatter distributions
+        entropy_penalty_scale = 5.0  # large enough to encourage flatter distributions
         loss_dict["loss"] += entropy_penalty_scale * entropy
         loss_dict["entropy_penalty"] = entropy.item()
 
@@ -793,7 +793,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # If you also want to penalize spiky outputs:
         confidence = (probs**2).sum(dim=-1).mean()
-        confidence_penalty_scale = 100.0
+        confidence_penalty_scale = 10.0
         loss_dict["loss"] += confidence_penalty_scale * confidence
         loss_dict["confidence_penalty"] = confidence.item()
 
