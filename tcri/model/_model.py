@@ -793,17 +793,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         loss_dict["margin_loss"] = margin_val
 
-        fn_args, fn_kwargs = self.module._get_fn_args_from_batch(batch)
-        trace = poutine.trace(self.module.model).get_trace(*fn_args, **fn_kwargs)
-        trace.compute_log_prob()
-        recon_log_prob = trace.nodes["obs"]["log_prob_sum"]  # reconstruction site
-        cls_log_prob   = trace.nodes["obs_label"]["log_prob_sum"]  # classification site
+        # fn_args, fn_kwargs = self.module._get_fn_args_from_batch(batch)
+        # trace = poutine.trace(self.module.model).get_trace(*fn_args, **fn_kwargs)
+        # trace.compute_log_prob()
+        # recon_log_prob = trace.nodes["obs"]["log_prob_sum"]  # reconstruction site
+        # cls_log_prob   = trace.nodes["obs_label"]["log_prob_sum"]  # classification site
 
-        # Negative log-likelihood components:
-        recon_loss = -recon_log_prob.item()
-        cls_loss   = -cls_log_prob.item()
-        print("Reconstruction Loss (batch):", recon_loss)
-        print("Classification Loss (batch):", cls_loss)
+        # # Negative log-likelihood components:
+        # recon_loss = -recon_log_prob.item()
+        # cls_loss   = -cls_log_prob.item()
+        # print("Reconstruction Loss (batch):", recon_loss)
+        # print("Classification Loss (batch):", cls_loss)
 
         self._my_global_step += 1
         return loss_dict
