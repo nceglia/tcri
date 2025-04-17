@@ -42,6 +42,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
+def normalized_exponential_vector(values, temperature=0.01):
+    assert temperature > 0, "Temperature must be positive"
+    exps = torch.exp(values / temperature)
+    return exps / torch.sum(exps, dim=-1, keepdim=True)
+
 def build_archetypes(c2p_mat, K=4):
     """
     c2p_mat: shape (c_count, P)
@@ -98,21 +104,23 @@ class ResidualBlock(nn.Module):
         return out + residual
 
 class PhenotypeClassifier(nn.Module):
-    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2, dropout_rate=0.1):
+    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2, dropout_rate=0.1, temperature=1.0):
         super(PhenotypeClassifier, self).__init__()
         self.attention_layer = AttentionLayer(embed_dim=n_latent, num_heads=num_heads, dropout_rate=dropout_rate)
         self.residual_blocks = nn.ModuleList(
             [ResidualBlock(n_latent, classifier_hidden, dropout_rate) for _ in range(num_layers)]
         )
         self.output_layer = nn.Linear(n_latent, P)
+        self.temperature = temperature  # Add temperature parameter
 
     def forward(self, x):
         x = self.attention_layer(x)
         for block in self.residual_blocks:
             x = block(x)
-        x = self.output_layer(x)
-        return x
-
+        logits = self.output_layer(x)
+        logits = torch.clamp(logits, min=-5.0, max=5.0)  # Clamp the logits
+        return logits / self.temperature  # Apply temperature scaling
+    
 ###############################################################################
 # -1) VampPrior
 ###############################################################################
@@ -756,7 +764,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         gamma = 2.0
         alpha = 0.25
 
-        probs = F.softmax(cls_logits, dim=-1)
+        probs = normalized_exponential_vector(cls_logits, temperature=2.0)
         # cls = torch.argmax(probs, dim=1)
 
         ct_idx = self.module.ct_array[idx]
@@ -810,7 +818,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         # Calculate classification logits
         cls_logits = self.module.classifier(z_batch)
-        probs = F.softmax(cls_logits, dim=-1)
+        probs = normalized_exponential_vector(cls_logits, temperature=2.0)
 
         # Retrieve the p_ct prior for each sample
         ct_idx = self.module.ct_array[idx]
@@ -1133,7 +1141,7 @@ class TCRIModel(BaseModelClass):
             prior_log = torch.log(clone_cov_posterior + eps)
             local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
-            probs = torch.softmax(local_logits, dim=-1)
+            probs = normalized_exponential_vector(local_logits, temperature=2.0)
 
             all_probs.append(probs.cpu())
             current_idx += this_batch_size
