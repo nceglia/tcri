@@ -759,34 +759,25 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         probs = F.softmax(cls_logits, dim=-1)
         # cls = torch.argmax(probs, dim=1)
 
-        # # Calculate accuracy
-        # correct_predictions = (cls == target_phen).sum().item()
-        # accuracy = correct_predictions / target_phen.size(0)
-        # self.log("train_accuracy", accuracy, prog_bar=True, on_epoch=True)
-
         ct_idx = self.module.ct_array[idx]
         p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-
-        # Calculate the similarity between predicted and prior distributions
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-
-        # Log the KL divergence as a measure of alignment with the prior
         self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
 
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
 
-        # p = F.softmax(cls_logits, dim=-1)
-        # q = probs ** 2 / torch.sum(probs, dim=0, keepdim=True)
-        # target_distribution = q / torch.sum(q, dim=1, keepdim=True)
-        # dkl_loss = F.kl_div(probs.log(), target_distribution, reduction='batchmean')
-        # loss_dict["loss"] += dkl_loss
-        # loss_dict["classification_loss"] = dkl_loss.item()
- 
-        # entropy_penalty_weight = 50.0
-        # T = max(0.5, 1.5 * np.exp(-0.001 * self._my_global_step))
-        # probs = F.softmax(cls_logits / T, dim=-1)
-        # entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        # loss_dict["loss"] += entropy_penalty_weight * entropy  # try 0.1 to 1.0
-        # loss_dict["classifier_entropy"] = entropy.item()
+        # 2) Choose a scale factor. If you want it strong, pick something like 10.0 or 50.0
+        entropy_penalty_scale = 100.0
+
+        # 3) Add it to the final loss
+        loss_dict["loss"] += entropy_penalty_scale * entropy
+
+        # (Optional) Log it for monitoring
+        loss_dict["entropy_penalty"] = entropy.item()
+
+        confidence = (probs**2).sum(dim=-1).mean()  # higher if distribution is spiky
+        confidence_penalty_scale = 10.0
+        loss_dict["loss"] += confidence_penalty_scale * confidence
 
         loss_dict["margin_loss"] = margin_val
 
