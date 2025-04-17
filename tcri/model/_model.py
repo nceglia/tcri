@@ -73,7 +73,7 @@ def build_archetypes(c2p_mat, K=4):
 
 
 class PhenotypeClassifier(nn.Module):
-    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, temperature=1.0):
+    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, num_heads=2, temperature=1.0):
         super(PhenotypeClassifier, self).__init__()
         layers = []
         input_dim = n_latent
