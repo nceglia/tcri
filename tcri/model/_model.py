@@ -790,7 +790,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         gamma = 2.0
         alpha = 0.25
 
-        probs = normalized_exponential_vector(cls_logits, temperature=2.0)
+        probs = normalized_exponential_vector(cls_logits, temperature=5.0)
         # cls = torch.argmax(probs, dim=1)
 
         ct_idx = self.module.ct_array[idx]
@@ -844,7 +844,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         # Calculate classification logits
         cls_logits = self.module.classifier(z_batch)
-        probs = normalized_exponential_vector(cls_logits, temperature=2.0)
+        probs = normalized_exponential_vector(cls_logits, temperature=5.0)
 
         # Retrieve the p_ct prior for each sample
         ct_idx = self.module.ct_array[idx]
@@ -1167,7 +1167,7 @@ class TCRIModel(BaseModelClass):
             prior_log = torch.log(clone_cov_posterior + eps)
             local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
 
-            probs = normalized_exponential_vector(local_logits, temperature=2.0)
+            probs = normalized_exponential_vector(local_logits, temperature=5.0)
 
             all_probs.append(probs.cpu())
             current_idx += this_batch_size
