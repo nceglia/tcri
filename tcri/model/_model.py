@@ -554,7 +554,8 @@ class TCRIModule(PyroBaseModuleClass):
                 logits=nb_logits,
                 validate_args=False,
             )
-            with poutine.scale(scale=self.reconstruction_loss_scale):
+            scale_val = torch.tensor(self.reconstruction_loss_scale, device=x.device)
+            with poutine.scale(scale=scale_val):
                 pyro.sample("obs", x_dist.to_event(1), obs=x)
 
     @auto_move_data
