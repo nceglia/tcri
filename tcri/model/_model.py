@@ -1150,6 +1150,28 @@ class TCRIModel(BaseModelClass):
         # Concatenate into final array of shape (n_cells, P)
         return torch.cat(all_probs, dim=0).numpy()
 
+    def plot_archetypes(self):
+        order = np.argsort(self.labels)
+        ordered_mat = self.c2p_mat[order, :]
+
+        # Plot heatmap of the clone phenotype distributions
+        plt.figure(figsize=(10, 6))
+        plt.imshow(ordered_mat, aspect='auto', cmap='viridis')
+        plt.colorbar(label='Phenotype Distribution')
+        plt.title('Heatmap of Clone Phenotype Distributions (Ordered by Cluster)')
+        plt.xlabel('Phenotype')
+        plt.ylabel('Clone (ordered by cluster)')
+        plt.show()
+
+        # Plot heatmap of the archetype centroids
+        plt.figure(figsize=(6, 4))
+        plt.imshow(self.centers, aspect='auto', cmap='viridis')
+        plt.colorbar(label='Centroid Value')
+        plt.title('Heatmap of Archetype Centroids')
+        plt.xlabel('Phenotype')
+        plt.ylabel('Archetype')
+        plt.show()
+
     def plot_loss(self, log_scale=False):
         # Retrieve loss and accuracy history
         loss_history = self.history_.get("elbo_train", [])
