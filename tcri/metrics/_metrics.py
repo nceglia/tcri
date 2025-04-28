@@ -104,17 +104,6 @@ def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, tem
     -------
     float
         The phenotypic entropy value for the specified clonotype
-        
-    Examples
-    --------
-    >>> import tcri
-    >>> # Calculate phenotypic entropy for a specific TCR clonotype at Day0
-    >>> entropy_value = tcri.tl.phenotypic_entropy(adata, "Day0", "CASSQETQYF")
-    >>> 
-    >>> # Calculate non-normalized entropy with custom parameters
-    >>> entropy_value = tcri.tl.phenotypic_entropy(
-    ...     adata, "tumor", "CASSLGQAYEQYF", base=10, normalized=False, temperature=0.5
-    ... )
     """
     logf = lambda x : np.log(x) / np.log(base)
     jd = joint_distribution(adata, covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
@@ -173,16 +162,6 @@ def clonality(adata):
     The function uses Shannon entropy to measure the diversity of the clone size distribution
     and normalizes it by the maximum possible entropy (log₂ of the number of unique clones).
     The formula is: Clonality = 1 - H/H_max, where H is the Shannon entropy.
-    
-    Examples
-    --------
-    >>> import tcri
-    >>> # Calculate clonality for all phenotypes
-    >>> clonality_dict = tcri.tl.clonality(adata)
-    >>> 
-    >>> # Print clonality for each phenotype
-    >>> for phenotype, clonality_value in clonality_dict.items():
-    ...     print(f"{phenotype}: {clonality_value:.3f}")
     """
     phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
     unique_phenotypes = np.unique(phenotypes)
@@ -211,7 +190,7 @@ def clone_fraction(adata, groupby):
             frequencies[group][c] = clones.count(c) / total_cells
     return frequencies
 
-def flux(adata, from_this, to_that, clones=None, temperature=1.0, distance_metric="l1", n_samples=0):
+def flux(adata, from_this, to_that, clones=None, temperature=1.0, distance_metric="l1", n_samples=0, weighted=False):
     """
     Calculate phenotypic flux between two covariate conditions for each clonotype.
     
@@ -260,8 +239,8 @@ def flux(adata, from_this, to_that, clones=None, temperature=1.0, distance_metri
     ... )
     """
     distances = dict()
-    jd_this = joint_distribution(adata, from_this, temperature=temperature, n_samples=n_samples, clones=clones)
-    jd_that = joint_distribution(adata, to_that, temperature=temperature, n_samples=n_samples, clones=clones)
+    jd_this = joint_distribution(adata, from_this, temperature=temperature, n_samples=n_samples, clones=clones,weighted=weighted)
+    jd_that = joint_distribution(adata, to_that, temperature=temperature, n_samples=n_samples, clones=clones,weighted=weighted)
     common_indices = jd_this.index.intersection(jd_that.index)
     if distance_metric == "l1":
         distances = (jd_this.loc[common_indices] - jd_that.loc[common_indices]).abs().sum(axis=1)
@@ -333,6 +312,7 @@ def mutual_information(
         weighted=weighted
     )
     pxy = pxy_df.to_numpy()
+        
     
     # Normalize to ensure it's a proper joint distribution
     total = pxy.sum()

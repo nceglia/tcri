@@ -1154,10 +1154,8 @@ class TCRIModel(BaseModelClass):
         # Retrieve loss and accuracy history
         loss_history = self.history_.get("elbo_train", [])
         loss_validation = self.history_.get("elbo_validation", [])
-        reconstruction_loss = self.history_.get("recon_loss_epoch", [])
-        classification_loss = self.history_.get("cls_loss_epoch", [])
-        train_accuracy = self.history_.get("train_accuracy_epoch", [])
-        val_accuracy = self.history_.get("val_accuracy", [])
+        train_accuracy = self.history_.get("kl_divergence_with_prior_train_epoch", [])
+        val_accuracy = self.history_.get("kl_divergence_with_prior_val", [])
 
         # Create subplots
         fig, axes = plt.subplots(2, 1, figsize=(10, 12))
@@ -1177,8 +1175,8 @@ class TCRIModel(BaseModelClass):
             if len(val_accuracy) > 0:
                 axes[1].plot(val_accuracy, label="Validation Accuracy")
             axes[1].set_xlabel("Epoch")
-            axes[1].set_ylabel("Accuracy")
-            axes[1].set_title("Accuracy Over Epochs")
+            axes[1].set_ylabel("dKL")
+            axes[1].set_title("DKL Over Epochs")
             axes[1].legend()
 
         # Apply log scale if requested
