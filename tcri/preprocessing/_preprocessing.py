@@ -21,6 +21,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 warnings.filterwarnings('ignore')
 
+def register_phenotype_key(adata, phenotype_key, order=None):
+    assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
+    if order==None:
+        adata.uns["tcri_unique_phenotypes"] = np.unique(adata.obs[phenotype_key].tolist())
+    adata.uns["tcri_phenotype_key"] = phenotype_key
+
+def register_clonotype_key(adata, tcr_key):
+    assert tcr_key in adata.obs, "Key {} not found.".format(tcr_key)
+    adata.uns["tcri_clone_key"] = tcr_key
+    adata.uns["tcri_unique_clonotypes"] = np.unique(adata.obs[tcr_key].tolist())
+
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
     clone_counts = adata.obs["trb_candidate"].value_counts()
@@ -178,6 +189,8 @@ def register_model(
     adata.obsm[latent_slot] = latent_z
     adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
     adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
+    register_phenotype_key(adata,"tcri_phenotype")
+    register_clonotype_key(adata,"trb_unique")
     return adata
 
 def joint_distribution(
@@ -381,18 +394,6 @@ def group_small_clones(adata, patient_key=""):
         else:
             ct.append("{}_{}".format(x,p))
     adata.obs["trb_unique"] = ct
-
-
-def register_phenotype_key(adata, phenotype_key, order=None):
-    assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
-    if order==None:
-        adata.uns["tcri_unique_phenotypes"] = np.unique(adata.obs[phenotype_key].tolist())
-    adata.uns["tcri_phenotype_key"] = phenotype_key
-
-def register_clonotype_key(adata, tcr_key):
-    assert tcr_key in adata.obs, "Key {} not found.".format(tcr_key)
-    adata.uns["tcri_clone_key"] = tcr_key
-    adata.uns["tcri_unique_clonotypes"] = np.unique(adata.obs[tcr_key].tolist())
 
 def register_probability_columns(adata, probability_columns):
     adata.uns["probability_columns"] = probability_columns
