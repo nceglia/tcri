@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from statannot import add_stat_annotation
 import matplotlib.patches as mpatches
 from scipy.cluster.hierarchy import dendrogram, linkage
-
+import scanpy as sc
 from gseapy import dotplot
 import tqdm
 
@@ -534,6 +534,20 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     fig.tight_layout()
     if save:
         fig.savefig(save)
+
+def plot_phenotype_probabilities(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs="tcri_phenotype", figsize=(10,8), add_outline=False, save=None,ncols=2,cmap="magma"):
+    phenotypes = adata.uns["tcri_phenotype_categories"]
+    prob_labels = []
+    adata = adata.copy()
+    for y,x in zip(phenotypes, adata.obsm["X_tcri_refined_phenotype_probs"].T):
+        adata.obs['{}_probability'.format(y)] = x
+        prob_labels.append('{}_probability'.format(y))
+    fig, ax = plt.subplots(1,1,figsize=figsize)
+    sc.pl.umap(adata,color=prob_labels, cmap=cmap, s=30, ncols=ncols, ax=ax, show=False, add_outline=add_outline)
+    fig.tight_layout()
+    if save != None:
+        fig.savefig(save)
+    return fig, ax
 
 def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,palette="coolwarm",save=None):
     clone_size(adata)

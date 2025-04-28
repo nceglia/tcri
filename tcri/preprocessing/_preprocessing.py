@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional
 
+from sklearn.metrics.pairwise import cosine_similarity
 
 warnings.filterwarnings('ignore')
 
@@ -31,8 +32,47 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
             return candidate
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
-import torch
-import pandas as pd
+def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs="tcri_phenotype"):
+    print("Classifying phenotypes")
+    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
+    ct_array = adata.uns["tcri_ct_array_for_cells"]
+    unique_cts = np.unique(ct_array)
+    phenotype_probs_posterior = adata.uns["tcri_p_ct"]
+    phenotypes = adata.uns["tcri_phenotype_categories"]
+    latent_z = adata.obsm["X_tcri"]
+
+    # Pre-compute phenotype archetype embeddings
+    archetype_matrix = np.vstack([
+        latent_z[adata.obs[phenotype_col].values == phenotype].mean(axis=0) 
+        for phenotype in phenotypes
+    ])
+
+    all_probs = np.zeros((adata.n_obs, len(phenotypes)))
+
+    # Iterate over each unique ct
+    for ct in unique_cts:
+        ct_indices = np.where(ct_array == ct)[0]
+        ct_embeddings = latent_z[ct_indices]
+
+        # Cosine similarity (cells x phenotypes)
+        similarity = cosine_similarity(ct_embeddings, archetype_matrix)
+        similarity = (similarity + 1) / 2  # Normalize cosine similarity to [0,1]
+
+        # Adjust similarity scores by posterior phenotype probabilities
+        adjusted_scores = similarity * phenotype_probs_posterior[ct]
+
+        # Normalize to probabilities per cell
+        probs_normalized = adjusted_scores / adjusted_scores.sum(axis=1, keepdims=True)
+        all_probs[ct_indices] = probs_normalized
+
+    # Store the normalized probabilities in AnnData
+    adata.obsm[phenotype_prob_slot] = all_probs
+
+    # Assign phenotype with highest probability
+    assignments = all_probs.argmax(axis=1)
+    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
+        assignments, categories=phenotypes
+    )
 
 @torch.no_grad()
 def register_model(
@@ -103,7 +143,6 @@ def register_model(
     adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
     adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
     adata.uns["tcri_ct_to_c"] = model.module.ct_to_c.cpu().numpy()
-
     # Get category labels from the model
     cov_col = model.adata_manager.registry["covariate_col"]
     clone_col = model.adata_manager.registry["clonotype_col"]
@@ -119,40 +158,26 @@ def register_model(
     adata.uns["tcri_phenotype_categories"] = (
         adata.obs[phenotype_col].astype("category").cat.categories.tolist()
     )
-
     adata.uns["tcri_metadata"] = {
         "covariate_col": cov_col,
         "clone_col": clone_col,
-        "phenotype_col": phenotype_col,
+        "   ": phenotype_col,
         "batch_col": batch_col,
     }
     adata.uns["tcri_local_scale"] = model.module.local_scale
-
     # Store per-cell arrays needed by downstream functions
     ct_array_for_cells = model.module.ct_array.cpu().numpy()
     adata.uns["tcri_ct_array_for_cells"] = ct_array_for_cells
-
     ct_to_cov = model.module.ct_to_cov.cpu().numpy()
     cov_array_for_cells = ct_to_cov[ct_array_for_cells]
     adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
-
     # Store per-cell phenotype probabilities
-    phenotype_probs = model.get_cell_phenotype_probs(batch_size=batch_size, gate_prob=gate_prob)
-    adata.obsm[phenotype_prob_slot] = phenotype_probs
-
-    # Store phenotype assignments (argmax of probabilities)
-    assignments = phenotype_probs.argmax(axis=1)
-    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
-        assignments, categories=adata.uns["tcri_phenotype_categories"]
-    )
-
+    classify_phenotypes(adata, phenotype_prob_slot=phenotype_prob_slot, phenotype_assignment_obs=phenotype_assignment_obs)
     # Store latent representation
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
-
     adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
     adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
-
     return adata
 
 def joint_distribution(
@@ -331,73 +356,6 @@ def joint_distribution(
         ]
         df_samples = df_samples[[col for col in df_samples.columns if col not in ["clonotype_id","clonotype_index","sample_id"]]]
         return df_samples
-
-
-
-def global_joint_distribution(
-    adata, 
-    temperature: float = 1.0, 
-    n_samples: int = 0, 
-) -> pd.DataFrame:
-    # Retrieve global clonotype-level phenotype estimates and mappings.
-    try:
-        # p_c is expected to be of shape (num_clonotypes, num_phenotypes)
-        p_c = torch.tensor(adata.uns["tcri_p_c"])
-    except KeyError:
-        raise KeyError("Global p_c not found in adata.uns. Please store it (e.g., under 'tcri_p_c').")
-    
-    clonotype_categories = adata.uns["tcri_clonotype_categories"]
-    phenotype_categories = adata.uns["tcri_phenotype_categories"]
-
-    # Apply temperature scaling (with a stability constant)
-    eps = 1e-8
-    p_c = F.softmax(torch.log(p_c + eps) / temperature, dim=-1)
-
-    if n_samples == 0:
-        # Point estimate: one row per clonotype.
-        p_c_arr = p_c.numpy()
-        df = pd.DataFrame(p_c_arr, columns=phenotype_categories)
-        # Create a clonotype index (assumes rows are in the same order as clonotype_categories)
-        indices = np.arange(len(clonotype_categories))
-        df["clonotype_index"] = indices
-        df["clonotype_id"] = [clonotype_categories[i] for i in indices]
-        # Set the index to clonotype_id (each is unique)
-        df.index = df["clonotype_id"]
-        df = df[[col for col in df.columns if "clonotype" not in col]]
-        return df
-
-    else:
-        if n_samples <= 0:
-            raise ValueError("n_samples must be > 0 when method is 'posterior'")
-        # Retrieve a stored global scale (if available) for concentration parameters; default to 1.0
-        global_scale = adata.uns.get("tcri_global_scale", 1.0)
-        # Form concentration parameters using the global scale
-        conc = global_scale * p_c  # shape: (num_clonotypes, num_phenotypes)
-        # Sample n_samples draws for each clonotype
-        samples = dist.Dirichlet(conc).sample((n_samples,))  # shape: (n_samples, num_clonotypes, num_phenotypes)
-        samples_np = samples.cpu().numpy() if samples.device.type != "cpu" else samples.numpy()
-        # Rearrange so each row corresponds to one sample draw:
-        num_clonotypes, num_pheno = samples_np.shape[1], samples_np.shape[2]
-        samples_expanded = samples_np.transpose(1, 0, 2).reshape(-1, num_pheno)
-        
-        # Expand the clonotype indices accordingly.
-        indices = np.arange(num_clonotypes)
-        indices_expanded = np.repeat(indices, n_samples)
-        clonotype_ids_expanded = [clonotype_categories[i] for i in indices_expanded]
-        # Also record a sample identifier for each draw.
-        sample_ids = np.tile(np.arange(n_samples), num_clonotypes)
-        
-        # Build the expanded DataFrame.
-        df_samples = pd.DataFrame(samples_expanded, columns=phenotype_categories)
-        df_samples["clonotype_index"] = indices_expanded
-        df_samples["clonotype_id"] = clonotype_ids_expanded
-        df_samples["sample_id"] = sample_ids
-        # Set a new index that combines clonotype_id and sample_id (not unique per clonotype)
-        df_samples.index = df_samples["clonotype_id"].astype(str) + "_" + df_samples["sample_id"].astype(str)
-        del df_samples["sample_id"]
-        df_samples = df_samples[[col for col in df_samples.columns if "clonotype" not in col]]
-        return df_samples
-
 
 def get_latent_embedding(
     adata, 
