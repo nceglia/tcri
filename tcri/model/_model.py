@@ -475,6 +475,10 @@ class TCRIModule(PyroBaseModuleClass):
         if ct_to_cov_array is not None:
             self.register_buffer("ct_to_cov", ct_to_cov_array)
 
+    @property
+    def use_gate(self) -> bool:
+        return self.gate_prob is not None
+
     @staticmethod
     def _get_fn_args_from_batch(tensor_dict: Dict[str, torch.Tensor]):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
@@ -674,17 +678,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.reconstruction_loss_scale = reconstruction_loss_scale
         self.clone_alignment_scale = clone_alignment_scale
         self._my_global_step = 0
-        self.kl_sigmoid_midpoint = 4000
-        self.kl_sigmoid_speed = 0.001
         self.gate_saturation_weight = gate_saturation_weight
         self.class_weights = class_weights
+        self.optimizer_config = optimizer_config
+
         if optimizer_config is None:
-            optimizer_config = {
-                "lr": 1e-3,
-                "betas": (0.9, 0.999),
-                "eps": 1e-5,
-                "weight_decay": 1e-4,
-            }
+            optimizer_config = {"lr":1e-3,"betas":(0.9,0.999),"eps":1e-5,"weight_decay":1e-4}
         self.optimizer_config = optimizer_config
 
     @property
@@ -761,13 +760,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)  # shape (batch_size, P)
         prior_log = torch.log(p_ct_prior + 1e-8)                # prior in log-space
 
-        # Weighted combination: same as in model(...)
-        # local_logits_model is exactly the distribution Pyro uses for obs_label
-        local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-        # if self.module.log_class_weights is not None:
-        #     local_logits_model = local_logits_model + self.module.log_class_weights
+        if self.module.use_gate:
+            local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+        else:
+            local_logits_model = cls_logits + prior_log
 
-        # Convert to probabilities for your custom penalty
         probs = F.softmax(local_logits_model, dim=-1)
 
         # ---------------------------
@@ -818,8 +815,14 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         ct_idx = self.module.ct_array[idx]
         p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
         prior_log = torch.log(p_ct_prior + 1e-8)
-
-        local_logits_model = self.module.gate_prob * cls_logits + (1 - self.module.gate_prob) * prior_log
+        if self.module.use_gate:
+            local_logits_model = (
+                self.module.gate_prob * cls_logits
+                + (1.0 - self.module.gate_prob) * prior_log
+            )
+        else:
+            # additive (Bayesian-product) rule
+            local_logits_model = cls_logits + prior_log
         probs = F.softmax(local_logits_model, dim=-1)
         # Retrieve the p_ct prior for each sample
         ct_idx = self.module.ct_array[idx]
@@ -895,7 +898,7 @@ class TCRIModel(BaseModelClass):
         classifier_dropout: float = 0.1,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
-        gate_prob: float = 0.5,
+        gate_prob: Optional[float] = 0.5, 
         kl_weight_max: float = 1.0,
         **kwargs,
     ):
@@ -905,10 +908,14 @@ class TCRIModel(BaseModelClass):
         phenotype_col = self.adata_manager.registry["phenotype_col"]
         covariate_col = self.adata_manager.registry["covariate_col"]
         batch_col = self.adata_manager.registry["batch_col"]
-
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
         target_codes = torch.tensor(ph_series.cat.codes.values, dtype=torch.long)
+        # ---- TCRIModel.__init__ -------------
+        if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
+            raise ValueError("gate_prob must be in [0,1] or None")
+        # (remove the self.module.gate_prob = gate_prob line)
+
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
@@ -1074,13 +1081,17 @@ class TCRIModel(BaseModelClass):
         latents = [self.module.get_latent(tensors) for tensors in scdl]
         return torch.cat(latents, dim=0).cpu().numpy()
 
+    @property
+    def use_gate(self) -> bool:
+        return self.module.use_gate
+
     @torch.no_grad()
     def get_p_ct(self):
         return self.module.get_p_ct().cpu().numpy()
 
     @torch.no_grad()
     def get_cell_phenotype_probs(
-        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: float = 0.5
+        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: Optional[float] = None
     ) -> np.ndarray:
         """
         Computes the cell-level phenotype probabilities in the same way as training,
@@ -1140,9 +1151,13 @@ class TCRIModel(BaseModelClass):
             )
 
             prior_log = torch.log(clone_cov_posterior + eps)
-            local_logits = gate_probs * cls_logits + (1.0 - gate_probs) * prior_log
+            if gate_prob is None:
+                # additive (Bayesian product) rule
+                local_logits = cls_logits + prior_log
+            else:
+                local_logits = gate_prob * cls_logits + (1.0 - gate_prob) * prior_log
 
-            probs = F.softmax(local_logits, dim=-1)
+            probs = F.softmax(local_logits, dim=-1) 
 
             all_probs.append(probs.cpu())
             current_idx += this_batch_size
