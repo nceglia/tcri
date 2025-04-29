@@ -43,8 +43,9 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
             return candidate
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
+
 def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs="tcri_phenotype"):
-    print("Classifying phenotypes")
+    print("\t...classifying phenotypes...\n")
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     ct_array = adata.uns["tcri_ct_array_for_cells"]
     unique_cts = np.unique(ct_array)
@@ -89,67 +90,12 @@ def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotyp
 def register_model(
     adata,
     model,
-    phenotype_prob_slot="X_tcri_phenotypes",
+    phenotype_prob_slot="X_tcri_probabilities",
     phenotype_assignment_obs="tcri_phenotype",
     latent_slot="X_tcri",
     batch_size=256,
-    gate_prob=0.5
+    compute_umap=False
 ):
-    """
-    Register TCRi model outputs in the AnnData object.
-    
-    This function takes a trained TCRi model and stores all relevant model outputs
-    and metadata in the AnnData object for downstream analysis. It stores the model's
-    latent representations, phenotype probabilities, and other model-derived data.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object to register model outputs in
-    model : TCRIModel
-        Trained TCRIModel object
-    phenotype_prob_slot : str, default="X_tcri_phenotypes"
-        Key in adata.obsm where phenotype probabilities will be stored
-    phenotype_assignment_obs : str, default="tcri_phenotype"
-        Key in adata.obs where the discrete phenotype assignments will be stored
-    latent_slot : str, default="X_tcri"
-        Key in adata.obsm where latent representations will be stored
-    batch_size : int, default=256
-        Batch size for model inference
-        
-    Returns
-    -------
-    AnnData
-        The input AnnData object with model outputs registered
-        
-    Notes
-    -----
-    The function stores multiple items in adata.uns for use by downstream functions:
-    - "tcri_p_ct": Clonotype-covariate phenotype distributions
-    - "tcri_ct_to_cov": Mapping from clonotype-covariate indices to covariate indices
-    - "tcri_ct_to_c": Mapping from clonotype-covariate indices to clonotype indices
-    - "tcri_covariate_categories": List of covariate category names
-    - "tcri_clonotype_categories": List of clonotype category names
-    - "tcri_phenotype_categories": List of phenotype category names
-    - "tcri_metadata": Dictionary of column names for different data types
-    - "tcri_ct_array_for_cells": For each cell, which clonotype-covariate index it belongs to
-    - "tcri_cov_array_for_cells": For each cell, which covariate index it has
-    
-    Examples
-    --------
-    >>> import tcri
-    >>> # Train a model
-    >>> model = tcri.TCRIModel(adata)
-    >>> model.train()
-    >>> 
-    >>> # Register model outputs
-    >>> adata = tcri.pp.register_model(
-    ...     adata, 
-    ...     model, 
-    ...     phenotype_prob_slot="X_tcri_phenotypes",
-    ...     phenotype_assignment_obs="tcri_phenotype"
-    ... )
-    """
     # Store model outputs
     adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
     adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
@@ -172,7 +118,7 @@ def register_model(
     adata.uns["tcri_metadata"] = {
         "covariate_col": cov_col,
         "clone_col": clone_col,
-        "   ": phenotype_col,
+        "phenotype_col": phenotype_col,
         "batch_col": batch_col,
     }
     adata.uns["tcri_local_scale"] = model.module.local_scale
@@ -183,14 +129,20 @@ def register_model(
     cov_array_for_cells = ct_to_cov[ct_array_for_cells]
     adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
     # Store per-cell phenotype probabilities
-    classify_phenotypes(adata, phenotype_prob_slot=phenotype_prob_slot, phenotype_assignment_obs=phenotype_assignment_obs)
+    
     # Store latent representation
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
     adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
     adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
+    classify_phenotypes(adata, phenotype_prob_slot=phenotype_prob_slot, phenotype_assignment_obs=phenotype_assignment_obs)
     register_phenotype_key(adata,"tcri_phenotype")
     register_clonotype_key(adata,"trb_unique")
+
+    if compute_umap:
+        sc.pp.neighbors(adata, use_rep="X_tcri")
+        sc.tl.umap(adata)
+
     return adata
 
 def joint_distribution(
