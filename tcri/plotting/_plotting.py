@@ -35,20 +35,18 @@ tcri_colors = [
     red,
     yellow,
     green,
-    gray,
-    "#F28E7F",  # Salmon
-    "#6A6E75",  # Iron Gray
+    "#004d47",  # Darker Teal
     "#AE81FF",  # Purple
     "#FD971F",  # Orange
     "#E6DB74",  # Yellow
     "#A6E22E",  # Green
-    "#66D9EF",  # Blue
+    "#F28E7F",  # Salmon
     "#75715E",  # Brown
     "#F92659",  # Pink
     "#D65F0E",  # Abricos
+    "#66D9EF",  # Blue
     "#F92672",  # Red
     "#1E1E1E",   # Black
-    "#004d47",  # Darker Teal
     "#272822",  # Background
     "#D291BC",  # Soft Pink
     "#3A506B",  # Dark Slate Blue
@@ -69,7 +67,6 @@ tcri_colors = [
 ]
 
 sns.set_palette(sns.color_palette(tcri_colors))
-
 
 def compare_phenotypes(adata, variable1, variable2):
     df = adata.obs[[variable1,variable2]]
@@ -535,19 +532,16 @@ def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normaliz
     if save:
         fig.savefig(save)
 
-def plot_phenotype_probabilities(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs="tcri_phenotype", figsize=(10,8), add_outline=False, save=None,ncols=2,cmap="magma"):
+def plot_phenotype_probabilities(adata, phenotype_prob_slot="X_tcri_phenotypes", add_outline=False, save=None,ncols=2,cmap="magma"):
     phenotypes = adata.uns["tcri_phenotype_categories"]
     prob_labels = []
     adata = adata.copy()
-    for y,x in zip(phenotypes, adata.obsm["X_tcri_refined_phenotype_probs"].T):
+    for y,x in zip(phenotypes, adata.obsm[phenotype_prob_slot].T):
         adata.obs['{}_probability'.format(y)] = x
         prob_labels.append('{}_probability'.format(y))
-    fig, ax = plt.subplots(1,1,figsize=figsize)
-    sc.pl.umap(adata,color=prob_labels, cmap=cmap, s=30, ncols=ncols, ax=ax, show=False, add_outline=add_outline)
-    fig.tight_layout()
+    sc.pl.umap(adata,color=prob_labels, cmap=cmap, s=30, ncols=ncols, show=False, add_outline=add_outline)
     if save != None:
-        fig.savefig(save)
-    return fig, ax
+        plt.savefig(save)
 
 def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,palette="coolwarm",save=None):
     clone_size(adata)
