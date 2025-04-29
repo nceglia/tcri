@@ -10,14 +10,14 @@ import datetime
 import pyro.distributions as dist
 from pyro.distributions import Dirichlet
 import pyro
-
+import scanpy as sc
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from typing import Optional
-
 from sklearn.metrics.pairwise import cosine_similarity
+import umap
 
 warnings.filterwarnings('ignore')
 
@@ -94,7 +94,12 @@ def register_model(
     phenotype_assignment_obs="tcri_phenotype",
     latent_slot="X_tcri",
     batch_size=256,
-    compute_umap=False
+    compute_umap=False,
+    umap_n_neighbors=50,
+    umap_min_dist=0.001,
+    umap_metric="euclidean",
+    umap_random_state=42,
+    umap_output_metric="euclidean"
 ):
     # Store model outputs
     adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
@@ -128,21 +133,26 @@ def register_model(
     ct_to_cov = model.module.ct_to_cov.cpu().numpy()
     cov_array_for_cells = ct_to_cov[ct_array_for_cells]
     adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
-    # Store per-cell phenotype probabilities
-    
-    # Store latent representation
+
     latent_z = model.get_latent_representation(batch_size=batch_size)
     adata.obsm[latent_slot] = latent_z
     adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
     adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
     classify_phenotypes(adata, phenotype_prob_slot=phenotype_prob_slot, phenotype_assignment_obs=phenotype_assignment_obs)
-    register_phenotype_key(adata,"tcri_phenotype")
-    register_clonotype_key(adata,"trb_unique")
 
     if compute_umap:
-        sc.pp.neighbors(adata, use_rep="X_tcri")
-        sc.tl.umap(adata)
-
+        print("\t...computing UMAP...\n")
+        reducer = umap.UMAP(
+            n_neighbors=umap_n_neighbors,
+            min_dist=umap_min_dist,
+            metric=umap_metric,
+            random_state=umap_random_state,
+            output_metric=umap_output_metric
+        )
+        embedding = reducer.fit_transform(latent_z)   # (n_cells, 2)
+        adata.obsm["X_umap"] = embedding
+    register_phenotype_key(adata,"tcri_phenotype")
+    register_clonotype_key(adata,"trb_unique")
     return adata
 
 def joint_distribution(
