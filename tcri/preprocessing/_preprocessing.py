@@ -29,10 +29,35 @@ DIM    = "\x1b[2m"
 GREEN  = "\x1b[32m"
 CYAN   = "\x1b[36m"
 MAGENT = "\x1b[35m"
+# ╭─ colour / pretty-print helpers ─────────────────────────────────────────╮
+RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
+GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED = "\x1b[31m"
 
-def _ok(msg): print(f"{GREEN}✅ {msg}{RESET}")
-def _info(k, shape):
-    print(f"   {CYAN}🎯 {k:<28}{DIM}{shape}{RESET}")
+def _ok(msg:str, quiet=False):    # success mark
+    if not quiet: print(f"{GRN}✅ {msg}{RESET}")
+
+def _info(key:str, txt:str, quiet=False):       # key-value info line
+    if not quiet: print(f"   {CYN}🎯 {key:<22}{DIM}{txt}{RESET}")
+
+def _warn(msg:str, quiet=False):   # warning line
+    if not quiet: print(f"{YLW}⚠️  {msg}{RESET}")
+
+def _fin(quiet=False):             # final flourish
+    if not quiet: print(f"{MAG}✨  Done!{RESET}")
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
+
+# ╭─ tiny ASCII histogram (handy in notebooks/SSH) ──────────────────────────╮
+def _ascii_hist(samples, bins=25, width=40) -> str:
+    hist, edges = np.histogram(samples, bins=bins)
+    top = hist.max()
+    lines=[]
+    for h,e0,e1 in zip(hist, edges[:-1], edges[1:]):
+        bar = "█"*int(width*h/top) if top else ""
+        lines.append(f"{e0:7.3f}-{e1:7.3f} | {bar}")
+    return "\n".join(lines)
+# ╰─────────────────
+
 
 
 warnings.filterwarnings('ignore')
