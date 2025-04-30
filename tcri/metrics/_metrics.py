@@ -20,6 +20,15 @@ from ..preprocessing._preprocessing import joint_distribution,joint_distribution
 
 warnings.filterwarnings('ignore')
 
+
+# ------------ simple ANSI helpers ------------ #
+RESET  = "\x1b[0m"
+BOLD   = "\x1b[1m"
+DIM    = "\x1b[2m"
+GREEN  = "\x1b[32m"
+CYAN   = "\x1b[36m"
+MAGENT = "\x1b[35m"
+
 # ╭─ colour / pretty-print helpers ─────────────────────────────────────────╮
 RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
 GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED = "\x1b[31m"
