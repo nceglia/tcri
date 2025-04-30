@@ -18,6 +18,22 @@ import torch.nn.functional as F
 from typing import Optional
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
+import numpy as np, pandas as pd, torch, umap
+from tqdm.auto import tqdm
+from scvi import REGISTRY_KEYS
+
+# ------------ simple ANSI helpers ------------ #
+RESET  = "\x1b[0m"
+BOLD   = "\x1b[1m"
+DIM    = "\x1b[2m"
+GREEN  = "\x1b[32m"
+CYAN   = "\x1b[36m"
+MAGENT = "\x1b[35m"
+
+def _ok(msg): print(f"{GREEN}✅ {msg}{RESET}")
+def _info(k, shape):
+    print(f"   {CYAN}🎯 {k:<28}{DIM}{shape}{RESET}")
+
 
 warnings.filterwarnings('ignore')
 
@@ -86,74 +102,177 @@ def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotyp
         assignments, categories=phenotypes
     )
 
+# ------------ helper to extract logits -------- #
+@torch.no_grad()
+def _compute_logits_and_prior(model, adata, batch_size=256, eps=1e-8):
+    device   = next(model.module.parameters()).device
+    loader   = model._make_data_loader(adata=adata, batch_size=batch_size)
+    ct_arr   = model.module.ct_array.to(device)
+    p_ct     = model.module.get_p_ct().to(device)
+
+    logits_buf, prior_buf = [], []
+    start = 0
+    for tensors in tqdm(loader, desc="extracting logits", leave=False):
+        x = tensors[REGISTRY_KEYS.X_KEY].to(device)
+        b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+        n = x.size(0)
+
+        z_loc, _, _ = model.module.encoder(x, b)
+        logits      = model.module.classifier(z_loc)
+        prior_log   = torch.log(p_ct[ct_arr[start:start+n]] + eps)
+
+        logits_buf.append(logits.cpu())
+        prior_buf.append(prior_log.cpu())
+        start += n
+
+    return (torch.cat(logits_buf).numpy().astype("float32"),
+            torch.cat(prior_buf).numpy().astype("float32"))
+
+# ------------ main routine -------------------- #
 @torch.no_grad()
 def register_model(
-    adata,
-    model,
+    adata, model,
     phenotype_prob_slot="X_tcri_probabilities",
     phenotype_assignment_obs="tcri_phenotype",
     latent_slot="X_tcri",
     batch_size=256,
+    store_logits=True,
+    store_logposterior=True,
     compute_umap=False,
     umap_n_neighbors=50,
-    umap_min_dist=0.001,
+    umap_min_dist=1e-3,
     umap_metric="euclidean",
     umap_random_state=42,
-    umap_output_metric="euclidean"
+    umap_output_metric="euclidean",
+    clonotype_key="trb_unique",
 ):
-    # Store model outputs
-    adata.uns["tcri_p_ct"] = model.module.get_p_ct().cpu().numpy()
+    print(f"{BOLD}{MAGENT}🔗  Registering TCRi model outputs …{RESET}")
+
+    # 1) priors & arrays -------------------------------------------------
+    adata.uns["tcri_p_ct"]      = model.module.get_p_ct().cpu().numpy()
     adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
-    adata.uns["tcri_ct_to_c"] = model.module.ct_to_c.cpu().numpy()
-    # Get category labels from the model
-    cov_col = model.adata_manager.registry["covariate_col"]
-    clone_col = model.adata_manager.registry["clonotype_col"]
-    phenotype_col = model.adata_manager.registry["phenotype_col"]
-    batch_col = model.adata_manager.registry["batch_col"]
-
-    adata.uns["tcri_covariate_categories"] = (
-        adata.obs[cov_col].astype("category").cat.categories.tolist()
-    )
-    adata.uns["tcri_clonotype_categories"] = (
-        adata.obs[clone_col].astype("category").cat.categories.tolist()
-    )
-    adata.uns["tcri_phenotype_categories"] = (
-        adata.obs[phenotype_col].astype("category").cat.categories.tolist()
-    )
-    adata.uns["tcri_metadata"] = {
-        "covariate_col": cov_col,
-        "clone_col": clone_col,
-        "phenotype_col": phenotype_col,
-        "batch_col": batch_col,
-    }
+    adata.uns["tcri_ct_to_c"]   = model.module.ct_to_c.cpu().numpy()
     adata.uns["tcri_local_scale"] = model.module.local_scale
-    # Store per-cell arrays needed by downstream functions
-    ct_array_for_cells = model.module.ct_array.cpu().numpy()
-    adata.uns["tcri_ct_array_for_cells"] = ct_array_for_cells
-    ct_to_cov = model.module.ct_to_cov.cpu().numpy()
-    cov_array_for_cells = ct_to_cov[ct_array_for_cells]
-    adata.uns["tcri_cov_array_for_cells"] = cov_array_for_cells
+    _ok("stored hierarchical priors")
+    for k in ("tcri_p_ct","tcri_ct_to_cov","tcri_ct_to_c"):
+        _info(f"uns['{k}']", np.shape(adata.uns[k]))
 
-    latent_z = model.get_latent_representation(batch_size=batch_size)
-    adata.obsm[latent_slot] = latent_z
-    adata.uns["tcri_global_prior"] = model.module.clone_phen_prior.cpu().numpy()
-    adata.uns["tcri_cov_prior"] = model.module.get_p_ct().cpu().numpy()
-    classify_phenotypes(adata, phenotype_prob_slot=phenotype_prob_slot, phenotype_assignment_obs=phenotype_assignment_obs)
+    # 2) metadata --------------------------------------------------------
+    meta = {
+        "covariate_col": model.adata_manager.registry["covariate_col"],
+        "clone_col":     model.adata_manager.registry["clonotype_col"],
+        "phenotype_col": model.adata_manager.registry["phenotype_col"],
+        "batch_col":     model.adata_manager.registry["batch_col"],
+    }
+    adata.uns["tcri_metadata"] = meta
+    _ok("stored metadata dictionary")
 
+    # categories
+    for key, col in (("covariate","covariate_col"),
+                     ("clonotype","clone_col"),
+                     ("phenotype","phenotype_col")):
+        cats = adata.obs[meta[col]].astype("category").cat.categories.tolist()
+        adata.uns[f"tcri_{key}_categories"] = cats
+        _info(f"uns['tcri_{key}_categories']", len(cats))
+
+    # per-cell ct / cov arrays
+    ct_arr = model.module.ct_array.cpu().numpy()
+    adata.uns["tcri_ct_array_for_cells"] = ct_arr
+    cov_arr = model.module.ct_to_cov.cpu().numpy()[ct_arr]
+    adata.uns["tcri_cov_array_for_cells"] = cov_arr
+    _ok("stored per-cell ct / cov indices")
+
+    # 3) latent means ----------------------------------------------------
+    z = model.get_latent_representation(batch_size=batch_size).astype("float32")
+    adata.obsm[latent_slot] = z
+    _ok("stored latent means")
+    _info(f"obsm['{latent_slot}']", z.shape)
+
+    # 4) logits & log-posterior -----------------------------------------
+    cls_logits, prior_log = _compute_logits_and_prior(model, adata, batch_size)
+    if store_logits:
+        adata.obsm["X_tcri_logits"] = cls_logits
+        _info("obsm['X_tcri_logits']", cls_logits.shape)
+    if store_logposterior:
+        adata.obsm["X_tcri_logposterior"] = cls_logits + prior_log
+        _info("obsm['X_tcri_logposterior']", cls_logits.shape)
+    _ok("computed logits & additive log-posterior")
+
+    # 5) probabilities & hard labels ------------------------------------
+    if phenotype_prob_slot not in adata.obsm:
+        from scipy.special import softmax
+        probs = softmax(cls_logits + prior_log, axis=1).astype("float32")
+        adata.obsm[phenotype_prob_slot] = probs
+        _info(f"obsm['{phenotype_prob_slot}']", probs.shape)
+
+    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
+        adata.obsm[phenotype_prob_slot].argmax(1),
+        categories=adata.uns["tcri_phenotype_categories"],
+    )
+    _ok("stored probabilities and hard labels")
+
+    # 6) optional UMAP ---------------------------------------------------
     if compute_umap:
-        print("\t...computing UMAP...\n")
+        print(f"{CYAN}🗺️  computing UMAP …{RESET}")
         reducer = umap.UMAP(
-            n_neighbors=umap_n_neighbors,
-            min_dist=umap_min_dist,
-            metric=umap_metric,
-            random_state=umap_random_state,
-            output_metric=umap_output_metric
+            n_neighbors=umap_n_neighbors, min_dist=umap_min_dist,
+            metric=umap_metric, random_state=umap_random_state,
+            output_metric=umap_output_metric,
         )
-        embedding = reducer.fit_transform(latent_z)   # (n_cells, 2)
-        adata.obsm["X_umap"] = embedding
-    register_phenotype_key(adata,"tcri_phenotype")
-    register_clonotype_key(adata,"trb_unique")
+        adata.obsm["X_umap"] = reducer.fit_transform(z)
+        _info("obsm['X_umap']", adata.obsm["X_umap"].shape)
+    
+    register_phenotype_key(adata,phenotype_assignment_obs)
+    register_clonotype_key(adata,clonotype_key)
+    
+    print(f"{MAGENT}✨  All TCRi artefacts registered!{RESET}")
     return adata
+
+def joint_distribution_posterior(
+        adata, covariate_label, *, temperature=1.0, clones=None,
+        weighted=False, combine_with_logits=True, precision=3, silent=False):
+
+    meta      = adata.uns["tcri_metadata"];  cov_col = meta["covariate_col"]
+    clone_col = meta["clone_col"];           ph_cats  = adata.uns["tcri_phenotype_categories"]
+    cov_idx   = adata.uns["tcri_covariate_categories"].index(covariate_label)
+
+    ct_per_cell  = adata.uns["tcri_ct_array_for_cells"]
+    cov_per_cell = adata.uns["tcri_cov_array_for_cells"]
+    clone_labels = adata.obs[clone_col].values
+
+    idx_cov = np.nonzero(cov_per_cell == cov_idx)[0]
+    if clones is not None:
+        idx_cov = idx_cov[np.isin(clone_labels[idx_cov], clones)]
+
+    _ok(f"selected {len(idx_cov):,} cells", silent)
+
+    p_ct_mean   = torch.tensor(adata.uns["tcri_p_ct"])
+    local_scale = adata.uns.get("tcri_local_scale", 1.0)
+    p_ct_sample = Dirichlet(local_scale * p_ct_mean + 1e-8).sample().numpy()
+    _ok("sampled one draw from posterior p_ct", silent)
+
+    if combine_with_logits:
+        if "X_tcri_logits" not in adata.obsm:
+            raise RuntimeError("X_tcri_logits missing in adata.")
+        logits     = adata.obsm["X_tcri_logits"][idx_cov]
+        ct_idx_sel = ct_per_cell[idx_cov]
+        log_prior  = np.log(p_ct_sample[ct_idx_sel] + 1e-8)
+        probs_cell = softmax((logits + log_prior)/temperature, axis=1)
+        _ok("combined logits with sampled prior", silent)
+    else:
+        probs_cell = p_ct_sample[ct_per_cell[idx_cov]]
+        _ok("using sampled p_ct only", silent)
+
+    df = (pd.DataFrame(probs_cell, columns=ph_cats,
+                       index=clone_labels[idx_cov])
+          .groupby(level=0).sum().astype(float))
+    if not weighted:
+        df = df.div(df.sum(1), axis=0).fillna(0.0)
+    if clones is not None:
+        df = df.reindex(clones).fillna(0.0)
+
+    _info("resulting DataFrame", df.shape, silent); _fin(silent)
+    return df.round(precision)
 
 def joint_distribution(
     adata, 
@@ -163,56 +282,7 @@ def joint_distribution(
     clones=None,
     weighted: bool = False,
 ) -> pd.DataFrame:
-    """
-    Calculate joint distribution of phenotypes and TCR clonotypes for a given covariate.
-    
-    This function retrieves phenotype probability distributions for each clonotype in a
-    specified covariate condition (e.g., timepoint, tissue type). The resulting distribution
-    shows how different clonotypes are associated with different phenotypes. Optionally,
-    distributions can be weighted by clone size to give more influence to larger clones.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object containing TCRi model outputs. Must contain certain fields in
-        adata.uns that are created by the register_model function
-    covariate_label : str
-        The covariate label (e.g., "Day0", "tumor") to calculate the joint distribution for
-    temperature : float, default=1.0
-        Temperature parameter for softening/sharpening distributions. Lower values make
-        distributions more peaked, higher values make them more uniform
-    n_samples : int, default=0
-        If > 0, samples from the Dirichlet distribution n_samples times for uncertainty
-        estimation. If 0, returns point estimates
-    clones : list, optional
-        List of clone IDs to restrict the analysis to. If None, uses all clones
-    weighted : bool, default=False
-        If True, weights each distribution by the number of cells in that clonotype and
-        covariate, giving more influence to larger clones in the final distribution
 
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame where each row is a clonotype and each column is a phenotype.
-        Each row contains the probability distribution over phenotypes for that clonotype.
-        If weighted=True, large clones contribute more to the overall distribution.
-        
-    Examples
-    --------
-    >>> import tcri
-    >>> # Get joint distribution for Day0
-    >>> jd = tcri.pp.joint_distribution(adata, "Day0")
-    >>> 
-    >>> # Get joint distribution with sampling for uncertainty estimation
-    >>> jd_samples = tcri.pp.joint_distribution(adata, "tumor", n_samples=100)
-    >>> 
-    >>> # Get weighted joint distribution for specific clones
-    >>> my_clones = ["CASSQETQYF", "CASSLGQAYEQYF"]
-    >>> jd_weighted = tcri.pp.joint_distribution(
-    ...     adata, "Day14", temperature=0.5, clones=my_clones, weighted=True
-    ... )
-    """
-    # Retrieve stored tensors and metadata
     p_ct = torch.tensor(adata.uns["tcri_p_ct"])
     ct_to_cov = torch.tensor(adata.uns["tcri_ct_to_cov"])
     ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])
