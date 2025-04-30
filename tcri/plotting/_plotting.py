@@ -7,7 +7,9 @@ import matplotlib.patches as mpatches
 from scipy.cluster.hierarchy import dendrogram, linkage
 import scanpy as sc
 from gseapy import dotplot
-import tqdm
+import numpy as np, pandas as pd, torch, umap
+from tqdm.auto import tqdm
+from scvi import REGISTRY_KEYS
 
 import collections
 import operator
@@ -21,6 +23,24 @@ from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
 from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
+
+# ╭─ colour / pretty-print helpers ─────────────────────────────────────────╮
+RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
+GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED = "\x1b[31m"
+
+def _ok(msg:str, quiet=False):    # success mark
+    if not quiet: print(f"{GRN}✅ {msg}{RESET}")
+
+def _info(key:str, txt:str, quiet=False):       # key-value info line
+    if not quiet: print(f"   {CYN}🎯 {key:<22}{DIM}{txt}{RESET}")
+
+def _warn(msg:str, quiet=False):   # warning line
+    if not quiet: print(f"{YLW}⚠️  {msg}{RESET}")
+
+def _fin(quiet=False):             # final flourish
+    if not quiet: print(f"{MAG}✨  Done!{RESET}")
+# ╰──────────────────────────────────────────────────────────────────────────╯
+
 
 
 import warnings
@@ -825,32 +845,120 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
 
     return ax
 
-def mutual_information_plot(adata, splitby=None, temperature=1.0):
-    """Create a plot showing mutual information between clonotypes and phenotypes."""
-    if splitby is None:
-        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+def bayesian_mutual_information(
+    adata,
+    *,
+    group1,
+    group2,
+    splitby,
+    n_samples       = 200,
+    temperature     = 1.0,
+    normalised      = True,
+    normalise_mode  = "average",
+    weighted        = False,
+    posterior       = True,
+    combine_with_logits=True,
+    seed            = 42,
+    palette         = None,
+):
+    np.random.seed(seed)
+
+    meta       = adata.uns["tcri_metadata"]
+    cov_col    = meta["covariate_col"]
+    clone_col  = meta["clone_col"]
+
+    groups = sorted(adata.obs[splitby].dropna().unique().tolist())
+    if palette == None:
+        palette = dict()
+        for i, g in enumerate(groups):
+            palette[g] = tcri_colors[i]
+    print(f"{BOLD}{MAG}──────── MI summary ({group1} → {group2}) ────────{RESET}")
+    _info("split column",      splitby)
+    _info("# groups",          len(groups))
+    _info("Δ samples / group", n_samples)
+    _info("weighted",          weighted)
+    print(f"{MAG}────────────────────────────────────────────────────{RESET}")
+
+    results = {}
+
+    # ---------- iterate over strata --------------------------------
+    for g in groups:
+        mask_g  = adata.obs[splitby] == g
+        clones  = adata.obs.loc[mask_g, clone_col].unique().tolist()
+
+        mi_pre  = []; mi_post = []
+        bar = tqdm(range(n_samples), desc=f"Δ-MI samples  ({g})")
+        for _ in bar:
+            mi_pre.append( mutual_information_tl(
+                adata, group1, temperature=temperature, n_samples=1,
+                clones=clones, weighted=weighted, normalised=normalised,
+                normalise_mode=normalise_mode, posterior=posterior,
+                combine_with_logits=combine_with_logits, verbose=False))
+            mi_post.append( mutual_information_tl(
+                adata, group2, temperature=temperature, n_samples=1,
+                clones=clones, weighted=weighted, normalised=normalised,
+                normalise_mode=normalise_mode, posterior=posterior,
+                combine_with_logits=combine_with_logits, verbose=False))
+
+        mi_pre  = np.array(mi_pre)
+        mi_post = np.array(mi_post)
+        delta   = mi_post - mi_pre
+
+        d_mean, d_std = delta.mean(), delta.std()
+        hdi_low, hdi_hi = np.percentile(delta, [2.5,97.5])
+        p_gt = (delta>0).mean(); p_lt = 1-p_gt
+        cohens_d = d_mean/d_std if d_std>0 else 0.0
+
+        print(f"\n{BOLD}{g}{RESET}  ΔMI = {d_mean:.4f} ± {d_std:.4f}   "
+              f"95 % HDI [{hdi_low:.4f}, {hdi_hi:.4f}]   "
+              f"P(>0)={p_gt:.3f}")
+
+        results[g] = dict(delta_samples=delta, mi_pre_samples=mi_pre,
+                          mi_post_samples=mi_post, delta_mean=d_mean,
+                          delta_std=d_std, cohens_d=cohens_d,
+                          p_greater=p_gt, p_less=p_lt,
+                          hdi=(hdi_low, hdi_hi))
+
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4),
+                           gridspec_kw=dict(width_ratios=[2, 2, 1]),
+                           constrained_layout=True)
     
-    # Calculate mutual information for each split
-    splits = adata.obs[splitby].unique()
-    mi_values = []
+    # A ─── Δ-MI KDEs
+    for i, g in enumerate(groups):
+        sns.kdeplot(results[g]["delta_samples"],
+                    fill=True, ax=ax[0],
+                    palette=[palette[g]],
+                    alpha=.9, linewidth=1.2, label=g)
+    ax[0].axvline(0, color="k", ls="--")
+    ax[0].set(title="Δ MI (post – pre)",
+              xlabel="Δ normalised MI", ylabel="density")
+    ax[0].legend(title=splitby)
     
-    for split in splits:
-        subset = adata[adata.obs[splitby] == split]
-        mi = mutual_information_tl(subset, split, temperature=temperature)
-        mi_values.append(mi)
+    # B ─── pre / post KDEs
+    for i, g in enumerate(groups):
+        sns.kdeplot(results[g]["mi_pre_samples"],
+                    ax=ax[1],  palette=[palette[g]],
+                    ls="-",  label=f"{g} – {group1}")
+        sns.kdeplot(results[g]["mi_post_samples"],
+                    ax=ax[1],  palette=[palette[g]],
+                    ls="--", label=f"{g} – {group2}")
+    ax[1].set(title="MI posterior per condition",
+              xlabel="normalised MI")
+    ax[1].legend()
     
-    # Create DataFrame for plotting
-    df = pd.DataFrame({
-        splitby: splits,
-        "Mutual Information": mi_values
-    })
+    # C ─── bar summary of Δ
+    means = [results[g]["delta_mean"] for g in groups]
+    errs  = [results[g]["delta_std"]  for g in groups]
+    ax[2].bar(groups, means, yerr=errs, capsize=5,
+              color=[palette[g] for g in groups])
+    ax[2].axhline(0, color="k", ls="--")
+    ax[2].set(title="Δ MI summary", ylabel="Δ normalised MI")
     
-    # Create the plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.barplot(data=df, x=splitby, y="Mutual Information", ax=ax)
-    
-    plt.tight_layout()
-    return ax
+    fig.suptitle("Bayesian MI Analysis of clonotype ⇄ phenotype coupling",
+                 fontsize=14, weight="bold")
+    return results
+
+
 
 def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_distribution", splitby=None, color_dict=None, temperature=1.0):
     """
