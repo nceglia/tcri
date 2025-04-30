@@ -22,6 +22,17 @@ import numpy as np, pandas as pd, torch, umap
 from tqdm.auto import tqdm
 from scvi import REGISTRY_KEYS
 
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from torch.distributions import Dirichlet
+import numpy as np
+import pandas as pd
+from   scipy.special import softmax
+from   torch.distributions import Dirichlet
+import torch
+
 # ------------ simple ANSI helpers ------------ #
 RESET  = "\x1b[0m"
 BOLD   = "\x1b[1m"
