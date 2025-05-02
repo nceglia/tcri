@@ -42,7 +42,6 @@ def _fin(quiet=False):             # final flourish
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
 
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -496,61 +495,162 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
 def clonality(adata, groupby = None, splitby=None, s=10, order=None, figsize=(12,5), palette=None):
     return tcri_boxplot(adata,clonality_tl, ylabel="Clonality", groupby=groupby, splitby=splitby, s=s, figsize=figsize, order=order, palette=palette)
 
-    
-def clonotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
-    if palette == None:
-        palette=tcri_colors
-    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clone_col"]
-    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
-    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+def clonotypic_entropy_by_phenotype(
+    adata,
+    *,
+    temperature       = 1.0,
+    n_samples         = 0,
+    weighted          = False,
+    normalised        = True,
+    posterior         = True,
+    combine_with_logits = True,
+    bayesian          = True,
+    bayes_samples     = 1_000,
+    palette           = None,
+    group_colors      = None,        # {covariate: colour}
+    hue_order         = None,
+    legend_fontsize   = 6,
+    bbox_to_anchor    = (1.15, 1.),
+    figsize           = (6, 3),
+    rotation          = 90,
+    save              = None,
+    return_df         = False,
+    progress          = True,
+):
+    """Box-and-dot plot of clonotypic entropy per phenotype / covariate."""
 
-    covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
-    clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
-    phenotypes = adata.obs[phenotype_col].astype("category").cat.categories.tolist()
-    batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
-    
-    mi = []
-    ps = []
-    ts = []
-    rs = []
-    cl = []
-    phs = []
-    for p in tqdm.tqdm(batches):
-        sub = adata[adata.obs[batch_col] == p].copy()
-        for t in covs:
-            subt = sub[sub.obs[cov_col] == t]
-            vclones = list(set(subt.obs[clone_col]))
-            for ph in phenotypes:
-                if splitby == None:
-                    mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
-                    ps.append(p)
-                    ts.append(t)
-                    phs.append(ph)
-                else:
-                    for s in set(subt.obs[splitby]):
-                        subts = subt[subt.obs[cov_col] == t]
-                        vclones = list(set(subts.obs[clone_col]))
-                        mi.append(centropy(subt,t,ph, temperature=temperature, clones=vclones,n_samples=n_samples, normalized=normalized))
-                        ps.append(p)
-                        ts.append(t)
-                        cl.append(s)
-                        phs.append(ph)
-    fig,ax = plt.subplots(1,1,figsize=figsize)
-    if splitby != None:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi, splitby:cl, phenotype_col:phs})
-        sns.boxplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col,palette=palette)
-        palette_black = {level: "black" for level in df[cov_col].unique()}
-        sns.stripplot(data=df,x=splitby,y="Clonotypic Entropy",hue=cov_col, dodge=True, palette=palette_black)
-    else:
-        df = pd.DataFrame.from_dict({cov_col: ts, batch_col:ps, "Clonotypic Entropy":mi,phenotype_col:phs})
-        sns.boxplot(data=df,x=phenotype_col,hue=cov_col,y="Clonotypic Entropy",color="#999999")
-        sns.stripplot(data=df,x=phenotype_col,hue=cov_col,y="Clonotypic Entropy",palette=palette,dodge=True)
-    plt.xticks(rotation=rotation)
-    leg = ax.legend(loc='upper right', bbox_to_anchor=bbox_to_anchor, fontsize=legend_fontsize)
+    # ---- meta columns --------------------------------------------- #
+    meta        = adata.uns["tcri_metadata"]
+    cov_col     = meta["covariate_col"]
+    clone_col   = meta["clone_col"]
+    phen_col    = meta["phenotype_col"]
+    batch_col   = meta["batch_col"]
+
+    covariates  = adata.obs[cov_col].astype("category").cat.categories.tolist()
+    phenotypes  = adata.obs[phen_col].astype("category").cat.categories.tolist()
+    batches     = adata.obs[batch_col].astype("category").cat.categories.tolist()
+
+    if hue_order is None:
+        hue_order = covariates
+    # # ---- colours -------------------------------------------------- #
+    # if group_colors is not None:
+    #     palette = tcri.pl.tcri_colors#[group_colors[c] for c in hue_order]
+    # elif palette is None:
+    #     palette = sns.color_palette("Set2", len(hue_order))
+    palette=tcri_colors
+    cov2col = dict(zip(hue_order, palette))
+
+    # ---- compute entropy values ----------------------------------- #
+    records = []
+    iterator = itertools.product(batches, hue_order, phenotypes)
+    if progress:
+        iterator = tqdm.tqdm(list(iterator), desc="clonotypic entropy")
+
+    for patient, cov_value, phen in iterator:
+        mask = (
+            (adata.obs[batch_col] == patient) &
+            (adata.obs[cov_col]   == cov_value) &
+            (adata.obs[phen_col]  == phen)
+        )
+        sub = adata[mask]
+        if sub.n_obs == 0:
+            continue
+        clones = list(set(sub.obs["trb_unique"]))
+        ent = centropy(
+            adata,
+            covariate          = cov_value,
+            phenotype          = phen,
+            temperature        = temperature,
+            n_samples          = n_samples,
+            weighted           = weighted,
+            clones             = clones,
+            normalised         = normalised,
+            posterior          = posterior,
+            combine_with_logits= combine_with_logits,
+            verbose            = False,
+        )
+        ent_scalar = float(ent)  # always scalar now
+        records.append(
+            {cov_col: cov_value, batch_col: patient,
+             phen_col: phen, "entropy": ent_scalar}
+        )
+
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        _warn("no data – nothing to plot")
+        return None
+
+    # ---- x-position jitter per hue -------------------------------- #
+    x_levels = df[phen_col].unique().tolist()
+    n_hue    = len(hue_order)
+    w_tot    = .8
+    step     = w_tot / n_hue
+    offsets  = np.linspace(-w_tot/2 + step/2, w_tot/2 - step/2, n_hue)
+    cov2off  = dict(zip(hue_order, offsets))
+    df["_x"] = df[phen_col].map(lambda x: x_levels.index(x)) + df[cov_col].map(cov2off)
+
+    # ---- plotting ------------------------------------------------- #
+    fig, ax = plt.subplots(figsize=figsize)
+
+    sns.boxplot(
+        data      = df,
+        x         = phen_col,
+        y         = "entropy",
+        hue       = cov_col,
+        palette   = palette,
+        hue_order = hue_order,
+        width     = w_tot,
+        fliersize = 0,
+        ax        = ax,
+        zorder    = 1,
+    )
+    ax.legend_.remove()
+
+    # ---- Bayesian / MW stats inside each phenotype ---------------- #
+    y_max = df["entropy"].max();  y_min = df["entropy"].min()
+    h_bar = (y_max - y_min) * .05
+    v_gap = h_bar * 1.25
+
+    for i, ph in enumerate(x_levels):
+        for j, (g1, g2) in enumerate(itertools.combinations(hue_order, 2)):
+            d1 = df[(df[phen_col]==ph)&(df[cov_col]==g1)]["entropy"].values
+            d2 = df[(df[phen_col]==ph)&(df[cov_col]==g2)]["entropy"].values
+            if len(d1)==0 or len(d2)==0:
+                continue
+
+            if bayesian:
+                samp1 = np.random.choice(d1, (bayes_samples, len(d1)), replace=True).mean(1)
+                samp2 = np.random.choice(d2, (bayes_samples, len(d2)), replace=True).mean(1)
+                delta = samp2 - samp1
+                lbl   = f"Δ={delta.mean():.2g}"
+            else:
+                from scipy.stats import mannwhitneyu
+                _, p = mannwhitneyu(d1,d2,alternative="two-sided")
+                lbl  = "ns" if p>=.05 else ("*" if p<.05 else "**" if p<.01 else "***" if p<.001 else "****")
+
+            x1 = i+cov2off[g1];  x2 = i+cov2off[g2];  y = y_max + j*v_gap
+            ax.plot([x1,x1,x2,x2], [y,y+h_bar,y+h_bar,y], color="k", lw=1.4)
+            ax.text((x1+x2)/2, y+h_bar, lbl, ha="center", va="bottom", fontsize=legend_fontsize)
+
+    # patient dots
+    pt_pal = sns.color_palette("tab20b", len(batches))
+    for pt,c in zip(batches, pt_pal):
+        sub = df[df[batch_col]==pt]
+        ax.scatter(sub["_x"], sub["entropy"], color=c, s=80, alpha=.85, zorder=3, label=pt)
+    ax.legend(title="Patient", fontsize=legend_fontsize, loc="upper right", bbox_to_anchor=bbox_to_anchor)
+
+    ax.set_xticklabels(x_levels, rotation=rotation)
+    ax.set_xlabel("Phenotype"); ax.set_ylabel("Clonotypic entropy")
+    ax.set_title("Clonotypic entropy per phenotype / covariate")
     fig.tight_layout()
+
     if save:
-        fig.savefig(save)
+        fig.savefig(save, dpi=150);  _ok(f"figure saved → {save}")
+    else:
+        plt.show()
+
+    if return_df:
+        return df
 
 def plot_phenotype_probabilities(adata, phenotype_prob_slot="X_tcri_phenotypes", add_outline=False, save=None,ncols=2,cmap="magma"):
     phenotypes = adata.uns["tcri_phenotype_categories"]
@@ -583,6 +683,135 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,pale
     if save != None:
         fig.savefig(save)
     return ax
+
+
+def ridge_delta_entropy(
+    df_delta      : pd.DataFrame,
+    *,
+    splitby       : str   = "complete_response",
+    order_group   : list  = None,
+    order_phen    : list  = None,
+    palette       : dict  = None,
+    bw_adjust     : float = 0.8,
+    jitter        : float = .15,
+    density_scale : float = .9,
+    significance  : bool  = True,
+    sig_test      : str   = "mannwhitney",     # or "bayesian"
+    bayes_iters   : int   = 5_000,
+    bracket_pad   : float = 0.15,              # ↑ lift for bracket
+    star_size     : int   = 16,                # ★ marker size
+    figsize       : tuple = (10, 6),
+    ax            = None
+):
+    """
+    Ridge plot of Δ-entropy posteriors per phenotype.
+
+    For each phenotype the *first two* groups in `order_group`
+    are compared and annotated:
+
+        ┌──────────┐
+    CR  │          │ NR
+        ★ p-value / stars
+
+    Bracket anchors are placed at the group means.
+    """
+    # ───── tidy → long Δ samples ─────────────────────────────────
+    long = (df_delta
+            .explode("delta_samples")
+            .rename(columns={"delta_samples": "delta"}))
+
+    if order_group is None:
+        order_group = sorted(long[splitby].unique())
+    if order_phen is None:
+        order_phen  = sorted(long["phenotype"].unique())
+
+    # ───── palette ───────────────────────────────────────────────
+    if palette is None:
+        tab = cm.tab10.colors
+        palette = {g: tab[i % 10] for i, g in enumerate(order_group)}
+
+    # ───── basic geometry ───────────────────────────────────────
+    phen2y   = {p: i for i, p in enumerate(order_phen)}
+    n_groups = len(order_group)
+
+    x_all        = long["delta"].astype(float).to_numpy()
+    x_min,x_max  = np.percentile(x_all, [0.5, 99.5])
+    pad          = 0.06*(x_max-x_min)
+    xs           = np.linspace(x_min-pad, x_max+pad, 500)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    # ───── draw ridges ───────────────────────────────────────────
+    for ph in order_phen:
+        base_y = phen2y[ph]
+
+        # plot each group’s ridge
+        means = {}                               # keep per-group mean (for bracket)
+        for g_idx, g in enumerate(order_group):
+            data = long[(long["phenotype"]==ph) & (long[splitby]==g)]["delta"].astype(float)
+            if data.empty:
+                continue
+            kde = st.gaussian_kde(data, bw_method=bw_adjust)
+            ys  = kde(xs)
+            ys  = ys/ys.max()*density_scale
+
+            shift   = (g_idx - (n_groups-1)/2)*2*jitter
+            y_line  = base_y + shift
+
+            ax.fill_between(xs, y_line, y_line+ys,
+                            color=palette[g], alpha=.85, lw=0)
+            ax.plot(xs, y_line+ys, color=palette[g], lw=.8)
+
+            means[g] = data.mean()
+
+        # ── bracket + significance for first two groups ─────────
+        if significance and len(order_group) >= 2 and all(k in means for k in order_group[:2]):
+            g1, g2   = order_group[:2]
+            d1 = long[(long["phenotype"]==ph)&(long[splitby]==g1)]["delta"].to_numpy(float)
+            d2 = long[(long["phenotype"]==ph)&(long[splitby]==g2)]["delta"].to_numpy(float)
+
+            # statistical label
+            if sig_test == "mannwhitney":
+                _, pval = st.mannwhitneyu(d1,d2,alternative="two-sided")
+                label = ("ns" if pval>=.05 else
+                         "*"  if pval<.05   else
+                         "**" if pval<.01  else
+                         "***" if pval<.001 else "****")
+            else:                                 # Bayesian Δ > 0
+                idx  = np.random.randint(0, min(len(d1),len(d2)), size=bayes_iters)
+                p_gt = ((d2[idx]-d1[idx]) > 0).mean()
+                label = f"P={p_gt:.2f}"
+
+            # bracket coordinates
+            x1, x2  = means[g1], means[g2]
+            y_brk   = base_y + density_scale + bracket_pad
+            ax.plot([x1, x1, x2, x2], [y_brk, y_brk+bracket_pad,
+                                        y_brk+bracket_pad, y_brk],
+                    color="k", lw=1.2)
+
+            # star / label on top
+            x_star  = (x1+x2)/2
+            ax.text(x_star, y_brk+bracket_pad*1.05, label,
+                    ha="center", va="bottom", fontsize=star_size,
+                    color="k")
+
+    # ───── axis cosmetics ───────────────────────────────────────
+    ax.set_yticks(list(phen2y.values()), list(order_phen))
+    ax.axvline(0, color="k", ls="--", lw=.8)
+    ax.set_xlabel("Δ clonotypic entropy  (post – pre)")
+    ax.set_xlim(x_min-pad, x_max+pad)
+    ax.set_title("Δ Clonotypic Entropy")
+
+    # legend
+    handles = [plt.Line2D([0],[0],lw=8,color=palette[g],label=g) for g in order_group]
+    ax.legend(handles=handles, title=splitby, frameon=False)
+
+    plt.tight_layout()
+    return fig, ax
+
 
     
 def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
