@@ -20,6 +20,16 @@ from ..preprocessing._preprocessing import joint_distribution,joint_distribution
 
 warnings.filterwarnings('ignore')
 
+import numpy as np, pandas as pd
+from typing import Optional, List
+from tqdm.auto import tqdm   # nice progress bar in notebooks
+# ╭──────────────────────────────────────────────────────────────╮
+# │  Δ-E N T R O P Y   T A B L E   B U I L D E R  (v2)           │
+# ╰──────────────────────────────────────────────────────────────╯
+import numpy as np, pandas as pd
+from typing import Optional, List
+from tqdm.auto import tqdm
+
 
 # ------------ simple ANSI helpers ------------ #
 RESET  = "\x1b[0m"
@@ -47,6 +57,27 @@ def _fin(quiet=False):             # final flourish
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
 
+# ╭─ tiny ASCII histogram (handy in notebooks/SSH) ──────────────────────────╮
+def _ascii_hist(samples, bins=25, width=40) -> str:
+    hist, edges = np.histogram(samples, bins=bins)
+    top = hist.max()
+    lines=[]
+    for h,e0,e1 in zip(hist, edges[:-1], edges[1:]):
+        bar = "█"*int(width*h/top) if top else ""
+        lines.append(f"{e0:7.3f}-{e1:7.3f} | {bar}")
+    return "\n".join(lines)
+# ╰─────────────────
+
+# # ---------- ASCII histogram (quick visual check) --------------------
+# def _ascii_hist(v, bins=25, width=40):
+#     h, edges = np.histogram(v, bins=bins)
+#     top = h.max()
+#     out=[]
+#     for c,e0,e1 in zip(h, edges[:-1], edges[1:]):
+#         bar = "█"*int(width*c/top) if top else ""
+#         out.append(f"{e0:7.3f}–{e1:7.3f} | {bar}")
+#     return "\n".join(out)
+
 # ╭─ MI helper (single source of truth) ─────────────────────────────────────╮
 def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> float:
     """
@@ -67,16 +98,6 @@ def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> fl
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
 
-# ╭─ tiny ASCII histogram (handy in notebooks/SSH) ──────────────────────────╮
-def _ascii_hist(samples, bins=25, width=40) -> str:
-    hist, edges = np.histogram(samples, bins=bins)
-    top = hist.max()
-    lines=[]
-    for h,e0,e1 in zip(hist, edges[:-1], edges[1:]):
-        bar = "█"*int(width*h/top) if top else ""
-        lines.append(f"{e0:7.3f}-{e1:7.3f} | {bar}")
-    return "\n".join(lines)
-# ╰─────────────────
 
 
 def dkl(p, q):
@@ -85,89 +106,292 @@ def dkl(p, q):
     q = np.clip(q, epsilon, 1)
     return entropy(p, q) 
 
-def clonotypic_entropy(adata, covariate, phenotype, base=2, normalized=True, temperature=1.0, clones=None, n_samples=0):
+import numpy as np, pandas as pd
+from   scipy.stats import entropy        # Shannon entropy
+from   typing import Optional, List, Union
+import numpy as np, pandas as pd
+from   typing import Optional, List, Union
+from   scipy.stats import entropy                         # Shannon H
+
+
+
+# ---------- ANSI helpers  -------------------------------------------
+RESET="\x1b[0m"; BOLD="\x1b[1m"; DIM="\x1b[2m"
+GRN="\x1b[32m"; CYN="\x1b[36m"; MAG="\x1b[35m"; YLW="\x1b[33m"
+
+# small helper ----------------------------------------------
+def _ent(p, base=2):
+    """Shannon entropy of a 1-D probability vector (with tiny ϵ-guard)."""
+    p   = np.asarray(p, dtype=float)
+    eps = 1e-15
+    p   = p.clip(eps) / p.sum()          # re-normalise + avoid log(0)
+    return entropy(p, base=base)
+
+def clonotypic_entropy_base(
+    adata,
+    covariate_label: str,
+    phenotype: str,
+    *,
+    base: int = 2,
+    normalised: bool = True,
+    temperature: float = 1.0,
+    clones: Optional[List[str]] = None,
+    weighted: bool = False,
+    posterior: bool = True,
+    combine_with_logits: bool = True,
+) -> float:
     """
-    Calculate the clonotypic entropy for a given phenotype and covariate.
-    
-    This function measures the diversity or uncertainty in the distribution of TCR clonotypes
-    within a specific phenotype for a given covariate condition. Higher entropy indicates
-    greater clonal diversity within the phenotype.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object containing the data with TCR and phenotype information
-    covariate : str
-        The covariate label (e.g., "Day0", "tumor") to calculate entropy for
-    phenotype : str
-        The phenotype for which to calculate clonotypic entropy
-    base : int, default=2
-        The base of the logarithm used for entropy calculation (base 2 gives entropy in bits)
-    normalized : bool, default=True
-        If True, normalizes the entropy by the maximum possible entropy (log of the number of clones)
-    temperature : float, default=1.0
-        Temperature parameter for softening/sharpening distributions
-    clones : list, optional
-        List of clone IDs to restrict the analysis to. If None, uses all clones
-    n_samples : int, default=0
-        Number of samples to use for Monte Carlo estimation. If 0, uses point estimates
-        
+    One-shot Shannon entropy **H(C)** over clonotypes inside a phenotype
+    at the specified covariate level.
+
+    It relies on the *joint-distribution* helpers already in your code‐
+    base.  These return (clone × phenotype) tables:
+
+        • posterior=True  → draws p_ct (and optionally adds logits)  
+        • posterior=False → uses the prior estimate only
+    """
+    # ----------- fetch (clone × phenotype) probability table --------
+    if posterior:
+        jd = joint_distribution_posterior(
+                adata,
+                covariate_label     = covariate_label,
+                temperature         = temperature,
+                clones              = clones,
+                weighted            = weighted,
+                combine_with_logits = combine_with_logits,
+                silent              = True)
+    else:
+        jd = joint_distribution(
+                adata,
+                covariate_label = covariate_label,
+                temperature     = temperature,
+                n_samples       = 0,
+                clones          = clones,
+                weighted        = weighted)
+
+    if jd is None or jd.empty or phenotype not in jd.columns:
+        return 0.0
+
+    # jd is (clone × phenotype) – select the column of interest
+    vec = jd[phenotype].to_numpy(dtype=float)
+    eps = 1e-15
+    vec = np.clip(vec, eps, None)
+    vec = vec / vec.sum()                           # ensure ∑=1
+
+    H = entropy(vec, base=base)
+    if normalised and len(vec) > 1:
+        H /= np.log(len(vec)) / np.log(base)        # max-entropy normalisation
+    return H
+
+
+def clonotypic_entropy(
+    adata,
+    covariate: str,
+    phenotype: str,
+    *,
+    temperature: float = 1.0,
+    n_samples: int = 0,           # 0 → single value
+    clones: Optional[List[str]] = None,
+    weighted: bool = False,
+    normalised: bool = True,
+    base: int = 2,
+    posterior: bool = True,
+    combine_with_logits: bool = True,
+    verbose: bool = True,
+    graph: bool = False,          # ASCII bar plot of posterior
+) -> Union[float, np.ndarray]:
+
+    if verbose:
+        print(f"{BOLD}{MAG}🧮  Clonotypic entropy – {phenotype} @ '{covariate}'{RESET}")
+        _info("posterior",      posterior)
+        _info("weighted",       weighted)
+        _info("# samples",      n_samples)
+
+    # ---- single deterministic draw ---------------------------------
+    if n_samples == 0:
+        H = clonotypic_entropy_base(
+                adata, covariate, phenotype,
+                base               = base,
+                normalised         = normalised,
+                temperature        = temperature,
+                clones             = clones,
+                weighted           = weighted,
+                posterior          = posterior,
+                combine_with_logits= combine_with_logits)
+        if verbose:
+            _ok(f"H = {H:.4f}")
+        return H
+
+    # ---- Monte-Carlo sampling --------------------------------------
+    H_samp = np.empty(n_samples, dtype=float)
+    for i in range(n_samples):
+        H_samp[i] = clonotypic_entropy_base(
+            adata, covariate, phenotype,
+            base               = base,
+            normalised         = normalised,
+            temperature        = temperature,
+            clones             = clones,
+            weighted           = weighted,
+            posterior          = posterior,
+            combine_with_logits= combine_with_logits)
+
+    if verbose:
+        _ok("sampling complete")
+        _info("mean ± sd",  f"{H_samp.mean():.4f} ± {H_samp.std():.4f}")
+        lo,hi = np.percentile(H_samp,[2.5,97.5])
+        _info("95 % CI",    f"[{lo:.4f}, {hi:.4f}]")
+        if graph:
+            print(f"{DIM}\nASCII histogram:\n{_ascii_hist(H_samp)}{RESET}")
+
+    return H_samp
+
+def delta_clonotypic_entropy(
+    adata,
+    phenotype: str,
+    *,
+    cov_pre:  str = "Pre-treatment",
+    cov_post: str = "Post-treatment",
+    n_samples: int = 1_000,
+    temperature: float = 1.0,
+    clones: Optional[List[str]] = None,
+    weighted: bool = False,
+    normalised: bool = True,
+    base: int = 2,
+    posterior: bool = True,
+    combine_with_logits: bool = True,
+    verbose: bool = True,
+    graph: bool = False,        # ASCII plot of Δ posterior
+    seed: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Sample Δ-entropy =  H_post – H_pre  for one phenotype.
+
     Returns
     -------
-    float
-        The clonotypic entropy value for the specified phenotype
-        
-    Examples
-    --------
-    >>> import tcri
-    >>> # Calculate clonotypic entropy for naive T cells at Day0
-    >>> entropy_value = tcri.tl.clonotypic_entropy(adata, "Day0", "naive")
-    >>> 
-    >>> # Calculate non-normalized entropy with custom parameters
-    >>> entropy_value = tcri.tl.clonotypic_entropy(
-    ...     adata, "tumor", "exhausted", base=10, normalized=False, temperature=0.5
-    ... )
+    delta_samples : ndarray  (shape = (n_samples,))
+        Positive values ⇒ entropy increased from pre → post.
     """
-    logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata, covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
-    res = jd.loc[phenotype].to_numpy()
-    cent = entropy(res, base=base)
-    if normalized:
-        cent = cent / logf(len(res))
-    return cent
+    if seed is not None:
+        np.random.seed(seed)
+
+    if verbose:
+        print(f"{BOLD}{MAG}Δ-Entropy  {phenotype}: "
+              f"'{cov_pre}' ⟶ '{cov_post}'{RESET}")
+        _info("# samples", n_samples)
+        _info("posterior", posterior)
+        _info("weighted",  weighted)
+
+    Δ = np.empty(n_samples, dtype=float)
+
+    # --- Monte Carlo loop -----------------------------------------
+    for i in range(n_samples):
+        H_pre  = clonotypic_entropy_base(
+                    adata, cov_pre,  phenotype,
+                    base=base, normalised=normalised,
+                    temperature=temperature,
+                    clones=clones, weighted=weighted,
+                    posterior=posterior,
+                    combine_with_logits=combine_with_logits)
+
+        H_post = clonotypic_entropy_base(
+                    adata, cov_post, phenotype,
+                    base=base, normalised=normalised,
+                    temperature=temperature,
+                    clones=clones, weighted=weighted,
+                    posterior=posterior,
+                    combine_with_logits=combine_with_logits)
+
+        Δ[i] = H_post - H_pre
+
+    if verbose:
+        _ok("sampling complete")
+        _info("mean ± sd", f"{Δ.mean():.4f} ± {Δ.std():.4f}")
+        lo,hi = np.percentile(Δ,[2.5,97.5])
+        _info("95 % CI",  f"[{lo:.4f}, {hi:.4f}]")
+        if graph:
+            print(f"{DIM}\nASCII histogram of Δ:\n{_ascii_hist(Δ)}{RESET}")
+
+    return Δ
+
+
+def delta_entropy_table(
+    adata,
+    *,
+    cov_pre : str = "Pre-treatment",
+    cov_post: str = "Post-treatment",
+    splitby : str = "response",
+    n_samples : int = 1_000,
+    temperature: float = 1.0,
+    weighted   : bool = False,
+    normalised : bool = True,
+    base       : int  = 2,
+    posterior  : bool = True,
+    combine_with_logits : bool = True,
+    seed : Optional[int] = 42,
+    show_progress: bool  = True
+) -> pd.DataFrame:
+    """
+    Build a tidy Δ-clonotypic-entropy table (post – pre).
+
+    Each row ⇢ one phenotype × one `splitby` group.
+    The `delta_samples` column keeps the full NumPy vector so you can
+    re-plot KDEs or run further stats without re-sampling.
+    """
+    # reproducibility
+    if seed is not None:
+        np.random.seed(seed)
+
+    meta       = adata.uns["tcri_metadata"]
+    clone_col  = meta["clone_col"]
+    phen_col   = meta["phenotype_col"]
+
+    groups     = sorted(adata.obs[splitby].dropna().unique().tolist())
+    phenotypes = adata.obs[phen_col].astype("category").cat.categories.tolist()
+
+    records = []
+    iterator = tqdm(groups, desc="Δ-entropy groups") if show_progress else groups
+
+    for g in iterator:
+        # — restrict ONLY the clone list, keep full AnnData for index integrity
+        mask_g   = adata.obs[splitby] == g
+        clones_g = adata.obs.loc[mask_g, clone_col].unique().tolist()
+
+        for ph in phenotypes:
+            delta = delta_clonotypic_entropy(
+                        adata, ph,
+                        cov_pre         = cov_pre,
+                        cov_post        = cov_post,
+                        n_samples       = n_samples,
+                        temperature     = temperature,
+                        clones          = clones_g,      # ⬅ scoped clones
+                        weighted        = weighted,
+                        normalised      = normalised,
+                        base            = base,
+                        posterior       = posterior,
+                        combine_with_logits = combine_with_logits,
+                        verbose         = False
+                    )
+
+            d_mean  = delta.mean()
+            d_sd    = delta.std()
+            hdi_lo, hdi_hi = np.percentile(delta, [2.5, 97.5])
+            p_gt    = (delta > 0).mean()
+            p_lt    = (delta < 0).mean()
+
+            records.append(dict(
+                **{splitby: g, "phenotype": ph},
+                delta_samples = delta,
+                delta_mean    = d_mean,
+                delta_sd      = d_sd,
+                hdi_low       = hdi_lo,
+                hdi_high      = hdi_hi,
+                p_greater     = p_gt,
+                p_less        = p_lt
+            ))
+
+    return pd.DataFrame.from_records(records)
 
 def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1.0, n_samples=0, clones=None):
-    """
-    Calculate the phenotypic entropy for a given clonotype and covariate.
-    
-    This function measures the diversity or uncertainty in the distribution of phenotypes
-    for a specific TCR clonotype within a given covariate condition. Higher entropy indicates
-    that the clonotype is associated with a broader range of phenotypes.
-    
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object containing the data with TCR and phenotype information
-    covariate : str
-        The covariate label (e.g., "Day0", "tumor") to calculate entropy for
-    clonotype : str
-        The clonotype ID for which to calculate phenotypic entropy
-    base : int, default=2
-        The base of the logarithm used for entropy calculation (base 2 gives entropy in bits)
-    normalized : bool, default=True
-        If True, normalizes the entropy by the maximum possible entropy (log of the number of phenotypes)
-    temperature : float, default=1.0
-        Temperature parameter for softening/sharpening distributions
-    n_samples : int, default=0
-        Number of samples to use for Monte Carlo estimation. If 0, uses point estimates
-    clones : list, optional
-        List of clone IDs to restrict the analysis to. If None, uses all clones
-        
-    Returns
-    -------
-    float
-        The phenotypic entropy value for the specified clonotype
-    """
     logf = lambda x : np.log(x) / np.log(base)
     jd = joint_distribution(adata, covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
     res = jd.loc[clonotype].to_numpy()

@@ -100,7 +100,7 @@ def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotyp
     print("\t...classifying phenotypes...\n")
     phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
     ct_array = adata.uns["tcri_ct_array_for_cells"]
-    unique_cts = np.unique(ct_array)
+    unique_cts = np.unique(ct_array)    
     phenotype_probs_posterior = adata.uns["tcri_p_ct"]
     phenotypes = adata.uns["tcri_phenotype_categories"]
     latent_z = adata.obsm["X_tcri"]
@@ -453,7 +453,6 @@ def get_latent_embedding(
     )
     return samples
 
-
 def group_small_clones(adata, patient_key=""):
     ct = []
     for x, s, p in zip(adata.obs["trb"], adata.obs["clone_size"], adata.obs[patient_key]):
@@ -467,6 +466,7 @@ def register_probability_columns(adata, probability_columns):
     adata.uns["probability_columns"] = probability_columns
 
 def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
+    import tqdm
     if batch_key == None:
         X = adata.X.todense()
         X = np.array(X.T)
