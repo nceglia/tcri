@@ -391,31 +391,117 @@ def delta_entropy_table(
 
     return pd.DataFrame.from_records(records)
 
-def phenotypic_entropy(adata, covariate, clonotype, base=2, normalized=True, temperature=1.0, n_samples=0, clones=None):
-    logf = lambda x : np.log(x) / np.log(base)
-    jd = joint_distribution(adata, covariate, temperature=temperature, n_samples=n_samples, clones=clones).T
-    res = jd.loc[clonotype].to_numpy()
-    pent = entropy(res, base=base)
-    if normalized:
-        pent = pent / logf(len(res))
-    return pent
 
-def phenotypic_entropies(adata, covariate, base=2, normalized=True, temperature=1., n_samples=0):
-    tcr_sequences = adata.obs[adata.uns["tcri_clone_key"]].tolist()
-    unique_tcrs = np.unique(tcr_sequences)
-    tcr_to_entropy_dict = {
-        tcr: phenotypic_entropy(
-            adata, 
-            covariate, 
-            tcr, 
-            base=base, 
-            normalized=normalized, 
-            temperature=temperature,
-            n_samples=n_samples
-        ) 
-        for tcr in unique_tcrs
-    }
-    return tcr_to_entropy_dict
+def phenotypic_entropy(
+    adata,
+    covariate              : str,
+    *,
+    clonotypes             : Optional[Union[str,List[str]]] = None,
+    base                   : int   = 2,
+    normalised             : bool  = True,
+    temperature            : float = 1.0,
+    n_samples              : int   = 0,
+    weighted               : bool  = False,
+    posterior              : bool  = True,
+    combine_with_logits    : bool  = True,
+    verbose                : bool  = True,
+    graph                  : bool  = False,
+    seed                   : Optional[int] = 42
+) -> Union[float, np.ndarray]:
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    # ── header ────────────────────────────────────────────────── #
+    if verbose:
+        print(f"{BOLD}{MAG}📈  Phenotypic-entropy at '{covariate}'{RESET}")
+        _info("posterior",   posterior,   False)
+        _info("n_samples",   n_samples,   False)
+        _info("normalised",  normalised,  False)
+
+    # ── pull meta info ----------------------------------------- #
+    meta           = adata.uns["tcri_metadata"]
+    clone_col      = meta["clone_col"]
+    covariate_col  = meta["covariate_col"]
+
+    # determine clonotype list
+    if clonotypes is None:
+        clones_list = (
+            adata.obs.loc[adata.obs[covariate_col] == covariate, clone_col]
+            .unique()
+            .tolist()
+        )
+    elif isinstance(clonotypes, str):
+        clones_list = [clonotypes]
+    else:
+        clones_list = clonotypes
+
+    if len(clones_list) == 0:
+        _warn("no clonotypes found – returning 0", quiet=not verbose)
+        return 0.0
+
+    log_base = np.log(base)
+
+    # ── ONE posterior/prior draw → mean entropy across clones ── #
+    def _one_sample() -> float:
+        if posterior:
+            jd = joint_distribution_posterior(
+                    adata,
+                    covariate_label     = covariate,
+                    temperature         = temperature,
+                    clones              = clones_list,
+                    weighted            = weighted,
+                    combine_with_logits = combine_with_logits,
+                    silent              = True)
+        else:
+            jd = joint_distribution(
+                    adata,
+                    covariate_label = covariate,
+                    temperature     = temperature,
+                    n_samples       = 0,
+                    clones          = clones_list,
+                    weighted        = weighted)
+
+        if jd is None or jd.empty:
+            return 0.0
+        ent_vals = []
+        for cl in clones_list:
+            if cl not in jd.index:
+                continue
+            p   = jd.loc[cl].to_numpy(dtype=float)
+            eps = 1e-15
+            p   = p.clip(eps) #/ p.sum()
+            h   = entropy(p, base=base)
+            if normalised:
+                h /= np.log(len(p)) / log_base
+            ent_vals.append(h)
+        return float(np.mean(ent_vals)) if ent_vals else 0.0
+
+    # ── no-sampling branch ------------------------------------ #
+    if n_samples == 0:
+        val = _one_sample()
+        _ok("entropy computed", quiet=not verbose)
+        if verbose:
+            _info("value", f"{val:.4f}")
+            _fin()
+        return val
+
+    # ── Monte-Carlo sampling ---------------------------------- #
+    samples = np.empty(n_samples, dtype=float)
+    for i in range(n_samples):
+        samples[i] = _one_sample()
+
+    if verbose:
+        _ok(f"generated {n_samples:,} samples")
+        _info("mean ± sd", f"{samples.mean():.4f} ± {samples.std():.4f}")
+        _info("95% CI",
+              f"[{np.percentile(samples,2.5):.4f}, "
+              f"{np.percentile(samples,97.5):.4f}]")
+        if graph:
+            print(f"{DIM}\nASCII histogram:\n{_ascii_hist(samples)}{RESET}")
+        _fin()
+
+    return samples
 
 def clonotypic_entropies(adata, covariate, normalized=True, base=2, temperature=1., decimals=5, n_samples=0):
     unique_phenotypes = adata.uns["tcri_phenotype_categories"]
@@ -453,18 +539,6 @@ def clone_fraction(adata, groupby):
             frequencies[group][c] = clones.count(c) / total_cells
     return frequencies
 
-def flux(adata, from_this, to_that, clones=None, temperature=1.0, distance_metric="l1", n_samples=0, weighted=False):
-    distances = dict()
-    jd_this = joint_distribution(adata, from_this, temperature=temperature, n_samples=n_samples, clones=clones,weighted=weighted)
-    jd_that = joint_distribution(adata, to_that, temperature=temperature, n_samples=n_samples, clones=clones,weighted=weighted)
-    common_indices = jd_this.index.intersection(jd_that.index)
-    if distance_metric == "l1":
-        distances = (jd_this.loc[common_indices] - jd_that.loc[common_indices]).abs().sum(axis=1)
-    else:
-        distances = pd.Series(
-            {idx: dkl(jd_this.loc[idx], jd_that.loc[idx]) for idx in common_indices}
-        )
-    return distances
 
 def mutual_information(
     adata,
@@ -544,3 +618,190 @@ def mutual_information(
               f"{_ascii_hist(mi_samples)}{RESET}")
 
     return mi_samples
+
+
+
+# ────────────────────────────────────────────────────────────────
+def flux_table(
+    adata,
+    *,
+    cov_pre:  str = "Pre-treatment",
+    cov_post: str = "Post-treatment",
+    splitby:  str = "response",
+    n_samples: int = 0,
+    temperature: float = 1.0,
+    weighted: bool = False,
+    posterior: bool = True,
+    combine_with_logits: bool = True,
+    distance_metric: str = "l1",
+    seed: Optional[int] = 42,
+    show_progress: bool = True
+) -> pd.DataFrame:
+    """
+    Build a tidy table with per-clone flux distances and clone size.
+
+    Nested progress bars:
+        • outer: groups in `splitby`
+        • inner: clones within that group
+    """
+
+    if seed is not None:
+        np.random.seed(seed)
+
+    meta        = adata.uns["tcri_metadata"]
+    clone_col   = meta["clone_col"]
+
+    groups   = sorted(adata.obs[splitby].dropna().unique().tolist())
+    records  = []
+
+    outer_it = groups if not show_progress else tqdm(groups, desc="groups")
+
+    for g in outer_it:
+        # -------- subset AnnData to *this* group -----------------
+        mask_g   = adata.obs[splitby] == g
+        adata_g  = adata[mask_g]
+        clones_g = adata_g.obs[clone_col].unique().tolist()
+
+        # -------- clone sizes (within this group) ----------------
+        c_sizes = adata_g.obs[clone_col].value_counts().to_dict()
+
+        # -------- flux distances  (vector, index = clone_id) -----
+        dist = flux(
+            adata,
+            from_this       = cov_pre,
+            to_that         = cov_post,
+            clones          = clones_g,
+            temperature     = temperature,
+            distance_metric = distance_metric,
+            n_samples       = n_samples,
+            weighted        = weighted,
+            posterior       = posterior,
+            combine_with_logits = combine_with_logits,
+            graph           = False            # keep helper quiet
+        )
+
+        # nested bar over clones ----------------------------------
+        inner_it = clones_g if not show_progress else tqdm(
+            clones_g, desc=f"{g}: clones", leave=False)
+
+        for cl in inner_it:
+            if n_samples == 0:
+                val   = float(dist.get(cl, np.nan))
+                sd    = 0.0
+                vec   = np.array([val])
+            else:
+                # `dist` is (n_samples, n_clones); retrieve column
+                idx   = clones_g.index(cl)
+                vec   = dist[:, idx]
+                val   = float(vec.mean())
+                sd    = float(vec.std(ddof=1))
+
+            records.append(dict(
+                **{splitby: g, "clone_id": cl},
+                flux_samples = vec,
+                flux_mean    = val,
+                flux_sd      = sd,
+                clone_size   = c_sizes.get(cl, 0)
+            ))
+
+    return pd.DataFrame.from_records(records)
+
+
+# ────────────────────────────────────────────────────────────────
+def flux(
+    adata,
+    *,
+    from_this           : str,
+    to_that             : str,
+    clones              : Optional[Union[str, List[str]]] = None,
+    temperature         : float = 1.0,
+    distance_metric     : str   = "l1",      # or "dkl"
+    n_samples           : int   = 0,         # posterior draws
+    weighted            : bool  = False,
+    posterior           : bool  = True,
+    combine_with_logits : bool  = True,
+    graph               : bool  = False,     # ASCII histogram
+    seed                : Optional[int] = 42
+) -> Union[pd.Series, np.ndarray]:
+    """
+    Flux distance D(p_clone^from , p_clone^to)  per clone.
+
+    Returns
+    -------
+    • `pd.Series` (index = clone_id)   if `n_samples == 0`
+    • `np.ndarray` shape = (n_samples, n_clones) otherwise
+      (rows correspond to posterior draws)
+    """
+    if seed is not None:
+        np.random.seed(seed)
+
+    # ---------- which clones? ----------------------------------
+    clone_col = adata.uns["tcri_metadata"]["clone_col"]
+    if clones is None:
+        clones = adata.obs[clone_col].unique().tolist()
+    elif isinstance(clones, str):
+        clones = [clones]
+
+    # ---------- get joint tables -------------------------------
+    get = joint_distribution_posterior if posterior else joint_distribution
+
+    jd_from = get(
+        adata,
+        covariate_label     = from_this,
+        temperature         = temperature,
+        clones              = clones,
+        weighted            = weighted,
+        combine_with_logits = combine_with_logits if posterior else None,
+        silent              = True
+    )
+    jd_to   = get(
+        adata,
+        covariate_label     = to_that,
+        temperature         = temperature,
+        clones              = clones,
+        weighted            = weighted,
+        combine_with_logits = combine_with_logits if posterior else None,
+        silent              = True
+    )
+
+    if jd_from.empty or jd_to.empty:
+        raise ValueError("No overlap between requested clones and data.")
+
+    common = jd_from.index.intersection(jd_to.index)
+    if distance_metric.lower() == "l1":
+        dist = (jd_from.loc[common] - jd_to.loc[common]).abs().sum(axis=1)
+    elif distance_metric.lower() == "dkl":
+        eps = 1e-15
+        def _dkl(p, q):
+            p = p.clip(eps)/p.sum(); q = q.clip(eps)/q.sum()
+            return float(np.sum(p*np.log(p/q)))
+        dist = pd.Series(
+            {cl: _dkl(jd_from.loc[cl], jd_to.loc[cl]) for cl in common}
+        )
+    else:
+        raise ValueError("distance_metric must be 'l1' or 'dkl'")
+
+    # ---------- single / multi-sample handling -----------------
+    if n_samples == 0:
+        return dist
+
+    # posterior draws (one extra call per sample)
+    samples = np.empty((n_samples, len(common)), dtype=float)
+    for i in range(n_samples):
+        jd_from_s = get(adata, covariate_label = from_this, temperature=temperature,
+                        clones=clones, weighted=weighted,
+                        combine_with_logits=combine_with_logits if posterior else None,
+                        silent=True)
+        jd_to_s   = get(adata, covariate_label = to_that,  temperature=temperature,
+                        clones=clones, weighted=weighted,
+                        combine_with_logits=combine_with_logits if posterior else None,
+                        silent=True)
+        if distance_metric.lower() == "l1":
+            samples[i] = (jd_from_s.loc[common] - jd_to_s.loc[common]).abs().sum(axis=1)
+        else:
+            samples[i] = [ _dkl(jd_from_s.loc[c], jd_to_s.loc[c]) for c in common ]
+
+    if graph:
+        print(_ascii_hist(samples.ravel()))
+
+    return samples

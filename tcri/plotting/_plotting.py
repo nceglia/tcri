@@ -276,86 +276,94 @@ def setup_ternary_plot():
     ax.set_axis_off()
     return fig, ax
 
-def probability_ternary(adata, phenotype_names, splitby=None, conditions=None, top_n=None):
-    """
-    Create a ternary plot showing phenotype probabilities.
+def probability_ternary(adata, phenotype_names, covariate, splitby, conditions,n_samples=1,
+                        temperature=1,top_n=None, scale_function=None,color="k",save=None):
+    if scale_function == None:
+        scale_function = freq_to_size_scaling
+    phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
+
+    cell_probabilities = collections.defaultdict(dict)
+    for s in set(adata.obs[splitby]):
+        sdata = adata[adata.obs[splitby] == s].copy()
+        clones = list(set(sdata.obs[adata.uns["tcri_clone_key"]]))
+        rtab = collections.defaultdict(lambda : collections.defaultdict(list))
+        for _ in range(n_samples):
+            jd = joint_distribution_posterior(
+                    adata,
+                    covariate_label     = covariate,
+                    temperature         = temperature,
+                    clones              = clones,
+                    weighted            = False,
+                    combine_with_logits = True,
+                    silent              = True)
+            for x in jd.T:
+                for p,v in jd.T[x].to_dict().items():
+                    rtab[x][p].append(v)
+        for x,v in rtab.items():
+            phs = []
+            pbs = []
+            for p, vals in v.items():
+                pbs.append(np.sum(vals))
+                phs.append(p)
+            cell_probabilities[s][x] = dict(zip(phs,pbs))
     
-    This function creates a ternary (triangular) plot that visualizes the distribution of
-    three phenotypes across different clonotypes. Each point represents a clonotype, with
-    its position indicating the relative probabilities of the three specified phenotypes.
+    repertoires = dict()
+    chains_to_use = "aaseq"
     
-    Parameters
-    ----------
-    adata : AnnData
-        AnnData object containing the data with TCR and phenotype information
-    phenotype_names : list
-        List of exactly three phenotype names to include in the plot, corresponding to
-        the three corners of the triangle
-    splitby : str, optional
-        Column name to split the data by. If None, uses the covariate column stored
-        in adata.uns["tcri_metadata"]["covariate_col"]
-    conditions : list, optional
-        List of conditions to include in the plot. If None, includes all unique values
-        in the splitby column
-    top_n : int, optional
-        If provided, only includes the top N clonotypes with the highest probability
-        for the first specified phenotype
-        
-    Returns
-    -------
-    tuple
-        A tuple containing (fig, ax) for the created plot
-        
-    Examples
-    --------
-    >>> import tcri
-    >>> # Create a ternary plot for three phenotypes
-    >>> fig, ax = tcri.pl.probability_ternary(
-    ...     adata, 
-    ...     phenotype_names=["CD8_naive", "CD8_effector", "CD8_memory"],
-    ...     splitby="timepoint"
-    ... )
-    >>> 
-    >>> # Focus on top clonotypes
-    >>> fig, ax = tcri.pl.probability_ternary(
-    ...     adata, 
-    ...     phenotype_names=["CD8_naive", "CD8_effector", "CD8_memory"],
-    ...     conditions=["Day0", "Day14"],
-    ...     top_n=50
-    ... )
-    """
-    if splitby is None:
-        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+    for s in set(adata.obs[splitby]):
+        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
+                                        phenotypes = phenotypes, 
+                                        use_genes = False, 
+                                        use_chain = False,
+                                        seq_type = chains_to_use,
+                                        chains_to_use = ['TRB'],
+                                        name = s)
     
-    if conditions is None:
-        conditions = adata.obs[splitby].unique()
+    for bc, condition, seq, phenotype in zip(adata.obs.index,
+                                             adata.obs[splitby],
+                                             adata.obs[adata.uns["tcri_clone_key"]],
+                                             adata.obs[adata.uns["tcri_phenotype_key"]]):
     
-    # Get joint distribution for each condition
-    jds = {}
-    for cond in conditions:
-        jd = joint_distribution(adata, cond, temperature=1.0)
-        if top_n is not None:
-            jd = jd.nlargest(top_n, phenotype_names[0])
-        jds[cond] = jd
+        if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
+            phenotypes_and_counts = cell_probabilities[condition][seq]
+            t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
+                                                      TRB = dict(aaseq = seq), 
+                                                      use_genes = False)
+            repertoires[condition].cell_list.append(t)
     
-    # Create the plot
-    fig, ax = setup_ternary_plot()
-    
-    # Plot points for each condition
-    for i, (cond, jd) in enumerate(jds.items()):
-        # Convert to ternary coordinates
-        x = jd[phenotype_names[0]].values
-        y = jd[phenotype_names[1]].values
-        z = jd[phenotype_names[2]].values
-        
-        # Plot points
-        ax.scatter(x, y, z, label=cond, alpha=0.6)
-    
-    # Add legend
-    ax.legend()
-    
-    plt.tight_layout()
-    return fig, ax
+    for condition, rep in repertoires.items():
+        rep._set_consistency()
+
+    phenotype_names_dict = {p: p for p in phenotype_names}
+    if type(conditions) == list:
+        if len(conditions) == 1:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = None
+        elif len(conditions) == 2:
+            start_clones_and_phenos = repertoires[conditions[0]]
+            end_clones_and_phenos = repertoires[conditions[1]]
+        else:
+            raise ValueError("Only two conditions supported.")
+    else:
+        print(repertoires.keys())
+        start_clones_and_phenos = repertoires[conditions]
+        end_clones_and_phenos = None
+    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
+    if top_n == None:
+        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
+    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
+    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
+                                            end_clones_and_phenotypes = end_clones_and_phenos,
+                                            phenotypes = phenotype_names, 
+                                            phenotype_names = phenotype_names_dict,
+                                            clones = c_clones,
+                                            line_type = 'arrows', 
+                                            kwargs_for_plots={"color":color,'alpha':0.8},
+                                            s_dict = s_dict,
+                                            return_axes  = True)
+    freq_to_size_legend(ax)
+    if save != None:
+        fig.savefig(save)
 
 def probability_distribution(adata, phenotype_order=None, color="#000000", rotation=90, splitby=None, order=None, figsize=(7,5), save=None):
     columns = []
