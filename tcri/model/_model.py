@@ -630,7 +630,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         n_steps_kl_warmup: int = 1000,
         adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
-        num_particles: int = 8,
+        num_particles: int = 5,
         optimizer_config: dict = None,
         class_weights: torch.Tensor = None,
         **kwargs,

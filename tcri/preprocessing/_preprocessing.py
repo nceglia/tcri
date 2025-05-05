@@ -516,7 +516,7 @@ def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
             gene_to_row = list(zip(sdata.var.index.tolist(), X))
             for symbol, exp in gene_to_row:
                 counts = np.unique(exp, return_counts = True)
-                entropies[symbol].append(entropy(counts[1][1:]))        
+                entropies[symbol].append(entropy(counts[1][1:]))
         aggregated_entropies = []
         for g in adata.var.index.tolist():
             ent = agg_function(entropies[g])

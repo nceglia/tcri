@@ -300,7 +300,6 @@ def delta_clonotypic_entropy(
                     clones=clones, weighted=weighted,
                     posterior=posterior,
                     combine_with_logits=combine_with_logits)
-
         Δ[i] = H_post - H_pre
 
     if verbose:
