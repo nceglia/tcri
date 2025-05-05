@@ -335,7 +335,7 @@ class TCRIModule(PyroBaseModuleClass):
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
         use_enumeration: bool = False,
-        classifier_hidden: int = 32,
+        classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
         classifier_num_heads: int = 2,
@@ -878,7 +878,7 @@ class TCRIModel(BaseModelClass):
         sharp_temperature: float = 1.0,
         use_enumeration: bool = False,
         patience: int = 300,
-        classifier_hidden: int = 32,
+        classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
@@ -1150,9 +1150,8 @@ class TCRIModel(BaseModelClass):
         # Concatenate into final array of shape (n_cells, P)
         return torch.cat(all_probs, dim=0).numpy()
 
-
     def boost_phenotype_prior(
-        model,
+        self,
         phenotype_name       : str,
         boost_factor         : float = 5.0,
         *,
@@ -1160,35 +1159,35 @@ class TCRIModel(BaseModelClass):
     ):
         GRN, YLW, MAG, RST = "\x1b[32m", "\x1b[33m", "\x1b[35m", "\x1b[0m"
         def _ok(m):   print(f"{GRN}✅ {m}{RST}")
-        cats = model.adata.obs[ model.adata_manager.registry["phenotype_col"] ]\
+        cats = self.adata.obs[ self.adata_manager.registry["phenotype_col"] ]\
                     .astype("category").cat.categories
         if phenotype_name not in cats:
             raise ValueError(f"phenotype '{phenotype_name}' not found. Choices: {list(cats)}")
         p_idx = list(cats).index(phenotype_name)
 
         # 2) clone-level prior  (numpy array stored in model.c2p_mat)
-        mat = model.c2p_mat.copy()
+        mat = self.c2p_mat.copy()
         mat[:, p_idx] *= boost_factor
         mat /= mat.sum(axis=1, keepdims=True)
         model.c2p_mat = mat                                    # keep external copy
 
         with torch.no_grad():
             new_clone_prior = torch.tensor(mat, dtype=torch.float32,
-                                        device=model.module.clone_phen_prior.device)
-            model.module.clone_phen_prior.data = new_clone_prior
+                                        device=self.module.clone_phen_prior.device)
+            self.module.clone_phen_prior.data = new_clone_prior
 
         _ok(f"Clone-level prior boosted ×{boost_factor:g} for '{phenotype_name}'")
 
         if affect_mixture:
-            centres = model.centers.copy()
+            centres = self.centers.copy()
             centres[:, p_idx] *= boost_factor
             centres /= centres.sum(axis=1, keepdims=True)
-            model.centers = centres
+            self.centers = centres
 
             with torch.no_grad():
                 new_mix = torch.tensor(centres, dtype=torch.float32,
-                                    device=model.module.mixture_concentration.device)
-                model.module.mixture_concentration.data = new_mix
+                                    device=self.module.mixture_concentration.device)
+                self.module.mixture_concentration.data = new_mix
 
             _ok(f"Mixture prior boosted ×{boost_factor:g} for '{phenotype_name}'")
 
