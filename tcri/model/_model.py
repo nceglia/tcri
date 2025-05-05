@@ -933,7 +933,6 @@ class TCRIModel(BaseModelClass):
         n_batch = len(batch_series.cat.categories)
 
         if phenotype_weights is None:
-            print("No phenotype weights provided, using inverse-frequency weights")
             # Automatically compute inverse-frequency weights for each phenotype
             freq_count = ph_series.value_counts(sort=False) 
             class_weights_arr = []
@@ -1169,7 +1168,7 @@ class TCRIModel(BaseModelClass):
         mat = self.c2p_mat.copy()
         mat[:, p_idx] *= boost_factor
         mat /= mat.sum(axis=1, keepdims=True)
-        model.c2p_mat = mat                                    # keep external copy
+        self.c2p_mat = mat                                    # keep external copy
 
         with torch.no_grad():
             new_clone_prior = torch.tensor(mat, dtype=torch.float32,
