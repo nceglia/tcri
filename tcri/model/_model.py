@@ -42,31 +42,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
 def normalized_exponential_vector(values, temperature=0.01):
     assert temperature > 0, "Temperature must be positive"
     exps = torch.exp(values / temperature)
     return exps / torch.sum(exps, dim=-1, keepdim=True)
 
 def build_archetypes(c2p_mat, K=4):
-    """
-    c2p_mat: shape (c_count, P)
-        Each row is the global distribution of phenotypes for that clone
-        (already row-stochastic).
-
-    K: number of archetypes to find.
-
-    Returns
-    -------
-    centers: shape (K, P)
-        Each row is the centroid distribution of a cluster (archetype).
-    labels: shape (c_count,)
-        Which archetype each clone ended up in.
-    """
     kmeans = KMeans(n_clusters=K, random_state=42)
     labels = kmeans.fit_predict(c2p_mat)
     centers = kmeans.cluster_centers_
-    # Ensure the centers are positive and row-stochastic
     centers = np.clip(centers, 1e-8, None)
     centers = centers / centers.sum(axis=1, keepdims=True)
     return centers, labels
@@ -77,17 +61,12 @@ class PhenotypeClassifier(nn.Module):
         super(PhenotypeClassifier, self).__init__()
         layers = []
         input_dim = n_latent
-
-        # Create a stack of MLP layers
         for _ in range(num_layers):
             layers.append(nn.Linear(input_dim, classifier_hidden))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout_rate))
             input_dim = classifier_hidden
-
-        # Output layer
         layers.append(nn.Linear(classifier_hidden, P))
-        
         self.mlp = nn.Sequential(*layers)
         self.temperature = temperature  # Add temperature parameter
 
@@ -146,10 +125,8 @@ class PhenotypeClassifier(nn.Module):
 #         logits = self.output_layer(x)
 #         logits = torch.clamp(logits, min=-5.0, max=5.0)  # Clamp the logits
 #         return logits / self.temperature  # Apply temperature scaling
-    
-###############################################################################
-# -1) VampPrior
-###############################################################################
+
+
 class VampPrior(torch.nn.Module):
     def __init__(self, pseudo_inputs, encoder):
         """
@@ -334,6 +311,7 @@ def pairwise_centroid_margin_loss(
     return penalty
 
 
+
 ###############################################################################
 # 2) Pyro Module with CVAE + Hierarchical Priors
 ###############################################################################
@@ -357,7 +335,6 @@ class TCRIModule(PyroBaseModuleClass):
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
         use_enumeration: bool = False,
-        gate_nn_hidden: int = 32,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
@@ -386,7 +363,6 @@ class TCRIModule(PyroBaseModuleClass):
         ), "mixture_concentration must be provided"
         self.use_enumeration = use_enumeration
         self.eps = 1e-6
-        self.gate_nn_hidden = gate_nn_hidden
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout
         self.kl_weight_max = kl_weight_max
@@ -656,8 +632,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 8,
         optimizer_config: dict = None,
-        gate_saturation_weight: float = 0.0,
-        clone_alignment_scale: float = 1.0,
         class_weights: torch.Tensor = None,
         **kwargs,
     ):
@@ -676,9 +650,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.margin_value = margin_value
         self.adaptive_margin = adaptive_margin
         self.reconstruction_loss_scale = reconstruction_loss_scale
-        self.clone_alignment_scale = clone_alignment_scale
         self._my_global_step = 0
-        self.gate_saturation_weight = gate_saturation_weight
         self.class_weights = class_weights
         self.optimizer_config = optimizer_config
 
@@ -882,23 +854,35 @@ class TCRIModel(BaseModelClass):
         adata.uns["tcri_manager"] = adata_manager
         return adata
 
+    # n_latent=128,                # Size of the latent space
+    # n_hidden=128,                # Size of hidden layers in encoder/decoder
+    # global_scale=5.0,            # Global scaling factor for the clonotype-level prior
+    # local_scale=3.,             # Local scaling factor for the ct-level prior
+    # use_enumeration=True,        # Whether to use enumeration in the model
+    # n_layers=3,                   # Number of layers in the encoder/decoder networks
+    # classifer_dropout=0.1,
+    # classifier_hidden=64,
+    # classifier_n_layers=2,
+    # K=20,
+    # gate_prob=None,
+    # kl_weight=0.5,
+    # patience=300
+
     def __init__(
         self,
         adata: AnnData,
-        n_latent: int = 10,
+        n_latent: int = 128,
         n_hidden: int = 128,
-        global_scale: float = 10.0,
-        local_scale: float = 5.0,
+        global_scale: float = 5.0,
+        local_scale: float = 3.0,
         sharp_temperature: float = 1.0,
         use_enumeration: bool = False,
-        patience: int = 50,
-        gate_saturation_weight: float = 0.0,
-        gate_nn_hidden: int = 32,
+        patience: int = 300,
         classifier_hidden: int = 32,
         classifier_dropout: float = 0.1,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
-        gate_prob: Optional[float] = 0.5, 
+        gate_prob: Optional[float] = None, 
         kl_weight_max: float = 1.0,
         **kwargs,
     ):
@@ -949,11 +933,11 @@ class TCRIModel(BaseModelClass):
         n_batch = len(batch_series.cat.categories)
 
         if phenotype_weights is None:
+            print("No phenotype weights provided, using inverse-frequency weights")
             # Automatically compute inverse-frequency weights for each phenotype
             freq_count = ph_series.value_counts(sort=False) 
             class_weights_arr = []
             for cat_name in ph_series.cat.categories:
-
                 c = freq_count[cat_name]
                 # inverse-frequency weight
                 weight = 1.0 / c
@@ -978,7 +962,6 @@ class TCRIModel(BaseModelClass):
             mixture_concentration=torch.from_numpy(self.centers),
             sharp_temperature=sharp_temperature,
             use_enumeration=use_enumeration,
-            gate_nn_hidden=gate_nn_hidden,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             class_weights=self.class_weights,
@@ -986,7 +969,6 @@ class TCRIModel(BaseModelClass):
             kl_weight_max=kl_weight_max,
         )
         self.init_params_ = self._get_init_params(locals())
-        self.gate_saturation_weight = gate_saturation_weight
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
         c_array_torch = torch.tensor(c_array_np, dtype=torch.long)
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
@@ -1009,17 +991,25 @@ class TCRIModel(BaseModelClass):
             f"sharp_temperature={sharp_temperature}."
         )
 
+    max_epochs=10,            # Total number of training epochs
+    batch_size=int(1e8),           # Batch size for training
+    margin_scale=0.00,
+    margin_value=0.00,
+    adaptive_margin=False,
+    lr=1e-3,                   # Learning rate for the optimizer
+    n_steps_kl_warmup=2000,
+    reconstruction_loss_scale=7e-3,
+
     def train(
         self,
-        max_epochs: int = 50,
-        batch_size: int = 128,
+        max_epochs: int = 1000,
+        batch_size: int = 1000,
         lr: float = 1e-3,
         margin_scale: float = 0.0,
-        margin_value: float = 2.0,
+        margin_value: float = 0.0,
         adaptive_margin: bool = False,
-        reconstruction_loss_scale: float = 1e-2,
-        n_steps_kl_warmup: int = 1000,
-        clone_alignment_scale: float = 0.0,
+        reconstruction_loss_scale: float = 1e-3,
+        n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):
         """
@@ -1043,8 +1033,6 @@ class TCRIModel(BaseModelClass):
             n_steps_kl_warmup=n_steps_kl_warmup,
             adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
-            gate_saturation_weight=self.gate_saturation_weight,
-            clone_alignment_scale=clone_alignment_scale,
             class_weights=self.class_weights,
             optimizer_config={
                 "lr": lr,
@@ -1143,9 +1131,6 @@ class TCRIModel(BaseModelClass):
             # ----- 1) Compute classifier logits (same as training) -----
             cls_logits = self.module.classifier(z_loc)
 
-            # if self.module.log_class_weights is not None:
-            #     cls_logits = cls_logits + self.module.log_class_weights
-
             gate_probs = torch.full(
                 (this_batch_size, self.module.P), gate_prob, device=x.device
             )
@@ -1164,6 +1149,50 @@ class TCRIModel(BaseModelClass):
 
         # Concatenate into final array of shape (n_cells, P)
         return torch.cat(all_probs, dim=0).numpy()
+
+
+    def boost_phenotype_prior(
+        model,
+        phenotype_name       : str,
+        boost_factor         : float = 5.0,
+        *,
+        affect_mixture       : bool  = True,
+    ):
+        GRN, YLW, MAG, RST = "\x1b[32m", "\x1b[33m", "\x1b[35m", "\x1b[0m"
+        def _ok(m):   print(f"{GRN}✅ {m}{RST}")
+        cats = model.adata.obs[ model.adata_manager.registry["phenotype_col"] ]\
+                    .astype("category").cat.categories
+        if phenotype_name not in cats:
+            raise ValueError(f"phenotype '{phenotype_name}' not found. Choices: {list(cats)}")
+        p_idx = list(cats).index(phenotype_name)
+
+        # 2) clone-level prior  (numpy array stored in model.c2p_mat)
+        mat = model.c2p_mat.copy()
+        mat[:, p_idx] *= boost_factor
+        mat /= mat.sum(axis=1, keepdims=True)
+        model.c2p_mat = mat                                    # keep external copy
+
+        with torch.no_grad():
+            new_clone_prior = torch.tensor(mat, dtype=torch.float32,
+                                        device=model.module.clone_phen_prior.device)
+            model.module.clone_phen_prior.data = new_clone_prior
+
+        _ok(f"Clone-level prior boosted ×{boost_factor:g} for '{phenotype_name}'")
+
+        if affect_mixture:
+            centres = model.centers.copy()
+            centres[:, p_idx] *= boost_factor
+            centres /= centres.sum(axis=1, keepdims=True)
+            model.centers = centres
+
+            with torch.no_grad():
+                new_mix = torch.tensor(centres, dtype=torch.float32,
+                                    device=model.module.mixture_concentration.device)
+                model.module.mixture_concentration.data = new_mix
+
+            _ok(f"Mixture prior boosted ×{boost_factor:g} for '{phenotype_name}'")
+
+        _ok("Read to train.")
 
     def plot_archetypes(self):
         order = np.argsort(self.labels)
