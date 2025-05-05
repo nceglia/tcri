@@ -32,7 +32,7 @@ import pandas as pd
 from   scipy.special import softmax
 from   torch.distributions import Dirichlet
 import torch
-import warning
+import warnings
 
 warnings.filterwarnings('ignore')
 
