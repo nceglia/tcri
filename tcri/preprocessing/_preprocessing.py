@@ -32,6 +32,9 @@ import pandas as pd
 from   scipy.special import softmax
 from   torch.distributions import Dirichlet
 import torch
+import warning
+
+warnings.filterwarnings('ignore')
 
 # ------------ simple ANSI helpers ------------ #
 RESET  = "\x1b[0m"
@@ -55,10 +58,7 @@ def _warn(msg:str, quiet=False):   # warning line
 
 def _fin(quiet=False):             # final flourish
     if not quiet: print(f"{MAG}✨  Done!{RESET}")
-# ╰──────────────────────────────────────────────────────────────────────────╯
 
-
-# ╭─ tiny ASCII histogram (handy in notebooks/SSH) ──────────────────────────╮
 def _ascii_hist(samples, bins=25, width=40) -> str:
     hist, edges = np.histogram(samples, bins=bins)
     top = hist.max()
@@ -67,11 +67,7 @@ def _ascii_hist(samples, bins=25, width=40) -> str:
         bar = "█"*int(width*h/top) if top else ""
         lines.append(f"{e0:7.3f}-{e1:7.3f} | {bar}")
     return "\n".join(lines)
-# ╰─────────────────
 
-
-
-warnings.filterwarnings('ignore')
 
 def register_phenotype_key(adata, phenotype_key, order=None):
     assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
@@ -309,6 +305,39 @@ def joint_distribution_posterior(
 
     _info("resulting DataFrame", df.shape, silent); _fin(silent)
     return df.round(precision)
+
+def remove_meaningless_genes(adata, include_mt=True, include_rp=True, include_mtrn=True, include_hsp=True, include_tcr=True):
+    genes = [x for x in adata.var.index.tolist() if "RIK" not in x.upper()]
+    genes = [x for x in genes if "GM" not in x]
+    genes = [x for x in genes if "-" not in x or "HLA" in x]
+    genes = [x for x in genes if "." not in x or "HLA" in x]
+    genes = [x for x in genes if "LINC" not in x.upper()]
+    if include_mtrn:
+        genes = [x for x in adata.var.index.tolist() if "MTRN" not in x]
+    if include_hsp:
+        genes = [x for x in adata.var.index.tolist() if "HSP" not in x]
+    if include_mt:
+        genes = [x for x in genes if "MT-" not in x.upper()]
+    if include_rp:
+        genes = [x for x in genes if "RP" not in x.upper()]
+    if include_tcr:
+        genes = [x for x in genes if "TRAV" not in x]
+        genes = [x for x in genes if "TRAJ" not in x]
+        genes = [x for x in genes if "TRAD" not in x]
+
+        genes = [x for x in genes if "TRBV" not in x]
+        genes = [x for x in genes if "TRBJ" not in x]
+        genes = [x for x in genes if "TRBD" not in x]
+
+        genes = [x for x in genes if "TRGV" not in x]
+        genes = [x for x in genes if "TRGJ" not in x]
+        genes = [x for x in genes if "TRGD" not in x]
+
+        genes = [x for x in genes if "TRDV" not in x]
+        genes = [x for x in genes if "TRDJ" not in x]
+        genes = [x for x in genes if "TRDD" not in x]
+    adata = adata[:,genes]
+    return adata.copy()
 
 def joint_distribution(
     adata, 

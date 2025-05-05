@@ -16,13 +16,20 @@ import operator
 import itertools
 
 from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities, set_ternary_corner_label, ternary_plot_projection
-from ..preprocessing._preprocessing import clone_size, joint_distribution
+from ..preprocessing._preprocessing import clone_size, joint_distribution, joint_distribution_posterior
 from ..metrics._metrics import clonotypic_entropy as centropy
 from ..metrics._metrics import phenotypic_entropy as pentropy
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
 from ..metrics._metrics import mutual_information as mutual_information_tl
 from ..metrics._metrics import clone_fraction as clone_fraction_tl
+
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+sc._settings.settings._vector_friendly=True
 
 # ╭─ colour / pretty-print helpers ─────────────────────────────────────────╮
 RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
@@ -41,14 +48,9 @@ def _fin(quiet=False):             # final flourish
     if not quiet: print(f"{MAG}✨  Done!{RESET}")
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
-
-import warnings
-warnings.filterwarnings('ignore')
-
 red = "#cd442a"
 yellow = "#f0bd00"
 green = "#7e9437"
-gray = "#eee"
 
 tcri_colors = [
     red,
