@@ -1084,6 +1084,7 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
 
     return ax
 
+
 def bayesian_mutual_information(
     adata,
     *,
