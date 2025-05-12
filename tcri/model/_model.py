@@ -854,20 +854,6 @@ class TCRIModel(BaseModelClass):
         adata.uns["tcri_manager"] = adata_manager
         return adata
 
-    # n_latent=128,                # Size of the latent space
-    # n_hidden=128,                # Size of hidden layers in encoder/decoder
-    # global_scale=5.0,            # Global scaling factor for the clonotype-level prior
-    # local_scale=3.,             # Local scaling factor for the ct-level prior
-    # use_enumeration=True,        # Whether to use enumeration in the model
-    # n_layers=3,                   # Number of layers in the encoder/decoder networks
-    # classifer_dropout=0.1,
-    # classifier_hidden=64,
-    # classifier_n_layers=2,
-    # K=20,
-    # gate_prob=None,
-    # kl_weight=0.5,
-    # patience=300
-
     def __init__(
         self,
         adata: AnnData,
@@ -880,6 +866,7 @@ class TCRIModel(BaseModelClass):
         patience: int = 300,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
+        n_pseudo_obs: int = 10,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
         gate_prob: Optional[float] = None, 
@@ -966,6 +953,7 @@ class TCRIModel(BaseModelClass):
             class_weights=self.class_weights,
             gate_prob=gate_prob,
             kl_weight_max=kl_weight_max,
+            n_pseudo_obs=n_pseudo_obs,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)

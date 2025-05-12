@@ -113,18 +113,15 @@ import numpy as np, pandas as pd
 from   typing import Optional, List, Union
 from   scipy.stats import entropy                         # Shannon H
 
-
-
 # ---------- ANSI helpers  -------------------------------------------
 RESET="\x1b[0m"; BOLD="\x1b[1m"; DIM="\x1b[2m"
 GRN="\x1b[32m"; CYN="\x1b[36m"; MAG="\x1b[35m"; YLW="\x1b[33m"
 
 # small helper ----------------------------------------------
 def _ent(p, base=2):
-    """Shannon entropy of a 1-D probability vector (with tiny ϵ-guard)."""
     p   = np.asarray(p, dtype=float)
     eps = 1e-15
-    p   = p.clip(eps) / p.sum()          # re-normalise + avoid log(0)
+    p   = p.clip(eps) / p.sum()
     return entropy(p, base=base)
 
 def clonotypic_entropy_base(
@@ -140,17 +137,6 @@ def clonotypic_entropy_base(
     posterior: bool = True,
     combine_with_logits: bool = True,
 ) -> float:
-    """
-    One-shot Shannon entropy **H(C)** over clonotypes inside a phenotype
-    at the specified covariate level.
-
-    It relies on the *joint-distribution* helpers already in your code‐
-    base.  These return (clone × phenotype) tables:
-
-        • posterior=True  → draws p_ct (and optionally adds logits)  
-        • posterior=False → uses the prior estimate only
-    """
-    # ----------- fetch (clone × phenotype) probability table --------
     if posterior:
         jd = joint_distribution_posterior(
                 adata,
@@ -172,7 +158,6 @@ def clonotypic_entropy_base(
     if jd is None or jd.empty or phenotype not in jd.columns:
         return 0.0
 
-    # jd is (clone × phenotype) – select the column of interest
     vec = jd[phenotype].to_numpy(dtype=float)
     eps = 1e-15
     vec = np.clip(vec, eps, None)
@@ -180,9 +165,8 @@ def clonotypic_entropy_base(
 
     H = entropy(vec, base=base)
     if normalised and len(vec) > 1:
-        H /= np.log(len(vec)) / np.log(base)        # max-entropy normalisation
+        H /= np.log(len(vec)) / np.log(base) #        # max-entropy normalisation
     return H
-
 
 def clonotypic_entropy(
     adata,
@@ -469,7 +453,7 @@ def phenotypic_entropy(
                 continue
             p   = jd.loc[cl].to_numpy(dtype=float)
             eps = 1e-15
-            p   = p.clip(eps) #/ p.sum()
+            p   = p.clip(eps)
             h   = entropy(p, base=base)
             if normalised:
                 h /= np.log(len(p)) / log_base
