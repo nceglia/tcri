@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from statannot import add_stat_annotation
 import matplotlib.patches as mpatches
 from scipy.cluster.hierarchy import dendrogram, linkage
 import scanpy as sc
@@ -27,7 +26,6 @@ from ..metrics._metrics import clone_fraction as clone_fraction_tl
 
 import warnings
 warnings.filterwarnings('ignore')
-
 
 sc._settings.settings._vector_friendly=True
 

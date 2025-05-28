@@ -99,7 +99,6 @@ def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> fl
 
 
 
-
 def dkl(p, q):
     epsilon = 1e-10
     p = np.clip(p, epsilon, 1)
