@@ -24,3 +24,4 @@ tqdm>=4.66.5
 # Optional dependencies
 torch-geometric>=2.6.1
 torchmetrics>=1.6.1
+daft
