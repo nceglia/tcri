@@ -189,23 +189,39 @@ def compare_joint_distribution(adata, temperature=1):
     plt.tight_layout()
     plt.show()
 
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False, n_samples=0, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
+def phenotypic_flux(adata, splitby, order, clones=None, normalize=False, n_samples=50, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
+    nt = False
     phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
     cell_probabilities = collections.defaultdict(dict)
     for s in order:
-        jd = joint_distribution(adata,s,n_samples=n_samples,temperature=temperature)
-        if n_samples > 0:
-            jd["clonotype_id"] = ["_".join(x.split("_")[:-1]) for x in jd.index]
-            jd = jd.groupby("clonotype_id").mean()
+        jds = []
+        print("Sampling joint distributions for {}".format(s))
+        for _ in tqdm.tqdm(range(n_samples)):
+            jd = joint_distribution_posterior(
+                    adata,
+                    covariate_label     = s,
+                    temperature         = temperature,
+                    weighted            = False,
+                    combine_with_logits = True,
+                    silent              = True)
+            jds.append(jd)
+        jd = (
+            pd.concat(jds)             # stack them one on top of another
+            .groupby(level=0)        # regroup by the original row index
+            .mean()                  # take the mean across stacks
+        )
         for x in jd.T:
-            cell_probabilities[s][x] = jd.T[x].to_dict()
+            dist = jd.T[x] / jd.T[x].sum()
+            cell_probabilities[s][x] = dist.to_dict()
     repertoires = dict()
     times = list(range(len(order)))
     if nt:
         chains_to_use = "ntseq"
     else:
         chains_to_use = "aaseq"
+    
     for s in order:
+        print("Creating cell repertoires for {}".format(s))
         repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
                                         phenotypes = phenotypes, 
                                         use_genes = False, 
@@ -213,11 +229,11 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False
                                         seq_type = chains_to_use,
                                         chains_to_use = ['TRB'],
                                         name = s)
-    
-    for bc, condition, seq, phenotype in zip(adata.obs.index,
+    print("Adding cells to repertoire")
+    for bc, condition, seq, phenotype in tqdm.tqdm(list(zip(adata.obs.index,
                                          adata.obs[splitby],
                                          adata.obs[adata.uns["tcri_clone_key"]],
-                                         adata.obs[adata.uns["tcri_phenotype_key"]]):
+                                         adata.obs[adata.uns["tcri_phenotype_key"]]))):
         if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
             phenotypes_and_counts = cell_probabilities[condition][seq]
             if nt:
@@ -233,6 +249,7 @@ def phenotypic_flux(adata, splitby, order, clones=None, normalize=True, nt=False
         rep._set_consistency()
     if phenotype_colors==None:
         phenotype_colors = dict(zip(set(adata.obs[adata.uns["tcri_phenotype_key"]]), tcri_colors))
+    print("Generating Sankey plot...")
     fig, ax = plot_pheno_sankey(phenotypes = phenotypes, 
                                 cell_repertoires = [repertoires[condition] for condition in order], 
                                 clones = clones,
