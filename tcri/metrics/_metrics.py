@@ -697,7 +697,7 @@ def flux(
     to_that             : str,
     clones              : Optional[Union[str, List[str]]] = None,
     temperature         : float = 1.0,
-    distance_metric     : str   = "l1",      # or "dkl"
+    distance_metric     : Union[str, callable] = "l1",      # MODIFIED: Type hint updated
     n_samples           : int   = 0,         # posterior draws
     weighted            : bool  = False,
     posterior           : bool  = True,
@@ -750,18 +750,30 @@ def flux(
         raise ValueError("No overlap between requested clones and data.")
 
     common = jd_from.index.intersection(jd_to.index)
-    if distance_metric.lower() == "l1":
-        dist = (jd_from.loc[common] - jd_to.loc[common]).abs().sum(axis=1)
-    elif distance_metric.lower() == "dkl":
+
+    # --- MINIMAL CHANGE BLOCK 1 ---
+    # Define _dkl once if needed
+    _dkl = None
+    if isinstance(distance_metric, str) and distance_metric.lower() == "dkl":
         eps = 1e-15
-        def _dkl(p, q):
+        def dkl_func(p, q):
             p = p.clip(eps)/p.sum(); q = q.clip(eps)/q.sum()
             return float(np.sum(p*np.log(p/q)))
+        _dkl = dkl_func
+
+    if isinstance(distance_metric, collections.abc.Callable):
+        dist = pd.Series(
+            {cl: distance_metric(jd_from.loc[cl], jd_to.loc[cl]) for cl in common}
+        )
+    elif isinstance(distance_metric, str) and distance_metric.lower() == "l1":
+        dist = (jd_from.loc[common] - jd_to.loc[common]).abs().sum(axis=1)
+    elif _dkl is not None:
         dist = pd.Series(
             {cl: _dkl(jd_from.loc[cl], jd_to.loc[cl]) for cl in common}
         )
     else:
-        raise ValueError("distance_metric must be 'l1' or 'dkl'")
+        raise ValueError("distance_metric must be 'l1', 'dkl', or a callable function.")
+    # --- END OF CHANGE ---
 
     # ---------- single / multi-sample handling -----------------
     if n_samples == 0:
@@ -778,10 +790,15 @@ def flux(
                         clones=clones, weighted=weighted,
                         combine_with_logits=combine_with_logits if posterior else None,
                         silent=True)
-        if distance_metric.lower() == "l1":
+        
+        # --- MINIMAL CHANGE BLOCK 2 ---
+        if isinstance(distance_metric, collections.abc.Callable):
+            samples[i] = [distance_metric(jd_from_s.loc[c], jd_to_s.loc[c]) for c in common]
+        elif isinstance(distance_metric, str) and distance_metric.lower() == "l1":
             samples[i] = (jd_from_s.loc[common] - jd_to_s.loc[common]).abs().sum(axis=1)
-        else:
+        else: # Handles the 'dkl' case using the function defined above
             samples[i] = [ _dkl(jd_from_s.loc[c], jd_to_s.loc[c]) for c in common ]
+        # --- END OF CHANGE ---
 
     if graph:
         print(_ascii_hist(samples.ravel()))
