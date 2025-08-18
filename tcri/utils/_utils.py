@@ -19,6 +19,19 @@ import matplotlib.colors as mcolors
 
 from contextlib import contextmanager
 
+from typing import Optional, Tuple, Dict, Any
+import json as _json
+import os as _os
+import warnings as _warnings
+
+import numpy as _np
+import pandas as _pd
+import scanpy as _sc
+import anndata as _ad
+import torch as _torch
+import pyro as _pyro
+
+
 def _resolve_TCRIModel():
     import importlib, importlib.util, os as _os
     # Try common import locations
@@ -2860,17 +2873,6 @@ def draw_clone_bars(data_dict, dict_order=None, ll=0.5, bk_th=0.0008, save_name=
 # Save / Load a trained TCRIModel together with a sanitized AnnData.
 # Avoids serializing a non-picklable AnnDataManager (tcri_manager) by
 # writing the .h5ad without it and reconstructing the manager on load.
-from typing import Optional, Tuple, Dict, Any
-import json as _json
-import os as _os
-import warnings as _warnings
-
-import numpy as _np
-import pandas as _pd
-import scanpy as _sc
-import anndata as _ad
-import torch as _torch
-import pyro as _pyro
 
 # Filenames
 AD_FILE = "adata.h5ad"
@@ -3021,5 +3023,4 @@ def save_tcri_session(
     with open(_os.path.join(out_dir, META_FILE), "w") as f:
         _json.dump(meta, f, indent=2)
     paths["meta"] = _os.path.join(out_dir, META_FILE)
-
     return paths
