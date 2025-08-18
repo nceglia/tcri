@@ -17,6 +17,117 @@ from scipy.stats import fisher_exact#, binom_test
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as mcolors
 
+from contextlib import contextmanager
+
+def _resolve_TCRIModel():
+    import importlib, importlib.util, os as _os
+    # Try common import locations
+    for name in ("tcri._model", "tcri.model", "_model"):
+        try:
+            mod = importlib.import_module(name)
+            if hasattr(mod, "TCRIModel"):
+                return mod.TCRIModel
+        except Exception:
+            pass
+    # Try local sibling files (editable installs)
+    here = _os.path.dirname(__file__)
+    for rel in ("../_model.py", "../../_model.py"):
+        fp = _os.path.normpath(_os.path.join(here, rel))
+        if _os.path.exists(fp):
+            spec = importlib.util.spec_from_file_location("tcri_model_local", fp)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "TCRIModel"):
+                return mod.TCRIModel
+    raise ModuleNotFoundError("Could not import TCRIModel.")
+
+@contextmanager
+def _disable_scvi_onload_train():
+    """
+    Temporarily monkey-patch scvi's PyroBaseModuleClass.on_load to avoid
+    the one-step warmup train that triggers EarlyStopping('elbo_validation').
+    """
+    try:
+        from scvi.module.base import _base_module as _scvi_bm
+    except Exception:
+        # Older/newer scvi variants – if import fails, just yield and load anyway
+        yield
+        return
+    _orig = getattr(_scvi_bm.PyroBaseModuleClass, "on_load", None)
+    def _noop(self, model):
+        import pyro as _pyro
+        _pyro.clear_param_store()
+    try:
+        if _orig is not None:
+            _scvi_bm.PyroBaseModuleClass.on_load = _noop
+        yield
+    finally:
+        if _orig is not None:
+            _scvi_bm.PyroBaseModuleClass.on_load = _orig
+
+def load_tcri_session(
+    run_dir: str,
+    *,
+    adata_path: Optional[str] = None,
+    map_location: Optional[str] = None,
+    layer: Optional[str] = None,   # keep if you added this
+):
+    TCRIModel = _resolve_TCRIModel()
+
+    # 1) Load adata
+    ad_file = adata_path or _os.path.join(run_dir, AD_FILE)
+    if not _os.path.exists(ad_file):
+        raise FileNotFoundError(f"Could not find adata file at: {ad_file}")
+    adata = _sc.read_h5ad(ad_file)
+
+    # 2) Setup metadata + categorical order
+    setup = {}
+    setup_file = _os.path.join(run_dir, SETUP_FILE)
+    if _os.path.exists(setup_file):
+        with open(setup_file, "r") as f:
+            setup = _json.load(f)
+    else:
+        _warnings.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
+        setup = _collect_setup_from_adata_or_model(adata, model=None)
+    _restore_category_order(adata, setup)
+
+    # Rebuild AnnData manager
+    _layer = layer or setup.get("layer", "X")
+    TCRIModel.setup_anndata(
+        adata,
+        layer=_layer,
+        clonotype_key=setup.get("clone_col", "unique_clone_id"),
+        phenotype_key=setup.get("phenotype_col", "phenotype_col"),
+        covariate_key=setup.get("covariate_col", "timepoint"),
+        batch_key=setup.get("batch_col", "patient"),
+    )
+
+    # 3) Load model WITHOUT scvi's warmup train
+    with _disable_scvi_onload_train():
+        model = TCRIModel.load(run_dir, adata=adata)
+
+    # 4) Restore Pyro param store
+    pyro_file = _os.path.join(run_dir, PYRO_FILE)
+    if _os.path.exists(pyro_file):
+        try:
+            _pyro.clear_param_store()
+            if map_location is not None:
+                try:
+                    _pyro.get_param_store().load(pyro_file, map_location=map_location)
+                except TypeError:
+                    _pyro.get_param_store().load(pyro_file)
+                    if map_location != "cpu":
+                        device = _torch.device(map_location)
+                        for k, v in list(_pyro.get_param_store().items()):
+                            _pyro.get_param_store()[k] = v.to(device)
+            else:
+                _pyro.get_param_store().load(pyro_file)
+        except Exception as e:
+            _warnings.warn(f"Could not load Pyro param store: {e}")
+
+    return model, adata
+
+
 
 def probabilities(adata):
     matrix = adata.obs[adata.uns["probability_columns"]]
@@ -2912,70 +3023,3 @@ def save_tcri_session(
     paths["meta"] = _os.path.join(out_dir, META_FILE)
 
     return paths
-
-def load_tcri_session(
-    run_dir: str,
-    *,
-    adata_path: Optional[str] = None,
-    map_location: Optional[str] = None,
-    layer: Optional[str] = None,
-) -> Tuple[Any, "_ad.AnnData"]:
-    from tcri.model import TCRIModel  # local import to avoid circulars for tooling
-    import scanpy as sc
-    # 1) Load AnnData
-    ad_file = adata_path or _os.path.join(run_dir, AD_FILE)
-    if not _os.path.exists(ad_file):
-        raise FileNotFoundError(f"Could not find adata file at: {ad_file}")
-    adata = sc.read_h5ad(ad_file)
-
-    if layer is not None:
-        layer = "counts"
-    # 2) Load setup metadata / restore categorical ordering
-    setup: Dict[str, Any] = {}
-    setup_file = _os.path.join(run_dir, SETUP_FILE)
-    if _os.path.exists(setup_file):
-        with open(setup_file, "r") as f:
-            setup = _json.load(f)
-    else:
-        _warnings.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
-        setup = _collect_setup_from_adata_or_model(adata, model=None)
-
-    _restore_category_order(adata, setup)
-
-    # 3) Rebuild AnnData manager in this session
-    TCRIModel.setup_anndata(
-        adata,
-        layer=layer,
-        clonotype_key=setup.get("clone_col", "unique_clone_id"),
-        phenotype_key=setup.get("phenotype_col", "phenotype_col"),
-        covariate_key=setup.get("covariate_col", "timepoint"),
-        batch_key=setup.get("batch_col", "patient"),
-    )
-
-    # 4) Load model without retraining
-    if hasattr(TCRIModel, "load"):
-        model = TCRIModel.load(run_dir, adata=adata)
-    else:
-        raise RuntimeError("Expected `TCRIModel.load` to exist (scvi BaseModelClass).")
-
-    # 5) Restore Pyro param store
-    pyro_file = _os.path.join(run_dir, PYRO_FILE)
-    if _os.path.exists(pyro_file):
-        try:
-            _pyro.clear_param_store()
-            if map_location is not None:
-                try:
-                    _pyro.get_param_store().load(pyro_file, map_location=map_location)
-                except TypeError:
-                    _pyro.get_param_store().load(pyro_file)
-                    if map_location != "cpu":
-                        device = _torch.device(map_location)
-                        for k, v in list(_pyro.get_param_store().items()):
-                            _pyro.get_param_store()[k] = v.to(device)
-            else:
-                _pyro.get_param_store().load(pyro_file)
-        except Exception as e:
-            _warnings.warn(f"Could not load Pyro param store: {e}")
-
-    return model, adata
-# === End TCRI IO utilities =====================================================
