@@ -2906,11 +2906,6 @@ def save_tcri_session(
             "pyro": getattr(_pyro, "__version__", "unknown"),
         },
     }
-    try:
-        import scvi as _scvi
-        meta["versions"]["scvi-tools"] = getattr(_scvi, "__version__", "unknown")
-    except Exception:
-        meta["versions"]["scvi-tools"] = "unknown"
 
     with open(_os.path.join(out_dir, META_FILE), "w") as f:
         _json.dump(meta, f, indent=2)
@@ -2923,15 +2918,18 @@ def load_tcri_session(
     *,
     adata_path: Optional[str] = None,
     map_location: Optional[str] = None,
+    layer: Optional[str] = None,
 ) -> Tuple[Any, "_ad.AnnData"]:
-    from _model import TCRIModel  # local import to avoid circulars for tooling
-
+    from tcri.model import TCRIModel  # local import to avoid circulars for tooling
+    import scanpy as sc
     # 1) Load AnnData
     ad_file = adata_path or _os.path.join(run_dir, AD_FILE)
     if not _os.path.exists(ad_file):
         raise FileNotFoundError(f"Could not find adata file at: {ad_file}")
-    adata = _sc.read_h5ad(ad_file)
+    adata = sc.read_h5ad(ad_file)
 
+    if layer is not None:
+        layer = "counts"
     # 2) Load setup metadata / restore categorical ordering
     setup: Dict[str, Any] = {}
     setup_file = _os.path.join(run_dir, SETUP_FILE)
@@ -2945,7 +2943,6 @@ def load_tcri_session(
     _restore_category_order(adata, setup)
 
     # 3) Rebuild AnnData manager in this session
-    layer = setup.get("layer", "X")
     TCRIModel.setup_anndata(
         adata,
         layer=layer,
