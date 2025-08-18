@@ -105,10 +105,10 @@ def load_tcri_session(
     _restore_category_order(adata, setup)
 
     # Rebuild AnnData manager
-    _layer = layer or setup.get("layer", "X")
+
     TCRIModel.setup_anndata(
         adata,
-        layer=_layer,
+        layer=layer,
         clonotype_key=setup.get("clone_col", "unique_clone_id"),
         phenotype_key=setup.get("phenotype_col", "phenotype_col"),
         covariate_key=setup.get("covariate_col", "timepoint"),
