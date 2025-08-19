@@ -54,29 +54,59 @@ def _resolve_TCRIModel():
                 return mod.TCRIModel
     raise ModuleNotFoundError("Could not import TCRIModel.")
 
+from contextlib import contextmanager
+
 @contextmanager
 def _disable_scvi_onload_train():
     """
     Temporarily monkey-patch scvi's PyroBaseModuleClass.on_load to avoid
     the one-step warmup train that triggers EarlyStopping('elbo_validation').
+
+    Compatible across scvi variants that pass different kwargs (e.g., pyro_param_store).
     """
+    candidates = []
     try:
         from scvi.module.base import _base_module as _scvi_bm
+        if hasattr(_scvi_bm, "PyroBaseModuleClass"):
+            candidates.append(_scvi_bm)
     except Exception:
-        # Older/newer scvi variants – if import fails, just yield and load anyway
+        pass
+    # Some installations have the class re-exported elsewhere; try other modules if needed
+    try:
+        from scvi.module.base import _pyromodule as _scvi_pm  # may not exist in all versions
+        if hasattr(_scvi_pm, "PyroBaseModuleClass"):
+            candidates.append(_scvi_pm)
+    except Exception:
+        pass
+
+    # If we couldn't import anything, just yield and hope load works.
+    if not candidates:
         yield
         return
-    _orig = getattr(_scvi_bm.PyroBaseModuleClass, "on_load", None)
-    def _noop(self, model):
-        import pyro as _pyro
+
+    import pyro as _pyro
+
+    def _noop(self, *args, **kwargs):
+        # Accept any args/kwargs (e.g., pyro_param_store) but do nothing.
+        # Keep Pyro store clean; we'll load our own params after model.load().
         _pyro.clear_param_store()
+        # If a store was provided, we intentionally ignore it here.
+
+    origs = []
     try:
-        if _orig is not None:
-            _scvi_bm.PyroBaseModuleClass.on_load = _noop
+        for mod in candidates:
+            cls = getattr(mod, "PyroBaseModuleClass", None)
+            if cls is None:
+                continue
+            orig = getattr(cls, "on_load", None)
+            if orig is not None:
+                origs.append((cls, orig))
+                setattr(cls, "on_load", _noop)
         yield
     finally:
-        if _orig is not None:
-            _scvi_bm.PyroBaseModuleClass.on_load = _orig
+        for cls, orig in origs:
+            setattr(cls, "on_load", orig)
+
 
 def load_tcri_session(
     run_dir: str,
