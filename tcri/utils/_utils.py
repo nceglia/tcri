@@ -32,6 +32,46 @@ import torch as _torch
 import pyro as _pyro
 
 
+def _ensure_pyro_posterior_params(model, adata) -> None:
+    import pyro, torch
+    from pyro.distributions import constraints
+    from torch import nn
+
+    store = pyro.get_param_store()
+    if "q_p_ct_raw" in store:
+        return
+
+    device = next(model.module.parameters()).device
+
+    # infer ct_count
+    if hasattr(model.module, "ct_count"):
+        ct_count = int(model.module.ct_count)
+    elif hasattr(model.module, "ct_to_cov"):
+        ct_count = int(model.module.ct_to_cov.shape[0])
+    elif hasattr(model.module, "ct_array"):
+        ct_count = int(model.module.ct_array.max().item() + 1)
+    else:
+        raise RuntimeError("Could not infer ct_count from the model.")
+
+    # infer P via classifier forward (most reliable)
+    try:
+        z = model.get_latent_representation(batch_size=8)
+        with torch.no_grad():
+            logits = model.module.classifier(torch.from_numpy(z[:1]).to(device))
+        P = int(logits.shape[-1])
+    except Exception:
+        # fallback to adata phenotypes
+        reg = getattr(model, "adata_manager", None)
+        phen_col = reg.registry.get("phenotype_col") if (reg and hasattr(reg, "registry")) else None
+        if phen_col and phen_col in adata.obs:
+            P = int(adata.obs[phen_col].astype("category").cat.categories.size)
+        else:
+            raise RuntimeError("Could not infer P from classifier or adata.")
+
+    init = torch.full((ct_count, P), 1.0 / P, device=device)
+    pyro.param("q_p_ct_raw", init, constraint=constraints.simplex)
+
+
 def _resolve_TCRIModel():
     import importlib, importlib.util, os as _os
     # Try common import locations
@@ -167,7 +207,8 @@ def load_tcri_session(
                 _pyro.get_param_store().load(pyro_file)
         except Exception as e:
             _warnings.warn(f"Could not load Pyro param store: {e}")
-
+    
+    _ensure_pyro_posterior_params(model, adata)
     return model, adata
 
 
