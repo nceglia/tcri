@@ -162,6 +162,103 @@ def _compute_logits_and_prior(model, adata, batch_size=256, eps=1e-8):
 
 # ------------ main routine -------------------- #
 @torch.no_grad()
+# def register_model(
+#     adata, model,
+#     phenotype_prob_slot="X_tcri_probabilities",
+#     phenotype_assignment_obs="tcri_phenotype",
+#     latent_slot="X_tcri",
+#     batch_size=256,
+#     store_logits=True,
+#     store_logposterior=True,
+#     compute_umap=False,
+#     umap_n_neighbors=50,
+#     umap_min_dist=1e-3,
+#     umap_metric="euclidean",
+#     umap_random_state=42,
+#     umap_output_metric="euclidean",
+#     clonotype_key="trb_unique",
+# ):
+#     print(f"{BOLD}{MAGENT}🔗  Registering TCRi model outputs …{RESET}")
+
+#     # 1) priors & arrays -------------------------------------------------
+#     adata.uns["tcri_p_ct"]      = model.module.get_p_ct().cpu().numpy()
+#     adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
+#     adata.uns["tcri_ct_to_c"]   = model.module.ct_to_c.cpu().numpy()
+#     adata.uns["tcri_local_scale"] = model.module.local_scale
+#     _ok("stored hierarchical priors")
+#     for k in ("tcri_p_ct","tcri_ct_to_cov","tcri_ct_to_c"):
+#         _info(f"uns['{k}']", np.shape(adata.uns[k]))
+
+#     # 2) metadata --------------------------------------------------------
+#     meta = {
+#         "covariate_col": model.adata_manager.registry["covariate_col"],
+#         "clone_col":     model.adata_manager.registry["clonotype_col"],
+#         "phenotype_col": model.adata_manager.registry["phenotype_col"],
+#         "batch_col":     model.adata_manager.registry["batch_col"],
+#     }
+#     adata.uns["tcri_metadata"] = meta
+#     _ok("stored metadata dictionary")
+
+#     # categories
+#     for key, col in (("covariate","covariate_col"),
+#                      ("clonotype","clone_col"),
+#                      ("phenotype","phenotype_col")):
+#         cats = adata.obs[meta[col]].astype("category").cat.categories.tolist()
+#         adata.uns[f"tcri_{key}_categories"] = cats
+#         _info(f"uns['tcri_{key}_categories']", len(cats))
+
+#     # per-cell ct / cov arrays
+#     ct_arr = model.module.ct_array.cpu().numpy()
+#     adata.uns["tcri_ct_array_for_cells"] = ct_arr
+#     cov_arr = model.module.ct_to_cov.cpu().numpy()[ct_arr]
+#     adata.uns["tcri_cov_array_for_cells"] = cov_arr
+#     _ok("stored per-cell ct / cov indices")
+
+#     # 3) latent means ----------------------------------------------------
+#     z = model.get_latent_representation(batch_size=batch_size).astype("float32")
+#     adata.obsm[latent_slot] = z
+#     _ok("stored latent means")
+#     _info(f"obsm['{latent_slot}']", z.shape)
+
+#     # 4) logits & log-posterior -----------------------------------------
+#     cls_logits, prior_log = _compute_logits_and_prior(model, adata, batch_size)
+#     if store_logits:
+#         adata.obsm["X_tcri_logits"] = cls_logits
+#         _info("obsm['X_tcri_logits']", cls_logits.shape)
+#     if store_logposterior:
+#         adata.obsm["X_tcri_logposterior"] = cls_logits + prior_log
+#         _info("obsm['X_tcri_logposterior']", cls_logits.shape)
+#     _ok("computed logits & additive log-posterior")
+
+#     # 5) probabilities & hard labels ------------------------------------
+#     if phenotype_prob_slot not in adata.obsm:
+#         from scipy.special import softmax
+#         probs = softmax(cls_logits + prior_log, axis=1).astype("float32")
+#         adata.obsm[phenotype_prob_slot] = probs
+#         _info(f"obsm['{phenotype_prob_slot}']", probs.shape)
+
+#     adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
+#         adata.obsm[phenotype_prob_slot].argmax(1),
+#         categories=adata.uns["tcri_phenotype_categories"],
+#     )
+#     _ok("stored probabilities and hard labels")
+
+#     # 6) optional UMAP ---------------------------------------------------
+#     if compute_umap:
+#         print(f"{CYAN}🗺️  computing UMAP …{RESET}")
+#         reducer = umap.UMAP(
+#             n_neighbors=umap_n_neighbors, min_dist=umap_min_dist,
+#             metric=umap_metric, random_state=umap_random_state,
+#             output_metric=umap_output_metric,
+#         )
+#         adata.obsm["X_umap"] = reducer.fit_transform(z)
+#         _info("obsm['X_umap']", adata.obsm["X_umap"].shape)
+    
+#     register_phenotype_key(adata,phenotype_assignment_obs)
+#     register_clonotype_key(adata,clonotype_key)
+    
+#     print(f"{MAGENT}✨  All TCRi artefacts registered!{RESET}")
+#     return adata
 def register_model(
     adata, model,
     phenotype_prob_slot="X_tcri_probabilities",
@@ -177,16 +274,58 @@ def register_model(
     umap_random_state=42,
     umap_output_metric="euclidean",
     clonotype_key="trb_unique",
+    # --- NEW: posterior controls ---------------------------------------
+    prior_weight: float = 1.0,      # β: increase to pull closer to prior
+    logit_weight: float = 1.0,      # α: decrease to dampen model evidence
+    temperature: float = 1.0,       # T>1 flattens -> relatively more prior
+    overwrite_probs: bool = True,   # recompute and overwrite existing probs
 ):
+    """
+    Register all TCRi artefacts into AnnData.
+
+    Parameters
+    ----------
+    adata : AnnData
+    model : TCRIModel
+    phenotype_prob_slot : str
+        obsm key to store per-cell phenotype probabilities.
+    phenotype_assignment_obs : str
+        obs key to store hard phenotype labels.
+    latent_slot : str
+        obsm key to store latent means.
+    batch_size : int
+        minibatch size for extraction.
+    store_logits : bool
+        store classifier logits to obsm['X_tcri_logits'].
+    store_logposterior : bool
+        store (cls_logits + prior_log) to obsm['X_tcri_logposterior'].
+    compute_umap : bool
+        compute UMAP on latent_slot and store in obsm['X_umap'].
+    clonotype_key : str
+        obs key for clonotype to register in utils.
+    prior_weight : float
+        Multiplier on log-prior (β). >1 pulls posterior toward prior.
+    logit_weight : float
+        Multiplier on classifier logits (α). <1 dampens model evidence.
+    temperature : float
+        Divides the weighted scores before softmax. >1 flattens.
+    overwrite_probs : bool
+        If True, recompute and overwrite probabilities even if the slot exists.
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy.special import softmax
+    import umap
+
     print(f"{BOLD}{MAGENT}🔗  Registering TCRi model outputs …{RESET}")
 
     # 1) priors & arrays -------------------------------------------------
-    adata.uns["tcri_p_ct"]      = model.module.get_p_ct().cpu().numpy()
-    adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
-    adata.uns["tcri_ct_to_c"]   = model.module.ct_to_c.cpu().numpy()
+    adata.uns["tcri_p_ct"]        = model.module.get_p_ct().cpu().numpy()
+    adata.uns["tcri_ct_to_cov"]   = model.module.ct_to_cov.cpu().numpy()
+    adata.uns["tcri_ct_to_c"]     = model.module.ct_to_c.cpu().numpy()
     adata.uns["tcri_local_scale"] = model.module.local_scale
     _ok("stored hierarchical priors")
-    for k in ("tcri_p_ct","tcri_ct_to_cov","tcri_ct_to_c"):
+    for k in ("tcri_p_ct", "tcri_ct_to_cov", "tcri_ct_to_c"):
         _info(f"uns['{k}']", np.shape(adata.uns[k]))
 
     # 2) metadata --------------------------------------------------------
@@ -200,9 +339,9 @@ def register_model(
     _ok("stored metadata dictionary")
 
     # categories
-    for key, col in (("covariate","covariate_col"),
-                     ("clonotype","clone_col"),
-                     ("phenotype","phenotype_col")):
+    for key, col in (("covariate", "covariate_col"),
+                     ("clonotype", "clone_col"),
+                     ("phenotype", "phenotype_col")):
         cats = adata.obs[meta[col]].astype("category").cat.categories.tolist()
         adata.uns[f"tcri_{key}_categories"] = cats
         _info(f"uns['tcri_{key}_categories']", len(cats))
@@ -226,19 +365,26 @@ def register_model(
         adata.obsm["X_tcri_logits"] = cls_logits
         _info("obsm['X_tcri_logits']", cls_logits.shape)
     if store_logposterior:
-        adata.obsm["X_tcri_logposterior"] = cls_logits + prior_log
+        adata.obsm["X_tcri_logposterior"] = (cls_logits + prior_log).astype("float32")
         _info("obsm['X_tcri_logposterior']", cls_logits.shape)
     _ok("computed logits & additive log-posterior")
 
     # 5) probabilities & hard labels ------------------------------------
-    if phenotype_prob_slot not in adata.obsm:
-        from scipy.special import softmax
-        probs = softmax(cls_logits + prior_log, axis=1).astype("float32")
+    # Weighted log-space combination + temperature
+    scores = (logit_weight * cls_logits) + (prior_weight * prior_log)
+    if temperature != 1.0:
+        scores = scores / float(temperature)
+    adata.obsm["X_tcri_scores"] = scores.astype("float32")
+
+    if overwrite_probs or (phenotype_prob_slot not in adata.obsm):
+        probs = softmax(scores, axis=1).astype("float32")
         adata.obsm[phenotype_prob_slot] = probs
         _info(f"obsm['{phenotype_prob_slot}']", probs.shape)
+    else:
+        probs = adata.obsm[phenotype_prob_slot]
 
     adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
-        adata.obsm[phenotype_prob_slot].argmax(1),
+        probs.argmax(1),
         categories=adata.uns["tcri_phenotype_categories"],
     )
     _ok("stored probabilities and hard labels")
@@ -253,10 +399,10 @@ def register_model(
         )
         adata.obsm["X_umap"] = reducer.fit_transform(z)
         _info("obsm['X_umap']", adata.obsm["X_umap"].shape)
-    
-    register_phenotype_key(adata,phenotype_assignment_obs)
-    register_clonotype_key(adata,clonotype_key)
-    
+
+    register_phenotype_key(adata, phenotype_assignment_obs)
+    register_clonotype_key(adata, clonotype_key)
+
     print(f"{MAGENT}✨  All TCRi artefacts registered!{RESET}")
     return adata
 
