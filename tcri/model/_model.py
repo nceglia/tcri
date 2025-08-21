@@ -42,6 +42,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
 def normalized_exponential_vector(values, temperature=0.01):
     assert temperature > 0, "Temperature must be positive"
     exps = torch.exp(values / temperature)
