@@ -725,8 +725,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict["confidence_penalty"] = confidence.item()
 
         # ---------------------------
-        # 7) Done
+        # 7) Gradient clipping (manual optimisation mode)
         # ---------------------------
+        torch.nn.utils.clip_grad_norm_(self.module.parameters(), max_norm=1.0)
+
         self._my_global_step += 1
         return loss_dict
     
@@ -999,8 +1001,6 @@ class TCRIModel(BaseModelClass):
             check_val_every_n_epoch=5,
             accelerator="auto",
             devices="auto",
-            gradient_clip_val=1.0,
-            gradient_clip_algorithm="norm",
             **kwargs,
         )
 
