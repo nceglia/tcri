@@ -77,57 +77,6 @@ class PhenotypeClassifier(nn.Module):
         return logits / self.temperature  # Apply temperature scaling
 
 
-# class AttentionLayer(nn.Module):
-#     def __init__(self, embed_dim, num_heads, dropout_rate=0.1):
-#         super(AttentionLayer, self).__init__()
-#         self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout_rate)
-
-#     def forward(self, x):
-#         if x.dim() == 2:
-#             x = x.unsqueeze(1)  # Shape becomes (batch_size, 1, embed_dim)
-#         x = x.permute(1, 0, 2)
-#         attn_output, _ = self.attention(x, x, x)
-#         return attn_output.permute(1, 0, 2).squeeze(1)
-
-# class ResidualBlock(nn.Module):
-#     def __init__(self, input_dim, hidden_dim, dropout_rate=0.1):
-#         super(ResidualBlock, self).__init__()
-#         self.linear1 = nn.Linear(input_dim, hidden_dim)
-#         self.ln1 = nn.LayerNorm(hidden_dim)
-#         self.relu = nn.ReLU()
-#         self.dropout = nn.Dropout(dropout_rate)
-#         self.linear2 = nn.Linear(hidden_dim, input_dim)
-#         self.ln2 = nn.LayerNorm(input_dim)
-
-#     def forward(self, x):
-#         residual = x
-#         out = self.linear1(x)
-#         out = self.ln1(out)
-#         out = self.relu(out)
-#         out = self.dropout(out)
-#         out = self.linear2(out)
-#         out = self.ln2(out)
-#         return out + residual
-
-# class PhenotypeClassifier(nn.Module):
-#     def __init__(self, n_latent, classifier_hidden, P, num_layers=3, num_heads=2, dropout_rate=0.1, temperature=1.0):
-#         super(PhenotypeClassifier, self).__init__()
-#         self.attention_layer = AttentionLayer(embed_dim=n_latent, num_heads=num_heads, dropout_rate=dropout_rate)
-#         self.residual_blocks = nn.ModuleList(
-#             [ResidualBlock(n_latent, classifier_hidden, dropout_rate) for _ in range(num_layers)]
-#         )
-#         self.output_layer = nn.Linear(n_latent, P)
-#         self.temperature = temperature  # Add temperature parameter
-
-#     def forward(self, x):
-#         x = self.attention_layer(x)
-#         for block in self.residual_blocks:
-#             x = block(x)
-#         logits = self.output_layer(x)
-#         logits = torch.clamp(logits, min=-5.0, max=5.0)  # Clamp the logits
-#         return logits / self.temperature  # Apply temperature scaling
-
-
 class VampPrior(torch.nn.Module):
     def __init__(self, pseudo_inputs, encoder):
         """
@@ -258,7 +207,6 @@ class MixtureDirichlet(dist.TorchDistribution):
         mixture_log = torch.log(expanded_weights)
         
         return torch.logsumexp(mixture_log + component_log_probs, dim=-1)
-
 
     def score_parts(self, value):
         # Compute log probability.
@@ -553,9 +501,8 @@ class TCRIModule(PyroBaseModuleClass):
             
             # Apply a sharpening transformation controlled by sharp_temperature.
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
-            # Normalize each row to be a valid probability vector.
+            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            # Scale to obtain Dirichlet concentration parameters.
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
             
             # Sample p_c from a single learned Dirichlet per clonotype.
@@ -574,6 +521,7 @@ class TCRIModule(PyroBaseModuleClass):
             else:
                 q_p_ct_raw = pyro.param("q_p_ct_raw")
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
+            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)  # ← add this
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
