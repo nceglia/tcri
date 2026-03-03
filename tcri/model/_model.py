@@ -498,7 +498,11 @@ class TCRIModule(PyroBaseModuleClass):
                 )
             else:
                 q_p_c_raw = pyro.param("q_p_c_raw")
-            
+
+            bad_c = ~torch.isfinite(q_p_c_raw)
+            if bad_c.any():
+                q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
+
             # Apply a sharpening transformation controlled by sharp_temperature.
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
             q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
@@ -520,6 +524,11 @@ class TCRIModule(PyroBaseModuleClass):
                 )
             else:
                 q_p_ct_raw = pyro.param("q_p_ct_raw")
+
+            bad_ct = ~torch.isfinite(q_p_ct_raw)
+            if bad_ct.any():
+                q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
+
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)  # ← add this
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
@@ -990,6 +999,8 @@ class TCRIModel(BaseModelClass):
             check_val_every_n_epoch=5,
             accelerator="auto",
             devices="auto",
+            gradient_clip_val=1.0,
+            gradient_clip_algorithm="norm",
             **kwargs,
         )
 
