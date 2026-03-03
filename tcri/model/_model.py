@@ -562,6 +562,10 @@ class TCRIModule(PyroBaseModuleClass):
 
         param_store = get_param_store()
         q_p_ct_raw = param_store["q_p_ct_raw"]
+        bad = ~torch.isfinite(q_p_ct_raw)
+        if bad.any():
+            n_phen = q_p_ct_raw.shape[1]
+            q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / n_phen, q_p_ct_raw)
         if self.sharp_temperature != 1.0:
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
