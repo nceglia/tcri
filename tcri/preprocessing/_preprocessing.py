@@ -592,6 +592,10 @@ def joint_distribution_posterior(
 
     p_ct_mean   = torch.tensor(adata.uns["tcri_p_ct"])
     local_scale = adata.uns.get("tcri_local_scale", 1.0)
+    bad = ~torch.isfinite(p_ct_mean)
+    if bad.any():
+        n_phen = p_ct_mean.shape[1]
+        p_ct_mean = torch.where(bad, torch.ones_like(p_ct_mean) / n_phen, p_ct_mean)
     p_ct_sample = Dirichlet(local_scale * p_ct_mean + 1e-8).sample().numpy()
     _ok("sampled one draw from posterior p_ct", silent)
 
