@@ -15,7 +15,9 @@ python3 setup.py install
 
 ## Overview
 
-TCRi is a comprehensive framework for analyzing paired single-cell RNA and TCR sequencing data. It provides tools for:
+TCRi is a comprehensive framework for analyzing paired single-cell RNA and TCR sequencing data.
+It provides tools for:
+
 - Joint distribution analysis
 - Information theoretic metrics
 - Visualization capabilities
@@ -25,7 +27,7 @@ TCRi is a comprehensive framework for analyzing paired single-cell RNA and TCR s
 
 ### 1. Model (`tcri.model`)
 
-The `TCRIModel` class implements a hierarchical Bayesian model for analyzing TCR and gene expression data:
+The `TCRIModel` class implements a hierarchical generative Bayesian model for analyzing paired TCR and gene expression data:
 
 ```python
 import tcri
@@ -198,7 +200,7 @@ If you use TCRi in your research, please cite:
 ```
 @article{nceglia2022tcri,
   title={TCRi: An Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing},
-  author={Nceglia, Nicholas and others},
+  author={Nceglia, Nicholas, Salehi, Sohrab and others},
   journal={bioRxiv},
   year={2022}
 }
