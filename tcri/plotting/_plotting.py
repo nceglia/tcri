@@ -190,6 +190,7 @@ def compare_joint_distribution(adata, temperature=1):
     plt.show()
 
 def phenotypic_flux(adata, splitby, order, clones=None, normalize=False, n_samples=50, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
+    import tqdm
     nt = False
     phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
     cell_probabilities = collections.defaultdict(dict)
