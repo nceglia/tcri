@@ -649,7 +649,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # 0) Basic overhead and set kl_weight
         # ---------------------------
         if self._my_global_step < self.n_steps_kl_warmup:
-            kl_weight = self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup)
+            kl_weight = max(1e-6, self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup))
         else:
             kl_weight = self.module.kl_weight_max
         self.module.kl_weight = kl_weight
