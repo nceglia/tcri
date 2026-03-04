@@ -36,7 +36,6 @@ warnings.filterwarnings(
 
 os.environ.pop("SLURM_NTASKS", None)
 os.environ.pop("SLURM_NTASKS_PER_NODE", None)
-pyro.clear_param_store()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -639,78 +638,57 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         return {"optimizer": optimizer}
     
     def training_step(self, batch, batch_idx):
-        """
-        1) Let super().training_step(batch, batch_idx) do the normal Pyro forward/back pass.
-        2) Then unify the distribution used in the model(...) with the distribution you penalize here.
-        3) Add your margin, entropy, confidence, and optional KL penalties.
-        """
-
-        # ---------------------------
-        # 0) Basic overhead and set kl_weight
-        # ---------------------------
-        if self._my_global_step < self.n_steps_kl_warmup:
+        # ── KL warmup ────────────────────────────────────────────
+        if self.n_steps_kl_warmup > 0 and self._my_global_step < self.n_steps_kl_warmup:
             kl_weight = max(1e-6, self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup))
         else:
             kl_weight = self.module.kl_weight_max
         self.module.kl_weight = kl_weight
 
-        # The super() call does the standard Pyro training step, returning a dict with "loss"
+        # ── Pyro ELBO step ───────────────────────────────────────
         loss_dict = super().training_step(batch, batch_idx)
         device = next(self.module.parameters()).device
 
-        # ensure loss is a tensor on the right device
         if not isinstance(loss_dict["loss"], torch.Tensor):
             loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
             loss_dict["loss"] = loss_dict["loss"].to(device)
 
-        # ---------------------------
-        # 1) Gather data, latent embeddings, margin penalty
-        # ---------------------------
-        z_batch = self.module.get_latent(batch).to(device)
-        idx = batch["indices"].long().view(-1).to(device)
-        target_phen = self.module._target_phenotypes[idx].to(device)
-
-        # Optional margin penalty
-        margin_val = 0.0
+        # ── Optional margin penalty (default off) ────────────────
         if self.margin_scale > 0.0:
+            z_batch = self.module.get_latent(batch).to(device)
+            idx = batch["indices"].long().view(-1).to(device)
+            target_phen = self.module._target_phenotypes[idx].to(device)
             margin_loss_val = pairwise_centroid_margin_loss(
-                z_batch,
-                target_phen,
+                z_batch, target_phen,
                 margin=self.margin_value,
                 adaptive_margin=self.adaptive_margin,
             ).to(device)
-            margin_loss = self.margin_scale * margin_loss_val
-            loss_dict["loss"] += margin_loss
-            margin_val = margin_loss_val.item()
-        loss_dict["margin_loss"] = margin_val
+            loss_dict["loss"] += self.margin_scale * margin_loss_val
+            loss_dict["margin_loss"] = margin_loss_val.item()
 
-        # ---------------------------
-        # 2) Diagnostics only (no contribution to loss)
-        # ---------------------------
-        cls_logits = self.module.classifier(z_batch)
-        ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-        prior_log = torch.log(p_ct_prior + 1e-8)
+        # ── Diagnostics (no gradient contribution) ───────────────
+        with torch.no_grad():
+            z_diag = self.module.get_latent(batch).to(device)
+            idx_diag = batch["indices"].long().view(-1).to(device)
+            cls_logits = self.module.classifier(z_diag)
+            ct_idx = self.module.ct_array[idx_diag]
+            p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+            prior_log = torch.log(p_ct_prior + 1e-8)
 
-        if self.module.use_gate:
-            local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-        else:
-            local_logits_model = cls_logits + prior_log
+            if self.module.use_gate:
+                local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+            else:
+                local_logits = cls_logits + prior_log
 
-        probs = F.softmax(local_logits_model, dim=-1)
+            probs = F.softmax(local_logits, dim=-1)
+            kl_div = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
+            confidence = (probs**2).sum(dim=-1).mean()
 
-        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        confidence = (probs**2).sum(dim=-1).mean()
-        self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=False, on_epoch=True)
+        self.log("kl_divergence_with_prior_train", kl_div, prog_bar=False, on_epoch=True)
         self.log("entropy_train", entropy, prog_bar=False, on_epoch=True)
         self.log("confidence_train", confidence, prog_bar=False, on_epoch=True)
-
-        # ---------------------------
-        # 7) Gradient clipping (manual optimisation mode)
-        # ---------------------------
-        torch.nn.utils.clip_grad_norm_(self.module.parameters(), max_norm=1.0)
 
         self._my_global_step += 1
         return loss_dict
@@ -722,33 +700,29 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             self.module.train()
 
         device = next(self.module.parameters()).device
-        z_batch = self.module.get_latent(batch).to(device)
-        idx = batch["indices"].long().view(-1).to(device)
-        target_phen = self.module._target_phenotypes[idx].to(device)
-
-        cls_logits = self.module.classifier(z_batch)
-        ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-        prior_log = torch.log(p_ct_prior + 1e-8)
-        if self.module.use_gate:
-            local_logits_model = (
-                self.module.gate_prob * cls_logits
-                + (1.0 - self.module.gate_prob) * prior_log
-            )
-        else:
-            # additive (Bayesian-product) rule
-            local_logits_model = cls_logits + prior_log
-        probs = F.softmax(local_logits_model, dim=-1)
-
-        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-
-        # Log the KL divergence as a measure of alignment with the prior
-        self.log("kl_divergence_with_prior_val", kl_divergence, prog_bar=True, on_epoch=True)
 
         if not isinstance(val_dict["loss"], torch.Tensor):
             val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
         else:
             val_dict["loss"] = val_dict["loss"].to(device)
+
+        # ── Diagnostic only ──────────────────────────────────────
+        z_batch = self.module.get_latent(batch).to(device)
+        idx = batch["indices"].long().view(-1).to(device)
+        cls_logits = self.module.classifier(z_batch)
+        ct_idx = self.module.ct_array[idx]
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+        prior_log = torch.log(p_ct_prior + 1e-8)
+
+        if self.module.use_gate:
+            local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+        else:
+            local_logits = cls_logits + prior_log
+
+        probs = F.softmax(local_logits, dim=-1)
+        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+        self.log("kl_divergence_with_prior_val", kl_divergence, prog_bar=False, on_epoch=True)
+
         self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
         return val_dict
 
@@ -920,15 +894,6 @@ class TCRIModel(BaseModelClass):
             f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
             f"sharp_temperature={sharp_temperature}."
         )
-
-    max_epochs=10,            # Total number of training epochs
-    batch_size=int(1e8),           # Batch size for training
-    margin_scale=0.00,
-    margin_value=0.00,
-    adaptive_margin=False,
-    lr=1e-3,                   # Learning rate for the optimizer
-    n_steps_kl_warmup=2000,
-    reconstruction_loss_scale=7e-3,
 
     def train(
         self,
