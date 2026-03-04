@@ -58,7 +58,7 @@ def build_archetypes(c2p_mat, K=4):
 
 
 class PhenotypeClassifier(nn.Module):
-    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, num_heads=2, temperature=1.0):
+    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, temperature=1.0):
         super(PhenotypeClassifier, self).__init__()
         layers = []
         input_dim = n_latent
@@ -73,8 +73,7 @@ class PhenotypeClassifier(nn.Module):
 
     def forward(self, x):
         logits = self.mlp(x)
-        logits = torch.clamp(logits, min=-5.0, max=5.0)  # Clamp the logits
-        return logits / self.temperature  # Apply temperature scaling
+        return logits / self.temperature
 
 
 class VampPrior(torch.nn.Module):
@@ -292,6 +291,8 @@ class TCRIModule(PyroBaseModuleClass):
         n_layers: int = 3,
         class_weights: torch.Tensor = None,
         kl_weight_max: float = 1.0,
+        guide_init_scale: float = 10.0,
+        classifier_temperature: float = 1.0,
     ):
         super().__init__()
         self.n_input = n_input
@@ -316,6 +317,8 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_dropout = classifier_dropout
         self.kl_weight_max = kl_weight_max
         self.classifier_n_layers = classifier_n_layers
+        self.guide_init_scale = guide_init_scale
+        self.classifier_temperature = classifier_temperature
 
         self.encoder = Encoder(
             n_input=n_input,
@@ -347,8 +350,8 @@ class TCRIModule(PyroBaseModuleClass):
             n_latent=self.n_latent,
             classifier_hidden=self.classifier_hidden,
             P=self.P,
-            num_layers=self.classifier_n_layers,  # Use the existing configurable number of layers
-            num_heads=self.classifier_num_heads  # You can make this configurable as well if needed
+            num_layers=self.classifier_n_layers,
+            temperature=self.classifier_temperature,
         )
 
         self.register_buffer("clone_phen_prior", torch.empty(0))
@@ -486,7 +489,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         with pyro.plate("clonotypes", self.c_count):
             # Start from a scaled version of the prior.
-            init_mat_c = self.clone_phen_prior * 10.0 + 1e-3
+            init_mat_c = self.clone_phen_prior * self.guide_init_scale + 1e-3
             init_mat_c = init_mat_c.to(x.device)
             
             # Learnable raw parameters for q(p_c)
@@ -514,7 +517,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         with pyro.plate("ct_plate", self.ct_count):
             init_mat = self.clone_phen_prior[self.ct_to_c, :]
-            init_mat = init_mat * 10.0 + 1e-3
+            init_mat = init_mat * self.guide_init_scale + 1e-3
             init_mat = init_mat.to(x.device)
             if "q_p_ct_raw" not in pyro.get_param_store():
                 q_p_ct_raw = pyro.param(
@@ -608,6 +611,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
 
+        self.n_steps_kl_warmup = n_steps_kl_warmup
         self.margin_scale = margin_scale
         self.margin_value = margin_value
         self.adaptive_margin = adaptive_margin
@@ -644,7 +648,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ---------------------------
         # 0) Basic overhead and set kl_weight
         # ---------------------------
-        kl_weight = self.module.kl_weight_max / (1.0 + np.exp(-0.005 * (self._my_global_step - 2000)))
+        if self._my_global_step < self.n_steps_kl_warmup:
+            kl_weight = self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup)
+        else:
+            kl_weight = self.module.kl_weight_max
         self.module.kl_weight = kl_weight
 
         # The super() call does the standard Pyro training step, returning a dict with "loss"
@@ -679,20 +686,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         loss_dict["margin_loss"] = margin_val
 
         # ---------------------------
-        # 2) Re-run part of the decode step to see how to unify distributions
+        # 2) Diagnostics only (no contribution to loss)
         # ---------------------------
-        x = batch[REGISTRY_KEYS.X_KEY].float().to(device)
-        batch_idx_tensor = batch[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-        log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6).to(device)
-
-        # ---------------------------
-        # 3) Build the same classification distribution Pyro sees
-        # ---------------------------
-        cls_logits = self.module.classifier(z_batch)  # raw classifier outputs
-
+        cls_logits = self.module.classifier(z_batch)
         ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)  # shape (batch_size, P)
-        prior_log = torch.log(p_ct_prior + 1e-8)                # prior in log-space
+        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+        prior_log = torch.log(p_ct_prior + 1e-8)
 
         if self.module.use_gate:
             local_logits_model = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
@@ -701,32 +700,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         probs = F.softmax(local_logits_model, dim=-1)
 
-        # ---------------------------
-        # 4) (Optional) KL to prior
-        # ---------------------------
-        # If you want to push classifier to match p_ct_prior softly:
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-        beta = 5.0
-        self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=True, on_epoch=True)
-        # e.g. scale it or add it to the main loss if you want
-        loss_dict["loss"] += beta * kl_divergence
-
-        # ---------------------------
-        # 5) Entropy Penalty
-        # ---------------------------
         entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-        entropy_penalty_scale = 5.0  # large enough to encourage flatter distributions
-        loss_dict["loss"] += entropy_penalty_scale * entropy
-        loss_dict["entropy_penalty"] = entropy.item()
-
-        # ---------------------------
-        # 6) Confidence (Square-Sum) Penalty
-        # ---------------------------
-        # If you also want to penalize spiky outputs:
         confidence = (probs**2).sum(dim=-1).mean()
-        confidence_penalty_scale = 10.0
-        loss_dict["loss"] += confidence_penalty_scale * confidence
-        loss_dict["confidence_penalty"] = confidence.item()
+        self.log("kl_divergence_with_prior_train", kl_divergence, prog_bar=False, on_epoch=True)
+        self.log("entropy_train", entropy, prog_bar=False, on_epoch=True)
+        self.log("confidence_train", confidence, prog_bar=False, on_epoch=True)
 
         # ---------------------------
         # 7) Gradient clipping (manual optimisation mode)
@@ -760,11 +739,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             # additive (Bayesian-product) rule
             local_logits_model = cls_logits + prior_log
         probs = F.softmax(local_logits_model, dim=-1)
-        # Retrieve the p_ct prior for each sample
-        ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
 
-        # Calculate the similarity between predicted and prior distributions
         kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
 
         # Log the KL divergence as a measure of alignment with the prior
@@ -833,8 +808,10 @@ class TCRIModel(BaseModelClass):
         n_pseudo_obs: int = 10,
         K: int = 10,
         phenotype_weights: Optional[Dict[str, float]] = None,
-        gate_prob: Optional[float] = None, 
+        gate_prob: Optional[float] = None,
         kl_weight_max: float = 1.0,
+        guide_init_scale: float = 10.0,
+        classifier_temperature: float = 1.0,
         **kwargs,
     ):
         super().__init__(adata)
@@ -918,6 +895,8 @@ class TCRIModel(BaseModelClass):
             gate_prob=gate_prob,
             kl_weight_max=kl_weight_max,
             n_pseudo_obs=n_pseudo_obs,
+            guide_init_scale=guide_init_scale,
+            classifier_temperature=classifier_temperature,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
