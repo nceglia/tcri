@@ -42,11 +42,6 @@ logger = logging.getLogger(__name__)
 
 
 
-def normalized_exponential_vector(values, temperature=0.01):
-    assert temperature > 0, "Temperature must be positive"
-    exps = torch.exp(values / temperature)
-    return exps / torch.sum(exps, dim=-1, keepdim=True)
-
 def build_archetypes(c2p_mat, K=4):
     kmeans = KMeans(n_clusters=K, random_state=42)
     labels = kmeans.fit_predict(c2p_mat)
@@ -218,49 +213,7 @@ class MixtureDirichlet(dist.TorchDistribution):
 
 
 ###############################################################################
-# 1) Pairwise Margin Loss Helper
-###############################################################################
-def pairwise_centroid_margin_loss(
-    z: torch.Tensor,
-    phenotypes: torch.Tensor,
-    margin: float = 1.0,
-    adaptive_margin: bool = False,
-) -> torch.Tensor:
-    """
-    Margin-based separation penalty on latent z for different phenotype groups.
-    If adaptive_margin=True, we scale the 'margin' by the standard deviation of
-    the phenotype centroids.
-    """
-    phenotypes = phenotypes.view(-1)
-    unique_phen = phenotypes.unique()
-    if len(unique_phen) < 2:
-        return z.new_zeros(1)
-
-    centroids = []
-    for p in unique_phen:
-        mask = phenotypes == p
-        z_p = z[mask]
-        centroids.append(z_p.mean(dim=0))
-    centroids = torch.stack(centroids, dim=0)
-
-    dists = []
-    for i in range(len(centroids)):
-        for j in range(i + 1, len(centroids)):
-            dists.append(torch.norm(centroids[i] - centroids[j], p=2))
-    if not dists:
-        return z.new_zeros(1)
-    dists = torch.stack(dists)
-
-    if adaptive_margin:
-        margin = margin * torch.std(centroids)
-
-    penalty = torch.clamp(margin - dists, min=0.0).mean()
-    return penalty
-
-
-
-###############################################################################
-# 2) Pyro Module with CVAE + Hierarchical Priors
+# 1) Pyro Module with CVAE + Hierarchical Priors
 ###############################################################################
 class TCRIModule(PyroBaseModuleClass):
     """
@@ -285,7 +238,6 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
-        classifier_num_heads: int = 2,
         n_hidden: int = 128,
         n_layers: int = 3,
         class_weights: torch.Tensor = None,
@@ -304,7 +256,6 @@ class TCRIModule(PyroBaseModuleClass):
         self.sharp_temperature = sharp_temperature
         self.mixture_concentration = mixture_concentration
         self.n_pseudo_obs = n_pseudo_obs
-        self.classifier_num_heads = classifier_num_heads
         self.gate_prob = gate_prob
         # Assert that it is not None
         assert (
@@ -545,10 +496,6 @@ class TCRIModule(PyroBaseModuleClass):
             with pyro.poutine.scale(scale=self.kl_weight):
                 z = pyro.sample("latent", latent_posterior.to_event(1))
 
-            ct_idx = self.ct_array[idx]
-            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
-            # cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
-
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
@@ -577,11 +524,11 @@ class TCRIModule(PyroBaseModuleClass):
 
 
 ###############################################################################
-# 3) Unified Training Plan with Validation Step for scvi Early Stopping
+# 2) Unified Training Plan with Validation Step for scvi Early Stopping
 ###############################################################################
 class UnifiedTrainingPlan(PyroTrainingPlan):
     """
-    Training plan that includes margin, classification, reconstruction losses,
+    Training plan that includes classification, reconstruction losses,
     KL warmup, plus a validation_step that logs 'elbo_validation' so scvi's
     early stopping can monitor it.
     """
@@ -589,10 +536,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def __init__(
         self,
         module: TCRIModule,
-        margin_scale: float = 0.0,
-        margin_value: float = 2.0,
         n_steps_kl_warmup: int = 1000,
-        adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 5,
         optimizer_config: dict = None,
@@ -611,9 +555,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
 
         self.n_steps_kl_warmup = n_steps_kl_warmup
-        self.margin_scale = margin_scale
-        self.margin_value = margin_value
-        self.adaptive_margin = adaptive_margin
         self.reconstruction_loss_scale = reconstruction_loss_scale
         self._my_global_step = 0
         self.class_weights = class_weights
@@ -653,19 +594,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
             loss_dict["loss"] = loss_dict["loss"].to(device)
-
-        # ── Optional margin penalty (default off) ────────────────
-        if self.margin_scale > 0.0:
-            z_batch = self.module.get_latent(batch).to(device)
-            idx = batch["indices"].long().view(-1).to(device)
-            target_phen = self.module._target_phenotypes[idx].to(device)
-            margin_loss_val = pairwise_centroid_margin_loss(
-                z_batch, target_phen,
-                margin=self.margin_value,
-                adaptive_margin=self.adaptive_margin,
-            ).to(device)
-            loss_dict["loss"] += self.margin_scale * margin_loss_val
-            loss_dict["margin_loss"] = margin_loss_val.item()
 
         # ── Diagnostics (no gradient contribution) ───────────────
         with torch.no_grad():
@@ -728,7 +656,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
 
 ###############################################################################
-# 4) High-Level scVI Model with scvi Early Stopping
+# 3) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
 class TCRIModel(BaseModelClass):
     @classmethod
@@ -772,6 +700,8 @@ class TCRIModel(BaseModelClass):
         adata: AnnData,
         n_latent: int = 128,
         n_hidden: int = 128,
+        n_layers: int = 3,
+        classifier_n_layers: int = 3,
         global_scale: float = 5.0,
         local_scale: float = 3.0,
         sharp_temperature: float = 1.0,
@@ -800,8 +730,6 @@ class TCRIModel(BaseModelClass):
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
             raise ValueError("gate_prob must be in [0,1] or None")
-        # (remove the self.module.gate_prob = gate_prob line)
-
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
@@ -858,6 +786,8 @@ class TCRIModel(BaseModelClass):
             P=P,
             n_batch=n_batch,
             n_hidden=n_hidden,
+            n_layers=n_layers,
+            classifier_n_layers=classifier_n_layers,
             global_scale=global_scale,
             local_scale=local_scale,
             mixture_concentration=torch.from_numpy(self.centers),
@@ -900,9 +830,6 @@ class TCRIModel(BaseModelClass):
         max_epochs: int = 1000,
         batch_size: int = 1000,
         lr: float = 1e-3,
-        margin_scale: float = 0.0,
-        margin_value: float = 0.0,
-        adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-3,
         n_steps_kl_warmup: int = 2000,
         **kwargs,
@@ -923,10 +850,7 @@ class TCRIModel(BaseModelClass):
 
         plan = UnifiedTrainingPlan(
             module=self.module,
-            margin_scale=margin_scale,
-            margin_value=margin_value,
             n_steps_kl_warmup=n_steps_kl_warmup,
-            adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
             class_weights=self.class_weights,
             optimizer_config={
@@ -1025,10 +949,6 @@ class TCRIModel(BaseModelClass):
 
             # ----- 1) Compute classifier logits (same as training) -----
             cls_logits = self.module.classifier(z_loc)
-
-            gate_probs = torch.full(
-                (this_batch_size, self.module.P), gate_prob, device=x.device
-            )
 
             prior_log = torch.log(clone_cov_posterior + eps)
             if gate_prob is None:
