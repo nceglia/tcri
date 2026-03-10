@@ -39,8 +39,8 @@ model = tcri.TCRIModel(
     n_hidden=128,
     global_scale=10.0,
     local_scale=5.0,
-    sharp_temperature=1.0,
-    sharpness_penalty_scale=0.0,
+    prior_temperature=1.0,
+    guide_temperature=1.0,
     use_enumeration=False,
     device=None
 )

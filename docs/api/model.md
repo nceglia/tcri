@@ -24,10 +24,10 @@ class TCRIModel:
         Scale parameter for the global prior
     local_scale : float, default=5.0
         Scale parameter for the local prior
-    sharp_temperature : float, default=1.0
-        Temperature parameter for sharpening the distributions
-    sharpness_penalty_scale : float, default=0.0
-        Scale for the sharpness penalty
+    prior_temperature : float, default=1.0
+        Temperature for sharpening the clone-phenotype prior distributions
+    guide_temperature : float, default=1.0
+        Temperature for sharpening learned parameters in the guide and get_p_ct()
     use_enumeration : bool, default=False
         Whether to use enumeration for discrete variables
     device : str, optional
