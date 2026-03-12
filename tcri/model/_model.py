@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 
+def normalized_exponential_vector(values, temperature=0.01):
+    assert temperature > 0, "Temperature must be positive"
+    exps = torch.exp(values / temperature)
+    return exps / torch.sum(exps, dim=-1, keepdim=True)
+
 def build_archetypes(c2p_mat, K=4):
     kmeans = KMeans(n_clusters=K, random_state=42)
     labels = kmeans.fit_predict(c2p_mat)
@@ -213,7 +218,49 @@ class MixtureDirichlet(dist.TorchDistribution):
 
 
 ###############################################################################
-# 1) Pyro Module with CVAE + Hierarchical Priors
+# 1) Pairwise Margin Loss Helper
+###############################################################################
+def pairwise_centroid_margin_loss(
+    z: torch.Tensor,
+    phenotypes: torch.Tensor,
+    margin: float = 1.0,
+    adaptive_margin: bool = False,
+) -> torch.Tensor:
+    """
+    Margin-based separation penalty on latent z for different phenotype groups.
+    If adaptive_margin=True, we scale the 'margin' by the standard deviation of
+    the phenotype centroids.
+    """
+    phenotypes = phenotypes.view(-1)
+    unique_phen = phenotypes.unique()
+    if len(unique_phen) < 2:
+        return z.new_zeros(1)
+
+    centroids = []
+    for p in unique_phen:
+        mask = phenotypes == p
+        z_p = z[mask]
+        centroids.append(z_p.mean(dim=0))
+    centroids = torch.stack(centroids, dim=0)
+
+    dists = []
+    for i in range(len(centroids)):
+        for j in range(i + 1, len(centroids)):
+            dists.append(torch.norm(centroids[i] - centroids[j], p=2))
+    if not dists:
+        return z.new_zeros(1)
+    dists = torch.stack(dists)
+
+    if adaptive_margin:
+        margin = margin * torch.std(centroids)
+
+    penalty = torch.clamp(margin - dists, min=0.0).mean()
+    return penalty
+
+
+
+###############################################################################
+# 2) Pyro Module with CVAE + Hierarchical Priors
 ###############################################################################
 class TCRIModule(PyroBaseModuleClass):
     """
@@ -230,8 +277,7 @@ class TCRIModule(PyroBaseModuleClass):
         n_batch: int,
         global_scale: float = 10.0,
         local_scale: float = 5.0,
-        prior_temperature: float = 1.0,
-        guide_temperature: float = 1.0,
+        sharp_temperature: float = 1.0,
         gate_prob: float = 0.5,
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
@@ -239,6 +285,7 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
+        classifier_num_heads: int = 2,
         n_hidden: int = 128,
         n_layers: int = 3,
         class_weights: torch.Tensor = None,
@@ -254,10 +301,10 @@ class TCRIModule(PyroBaseModuleClass):
         self.n_layers = n_layers
         self.global_scale = global_scale
         self.local_scale = local_scale
-        self.prior_temperature = prior_temperature
-        self.guide_temperature = guide_temperature
+        self.sharp_temperature = sharp_temperature
         self.mixture_concentration = mixture_concentration
         self.n_pseudo_obs = n_pseudo_obs
+        self.classifier_num_heads = classifier_num_heads
         self.gate_prob = gate_prob
         # Assert that it is not None
         assert (
@@ -271,10 +318,6 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_n_layers = classifier_n_layers
         self.guide_init_scale = guide_init_scale
         self.classifier_temperature = classifier_temperature
-
-        # Defaults so model()/guide() work before train() sets them
-        self.kl_weight = 1e-6
-        self.reconstruction_loss_scale = 1e-3
 
         self.encoder = Encoder(
             n_input=n_input,
@@ -346,8 +389,8 @@ class TCRIModule(PyroBaseModuleClass):
         prior_mat = clone_phen_prior_mat + self.eps
         prior_mat = prior_mat / prior_mat.sum(dim=1, keepdim=True)
 
-        if self.prior_temperature != 1.0:
-            prior_mat = prior_mat ** (1.0 / self.prior_temperature)
+        if self.sharp_temperature != 1.0:
+            prior_mat = prior_mat ** (1.0 / self.sharp_temperature)
             prior_mat = prior_mat / prior_mat.sum(dim=1, keepdim=True)
 
         self.register_buffer("clone_phen_prior", prior_mat)
@@ -379,7 +422,11 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight = self.kl_weight
         batch_size = x.shape[0]
 
+        B = self.mixture_concentration.shape[0]
+        mixture_weights = torch.ones(B, device=self.mixture_concentration.device) / B
+
         with pyro.plate("clonotypes", self.c_count):
+            # Assume self.mixture_concentration is a tensor of shape (B, K)
             B = self.mixture_concentration.shape[0]
             mixture_weights = torch.ones(B, device=x.device) / B
             # Expand mixture parameters to add a leading dimension for clonotypes.
@@ -458,8 +505,8 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_c.any():
                 q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
 
-            # Apply a sharpening transformation controlled by guide_temperature.
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
+            # Apply a sharpening transformation controlled by sharp_temperature.
+            q_p_c_sharp = q_p_c_raw ** (1.0 / self.sharp_temperature)
             q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
@@ -484,8 +531,8 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_ct.any():
                 q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
 
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
+            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
+            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)  # ← add this
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
             conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
@@ -497,6 +544,10 @@ class TCRIModule(PyroBaseModuleClass):
             latent_posterior = dist.Normal(z_loc, z_scale)
             with pyro.poutine.scale(scale=self.kl_weight):
                 z = pyro.sample("latent", latent_posterior.to_event(1))
+
+            ct_idx = self.ct_array[idx]
+            prior_log_guide = torch.log(q_p_ct_sharp[ct_idx] + 1e-8)
+            # cls_logits = self.classifier(z) #+ self.phenotype_decoder(z)
 
     @auto_move_data
     def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
@@ -517,8 +568,8 @@ class TCRIModule(PyroBaseModuleClass):
         if bad.any():
             n_phen = q_p_ct_raw.shape[1]
             q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / n_phen, q_p_ct_raw)
-        if self.guide_temperature != 1.0:
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
+        if self.sharp_temperature != 1.0:
+            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.sharp_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
         else:
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
@@ -526,11 +577,11 @@ class TCRIModule(PyroBaseModuleClass):
 
 
 ###############################################################################
-# 2) Unified Training Plan with Validation Step for scvi Early Stopping
+# 3) Unified Training Plan with Validation Step for scvi Early Stopping
 ###############################################################################
 class UnifiedTrainingPlan(PyroTrainingPlan):
     """
-    Training plan that includes classification, reconstruction losses,
+    Training plan that includes margin, classification, reconstruction losses,
     KL warmup, plus a validation_step that logs 'elbo_validation' so scvi's
     early stopping can monitor it.
     """
@@ -538,7 +589,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def __init__(
         self,
         module: TCRIModule,
+        margin_scale: float = 0.0,
+        margin_value: float = 2.0,
         n_steps_kl_warmup: int = 1000,
+        adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 5,
         optimizer_config: dict = None,
@@ -557,6 +611,9 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
 
         self.n_steps_kl_warmup = n_steps_kl_warmup
+        self.margin_scale = margin_scale
+        self.margin_value = margin_value
+        self.adaptive_margin = adaptive_margin
         self.reconstruction_loss_scale = reconstruction_loss_scale
         self._my_global_step = 0
         self.class_weights = class_weights
@@ -596,6 +653,19 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
         else:
             loss_dict["loss"] = loss_dict["loss"].to(device)
+
+        # ── Optional margin penalty (default off) ────────────────
+        if self.margin_scale > 0.0:
+            z_batch = self.module.get_latent(batch).to(device)
+            idx = batch["indices"].long().view(-1).to(device)
+            target_phen = self.module._target_phenotypes[idx].to(device)
+            margin_loss_val = pairwise_centroid_margin_loss(
+                z_batch, target_phen,
+                margin=self.margin_value,
+                adaptive_margin=self.adaptive_margin,
+            ).to(device)
+            loss_dict["loss"] += self.margin_scale * margin_loss_val
+            loss_dict["margin_loss"] = margin_loss_val.item()
 
         # ── Diagnostics (no gradient contribution) ───────────────
         with torch.no_grad():
@@ -658,7 +728,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
 
 ###############################################################################
-# 3) High-Level scVI Model with scvi Early Stopping
+# 4) High-Level scVI Model with scvi Early Stopping
 ###############################################################################
 class TCRIModel(BaseModelClass):
     @classmethod
@@ -702,12 +772,9 @@ class TCRIModel(BaseModelClass):
         adata: AnnData,
         n_latent: int = 128,
         n_hidden: int = 128,
-        n_layers: int = 3,
-        classifier_n_layers: int = 3,
         global_scale: float = 5.0,
         local_scale: float = 3.0,
-        prior_temperature: float = 1.0,
-        guide_temperature: float = 1.0,
+        sharp_temperature: float = 1.0,
         use_enumeration: bool = False,
         patience: int = 300,
         classifier_hidden: int = 128,
@@ -733,6 +800,8 @@ class TCRIModel(BaseModelClass):
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
             raise ValueError("gate_prob must be in [0,1] or None")
+        # (remove the self.module.gate_prob = gate_prob line)
+
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
@@ -789,13 +858,10 @@ class TCRIModel(BaseModelClass):
             P=P,
             n_batch=n_batch,
             n_hidden=n_hidden,
-            n_layers=n_layers,
-            classifier_n_layers=classifier_n_layers,
             global_scale=global_scale,
             local_scale=local_scale,
             mixture_concentration=torch.from_numpy(self.centers),
-            prior_temperature=prior_temperature,
-            guide_temperature=guide_temperature,
+            sharp_temperature=sharp_temperature,
             use_enumeration=use_enumeration,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
@@ -826,7 +892,7 @@ class TCRIModel(BaseModelClass):
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
             f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
-            f"prior_temperature={prior_temperature}, guide_temperature={guide_temperature}."
+            f"sharp_temperature={sharp_temperature}."
         )
 
     def train(
@@ -834,6 +900,9 @@ class TCRIModel(BaseModelClass):
         max_epochs: int = 1000,
         batch_size: int = 1000,
         lr: float = 1e-3,
+        margin_scale: float = 0.0,
+        margin_value: float = 0.0,
+        adaptive_margin: bool = False,
         reconstruction_loss_scale: float = 1e-3,
         n_steps_kl_warmup: int = 2000,
         **kwargs,
@@ -854,7 +923,10 @@ class TCRIModel(BaseModelClass):
 
         plan = UnifiedTrainingPlan(
             module=self.module,
+            margin_scale=margin_scale,
+            margin_value=margin_value,
             n_steps_kl_warmup=n_steps_kl_warmup,
+            adaptive_margin=adaptive_margin,
             reconstruction_loss_scale=reconstruction_loss_scale,
             class_weights=self.class_weights,
             optimizer_config={
@@ -902,15 +974,16 @@ class TCRIModel(BaseModelClass):
 
     @torch.no_grad()
     def get_cell_phenotype_probs(
-        self, adata=None, batch_size: int = 256, eps: float = 1e-8
+        self, adata=None, batch_size: int = 256, eps: float = 1e-8, gate_prob: Optional[float] = None
     ) -> np.ndarray:
         """
-        Computes the cell-level phenotype probabilities in the same way as training.
-
-        If ``self.module.gate_prob`` is set (i.e. ``use_gate`` is True), uses:
-            local_logits = gate_prob * cls_logits + (1 - gate_prob) * log(prior)
-        Otherwise uses the additive (Bayesian product) rule:
-            local_logits = cls_logits + log(prior)
+        Computes the cell-level phenotype probabilities in the same way as training,
+        using:
+        cls_logits = classifier(z_loc) + phenotype_decoder(z_loc)
+        if class weights exist, add them
+        gate_probs = sigmoid(gate_nn(z_loc))
+        local_logits = gate_probs*cls_logits + (1 - gate_probs)*log(prior)
+        softmax(local_logits) -> probabilities
 
         Parameters
         ----------
@@ -953,11 +1026,16 @@ class TCRIModel(BaseModelClass):
             # ----- 1) Compute classifier logits (same as training) -----
             cls_logits = self.module.classifier(z_loc)
 
+            gate_probs = torch.full(
+                (this_batch_size, self.module.P), gate_prob, device=x.device
+            )
+
             prior_log = torch.log(clone_cov_posterior + eps)
-            if self.module.use_gate:
-                local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-            else:
+            if gate_prob is None:
+                # additive (Bayesian product) rule
                 local_logits = cls_logits + prior_log
+            else:
+                local_logits = gate_prob * cls_logits + (1.0 - gate_prob) * prior_log
 
             probs = F.softmax(local_logits, dim=-1) 
 
