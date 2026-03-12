@@ -917,4 +917,4 @@ def _compute_logits_and_prior(model, adata, batch_size=256, eps=1e-8):
         start += n
 
     return (torch.cat(logits_buf).numpy().astype("float32"),
-            torch.cat(prior_buf).numpy().astype("float32"))ß
+            torch.cat(prior_buf).numpy().astype("float32"))
