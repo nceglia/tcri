@@ -87,6 +87,100 @@ tcri_colors = [
 
 sns.set_palette(sns.color_palette(tcri_colors))
 
+from ..metrics._metrics import mi_compare as mi_compare_tl
+from ..utils._utils import auc_and_label_permutation, bootstrap_auc, stars
+
+
+def mi_compare(adata, groupby, groups=None, treatment=None, n_samples=50,
+               point="median", palette=None, patient_col=None,
+               clone_col=None, covariate_col=None,
+               ax=None, save=None, seed=42, verbose=True, **mi_kwargs):
+
+    result = mi_compare_tl(
+        adata, groupby=groupby, groups=groups, treatment=treatment,
+        n_samples=n_samples, patient_col=patient_col,
+        clone_col=clone_col, covariate_col=covariate_col,
+        verbose=verbose, **mi_kwargs
+    )
+
+    summary = result["summary"]
+    pairs = result["pairs"]
+    covariates = result["params"]["covariates"]
+
+    n_pairs = len(pairs)
+    n_covs = len(covariates)
+    fig_needed = ax is None
+    if fig_needed:
+        fig, axes = plt.subplots(n_pairs, n_covs,
+                                  figsize=(6 * n_covs, 5 * n_pairs),
+                                  squeeze=False)
+    else:
+        axes = np.atleast_2d(ax)
+
+    all_stats = {}
+    rng = np.random.default_rng(seed)
+
+    for i, (g0, g1) in enumerate(pairs):
+        if palette is None:
+            pal = {g0: tcri_colors[0], g1: tcri_colors[1]}
+        else:
+            pal = palette
+
+        for j, cov in enumerate(covariates):
+            cur_ax = axes[i, j]
+            pat = summary[
+                (summary["covariate"] == cov) &
+                (summary["group"].isin([g0, g1]))
+            ].copy()
+            pat["point"] = pat[point]
+
+            g0_vals = pat.loc[pat["group"] == g0, "point"].values
+            g1_vals = pat.loc[pat["group"] == g1, "point"].values
+
+            _, p_mwu = mannwhitneyu(g0_vals, g1_vals, alternative="two-sided")
+            auc, p_perm, _, perm_mode = auc_and_label_permutation(
+                pat["point"].values, pat["group"].values, pos_label=g1)
+            auc_lo, auc_hi = bootstrap_auc(
+                pat["point"].values, pat["group"].values, pos_label=g1)
+
+            sns.boxplot(data=pat, x="group", y="point", order=[g0, g1],
+                        width=0.45, showcaps=True, showfliers=False,
+                        boxprops=dict(facecolor="white", alpha=0.9),
+                        medianprops=dict(color="k", lw=2), ax=cur_ax)
+
+            for x_pos, grp in enumerate([g0, g1]):
+                sub = pat[pat["group"] == grp].sort_values("point").reset_index(drop=True)
+                jitter = rng.uniform(-0.18, 0.18, len(sub))
+                for k, row in sub.iterrows():
+                    xj = x_pos + jitter[k]
+                    cur_ax.plot([xj, xj], [row["lo"], row["hi"]],
+                                color=pal[grp], lw=1.2, alpha=0.45)
+                    cur_ax.scatter(xj, row["point"], color=pal[grp], s=65, zorder=3)
+                    cur_ax.text(xj, row["hi"] + 0.004, row["patient"], fontsize=6,
+                                ha="center", va="bottom", color=pal[grp])
+
+            cur_ax.set_xlabel("")
+            cur_ax.set_ylabel(f"{cov} TCRi NMI")
+            cur_ax.set_title(
+                f"{cov} NMI: {g0} vs {g1}\n"
+                f"MWU p={p_mwu:.3g}  |  AUROC={auc:.2f} [{auc_lo:.2f}, {auc_hi:.2f}]"
+                f"  |  label-perm p={p_perm:.3g} ({perm_mode})",
+                fontweight="bold", fontsize=9)
+            sns.despine(ax=cur_ax)
+
+            all_stats[(g0, g1, cov)] = {
+                "p_mwu": p_mwu, "auc": auc,
+                "auc_ci": (auc_lo, auc_hi),
+                "p_perm": p_perm, "perm_mode": perm_mode,
+            }
+
+    if fig_needed:
+        fig.tight_layout()
+        if save is not None:
+            fig.savefig(save, dpi=200, bbox_inches="tight")
+
+    return result, all_stats
+
 def compare_phenotypes(adata, variable1, variable2):
     df = adata.obs[[variable1,variable2]]
     df=pd.crosstab(df[variable1],df[variable2],normalize='index')
