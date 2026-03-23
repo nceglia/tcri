@@ -68,15 +68,6 @@ def _ascii_hist(samples, bins=25, width=40) -> str:
     return "\n".join(lines)
 # ╰─────────────────
 
-# # ---------- ASCII histogram (quick visual check) --------------------
-# def _ascii_hist(v, bins=25, width=40):
-#     h, edges = np.histogram(v, bins=bins)
-#     top = h.max()
-#     out=[]
-#     for c,e0,e1 in zip(h, edges[:-1], edges[1:]):
-#         bar = "█"*int(width*c/top) if top else ""
-#         out.append(f"{e0:7.3f}–{e1:7.3f} | {bar}")
-#     return "\n".join(out)
 
 # ╭─ MI helper (single source of truth) ─────────────────────────────────────╮
 def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> float:
@@ -97,6 +88,71 @@ def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> fl
     return mi/denom if denom > 0 else 0.0
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
+
+def mi_compare(adata, groupby, groups=None, treatment=None, n_samples=50,
+               patient_col=None, clone_col=None, covariate_col=None,
+               verbose=True, **mi_kwargs):
+    meta = adata.uns["tcri_metadata"]
+    patient_col = patient_col or meta["batch_col"]
+    clone_col = clone_col or meta["clone_col"]
+    covariate_col = covariate_col or meta["covariate_col"]
+
+    covariates = treatment
+    if covariates is None:
+        covariates = adata.obs[covariate_col].cat.categories.tolist()
+    elif isinstance(covariates, str):
+        covariates = [covariates]
+
+    # resolve groups into list of 2-tuples
+    unique_groups = adata.obs[groupby].dropna().unique().tolist()
+    if groups is None:
+        pairs = list(itertools.combinations(sorted(unique_groups), 2))
+    elif isinstance(groups[0], (list, tuple)):
+        pairs = [tuple(g) for g in groups]
+    else:
+        pairs = list(itertools.combinations(groups, 2))
+
+    # compute patient-level MI samples
+    keep_groups = set(g for pair in pairs for g in pair)
+    records = []
+    patients = adata.obs[patient_col].unique()
+    for p in tqdm(patients, disable=not verbose, desc="MI per patient"):
+        pmask = adata.obs[patient_col] == p
+        group_val = adata.obs.loc[pmask, groupby].iloc[0]
+        if group_val not in keep_groups:
+            continue
+        clones = adata.obs.loc[pmask, clone_col].unique().tolist()
+        for cov in covariates:
+            try:
+                samples = mutual_information(
+                    adata, cov, n_samples=n_samples,
+                    clones=clones, verbose=False, **mi_kwargs
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"  Skip {p}/{cov}: {e}")
+                continue
+            for s in np.atleast_1d(samples):
+                records.append({"patient": p, "group": group_val,
+                                "covariate": cov, "MI": float(s)})
+
+    result = pd.DataFrame(records)
+    summary = (
+        result.groupby(["patient", "group", "covariate"])["MI"]
+        .agg(mean="mean", median="median",
+             lo=lambda x: np.quantile(x, 0.025),
+             hi=lambda x: np.quantile(x, 0.975),
+             sd="std", n="size")
+        .reset_index()
+    )
+
+    return {
+        "samples": result,
+        "summary": summary,
+        "pairs": pairs,
+        "params": {"groupby": groupby, "covariates": covariates,
+                   "n_samples": n_samples, "patient_col": patient_col},
+    }
 
 
 def dkl(p, q):
