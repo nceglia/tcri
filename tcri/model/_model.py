@@ -442,11 +442,9 @@ class TCRIModule(PyroBaseModuleClass):
         batch_size = x.shape[0]
 
         with pyro.plate("clonotypes", self.c_count):
-            # Start from a scaled version of the prior.
             init_mat_c = self.clone_phen_prior * self.guide_init_scale + 1e-3
             init_mat_c = init_mat_c.to(x.device)
             
-            # Learnable raw parameters for q(p_c)
             if "q_p_c_raw" not in pyro.get_param_store():
                 q_p_c_raw = pyro.param(
                     "q_p_c_raw",
@@ -460,21 +458,14 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_c.any():
                 q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
 
-            # Apply a sharpening transformation controlled by guide_temperature.
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
-            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)
-            q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-
             if self.learnable_guide_scale:
-                log_scale_c = pyro.param(
-                    "log_scale_c",
-                    torch.full((self.c_count,), np.log(self.global_scale), device=x.device),
-                )
-                scale_c = torch.exp(log_scale_c.clamp(-4, 10)).unsqueeze(-1)
+                conc_c_guide = torch.clamp(q_p_c_raw, min=1e-3)
             else:
-                scale_c = self.global_scale
+                q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
+                q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)
+                q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
+                conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
 
-            conc_c_guide = torch.clamp(scale_c * q_p_c_sharp, min=1e-3)
             conc_c_guide = torch.where(torch.isfinite(conc_c_guide), conc_c_guide, torch.ones_like(conc_c_guide))
             with poutine.scale(scale=self.hierarchical_kl_weight):
                 pyro.sample("p_c", dist.Dirichlet(conc_c_guide, validate_args=False))
@@ -486,7 +477,7 @@ class TCRIModule(PyroBaseModuleClass):
             if "q_p_ct_raw" not in pyro.get_param_store():
                 q_p_ct_raw = pyro.param(
                     "q_p_ct_raw",
-                    init_mat.clone().detach(),  # Make sure it's not a leaf
+                    init_mat.clone().detach(),
                     constraint=dist.constraints.positive,
                 )
             else:
@@ -496,20 +487,14 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_ct.any():
                 q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
 
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
-            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-
             if self.learnable_guide_scale:
-                log_scale_ct = pyro.param(
-                    "log_scale_ct",
-                    torch.full((self.ct_count,), np.log(self.local_scale), device=x.device),
-                )
-                scale_ct = torch.exp(log_scale_ct.clamp(-4, 10)).unsqueeze(-1)
+                conc_ct_guide = torch.clamp(q_p_ct_raw, min=1e-3)
             else:
-                scale_ct = self.local_scale
+                q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
+                q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
+                q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
+                conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
 
-            conc_ct_guide = torch.clamp(scale_ct * q_p_ct_sharp, min=1e-3)
             conc_ct_guide = torch.where(torch.isfinite(conc_ct_guide), conc_ct_guide, torch.ones_like(conc_ct_guide))
             with poutine.scale(scale=self.hierarchical_kl_weight):
                 pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide, validate_args=False))
@@ -541,6 +526,8 @@ class TCRIModule(PyroBaseModuleClass):
         if bad.any():
             n_phen = q_p_ct_raw.shape[1]
             q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / n_phen, q_p_ct_raw)
+        if self.learnable_guide_scale:
+            return q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         if self.guide_temperature != 1.0:
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
@@ -553,10 +540,18 @@ class TCRIModule(PyroBaseModuleClass):
         from pyro import get_param_store
         ps = get_param_store()
         out = {}
-        if "log_scale_c" in ps:
-            out["scale_c"] = torch.exp(ps["log_scale_c"]).cpu().numpy()
-        if "log_scale_ct" in ps:
-            out["scale_ct"] = torch.exp(ps["log_scale_ct"]).cpu().numpy()
+        if self.learnable_guide_scale:
+            if "q_p_c_raw" in ps:
+                out["scale_c"] = ps["q_p_c_raw"].sum(dim=1).cpu().numpy()
+            if "q_p_ct_raw" in ps:
+                raw = ps["q_p_ct_raw"].cpu().numpy()
+                out["scale_ct"] = raw.sum(axis=1)
+                out["conc_ct"] = raw
+        else:
+            if "log_scale_c" in ps:
+                out["scale_c"] = torch.exp(ps["log_scale_c"]).cpu().numpy()
+            if "log_scale_ct" in ps:
+                out["scale_ct"] = torch.exp(ps["log_scale_ct"]).cpu().numpy()
         return out
 
 
