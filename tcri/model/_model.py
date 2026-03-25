@@ -246,9 +246,11 @@ class TCRIModule(PyroBaseModuleClass):
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         learnable_guide_scale: bool = False,
+        hierarchical_kl_weight: float = 1.0,
     ):
         super().__init__()
         self.learnable_guide_scale = learnable_guide_scale
+        self.hierarchical_kl_weight = hierarchical_kl_weight
         self.n_input = n_input
         self.n_latent = n_latent
         self.P = P
@@ -384,21 +386,19 @@ class TCRIModule(PyroBaseModuleClass):
         with pyro.plate("clonotypes", self.c_count):
             B = self.mixture_concentration.shape[0]
             mixture_weights = torch.ones(B, device=x.device) / B
-            # Expand mixture parameters to add a leading dimension for clonotypes.
-            # expanded_conc will have shape (self.c_count, B, K)
             expanded_conc = self.mixture_concentration.unsqueeze(0).expand(
                 self.c_count, -1, -1
             )
-            # expanded_weights will have shape (self.c_count, B)
             expanded_weights = mixture_weights.unsqueeze(0).expand(self.c_count, -1)
             mixture_dist = MixtureDirichlet(expanded_weights, expanded_conc)
-            p_c = pyro.sample("p_c", mixture_dist)
-            # print("p_c shape:", p_c.shape)
+            with poutine.scale(scale=self.hierarchical_kl_weight):
+                p_c = pyro.sample("p_c", mixture_dist)
 
         with pyro.plate("ct_plate", self.ct_count):
             base_p = p_c[self.ct_to_c] + self.eps
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
-            p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
+            with poutine.scale(scale=self.hierarchical_kl_weight):
+                p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
 
         # Encoder
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
@@ -470,12 +470,14 @@ class TCRIModule(PyroBaseModuleClass):
                     "log_scale_c",
                     torch.full((self.c_count,), np.log(self.global_scale), device=x.device),
                 )
-                scale_c = torch.exp(log_scale_c).unsqueeze(-1)
+                scale_c = torch.exp(log_scale_c.clamp(-4, 10)).unsqueeze(-1)
             else:
                 scale_c = self.global_scale
 
             conc_c_guide = torch.clamp(scale_c * q_p_c_sharp, min=1e-3)
-            pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
+            conc_c_guide = torch.where(torch.isfinite(conc_c_guide), conc_c_guide, torch.ones_like(conc_c_guide))
+            with poutine.scale(scale=self.hierarchical_kl_weight):
+                pyro.sample("p_c", dist.Dirichlet(conc_c_guide, validate_args=False))
 
         with pyro.plate("ct_plate", self.ct_count):
             init_mat = self.clone_phen_prior[self.ct_to_c, :]
@@ -503,12 +505,14 @@ class TCRIModule(PyroBaseModuleClass):
                     "log_scale_ct",
                     torch.full((self.ct_count,), np.log(self.local_scale), device=x.device),
                 )
-                scale_ct = torch.exp(log_scale_ct).unsqueeze(-1)
+                scale_ct = torch.exp(log_scale_ct.clamp(-4, 10)).unsqueeze(-1)
             else:
                 scale_ct = self.local_scale
 
             conc_ct_guide = torch.clamp(scale_ct * q_p_ct_sharp, min=1e-3)
-            pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
+            conc_ct_guide = torch.where(torch.isfinite(conc_ct_guide), conc_ct_guide, torch.ones_like(conc_ct_guide))
+            with poutine.scale(scale=self.hierarchical_kl_weight):
+                pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide, validate_args=False))
 
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
         z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
@@ -751,6 +755,7 @@ class TCRIModel(BaseModelClass):
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         learnable_guide_scale: bool = False,
+        hierarchical_kl_weight: float = 1.0,
         **kwargs,
     ):
         super().__init__(adata)
@@ -838,6 +843,7 @@ class TCRIModel(BaseModelClass):
             guide_init_scale=guide_init_scale,
             classifier_temperature=classifier_temperature,
             learnable_guide_scale=learnable_guide_scale,
+            hierarchical_kl_weight=hierarchical_kl_weight,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
