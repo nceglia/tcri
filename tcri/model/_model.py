@@ -245,8 +245,10 @@ class TCRIModule(PyroBaseModuleClass):
         kl_weight_max: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
+        learnable_guide_scale: bool = False,
     ):
         super().__init__()
+        self.learnable_guide_scale = learnable_guide_scale
         self.n_input = n_input
         self.n_latent = n_latent
         self.P = P
@@ -460,11 +462,19 @@ class TCRIModule(PyroBaseModuleClass):
 
             # Apply a sharpening transformation controlled by guide_temperature.
             q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
-            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
+            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
-            
-            # Sample p_c from a single learned Dirichlet per clonotype.
+
+            if self.learnable_guide_scale:
+                log_scale_c = pyro.param(
+                    "log_scale_c",
+                    torch.full((self.c_count,), np.log(self.global_scale), device=x.device),
+                )
+                scale_c = torch.exp(log_scale_c).unsqueeze(-1)
+            else:
+                scale_c = self.global_scale
+
+            conc_c_guide = torch.clamp(scale_c * q_p_c_sharp, min=1e-3)
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
 
         with pyro.plate("ct_plate", self.ct_count):
@@ -487,7 +497,17 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
             q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
+
+            if self.learnable_guide_scale:
+                log_scale_ct = pyro.param(
+                    "log_scale_ct",
+                    torch.full((self.ct_count,), np.log(self.local_scale), device=x.device),
+                )
+                scale_ct = torch.exp(log_scale_ct).unsqueeze(-1)
+            else:
+                scale_ct = self.local_scale
+
+            conc_ct_guide = torch.clamp(scale_ct * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
@@ -523,6 +543,17 @@ class TCRIModule(PyroBaseModuleClass):
         else:
             q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
         return q_p_ct_sharp
+
+    @torch.no_grad()
+    def get_learned_scales(self):
+        from pyro import get_param_store
+        ps = get_param_store()
+        out = {}
+        if "log_scale_c" in ps:
+            out["scale_c"] = torch.exp(ps["log_scale_c"]).cpu().numpy()
+        if "log_scale_ct" in ps:
+            out["scale_ct"] = torch.exp(ps["log_scale_ct"]).cpu().numpy()
+        return out
 
 
 ###############################################################################
@@ -719,6 +750,7 @@ class TCRIModel(BaseModelClass):
         kl_weight_max: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
+        learnable_guide_scale: bool = False,
         **kwargs,
     ):
         super().__init__(adata)
@@ -805,6 +837,7 @@ class TCRIModel(BaseModelClass):
             n_pseudo_obs=n_pseudo_obs,
             guide_init_scale=guide_init_scale,
             classifier_temperature=classifier_temperature,
+            learnable_guide_scale=learnable_guide_scale,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
@@ -899,6 +932,10 @@ class TCRIModel(BaseModelClass):
     @torch.no_grad()
     def get_p_ct(self):
         return self.module.get_p_ct().cpu().numpy()
+
+    @torch.no_grad()
+    def get_learned_scales(self):
+        return self.module.get_learned_scales()
 
     @torch.no_grad()
     def get_cell_phenotype_probs(
