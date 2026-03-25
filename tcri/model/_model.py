@@ -319,6 +319,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.register_buffer("c_array", torch.empty(0, dtype=torch.long))
         self.register_buffer("ct_array", torch.empty(0, dtype=torch.long))
         self.register_buffer("ct_to_cov", torch.empty(0, dtype=torch.long))
+        self.register_buffer("ct_phen_prior", torch.empty(0))
         self.c_count = 0
         self.ct_count = 0
         self.n_cells = 0
@@ -342,6 +343,7 @@ class TCRIModule(PyroBaseModuleClass):
         ct_array_for_cells: torch.Tensor,
         target_phenotypes: torch.Tensor,
         ct_to_cov_array: torch.Tensor = None,
+        ct_phen_prior_mat: torch.Tensor = None,
     ):
         self.c_count = c_count
         self.ct_count = ct_count
@@ -359,6 +361,13 @@ class TCRIModule(PyroBaseModuleClass):
         self.register_buffer("c_array", c_array_for_cells)
         self.register_buffer("ct_array", ct_array_for_cells)
         self.register_buffer("_target_phenotypes", target_phenotypes)
+
+        if ct_phen_prior_mat is not None:
+            ct_prior = ct_phen_prior_mat + self.eps
+            ct_prior = ct_prior / ct_prior.sum(dim=1, keepdim=True)
+            self.register_buffer("ct_phen_prior", ct_prior)
+        else:
+            self.register_buffer("ct_phen_prior", prior_mat[ct_to_c_array])
 
         if ct_to_cov_array is not None:
             self.register_buffer("ct_to_cov", ct_to_cov_array)
@@ -471,8 +480,7 @@ class TCRIModule(PyroBaseModuleClass):
                 pyro.sample("p_c", dist.Dirichlet(conc_c_guide, validate_args=False))
 
         with pyro.plate("ct_plate", self.ct_count):
-            init_mat = self.clone_phen_prior[self.ct_to_c, :]
-            init_mat = init_mat * self.guide_init_scale + 1e-3
+            init_mat = self.ct_phen_prior * self.guide_init_scale + 1e-3
             init_mat = init_mat.to(x.device)
             if "q_p_ct_raw" not in pyro.get_param_store():
                 q_p_ct_raw = pyro.param(
@@ -794,6 +802,13 @@ class TCRIModel(BaseModelClass):
         for i in range(len(c_array_np)):
             ct_array_np[i] = ct_map[(c_array_np[i], cov_array_np[i])]
 
+        ct2p_mat = np.zeros((ct_count, P), dtype=np.float32)
+        for i in range(len(ct_array_np)):
+            ct2p_mat[ct_array_np[i], pvals_np[i]] += 1
+        ct2p_mat += 1e-6
+        ct2p_mat = ct2p_mat / ct2p_mat.sum(axis=1, keepdims=True)
+        self.ct2p_mat = ct2p_mat
+
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
 
@@ -842,6 +857,7 @@ class TCRIModel(BaseModelClass):
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
+        ct2p_torch = torch.tensor(ct2p_mat, dtype=torch.float32)
         c_array_torch = torch.tensor(c_array_np, dtype=torch.long)
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
@@ -856,6 +872,7 @@ class TCRIModel(BaseModelClass):
             ct_array_for_cells=ct_array_torch,
             target_phenotypes=target_codes,
             ct_to_cov_array=ct_to_cov_torch,
+            ct_phen_prior_mat=ct2p_torch,
         )
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
