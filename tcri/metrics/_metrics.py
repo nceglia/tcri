@@ -15,6 +15,7 @@ import numpy as np, pandas as pd, torch, umap
 from tqdm.auto import tqdm
 from scvi import REGISTRY_KEYS
 import itertools
+import collections
 # Local imports
 from ..preprocessing._preprocessing import joint_distribution,joint_distribution_posterior
 
