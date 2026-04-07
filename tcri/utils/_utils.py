@@ -1833,9 +1833,8 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
     for i in range(n_reps):
         for phenotype in phenotypes:
             node = plot_nodes[i][phenotype]
-            top = node.y + node.value
-            if top > data_ymax:
-                data_ymax = top
+            if node.max_y > data_ymax:
+                data_ymax = node.max_y
 
     if 'xlim' in kwargs:
         ax.set_xlim(kwargs['xlim'])
