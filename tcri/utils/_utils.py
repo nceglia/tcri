@@ -1819,8 +1819,8 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
         fig, ax = plt.subplots(figsize = kwargs['figsize'])
     else:
         fig, ax = plt.subplots(figsize = (9, 5))
-        
-    
+
+
     for i in range(n_reps):
         for phenotype in phenotypes:
             plot_nodes[i][phenotype].plot(ax = ax)
@@ -1828,18 +1828,26 @@ def plot_pheno_sankey(phenotypes, cell_repertoires, clones = None, **kwargs):
             for origin_phenotype in phenotypes:
                 for dest_phenotype in phenotypes:
                     origin_nodes[i][(origin_phenotype, dest_phenotype)].plot_node_connection(destination_nodes[i][(origin_phenotype, dest_phenotype)], ax = ax, alpha = 0.5)
-    
+
+    data_ymax = 0
+    for i in range(n_reps):
+        for phenotype in phenotypes:
+            node = plot_nodes[i][phenotype]
+            top = node.y + node.value
+            if top > data_ymax:
+                data_ymax = top
+
     if 'xlim' in kwargs:
         ax.set_xlim(kwargs['xlim'])
     if 'ylim' in kwargs:
         ax.set_ylim(kwargs['ylim'])
     else:
         if kwargs.get('normalize', True):
-            ax.set_ylim([0, min(ax.get_ylim()[1], 1)])
+            ax.set_ylim([0, min(data_ymax * 1.02, 1)])
         else:
-            ax.set_ylim([0, ax.get_ylim()[1]])
-        
-    
+            ax.set_ylim([0, data_ymax * 1.02])
+
+
     if kwargs.get('show_legend', True):
         ax.legend([plot_nodes[0][phenotype].patch for phenotype in phenotypes], list(phenotypes),frameon=True, fontsize=fontsize_dict['legend_fontsize'],bbox_to_anchor=(1.05, 1), loc='upper left')
 
