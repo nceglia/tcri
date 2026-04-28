@@ -5,6 +5,13 @@ from anndata import AnnData
 from scipy import sparse
 import torch
 
+
+def pytest_configure(config):
+    """Deterministic RNG for all tests (Notion T13)."""
+    np.random.seed(42)
+    torch.manual_seed(42)
+
+
 @pytest.fixture
 def mock_adata():
     """Create a mock AnnData object with the necessary structure for testing."""
@@ -50,7 +57,10 @@ def mock_adata():
     # Add required model outputs
     n_ct_pairs = 40  # 20 clones * 2 timepoints
     n_phenotypes = 3
-    adata.uns["tcri_p_ct"] = torch.randn(n_ct_pairs, n_phenotypes)
+    # Valid simplex rows (joint_distribution applies log-softmax; randn breaks this)
+    adata.uns["tcri_p_ct"] = np.random.dirichlet(
+        np.ones(n_phenotypes), size=n_ct_pairs
+    ).astype(np.float32)
     adata.uns["tcri_ct_to_cov"] = torch.tensor([0, 1] * 20)  # Alternating timepoints
     adata.uns["tcri_ct_to_c"] = torch.tensor([i for i in range(20)] * 2)  # Clone indices
     adata.uns["tcri_covariate_categories"] = ['T1', 'T2']
