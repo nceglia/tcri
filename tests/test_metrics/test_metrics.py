@@ -1,96 +1,88 @@
-import pytest
 import numpy as np
+import pandas as pd
+import pytest
+
 from tcri.metrics._metrics import (
     clonotypic_entropy,
     phenotypic_entropy,
     mutual_information,
-    clonality
+    clonality,
 )
 
-@pytest.mark.xfail(strict=False, reason="X_tcri_logits not populated by mock_adata fixture; tracked in T2 fixture alignment")
-def test_clonotypic_entropy(mock_adata, mock_joint_distribution):
-    """Test clonotypic_entropy function."""
-    # Test with mock data
-    entropy_val = clonotypic_entropy(
-        mock_adata,
-        covariate="T1",
-        phenotype="A",
-        temperature=1.0
-    )
-    
-    # Check that entropy is between 0 and 1 (normalized)
-    assert 0 <= entropy_val <= 1
-    
-    # Test with different temperature
-    entropy_val_temp = clonotypic_entropy(
-        mock_adata,
-        covariate="T1",
-        phenotype="A",
-        temperature=0.5
-    )
-    assert entropy_val_temp != entropy_val  # Should be different with different temperature
 
-@pytest.mark.xfail(strict=False, reason="phenotypic_entropy API drifted; mock fixture passes removed clonotype kwarg; tracked in T2")
-def test_phenotypic_entropy(mock_adata, mock_joint_distribution):
-    """Test phenotypic_entropy function."""
-    # Test with mock data
-    entropy_val = phenotypic_entropy(
-        mock_adata,
-        covariate="T1",
-        clonotype="clone_0",
-        temperature=1.0
-    )
-    
-    # Check that entropy is between 0 and 1 (normalized)
-    assert 0 <= entropy_val <= 1
-    
-    # Test with different temperature
-    entropy_val_temp = phenotypic_entropy(
-        mock_adata,
-        covariate="T1",
-        clonotype="clone_0",
-        temperature=0.5
-    )
-    assert entropy_val_temp != entropy_val  # Should be different with different temperature
+def test_clonotypic_entropy(trained_model):
+    _, adata = trained_model
+    covariate = adata.uns["tcri_covariate_categories"][0]
+    phenotypes = adata.uns["tcri_phenotype_categories"]
 
-@pytest.mark.xfail(strict=False, reason="X_tcri_logits not populated by mock_adata fixture; tracked in T2 fixture alignment")
-def test_mutual_information(mock_adata, mock_joint_distribution):
-    """Test mutual_information function."""
-    # Test with mock data
-    mi_val = mutual_information(
-        mock_adata,
-        covariate="T1",
-        temperature=1.0
+    s = clonotypic_entropy(adata, covariate, n_samples=20)
+    assert isinstance(s, pd.Series)
+    assert list(s.index) == list(phenotypes)
+    vals = s.to_numpy()
+    assert np.all(np.isfinite(vals))
+    assert np.all(vals >= 0)
+
+    arr = clonotypic_entropy(
+        adata, covariate, point_estimate=False, n_samples=5
     )
-    
-    # Check that MI is non-negative
-    assert mi_val >= 0
-    
-    # Test with different temperature
-    mi_val_temp = mutual_information(
-        mock_adata,
-        covariate="T1",
-        temperature=0.5
+    assert isinstance(arr, np.ndarray)
+    assert arr.shape == (5, len(phenotypes))
+    assert np.all(np.isfinite(arr))
+    assert np.all(arr >= 0)
+
+    with pytest.raises(ValueError):
+        clonotypic_entropy(adata, covariate, n_samples=0)
+
+
+def test_phenotypic_entropy(trained_model):
+    _, adata = trained_model
+    covariate = adata.uns["tcri_covariate_categories"][0]
+
+    meta = adata.uns["tcri_metadata"]
+    expected_clones = (
+        adata.obs.loc[adata.obs[meta["covariate_col"]] == covariate, meta["clone_col"]]
+        .unique()
+        .tolist()
     )
-    assert mi_val_temp != mi_val  # Should be different with different temperature
-    
-    # Test with weighted=True
-    mi_val_weighted = mutual_information(
-        mock_adata,
-        covariate="T1",
-        temperature=1.0,
-        weighted=True
+
+    s = phenotypic_entropy(adata, covariate, n_samples=20)
+    assert isinstance(s, pd.Series)
+    assert set(s.index) == set(expected_clones)
+    vals = s.to_numpy()
+    assert np.all(np.isfinite(vals))
+    assert np.all(vals >= 0)
+
+    arr = phenotypic_entropy(
+        adata, covariate, point_estimate=False, n_samples=5
     )
-    assert mi_val_weighted != mi_val  # Should be different when weighted
+    assert isinstance(arr, np.ndarray)
+    assert arr.shape == (5, len(expected_clones))
+    assert np.all(np.isfinite(arr))
+    assert np.all(arr >= 0)
+
+    with pytest.raises(ValueError):
+        phenotypic_entropy(adata, covariate, n_samples=0)
+
+
+def test_mutual_information(trained_model):
+    _, adata = trained_model
+    covariate = adata.uns["tcri_covariate_categories"][0]
+
+    mi = mutual_information(adata, covariate=covariate, temperature=1.0, verbose=False)
+    assert np.isfinite(mi)
+    assert mi >= 0
+
+    mi_alt = mutual_information(adata, covariate=covariate, temperature=0.5, verbose=False)
+    assert np.isfinite(mi_alt)
+    assert mi_alt >= 0
+    assert mi_alt != mi
+
 
 def test_clonality(mock_adata):
     """Test clonality function."""
-    # Test with mock data
     clonality_dict = clonality(mock_adata)
-    
-    # Check that clonality values are between 0 and 1
+
     for val in clonality_dict.values():
         assert 0 <= val <= 1
-    
-    # Check that we have clonality values for all phenotypes
-    assert set(clonality_dict.keys()) == set(mock_adata.uns["tcri_phenotype_categories"]) 
+
+    assert set(clonality_dict.keys()) == set(mock_adata.uns["tcri_phenotype_categories"])
