@@ -204,6 +204,13 @@ def _disable_scvi_onload_train():
             setattr(cls, "on_load", orig)
 
 
+def _pyro_load(path, map_location=None):
+    # torch>=2.6 defaults torch.load(weights_only=True), which rejects the
+    # constraint instances pyro stores. Self-produced artifacts only.
+    state = _torch.load(path, map_location=map_location, weights_only=False)
+    _pyro.get_param_store().set_state(state)
+
+
 def load_tcri_session(
     run_dir: str,
     *,
@@ -252,15 +259,15 @@ def load_tcri_session(
             _pyro.clear_param_store()
             if map_location is not None:
                 try:
-                    _pyro.get_param_store().load(pyro_file, map_location=map_location)
+                    _pyro_load(pyro_file, map_location=map_location)
                 except TypeError:
-                    _pyro.get_param_store().load(pyro_file)
+                    _pyro_load(pyro_file)
                     if map_location != "cpu":
                         device = _torch.device(map_location)
                         for k, v in list(_pyro.get_param_store().items()):
                             _pyro.get_param_store()[k] = v.to(device)
             else:
-                _pyro.get_param_store().load(pyro_file)
+                _pyro_load(pyro_file)
         except Exception as e:
             _warnings.warn(f"Could not load Pyro param store: {e}")
     
