@@ -260,11 +260,11 @@ def clonotypic_entropy(
             silent              = True,
         )
         if jd is None or jd.empty:
-            samples[i, :] = 0.0
+            samples[i, :] = np.nan
             continue
         for j, p in enumerate(phenotypes):
             if p not in jd.columns:
-                samples[i, j] = 0.0
+                samples[i, j] = np.nan
                 continue
             vec = jd[p].to_numpy(dtype=float)
             vec = np.clip(vec, 1e-15, None)
@@ -275,7 +275,7 @@ def clonotypic_entropy(
             samples[i, j] = H
 
     if point_estimate:
-        return pd.Series(samples.mean(axis=0), index=phenotypes, name=covariate)
+        return pd.Series(np.nanmean(samples, axis=0), index=phenotypes, name=covariate)
     return samples
 
 def delta_clonotypic_entropy(
@@ -473,13 +473,13 @@ def phenotypic_entropy(
             silent              = True,
         )
         if jd is None or jd.empty:
-            samples[i, :] = 0.0
+            samples[i, :] = np.nan
             continue
         n_phen = jd.shape[1]
         norm = np.log2(n_phen) if n_phen > 1 else 1.0
         for j, cl in enumerate(clones_list):
             if cl not in jd.index:
-                samples[i, j] = 0.0
+                samples[i, j] = np.nan
                 continue
             p = jd.loc[cl].to_numpy(dtype=float)
             p = np.clip(p, 1e-15, None)
@@ -487,7 +487,7 @@ def phenotypic_entropy(
             samples[i, j] = entropy(p, base=2) / norm
 
     if point_estimate:
-        return pd.Series(samples.mean(axis=0), index=clones_list, name=covariate)
+        return pd.Series(np.nanmean(samples, axis=0), index=clones_list, name=covariate)
     return samples
 
 
