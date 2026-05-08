@@ -666,7 +666,7 @@ def clonotypic_entropy_by_phenotype(
         )
         if not mask_pc.any():
             continue
-        clones = list(set(adata.obs.loc[mask_pc, "trb_unique"]))
+        clones = list(set(adata.obs.loc[mask_pc, clone_col]))
         if not clones:
             continue
         ent_series = centropy(
