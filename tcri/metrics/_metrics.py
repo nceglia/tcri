@@ -227,63 +227,56 @@ def clonotypic_entropy_base(
 def clonotypic_entropy(
     adata,
     covariate: str,
-    phenotype: str,
     *,
+    point_estimate: bool = True,
+    n_samples: int = 200,
     temperature: float = 1.0,
-    n_samples: int = 0,           # 0 → single value
-    clones: Optional[List[str]] = None,
-    weighted: bool = False,
-    normalised: bool = True,
-    base: int = 2,
-    posterior: bool = True,
     combine_with_logits: bool = True,
-    verbose: bool = True,
-    graph: bool = False,          # ASCII bar plot of posterior
-) -> Union[float, np.ndarray]:
+    _clones: Optional[List[str]] = None,
+) -> Union[pd.Series, np.ndarray]:
+    """
+    H[ P(C | P=p, T=covariate) ] for every phenotype p.
 
-    if verbose:
-        print(f"{BOLD}{MAG}🧮  Clonotypic entropy – {phenotype} @ '{covariate}'{RESET}")
-        _info("posterior",      posterior)
-        _info("weighted",       weighted)
-        _info("# samples",      n_samples)
+    Returns
+    -------
+    point_estimate=True  -> pd.Series indexed by phenotype name,
+                            values are mean H over n_samples posterior draws.
+    point_estimate=False -> np.ndarray of shape (n_samples, n_phenotypes).
+    """
+    if n_samples < 1:
+        raise ValueError("n_samples must be >= 1")
 
-    # ---- single deterministic draw ---------------------------------
-    if n_samples == 0:
-        H = clonotypic_entropy_base(
-                adata, covariate, phenotype,
-                base               = base,
-                normalised         = normalised,
-                temperature        = temperature,
-                clones             = clones,
-                weighted           = weighted,
-                posterior          = posterior,
-                combine_with_logits= combine_with_logits)
-        if verbose:
-            _ok(f"H = {H:.4f}")
-        return H
+    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    n_pheno = len(phenotypes)
+    samples = np.empty((n_samples, n_pheno), dtype=float)
 
-    # ---- Monte-Carlo sampling --------------------------------------
-    H_samp = np.empty(n_samples, dtype=float)
     for i in range(n_samples):
-        H_samp[i] = clonotypic_entropy_base(
-            adata, covariate, phenotype,
-            base               = base,
-            normalised         = normalised,
-            temperature        = temperature,
-            clones             = clones,
-            weighted           = weighted,
-            posterior          = posterior,
-            combine_with_logits= combine_with_logits)
+        jd = joint_distribution_posterior(
+            adata,
+            covariate_label     = covariate,
+            temperature         = temperature,
+            clones              = _clones,
+            combine_with_logits = combine_with_logits,
+            silent              = True,
+        )
+        if jd is None or jd.empty:
+            samples[i, :] = 0.0
+            continue
+        for j, p in enumerate(phenotypes):
+            if p not in jd.columns:
+                samples[i, j] = 0.0
+                continue
+            vec = jd[p].to_numpy(dtype=float)
+            vec = np.clip(vec, 1e-15, None)
+            vec = vec / vec.sum()
+            H = entropy(vec, base=2)
+            if len(vec) > 1:
+                H /= np.log2(len(vec))
+            samples[i, j] = H
 
-    if verbose:
-        _ok("sampling complete")
-        _info("mean ± sd",  f"{H_samp.mean():.4f} ± {H_samp.std():.4f}")
-        lo,hi = np.percentile(H_samp,[2.5,97.5])
-        _info("95 % CI",    f"[{lo:.4f}, {hi:.4f}]")
-        if graph:
-            print(f"{DIM}\nASCII histogram:\n{_ascii_hist(H_samp)}{RESET}")
-
-    return H_samp
+    if point_estimate:
+        return pd.Series(samples.mean(axis=0), index=phenotypes, name=covariate)
+    return samples
 
 def delta_clonotypic_entropy(
     adata,
@@ -433,122 +426,70 @@ def delta_entropy_table(
 
 def phenotypic_entropy(
     adata,
-    covariate              : str,
+    covariate: str,
     *,
-    clonotypes             : Optional[Union[str,List[str]]] = None,
-    base                   : int   = 2,
-    normalised             : bool  = True,
-    temperature            : float = 1.0,
-    n_samples              : int   = 0,
-    weighted               : bool  = False,
-    posterior              : bool  = True,
-    combine_with_logits    : bool  = True,
-    verbose                : bool  = True,
-    graph                  : bool  = False,
-    seed                   : Optional[int] = 42
-) -> Union[float, np.ndarray]:
+    point_estimate: bool = True,
+    n_samples: int = 200,
+    temperature: float = 1.0,
+    combine_with_logits: bool = True,
+) -> Union[pd.Series, np.ndarray]:
+    """
+    H[ P(P | C=c, T=covariate) ] for every clone c present at the covariate.
 
-    if seed is not None:
-        np.random.seed(seed)
+    Returns
+    -------
+    point_estimate=True  -> pd.Series indexed by clone name,
+                            values are mean H over n_samples posterior draws.
+    point_estimate=False -> np.ndarray of shape (n_samples, n_clones).
+    """
+    if n_samples < 1:
+        raise ValueError("n_samples must be >= 1")
 
-    # ── header ────────────────────────────────────────────────── #
-    if verbose:
-        print(f"{BOLD}{MAG}📈  Phenotypic-entropy at '{covariate}'{RESET}")
-        _info("posterior",   posterior,   False)
-        _info("n_samples",   n_samples,   False)
-        _info("normalised",  normalised,  False)
+    meta          = adata.uns["tcri_metadata"]
+    clone_col     = meta["clone_col"]
+    covariate_col = meta["covariate_col"]
 
-    # ── pull meta info ----------------------------------------- #
-    meta           = adata.uns["tcri_metadata"]
-    clone_col      = meta["clone_col"]
-    covariate_col  = meta["covariate_col"]
-
-    # determine clonotype list
-    if clonotypes is None:
-        clones_list = (
-            adata.obs.loc[adata.obs[covariate_col] == covariate, clone_col]
-            .unique()
-            .tolist()
-        )
-    elif isinstance(clonotypes, str):
-        clones_list = [clonotypes]
-    else:
-        clones_list = clonotypes
+    clones_list = (
+        adata.obs.loc[adata.obs[covariate_col] == covariate, clone_col]
+        .unique()
+        .tolist()
+    )
 
     if len(clones_list) == 0:
-        _warn("no clonotypes found – returning 0", quiet=not verbose)
-        return 0.0
+        if point_estimate:
+            return pd.Series(dtype=float, name=covariate)
+        return np.empty((n_samples, 0), dtype=float)
 
-    log_base = np.log(base)
+    n_clones = len(clones_list)
+    samples = np.empty((n_samples, n_clones), dtype=float)
 
-    # ── ONE posterior/prior draw → mean entropy across clones ── #
-    def _one_sample() -> float:
-        if posterior:
-            jd = joint_distribution_posterior(
-                    adata,
-                    covariate_label     = covariate,
-                    temperature         = temperature,
-                    clones              = clones_list,
-                    weighted            = weighted,
-                    combine_with_logits = combine_with_logits,
-                    silent              = True)
-        else:
-            jd = joint_distribution(
-                    adata,
-                    covariate_label = covariate,
-                    temperature     = temperature,
-                    n_samples       = 0,
-                    clones          = clones_list,
-                    weighted        = weighted)
-
-        if jd is None or jd.empty:
-            return 0.0
-        ent_vals = []
-        for cl in clones_list:
-            if cl not in jd.index:
-                continue
-            p   = jd.loc[cl].to_numpy(dtype=float)
-            eps = 1e-15
-            p   = p.clip(eps)
-            h   = entropy(p, base=base)
-            if normalised:
-                h /= np.log(len(p)) / log_base
-            ent_vals.append(h)
-        return float(np.mean(ent_vals)) if ent_vals else 0.0
-
-    # ── no-sampling branch ------------------------------------ #
-    if n_samples == 0:
-        val = _one_sample()
-        _ok("entropy computed", quiet=not verbose)
-        if verbose:
-            _info("value", f"{val:.4f}")
-            _fin()
-        return val
-
-    # ── Monte-Carlo sampling ---------------------------------- #
-    samples = np.empty(n_samples, dtype=float)
     for i in range(n_samples):
-        samples[i] = _one_sample()
+        jd = joint_distribution_posterior(
+            adata,
+            covariate_label     = covariate,
+            temperature         = temperature,
+            clones              = clones_list,
+            combine_with_logits = combine_with_logits,
+            silent              = True,
+        )
+        if jd is None or jd.empty:
+            samples[i, :] = 0.0
+            continue
+        n_phen = jd.shape[1]
+        norm = np.log2(n_phen) if n_phen > 1 else 1.0
+        for j, cl in enumerate(clones_list):
+            if cl not in jd.index:
+                samples[i, j] = 0.0
+                continue
+            p = jd.loc[cl].to_numpy(dtype=float)
+            p = np.clip(p, 1e-15, None)
+            p = p / p.sum()
+            samples[i, j] = entropy(p, base=2) / norm
 
-    if verbose:
-        _ok(f"generated {n_samples:,} samples")
-        _info("mean ± sd", f"{samples.mean():.4f} ± {samples.std():.4f}")
-        _info("95% CI",
-              f"[{np.percentile(samples,2.5):.4f}, "
-              f"{np.percentile(samples,97.5):.4f}]")
-        if graph:
-            print(f"{DIM}\nASCII histogram:\n{_ascii_hist(samples)}{RESET}")
-        _fin()
-
+    if point_estimate:
+        return pd.Series(samples.mean(axis=0), index=clones_list, name=covariate)
     return samples
 
-def clonotypic_entropies(adata, covariate, normalized=True, base=2, temperature=1., decimals=5, n_samples=0):
-    unique_phenotypes = adata.uns["tcri_phenotype_categories"]
-    phenotype_entropies = dict()
-    for phenotype in unique_phenotypes:
-        cent = clonotypic_entropy(adata, covariate, phenotype, temperature=temperature)
-        phenotype_entropies[phenotype] = np.round(cent,decimals=decimals)
-    return phenotype_entropies
 
 def clonality(adata):
     phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
@@ -586,7 +527,6 @@ def mutual_information(
     temperature: float = 1.0,
     n_samples: int = 0,
     clones: Optional[List[str]] = None,
-    weighted: bool = False,
     normalised: bool = True,
     normalise_mode: str = "average",
     posterior: bool = True,
@@ -597,14 +537,13 @@ def mutual_information(
     """
     MI between clonotype and phenotype at one covariate value.
 
-    posterior=True  → Dirichlet draw of p_ct (+ optional logits)  
+    posterior=True  → Dirichlet draw of p_ct (+ optional logits)
     posterior=False → prior-only (uses your original joint_distribution).
     """
 
     if verbose:
         print(f"{BOLD}{MAGENT}📊  MI for '{covariate}'{RESET}")
         _info("posterior",  posterior)
-        _info("weighted",   weighted)
         _info("n_samples",  n_samples)
 
     # helper to obtain *one* joint table
@@ -615,7 +554,6 @@ def mutual_information(
                 covariate_label     = covariate,
                 temperature         = temperature,
                 clones              = clones,
-                weighted            = weighted,
                 combine_with_logits = combine_with_logits,
                 silent              = silent_flag,
             )

@@ -620,10 +620,7 @@ def clonotypic_entropy_by_phenotype(
     adata,
     *,
     temperature       = 1.0,
-    n_samples         = 0,
-    weighted          = False,
-    normalised        = True,
-    posterior         = True,
+    n_samples         = 200,
     combine_with_logits = True,
     bayesian          = True,
     bayes_samples     = 1_000,
@@ -653,48 +650,43 @@ def clonotypic_entropy_by_phenotype(
 
     if hue_order is None:
         hue_order = covariates
-    # # ---- colours -------------------------------------------------- #
-    # if group_colors is not None:
-    #     palette = tcri.pl.tcri_colors#[group_colors[c] for c in hue_order]
-    # elif palette is None:
-    #     palette = sns.color_palette("Set2", len(hue_order))
     palette=tcri_colors
     cov2col = dict(zip(hue_order, palette))
 
     # ---- compute entropy values ----------------------------------- #
     records = []
-    iterator = itertools.product(batches, hue_order, phenotypes)
+    iterator = list(itertools.product(batches, hue_order))
     if progress:
-        iterator = tqdm.tqdm(list(iterator), desc="clonotypic entropy")
+        iterator = tqdm.tqdm(iterator, desc="clonotypic entropy")
 
-    for patient, cov_value, phen in iterator:
-        mask = (
+    for patient, cov_value in iterator:
+        mask_pc = (
             (adata.obs[batch_col] == patient) &
-            (adata.obs[cov_col]   == cov_value) &
-            (adata.obs[phen_col]  == phen)
+            (adata.obs[cov_col]   == cov_value)
         )
-        sub = adata[mask]
-        if sub.n_obs == 0:
+        if not mask_pc.any():
             continue
-        clones = list(set(sub.obs["trb_unique"]))
-        ent = centropy(
+        clones = list(set(adata.obs.loc[mask_pc, "trb_unique"]))
+        if not clones:
+            continue
+        ent_series = centropy(
             adata,
             covariate          = cov_value,
-            phenotype          = phen,
-            temperature        = temperature,
+            point_estimate     = True,
             n_samples          = n_samples,
-            weighted           = weighted,
-            clones             = clones,
-            normalised         = normalised,
-            posterior          = posterior,
+            temperature        = temperature,
             combine_with_logits= combine_with_logits,
-            verbose            = False,
+            _clones            = clones,
         )
-        ent_scalar = float(ent)  # always scalar now
-        records.append(
-            {cov_col: cov_value, batch_col: patient,
-             phen_col: phen, "entropy": ent_scalar}
-        )
+        for phen in phenotypes:
+            if not (mask_pc & (adata.obs[phen_col] == phen)).any():
+                continue
+            if phen not in ent_series.index:
+                continue
+            records.append(
+                {cov_col: cov_value, batch_col: patient,
+                 phen_col: phen, "entropy": float(ent_series[phen])}
+            )
 
     df = pd.DataFrame.from_records(records)
     if df.empty:
