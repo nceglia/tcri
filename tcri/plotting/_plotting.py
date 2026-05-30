@@ -15,14 +15,14 @@ import collections
 import operator
 import itertools
 
-from ..utils._utils import Phenotypes, CellRepertoire, Tcell, plot_pheno_sankey, plot_pheno_ternary_change_plots, draw_clone_bars, probabilities, set_ternary_corner_label, ternary_plot_projection
+from ..utils._utils import probabilities
+from ._sankey import SankeyNode
 from ..preprocessing._preprocessing import clone_size, joint_distribution, joint_distribution_posterior
 from ..metrics._metrics import clonotypic_entropy as centropy
 from ..metrics._metrics import phenotypic_entropy as pentropy
 from ..metrics._metrics import clonality as clonality_tl
 from ..metrics._metrics import flux as flux_tl
 from ..metrics._metrics import mutual_information as mutual_information_tl
-from ..metrics._metrics import clone_fraction as clone_fraction_tl
 
 
 import warnings
@@ -284,198 +284,243 @@ def compare_joint_distribution(adata, temperature=1):
     plt.tight_layout()
     plt.show()
 
-def phenotypic_flux(adata, splitby, order, clones=None, normalize=False, n_samples=50, phenotype_colors=None, save=None, figsize=(6,3), show_legend=True, temperature=1):
-    import tqdm
-    nt = False
-    phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
-    cell_probabilities = collections.defaultdict(dict)
-    for s in order:
-        jds = []
-        print("Sampling joint distributions for {}".format(s))
-        for _ in tqdm.tqdm(range(n_samples)):
-            jd = joint_distribution_posterior(
-                    adata,
-                    covariate_label     = s,
-                    temperature         = temperature,
-                    weighted            = False,
-                    combine_with_logits = True,
-                    silent              = True)
-            jds.append(jd)
-        jd = (
-            pd.concat(jds)             # stack them one on top of another
-            .groupby(level=0)        # regroup by the original row index
-            .mean()                  # take the mean across stacks
+def _phenotype_mass_per_clone(adata, covariate, clones, normalize):
+    """Per-clone phenotype mass at one covariate.
+
+    Returns dict {clone_id -> np.ndarray(n_phen)} aligned to
+    adata.uns['tcri_phenotype_categories']. Rows of joint_distribution
+    sum to 1 (per clone-celltype). Multiple ct rows for the same clone
+    are summed. With normalize=True, each clone-ct row contributes its
+    probability vector unweighted; with normalize=False, each row is
+    weighted by the clone's cell count at this covariate.
+    """
+    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    jd = joint_distribution(adata, covariate_label=covariate, clones=clones)
+    if jd is None or jd.empty:
+        return {}
+
+    if not normalize:
+        meta = adata.uns["tcri_metadata"]
+        clone_col = meta["clone_col"]
+        cov_col = meta["covariate_col"]
+        counts_at_cov = (
+            adata.obs.loc[adata.obs[cov_col] == covariate, clone_col]
+            .value_counts()
+            .to_dict()
         )
-        for x in jd.T:
-            dist = jd.T[x] / jd.T[x].sum()
-            cell_probabilities[s][x] = dist.to_dict()
-    repertoires = dict()
-    times = list(range(len(order)))
-    if nt:
-        chains_to_use = "ntseq"
     else:
-        chains_to_use = "aaseq"
-    
-    for s in order:
-        print("Creating cell repertoires for {}".format(s))
-        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
-                                        phenotypes = phenotypes, 
-                                        use_genes = False, 
-                                        use_chain = False,
-                                        seq_type = chains_to_use,
-                                        chains_to_use = ['TRB'],
-                                        name = s)
-    print("Adding cells to repertoire")
-    for bc, condition, seq, phenotype in tqdm.tqdm(list(zip(adata.obs.index,
-                                         adata.obs[splitby],
-                                         adata.obs[adata.uns["tcri_clone_key"]],
-                                         adata.obs[adata.uns["tcri_phenotype_key"]]))):
-        if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
-            phenotypes_and_counts = cell_probabilities[condition][seq]
-            if nt:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(ntseq = seq), 
-                                                          use_genes = False)
+        counts_at_cov = None
+
+    per_clone = {}
+    for clone_id, row in jd[phenotypes].iterrows():
+        vec = row.to_numpy(dtype=float)
+        if counts_at_cov is not None:
+            vec = vec * counts_at_cov.get(clone_id, 0)
+        per_clone.setdefault(clone_id, np.zeros(len(phenotypes)))
+        per_clone[clone_id] = per_clone[clone_id] + vec
+    return per_clone
+
+
+def plot_pheno_sankey(
+    adata,
+    *,
+    covariate_order,
+    clones=None,
+    phenotype_colors=None,
+    times=None,
+    time_rescale=1.0,
+    normalize=True,
+    ax=None,
+    figsize=(9, 5),
+    xlim=None,
+    ylim=None,
+    xlabel=None,
+    ylabel=None,
+    title=None,
+    show_legend=True,
+    fontsize=12,
+    return_axes=False,
+):
+    """Sankey of phenotype-distribution flow across covariate values.
+
+    Built directly from adata via joint_distribution; no CellRepertoire
+    construction. Flow geometry preserves the per-clone outer-product
+    semantics of the original implementation.
+    """
+    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    n_phen = len(phenotypes)
+    n_reps = len(covariate_order)
+    if n_reps == 0:
+        raise ValueError("covariate_order must contain at least one covariate")
+
+    if phenotype_colors is None:
+        phenotype_colors = {p: tcri_colors[i % len(tcri_colors)] for i, p in enumerate(phenotypes)}
+
+    if times is not None:
+        times = np.array(times) * time_rescale
+        dx = (max(times) - min(times)) / 500 if max(times) > min(times) else 0.2
+    else:
+        times = list(range(n_reps))
+        dx = 0.2
+
+    per_cov = [
+        _phenotype_mass_per_clone(adata, cov, clones, normalize)
+        for cov in covariate_order
+    ]
+
+    origin_nodes = [{} for _ in range(n_reps - 1)]
+    destination_nodes = [{} for _ in range(n_reps - 1)]
+    plot_nodes = [{} for _ in range(n_reps)]
+
+    if n_reps == 1:
+        c_origin_node_vals = np.zeros(n_phen)
+        clone_keys = clones if clones is not None else list(per_cov[0].keys())
+        for clone in clone_keys:
+            c_origin_node_vals += per_cov[0].get(clone, np.zeros(n_phen))
+        origin_main_node_ys = np.array([0] + list(np.cumsum(c_origin_node_vals[:-1])))
+        for j, p in enumerate(phenotypes):
+            plot_nodes[0][p] = SankeyNode(
+                times[0], origin_main_node_ys[j], c_origin_node_vals[j],
+                dx=dx, color=phenotype_colors[p],
+            )
+    else:
+        for i in range(n_reps - 1):
+            origin = per_cov[i]
+            dest = per_cov[i + 1]
+
+            c_origin_flow = np.zeros((n_phen, n_phen))
+            c_dest_flow = np.zeros((n_phen, n_phen))
+            c_origin_node_vals = np.zeros(n_phen)
+            c_dest_node_vals = np.zeros(n_phen)
+
+            if clones is not None:
+                clone_keys = clones
             else:
-                t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                          TRB = dict(aaseq = seq), 
-                                                          use_genes = False)    
-            repertoires[condition].cell_list.append(t)
-    for condition, rep in repertoires.items():
-        rep._set_consistency()
-    if phenotype_colors==None:
-        phenotype_colors = dict(zip(set(adata.obs[adata.uns["tcri_phenotype_key"]]), tcri_colors))
-    print("Generating Sankey plot...")
-    fig, ax = plot_pheno_sankey(phenotypes = phenotypes, 
-                                cell_repertoires = [repertoires[condition] for condition in order], 
-                                clones = clones,
-                                times = times,
-                                xlim = [min(times), max(times)],
-                                time_rescale = 1,
-                                normalize=normalize,
-                                xlabel = splitby,
-                                return_axes = True, 
-                                show_legend = show_legend,
-                                figsize = figsize,
-                                phenotype_colors=phenotype_colors)
+                clone_keys = list(set(origin.keys()) | set(dest.keys()))
+
+            for clone in clone_keys:
+                o = origin.get(clone, np.zeros(n_phen))
+                d = dest.get(clone, np.zeros(n_phen))
+                c_origin_node_vals += o
+                c_dest_node_vals += d
+                o_sum = o.sum()
+                d_sum = d.sum()
+                if o_sum > 0 and d_sum > 0:
+                    c_origin_flow += np.outer(o, d / d_sum)
+                    c_dest_flow += np.outer(o / o_sum, d)
+
+            origin_main_node_ys = np.array([0] + list(np.cumsum(c_origin_node_vals[:-1])))
+            dest_main_node_ys = np.array([0] + list(np.cumsum(c_dest_node_vals[:-1])))
+            running_origin_node_ys = origin_main_node_ys.copy()
+            running_dest_node_ys = np.cumsum(c_dest_node_vals) - np.sum(c_dest_flow, axis=0)
+
+            for j, op in enumerate(phenotypes):
+                plot_nodes[i][op] = SankeyNode(
+                    times[i], origin_main_node_ys[j], c_origin_node_vals[j],
+                    dx=dx, color=phenotype_colors[op],
+                )
+                for k, dp in enumerate(phenotypes):
+                    origin_nodes[i][(op, dp)] = SankeyNode(
+                        times[i], running_origin_node_ys[j], c_origin_flow[j, k],
+                        dx=dx, color=phenotype_colors[op],
+                    )
+                    running_origin_node_ys[j] += c_origin_flow[j, k]
+                    destination_nodes[i][(op, dp)] = SankeyNode(
+                        times[i + 1], running_dest_node_ys[k], c_dest_flow[j, k],
+                        dx=dx, color=phenotype_colors[dp],
+                    )
+                    running_dest_node_ys[k] += c_dest_flow[j, k]
+
+            if i == n_reps - 2:
+                for j, p in enumerate(phenotypes):
+                    plot_nodes[i + 1][p] = SankeyNode(
+                        times[i + 1], dest_main_node_ys[j], c_dest_node_vals[j],
+                        dx=dx, color=phenotype_colors[p],
+                    )
+
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    for i in range(n_reps):
+        for p in phenotypes:
+            plot_nodes[i][p].plot(ax=ax)
+        if i < n_reps - 1:
+            for op in phenotypes:
+                for dp in phenotypes:
+                    origin_nodes[i][(op, dp)].plot_node_connection(
+                        destination_nodes[i][(op, dp)], ax=ax, alpha=0.5,
+                    )
+
+    data_ymax = 0.0
+    for i in range(n_reps):
+        for p in phenotypes:
+            node = plot_nodes[i][p]
+            if node.max_y > data_ymax:
+                data_ymax = node.max_y
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    else:
+        ax.set_ylim([0, min(data_ymax * 1.02, 1) if normalize else data_ymax * 1.02])
+
+    if show_legend:
+        ax.legend(
+            [plot_nodes[0][p].patch for p in phenotypes],
+            list(phenotypes),
+            frameon=True, fontsize=fontsize,
+            bbox_to_anchor=(1.05, 1), loc='upper left',
+        )
+
+    if xlabel is not None:
+        ax.set_xlabel(xlabel, fontsize=fontsize)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel, fontsize=fontsize)
+    else:
+        ax.set_ylabel('Fraction' if normalize else 'Cell Counts', fontsize=fontsize)
+    if title is not None:
+        ax.set_title(title, fontsize=fontsize)
+
+    if fig is not None:
+        fig.tight_layout()
+
+    if return_axes:
+        return fig, ax
+    return None
+
+
+def phenotypic_flux(
+    adata, splitby, order, clones=None, normalize=True,
+    phenotype_colors=None, save=None, figsize=(6, 3),
+    show_legend=True, title=None,
+):
+    """Sankey of phenotype flow across `order` values of `splitby`.
+
+    Thin wrapper around plot_pheno_sankey. `splitby` is forwarded as the
+    x-axis label and must match adata.uns['tcri_metadata']['covariate_col'].
+    """
+    times = list(range(len(order)))
+    if phenotype_colors is None:
+        phenotype_colors = dict(zip(adata.uns["tcri_phenotype_categories"], tcri_colors))
+    fig, ax = plot_pheno_sankey(
+        adata,
+        covariate_order=order,
+        clones=clones,
+        phenotype_colors=phenotype_colors,
+        times=times,
+        xlim=(min(times), max(times)) if len(times) > 1 else None,
+        normalize=normalize,
+        xlabel=splitby,
+        title=title,
+        show_legend=show_legend,
+        figsize=figsize,
+        return_axes=True,
+    )
     ax.set_xticks(times)
     ax.set_xticklabels(order)
-    if save != None:
-        fig.savefig(save)
-
-def freq_to_size_scaling(freq):
-    return 10*(freq**(1/2))
-
-def freq_to_size_legend(ax, min_freq = 1e-6, max_freq = 1, loc = [0.85, 0.92], size = 0.25, x_offset = 0.1):
-    freq_to_y_pos = lambda f: loc[1]-np.log(max_freq/f)*size/np.log(max_freq/min_freq)
-    legend_pnts = np.exp(np.arange(np.log(min_freq), np.log(max_freq), 0.001))
-    ax.scatter(loc[0]*np.ones(len(legend_pnts)), [freq_to_y_pos(y) for y in legend_pnts], s = [freq_to_size_scaling(x)**2 for x in legend_pnts], marker = '_', c = 'k')
-    ax.plot(loc[0]*np.ones(2)+ x_offset, [freq_to_y_pos(min_freq), freq_to_y_pos(max_freq)], 'k', lw = 1)
-    major_ticks = [10**x for x in  range(int(np.ceil(np.log10(min_freq))), int(np.floor(np.log10(max_freq))+1))]
-    minor_ticks = sum([[x*major_tick for x in range(1, 10)] for major_tick in major_ticks[:-1]], [])
-    for minor_tick in minor_ticks:
-        ax.plot([loc[0]*np.ones(2)+ x_offset, loc[0]*np.ones(2)+ 1.2*x_offset], [freq_to_y_pos(minor_tick), freq_to_y_pos(minor_tick)], 'k', lw = 0.5)
-    for major_tick in major_ticks:
-        ax.plot([loc[0]*np.ones(2)+ x_offset, loc[0]*np.ones(2)+ 1.5*x_offset], [freq_to_y_pos(major_tick), freq_to_y_pos(major_tick)], 'k', lw = 0.75)
-        if major_tick < 0.1:
-            ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), '%.0e'%(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
-        else:
-            ax.text(loc[0]+ 1.7*x_offset, freq_to_y_pos(major_tick), str(major_tick), ha = 'left', va = 'center', rotation = 0, fontsize = 8)
-
-def setup_ternary_plot():
-    """Set up a ternary plot with proper axes and labels."""
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.set_aspect('equal')
-    ax.set_axis_off()
-    return fig, ax
-
-def probability_ternary(adata, phenotype_names, covariate, splitby, conditions,n_samples=1,
-                        temperature=1,top_n=None, scale_function=None,color="k",save=None):
-    if scale_function == None:
-        scale_function = freq_to_size_scaling
-    phenotypes = Phenotypes(adata.uns["tcri_phenotype_categories"])
-
-    cell_probabilities = collections.defaultdict(dict)
-    for s in set(adata.obs[splitby]):
-        sdata = adata[adata.obs[splitby] == s].copy()
-        clones = list(set(sdata.obs[adata.uns["tcri_clone_key"]]))
-        rtab = collections.defaultdict(lambda : collections.defaultdict(list))
-        for _ in range(n_samples):
-            jd = joint_distribution_posterior(
-                    adata,
-                    covariate_label     = covariate,
-                    temperature         = temperature,
-                    clones              = clones,
-                    weighted            = False,
-                    combine_with_logits = True,
-                    silent              = True)
-            for x in jd.T:
-                for p,v in jd.T[x].to_dict().items():
-                    rtab[x][p].append(v)
-        for x,v in rtab.items():
-            phs = []
-            pbs = []
-            for p, vals in v.items():
-                pbs.append(np.sum(vals))
-                phs.append(p)
-            cell_probabilities[s][x] = dict(zip(phs,pbs))
-    
-    repertoires = dict()
-    chains_to_use = "aaseq"
-    
-    for s in set(adata.obs[splitby]):
-        repertoires[s] = CellRepertoire(clones_and_phenos = {}, 
-                                        phenotypes = phenotypes, 
-                                        use_genes = False, 
-                                        use_chain = False,
-                                        seq_type = chains_to_use,
-                                        chains_to_use = ['TRB'],
-                                        name = s)
-    
-    for bc, condition, seq, phenotype in zip(adata.obs.index,
-                                             adata.obs[splitby],
-                                             adata.obs[adata.uns["tcri_clone_key"]],
-                                             adata.obs[adata.uns["tcri_phenotype_key"]]):
-    
-        if str(seq) != "nan" and condition in repertoires and seq in cell_probabilities[condition]:
-            phenotypes_and_counts = cell_probabilities[condition][seq]
-            t = Tcell(phenotypes = phenotypes, phenotypes_and_counts = phenotypes_and_counts, 
-                                                      TRB = dict(aaseq = seq), 
-                                                      use_genes = False)
-            repertoires[condition].cell_list.append(t)
-    
-    for condition, rep in repertoires.items():
-        rep._set_consistency()
-
-    phenotype_names_dict = {p: p for p in phenotype_names}
-    if type(conditions) == list:
-        if len(conditions) == 1:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = None
-        elif len(conditions) == 2:
-            start_clones_and_phenos = repertoires[conditions[0]]
-            end_clones_and_phenos = repertoires[conditions[1]]
-        else:
-            raise ValueError("Only two conditions supported.")
-    else:
-        print(repertoires.keys())
-        start_clones_and_phenos = repertoires[conditions]
-        end_clones_and_phenos = None
-    s_dict = {c: scale_function(sum(start_clones_and_phenos[c].values())/start_clones_and_phenos.norm) for c in start_clones_and_phenos.clones}
-    if top_n == None:
-        top_n = len(set(adata.obs[adata.uns["tcri_clone_key"]]))
-    c_clones = sorted(start_clones_and_phenos.clones, key = s_dict.get, reverse = True)[:top_n]
-    fig, ax = plot_pheno_ternary_change_plots(start_clones_and_phenotypes = start_clones_and_phenos,
-                                            end_clones_and_phenotypes = end_clones_and_phenos,
-                                            phenotypes = phenotype_names, 
-                                            phenotype_names = phenotype_names_dict,
-                                            clones = c_clones,
-                                            line_type = 'arrows', 
-                                            kwargs_for_plots={"color":color,'alpha':0.8},
-                                            s_dict = s_dict,
-                                            return_axes  = True)
-    freq_to_size_legend(ax)
-    if save != None:
+    if save is not None:
         fig.savefig(save)
 
 def probability_distribution(adata, phenotype_order=None, color="#000000", rotation=90, splitby=None, order=None, figsize=(7,5), save=None):
@@ -997,10 +1042,6 @@ def set_color_palette(adata, columns):
             main_color_map[val] = c
         adata.uns["{}_colors".format(x)] = ct
     return main_color_map
-
-def clone_fraction(adata, groupby):
-    fractions = clone_fraction_tl(adata,groupby=groupby)
-    draw_clone_bars(fractions, title=groupby)
 
 def flux(adata, key, order, groupby, paint_dict=None, method="probabilistic", paint=None, distance_metric="l1", figsize=(12,5), paint_order=None, palette=None):
     dfs = []
