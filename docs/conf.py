@@ -11,8 +11,14 @@ description = 'Information Theoretic Framework for Paired Single Cell Gene Expre
 copyright = '2022-2025'
 author = 'Nicholas Ceglia'
 
-# The full version, including alpha/beta/rc tags
-release = '0.0.1'
+# The full version, including alpha/beta/rc tags.
+# Single source of truth is pyproject.toml; read it back via installed metadata.
+try:
+    from importlib.metadata import version as _pkg_version
+    release = _pkg_version("tcri")
+except Exception:
+    release = "0.0.0"
+version = release
 
 # -- General configuration ---------------------------------------------------
 
