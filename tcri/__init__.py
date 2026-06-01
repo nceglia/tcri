@@ -1,3 +1,10 @@
+from importlib.metadata import PackageNotFoundError, version as _version
+
+try:
+    __version__ = _version("tcri")
+except PackageNotFoundError:  # running from a source tree without an install
+    __version__ = "0.0.0+unknown"
+
 from . import metrics as tl
 from . import preprocessing as pp
 from . import plotting as pl

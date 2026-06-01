@@ -15,7 +15,7 @@ https://www.biorxiv.org/content/10.1101/2022.10.01.510457v1
 ```bash
 python3 -m venv tvenv
 source tvenv/bin/activate
-python3 setup.py install
+pip install .
 ```
 
 ## Overview
