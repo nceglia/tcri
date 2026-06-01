@@ -13,7 +13,7 @@ TCRi is a comprehensive framework for analyzing paired single-cell RNA and TCR s
 ```bash
 python3 -m venv tvenv
 source tvenv/bin/activate
-python3 setup.py install
+pip install .
 ```
 
 ## Citation
