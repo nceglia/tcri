@@ -19,7 +19,7 @@ python3 -m venv tvenv
 source tvenv/bin/activate  # On Windows, use: tvenv\Scripts\activate
 
 # Install the package
-python3 setup.py install
+pip install .
 ```
 
 ## Dependencies
