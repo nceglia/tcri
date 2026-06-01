@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Copyright (C) 2022 Zachary Sethna
-"""
 from __future__ import print_function, division
 import os
 import sys
@@ -319,12 +315,6 @@ tcri_colors = [
     "#C38D94",  # Muted Rose
     "#6D6A75",  # Purple Gray
 ]
-
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""
-Copyright (C) 2022 Zachary Sethna
-"""
 
 import daft
 import matplotlib.pyplot as plt
