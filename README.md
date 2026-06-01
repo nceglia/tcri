@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/nceglia/tcri/blob/main/tcri_logo.png?raw=true" alt="TCRi logo" width="500">
+</p>
+
 # **TCR**i
 [![tests](https://github.com/nceglia/tcri/actions/workflows/tests.yml/badge.svg)](https://github.com/nceglia/tcri/actions/workflows/tests.yml)
 Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing
