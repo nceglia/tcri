@@ -665,7 +665,7 @@ class TCRIModel(BaseModelClass):
     def setup_anndata(
         cls,
         adata: AnnData,
-        layer: str = "X",
+        layer: Optional[str] = None,
         clonotype_key: str = "unique_clone_id",
         phenotype_key: str = "phenotype_col",
         covariate_key: str = "timepoint",
@@ -695,6 +695,10 @@ class TCRIModel(BaseModelClass):
         adata_manager.registry["batch_col"] = batch_key
         cls.register_manager(adata_manager)
         adata.uns["tcri_manager"] = adata_manager
+        if layer is None:
+            adata.uns.pop("tcri_layer", None)
+        else:
+            adata.uns["tcri_layer"] = layer
         return adata
 
     def __init__(
