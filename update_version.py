@@ -1,112 +1,89 @@
 #!/usr/bin/env python3
 """
-Script to update the version of the tcri package in setup.py.
+Update the version of the tcri package.
+
+The single source of truth for the version is the ``version`` field in
+``pyproject.toml``. ``tcri.__version__`` and the docs (``docs/conf.py``) both
+read it back via ``importlib.metadata``, so this script only edits
+``pyproject.toml``.
 
 Usage:
-    python update_version.py 0.0.2
-    python update_version.py --major  # Bump major version (e.g., 0.0.1 -> 1.0.0)
-    python update_version.py --minor  # Bump minor version (e.g., 0.0.1 -> 0.1.0)
-    python update_version.py --patch  # Bump patch version (e.g., 0.0.1 -> 0.0.2)
+    python update_version.py 0.2.0     # set an explicit version
+    python update_version.py --major   # 0.1.0 -> 1.0.0
+    python update_version.py --minor   # 0.1.0 -> 0.2.0
+    python update_version.py --patch   # 0.1.0 -> 0.1.1
 """
 
 import re
 import sys
 from pathlib import Path
 
+PYPROJECT = Path(__file__).parent / "pyproject.toml"
+# Match the [project] `version = "X.Y.Z"` line (anchored to start of line).
+VERSION_RE = re.compile(r'(?m)^(version\s*=\s*")([^"]+)(")')
 
-def get_current_version(setup_file: Path) -> str:
-    """Extract current version from setup.py."""
-    content = setup_file.read_text()
-    match = re.search(r"version\s*=\s*['\"]([^'\"]+)['\"]", content)
+
+def get_current_version(text: str) -> str:
+    match = VERSION_RE.search(text)
     if not match:
-        raise ValueError("Could not find version in setup.py")
-    return match.group(1)
+        raise ValueError('Could not find `version = "..."` in pyproject.toml')
+    return match.group(2)
 
 
-def parse_version(version: str) -> tuple[int, int, int]:
-    """Parse version string into (major, minor, patch) tuple."""
-    parts = version.split('.')
+def parse_version(version: str) -> tuple:
+    parts = version.split(".")
     if len(parts) != 3:
-        raise ValueError(f"Invalid version format: {version}. Expected format: X.Y.Z")
+        raise ValueError(f"Invalid version {version!r}; expected X.Y.Z")
     try:
-        return tuple(map(int, parts))
+        return tuple(int(p) for p in parts)
     except ValueError:
-        raise ValueError(f"Invalid version format: {version}. All parts must be integers.")
+        raise ValueError(f"Invalid version {version!r}; all parts must be integers")
 
 
 def bump_version(version: str, part: str) -> str:
-    """Bump the specified part of the version."""
     major, minor, patch = parse_version(version)
-    
-    if part == 'major':
-        major += 1
-        minor = 0
-        patch = 0
-    elif part == 'minor':
-        minor += 1
-        patch = 0
-    elif part == 'patch':
-        patch += 1
-    else:
-        raise ValueError(f"Invalid version part: {part}. Must be 'major', 'minor', or 'patch'.")
-    
-    return f"{major}.{minor}.{patch}"
+    if part == "major":
+        return f"{major + 1}.0.0"
+    if part == "minor":
+        return f"{major}.{minor + 1}.0"
+    if part == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    raise ValueError(f"Invalid part {part!r}; must be major, minor, or patch")
 
 
-def update_version(setup_file: Path, new_version: str) -> None:
-    """Update version in setup.py."""
-    content = setup_file.read_text()
-    
-    # Validate new version format
-    parse_version(new_version)
-    
-    # Replace version in setup.py
-    new_content = re.sub(
-        r"(version\s*=\s*['\"])([^'\"]+)(['\"])",
-        rf"\g<1>{new_version}\g<3>",
-        content
-    )
-    
-    if new_content == content:
-        raise ValueError("Failed to update version in setup.py")
-    
-    setup_file.write_text(new_content)
+def main() -> None:
+    if not PYPROJECT.exists():
+        sys.exit(f"Error: {PYPROJECT} not found")
 
+    text = PYPROJECT.read_text()
+    current = get_current_version(text)
+    print(f"Current version: {current}")
 
-def main():
-    setup_file = Path(__file__).parent / "setup.py"
-    
-    if not setup_file.exists():
-        print(f"Error: {setup_file} not found", file=sys.stderr)
-        sys.exit(1)
-    
-    current_version = get_current_version(setup_file)
-    print(f"Current version: {current_version}")
-    
     if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(1)
-    
+
     arg = sys.argv[1]
-    
-    # Determine new version
-    if arg.startswith('--'):
-        part = arg[2:]
-        if part not in ['major', 'minor', 'patch']:
-            print(f"Error: Invalid argument '{arg}'", file=sys.stderr)
-            print(__doc__)
-            sys.exit(1)
-        new_version = bump_version(current_version, part)
+    if arg.startswith("--"):
+        new_version = bump_version(current, arg[2:])
     else:
+        parse_version(arg)  # validate format
         new_version = arg
-    
-    # Update version
-    try:
-        update_version(setup_file, new_version)
-        print(f"Version updated: {current_version} -> {new_version}")
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+
+    if new_version == current:
+        print(f"Version already {current}; nothing to do.")
+        return
+
+    new_text = VERSION_RE.sub(rf"\g<1>{new_version}\g<3>", text, count=1)
+    if new_text == text:
+        sys.exit("Error: failed to update version in pyproject.toml")
+
+    PYPROJECT.write_text(new_text)
+    print(f"Version updated: {current} -> {new_version}")
+    print(
+        "Note: tcri.__version__ and the docs read this via importlib.metadata; "
+        "reinstall (pip install -e .) to refresh the installed metadata."
+    )
 
 
 if __name__ == "__main__":
