@@ -127,7 +127,6 @@ def trained_model(synthetic_adata):
     adata = synthetic_adata.copy()
     TCRIModel.setup_anndata(
         adata,
-        layer=None,
         clonotype_key="unique_clone_id",
         phenotype_key="phenotype_col",
         covariate_key="timepoint",
