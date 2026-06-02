@@ -212,7 +212,7 @@ def load_tcri_session(
     *,
     adata_path: Optional[str] = None,
     map_location: Optional[str] = None,
-    layer: Optional[str] = None,   # keep if you added this
+    layer: Optional[str] = None,
 ):
     TCRIModel = _resolve_TCRIModel()
 
@@ -234,10 +234,13 @@ def load_tcri_session(
     _restore_category_order(adata, setup)
 
     # Rebuild AnnData manager
+    setup_layer = layer if layer is not None else setup.get("layer")
+    if setup_layer == "X" and "X" not in adata.layers:
+        setup_layer = None
 
     TCRIModel.setup_anndata(
         adata,
-        layer=layer,
+        layer=setup_layer,
         clonotype_key=setup.get("clone_col", "unique_clone_id"),
         phenotype_key=setup.get("phenotype_col", "phenotype_col"),
         covariate_key=setup.get("covariate_col", "timepoint"),
@@ -560,7 +563,7 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
         cats_key = f"tcri_{key}_categories"
         if cats_key in adata.uns:
             setup[cats_key] = list(map(str, adata.uns[cats_key]))
-    setup["layer"] = adata.uns.get("tcri_layer", "X")
+    setup["layer"] = adata.uns.get("tcri_layer")
     try:
         reg = getattr(model, "adata_manager", None)
         if reg is not None and hasattr(reg, "registry"):
@@ -569,8 +572,11 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
             setup.setdefault("clone_col", r.get("clonotype_col"))
             setup.setdefault("covariate_col", r.get("covariate_col"))
             setup.setdefault("batch_col", r.get("batch_col"))
+            setup_args = r.get("setup_args", {})
+            if isinstance(setup_args, dict) and "layer" in setup_args:
+                setup["layer"] = setup_args["layer"]
             if isinstance(r.get("X"), dict) and "layer" in r["X"]:
-                setup["layer"] = r["X"]["layer"] or "X"
+                setup["layer"] = r["X"]["layer"]
     except Exception:
         pass
     return setup
