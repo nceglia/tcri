@@ -120,6 +120,17 @@ def _ensure_pyro_posterior_params(model, adata) -> None:
         else:
             raise RuntimeError("Could not infer P from classifier or adata.")
 
+    _warnings.warn(
+        "Pyro param store has no 'q_p_ct_raw'; re-initializing it to a uniform "
+        "1/P simplex. Downstream posterior metrics (joint_distribution_posterior, "
+        "phenotypic/clonotypic entropy, mutual information) will run on this "
+        "uninformative prior instead of the trained posterior. This usually means "
+        "the Pyro param store failed to load or was never saved; verify the model's "
+        "Pyro params were persisted and restored (e.g. via save_tcri_session / "
+        "load_tcri_session).",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     init = torch.full((ct_count, P), 1.0 / P, device=device)
     pyro.param("q_p_ct_raw", init, constraint=constraints.simplex)
 
