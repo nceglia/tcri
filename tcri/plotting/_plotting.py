@@ -864,12 +864,12 @@ def ridge_delta_entropy(
     """
     Ridge plot of Δ-entropy posteriors per phenotype.
 
-    For each phenotype the *first two* groups in `order_group`
-    are compared and annotated:
+    For each phenotype the *first two* groups in ``order_group``
+    are compared and annotated::
 
-        ┌──────────┐
-    CR  │          │ NR
-        ★ p-value / stars
+            ┌──────────┐
+        CR  │          │ NR
+            ★ p-value / stars
 
     Bracket anchors are placed at the group means.
     """
