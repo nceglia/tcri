@@ -273,6 +273,23 @@ def joint_distribution_posterior(
     cov_per_cell = adata.uns["tcri_cov_array_for_cells"]
     clone_labels = adata.obs[clone_col].values
 
+    # Guard against filtered AnnData (view or subset copy). The per-cell arrays in
+    # .uns are stored in the original full-cell space and are NOT subset when adata
+    # is sliced, whereas .obs/.obsm ARE subset. Indexing one with positions derived
+    # from the other then silently misaligns cells (Notion #4). Fail loudly instead
+    # of returning wrong numbers.
+    n_obs = adata.n_obs
+    if len(ct_per_cell) != n_obs or len(cov_per_cell) != n_obs:
+        raise ValueError(
+            "joint_distribution_posterior received an AnnData whose per-cell "
+            f"registration arrays (len {len(ct_per_cell)}) do not match adata.n_obs "
+            f"({n_obs}). This happens when the function is called on a filtered "
+            "AnnData view or subset: the 'tcri_*_array_for_cells' arrays in .uns "
+            "remain in the original full-cell space while .obs/.obsm are subset, so "
+            "cell indices silently misalign. Re-run register_model(...) on the "
+            "filtered AnnData, or pass the full object and filter with `clones=`."
+        )
+
     idx_cov = np.nonzero(cov_per_cell == cov_idx)[0]
     if clones is not None:
         idx_cov = idx_cov[np.isin(clone_labels[idx_cov], clones)]
