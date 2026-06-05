@@ -12,12 +12,26 @@ copyright = '2022-2025'
 author = 'Nicholas Ceglia'
 
 # The full version, including alpha/beta/rc tags.
-# Single source of truth is pyproject.toml; read it back via installed metadata.
-try:
-    from importlib.metadata import version as _pkg_version
-    release = _pkg_version("tcri")
-except Exception:
-    release = "0.0.0"
+# Single source of truth is pyproject.toml. Prefer installed metadata; fall back
+# to parsing pyproject.toml directly so the version is correct even when the
+# package is not installed in the docs environment (e.g. on ReadTheDocs, where
+# the heavy runtime deps are mocked rather than installed).
+def _get_release():
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("tcri")
+    except Exception:
+        pass
+    try:
+        import tomllib  # Python 3.11+
+        _pp = os.path.join(os.path.dirname(__file__), os.pardir, "pyproject.toml")
+        with open(_pp, "rb") as _f:
+            return tomllib.load(_f)["project"]["version"]
+    except Exception:
+        return "0.0.0"
+
+
+release = _get_release()
 version = release
 
 # -- General configuration ---------------------------------------------------
@@ -80,6 +94,11 @@ html_theme_options = {
 # -- Options for autodoc extension -------------------------------------------
 autodoc_member_order = 'bysource'
 autodoc_typehints = 'description'
+# Read constructor signatures from ``__init__`` directly. Without this, classes
+# whose (mocked) base injects ``__new__(*args, **kwargs)`` — e.g. TCRIModel via
+# scvi's BaseModelClass — would render as ``TCRIModel(*args, **kwargs)`` on the
+# deps-mocked ReadTheDocs build.
+autodoc_class_signature = 'separated'
 autodoc_default_options = {
     'members': True,
     'undoc-members': True,
@@ -90,9 +109,27 @@ autodoc_default_options = {
 add_module_names = False
 # Generate stub pages for any autosummary directives.
 autosummary_generate = True
-# Don't fail the whole build if an optional/heavy import is unavailable at
-# doc-build time; autodoc will note the missing object instead.
-autodoc_mock_imports = []
+# Mock the heavy / native scientific dependencies so the API reference can be
+# built from source without installing the full ML stack (torch, scvi-tools,
+# scanpy, ...). autodoc still reads the real signatures and docstrings of TCRi's
+# own code; only third-party imports are stubbed. numpy and pandas are kept real
+# (they're light and let intersphinx resolve their types).
+autodoc_mock_imports = [
+    "torch",
+    "pyro",
+    "scvi",
+    "sklearn",
+    "scanpy",
+    "anndata",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "mpltern",
+    "umap",
+    "tqdm",
+    "daft",
+    "gseapy",
+]
 
 # -- Options for napoleon extension ------------------------------------------
 napoleon_google_docstring = True
