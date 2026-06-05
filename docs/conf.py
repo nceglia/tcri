@@ -64,7 +64,6 @@ html_favicon = '../framework.png'
 
 html_theme_options = {
     'logo_only': False,
-    'display_version': True,
     'prev_next_buttons_location': 'bottom',
     'style_external_links': False,
     'style_nav_header_background': '#2980B9',
@@ -81,6 +80,19 @@ html_theme_options = {
 # -- Options for autodoc extension -------------------------------------------
 autodoc_member_order = 'bysource'
 autodoc_typehints = 'description'
+autodoc_default_options = {
+    'members': True,
+    'undoc-members': True,
+    'show-inheritance': True,
+}
+# Show clean object names (e.g. ``joint_distribution``) rather than the full
+# private module path in signatures and headings.
+add_module_names = False
+# Generate stub pages for any autosummary directives.
+autosummary_generate = True
+# Don't fail the whole build if an optional/heavy import is unavailable at
+# doc-build time; autodoc will note the missing object instead.
+autodoc_mock_imports = []
 
 # -- Options for napoleon extension ------------------------------------------
 napoleon_google_docstring = True
