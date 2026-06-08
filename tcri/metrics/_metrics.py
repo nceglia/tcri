@@ -234,14 +234,57 @@ def clonotypic_entropy(
     combine_with_logits: bool = True,
     _clones: Optional[List[str]] = None,
 ) -> Union[pd.Series, np.ndarray]:
-    """
-    H[ P(C | P=p, T=covariate) ] for every phenotype p.
+    r"""Clonotypic entropy of each phenotype at one covariate value.
+
+    For a phenotype :math:`\phi`, this is the normalized Shannon entropy of the
+    distribution over clonotypes carrying that phenotype,
+    :math:`H\!\left[P(c \mid \phi,\, m)\right]`, estimated from posterior draws of
+    the clone–phenotype joint distribution. High values mean the phenotype is
+    spread across many clones; low values mean a few clones dominate it.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Registered object (see
+        :func:`~tcri.preprocessing._preprocessing.register_model`).
+    covariate : str
+        Covariate value :math:`m` to condition on (a category of the registered
+        covariate column).
+    point_estimate : bool, default True
+        If True, return the posterior-mean entropy per phenotype; if False, return
+        the full matrix of per-draw entropies.
+    n_samples : int, default 200
+        Number of posterior draws to average over. Must be ``>= 1``.
+    temperature : float, default 1.0
+        Sharpen (``<1``) or flatten (``>1``) the per-cell distribution before
+        aggregating.
+    combine_with_logits : bool, default True
+        Combine the sampled prior :math:`p_{ct}` with the per-cell classifier
+        logits (the full posterior) rather than the prior alone.
 
     Returns
     -------
-    point_estimate=True  -> pd.Series indexed by phenotype name,
-                            values are mean H over n_samples posterior draws.
-    point_estimate=False -> np.ndarray of shape (n_samples, n_phenotypes).
+    pandas.Series or numpy.ndarray
+        If ``point_estimate`` is True, a Series indexed by phenotype name whose
+        values are the mean entropy in bits, normalized to :math:`[0, 1]` by
+        :math:`\log_2 n_\text{clones}`, over ``n_samples`` draws. Otherwise an
+        array of shape ``(n_samples, n_phenotypes)``.
+
+    Raises
+    ------
+    ValueError
+        If ``n_samples < 1``.
+
+    See Also
+    --------
+    phenotypic_entropy : the per-clone analogue, :math:`H[P(\phi \mid c, m)]`.
+    mutual_information : clone–phenotype coupling at a covariate.
+
+    Examples
+    --------
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> ce = clonotypic_entropy(adata, covariate, n_samples=50)
+    >>> ce.sort_values(ascending=False).head()
     """
     if n_samples < 1:
         raise ValueError("n_samples must be >= 1")
@@ -433,14 +476,53 @@ def phenotypic_entropy(
     temperature: float = 1.0,
     combine_with_logits: bool = True,
 ) -> Union[pd.Series, np.ndarray]:
-    """
-    H[ P(P | C=c, T=covariate) ] for every clone c present at the covariate.
+    r"""Phenotypic entropy of each clonotype at one covariate value.
+
+    For a clonotype :math:`c`, this is the normalized Shannon entropy of its
+    distribution over phenotypes, :math:`H\!\left[P(\phi \mid c,\, m)\right]`,
+    estimated from posterior draws. High values mean the clone is phenotypically
+    plastic; low values mean it is committed to one phenotype.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Registered object (see
+        :func:`~tcri.preprocessing._preprocessing.register_model`).
+    covariate : str
+        Covariate value :math:`m` to condition on.
+    point_estimate : bool, default True
+        If True, return the posterior-mean entropy per clone; if False, the full
+        per-draw matrix.
+    n_samples : int, default 200
+        Number of posterior draws to average over. Must be ``>= 1``.
+    temperature : float, default 1.0
+        Sharpen (``<1``) or flatten (``>1``) the per-cell distribution.
+    combine_with_logits : bool, default True
+        Combine the sampled prior with the per-cell classifier logits.
 
     Returns
     -------
-    point_estimate=True  -> pd.Series indexed by clone name,
-                            values are mean H over n_samples posterior draws.
-    point_estimate=False -> np.ndarray of shape (n_samples, n_clones).
+    pandas.Series or numpy.ndarray
+        If ``point_estimate`` is True, a Series indexed by clonotype, in bits and
+        normalized to :math:`[0, 1]` by :math:`\log_2 n_\text{phenotypes}`.
+        Otherwise an array of shape ``(n_samples, n_clones)`` over the clones
+        present at ``covariate``.
+
+    Raises
+    ------
+    ValueError
+        If ``n_samples < 1``.
+
+    See Also
+    --------
+    clonotypic_entropy : the per-phenotype analogue.
+    flux : change in a clone's phenotype distribution between two covariates.
+
+    Examples
+    --------
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> pe = phenotypic_entropy(adata, covariate, n_samples=50)
+    >>> pe.mean()  # average phenotypic plasticity across clones
     """
     if n_samples < 1:
         raise ValueError("n_samples must be >= 1")
@@ -492,6 +574,34 @@ def phenotypic_entropy(
 
 
 def clonality(adata):
+    r"""Phenotype clonality: how clonally concentrated each phenotype is.
+
+    For each phenotype, clonality is :math:`1 - H / \log_2 K`, where :math:`H` is
+    the Shannon entropy (bits) of the clone-size distribution among cells of that
+    phenotype and :math:`K` is the number of distinct clones. It is the normalized
+    complement of clonotypic entropy: ``1`` means a single clone dominates the
+    phenotype, ``0`` means all clones are equally represented.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Registered object. Uses the observed (hard) clone and phenotype labels
+        rather than the posterior, so it only needs the registered category keys.
+
+    Returns
+    -------
+    dict of {str: float}
+        Maps each phenotype to its clonality in :math:`[0, 1]`.
+
+    See Also
+    --------
+    clonotypic_entropy : the soft, posterior per-phenotype entropy.
+
+    Examples
+    --------
+    >>> clonality(adata)
+    {'A': 0.31, 'B': 0.07, 'C': 0.52}
+    """
     phenotypes = adata.obs[adata.uns["tcri_phenotype_key"]].tolist()
     unique_phenotypes = np.unique(phenotypes)
     entropys = dict()
@@ -534,11 +644,64 @@ def mutual_information(
     verbose: bool = True,
     graph: bool = False,
 ) -> Union[float, np.ndarray]:
-    """
-    MI between clonotype and phenotype at one covariate value.
+    r"""Mutual information between clonotype and phenotype at one covariate value.
 
-    posterior=True  → Dirichlet draw of p_ct (+ optional logits)
-    posterior=False → prior-only (uses your original joint_distribution).
+    :math:`I(c; \phi \mid m)` quantifies how much knowing a cell's clonotype tells
+    you about its phenotype at covariate :math:`m` — the strength of
+    clone–phenotype coupling. Zero means clonotype and phenotype are independent;
+    larger values mean clones are phenotypically structured.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Registered object (see
+        :func:`~tcri.preprocessing._preprocessing.register_model`).
+    covariate : str
+        Covariate value :math:`m` to condition on.
+    temperature : float, default 1.0
+        Sharpen (``<1``) or flatten (``>1``) the distributions before computing MI.
+    n_samples : int, default 0
+        ``0`` returns a single point estimate; ``> 0`` returns one MI value per
+        posterior draw.
+    clones : list of str, optional
+        Restrict to these clonotypes; default uses all.
+    normalised : bool, default True
+        Normalize the MI (see ``normalise_mode``) to :math:`[0, 1]`.
+    normalise_mode : str, default "average"
+        Normalization denominator when ``normalised`` is True (e.g. the average of
+        the two marginal entropies).
+    posterior : bool, default True
+        Use a Dirichlet draw of :math:`p_{ct}` (optionally combined with the
+        classifier logits). If False, use the prior-only joint distribution.
+    combine_with_logits : bool, default True
+        Combine the sampled prior with the per-cell logits (only when ``posterior``).
+    verbose : bool, default True
+        Print a short progress summary.
+    graph : bool, default False
+        Print an ASCII histogram of the posterior MI draws.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        A single (normalized) MI in bits if ``n_samples == 0``; otherwise an array
+        of shape ``(n_samples,)`` of per-draw values.
+
+    Notes
+    -----
+    .. math::
+
+        I(c; \phi) = \sum_{c,\, \phi} p(c, \phi)\,
+                     \log_2 \frac{p(c, \phi)}{p(c)\, p(\phi)}
+
+    See Also
+    --------
+    clonotypic_entropy, phenotypic_entropy : the marginal entropies MI builds on.
+
+    Examples
+    --------
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> mutual_information(adata, covariate, verbose=False)
+    0.42
     """
 
     if verbose:
@@ -700,14 +863,59 @@ def flux(
     graph               : bool  = False,     # ASCII histogram
     seed                : Optional[int] = 42
 ) -> Union[pd.Series, np.ndarray]:
-    """
-    Flux distance D(p_clone^from , p_clone^to)  per clone.
+    r"""Phenotypic flux of each clonotype between two covariate values.
+
+    For each clonotype, the distance between its phenotype distribution at
+    ``from_this`` and at ``to_that`` — how much the clone's phenotype mix shifts
+    across the two covariates. Useful for tracking phenotypic movement over time or
+    treatment.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Registered object (see
+        :func:`~tcri.preprocessing._preprocessing.register_model`).
+    from_this, to_that : str
+        The two covariate values to compare (e.g. ``"Pre-treatment"`` and
+        ``"Post-treatment"``).
+    clones : str or list of str, optional
+        Restrict to these clonotypes; default uses all clones present.
+    temperature : float, default 1.0
+        Sharpen (``<1``) or flatten (``>1``) the distributions.
+    distance_metric : str or callable, default "l1"
+        Distance between the two phenotype distributions — e.g. ``"l1"`` or
+        ``"dkl"``, or a callable ``f(p, q) -> float``.
+    n_samples : int, default 0
+        ``0`` returns a point estimate per clone; ``> 0`` returns per-draw values.
+    weighted : bool, default False
+        Weight clones by size when building the joint distribution.
+    posterior : bool, default True
+        Use posterior draws of :math:`p_{ct}` (vs the prior-only joint).
+    combine_with_logits : bool, default True
+        Combine the sampled prior with the per-cell logits (only when ``posterior``).
+    graph : bool, default False
+        Print an ASCII histogram of the flux distribution.
+    seed : int, optional
+        Seed for the posterior sampling (default 42).
 
     Returns
     -------
-    • `pd.Series` (index = clone_id)   if `n_samples == 0`
-    • `np.ndarray` shape = (n_samples, n_clones) otherwise
-      (rows correspond to posterior draws)
+    pandas.Series or numpy.ndarray
+        A Series indexed by clonotype if ``n_samples == 0``; otherwise an array of
+        shape ``(n_samples, n_clones)`` whose rows are posterior draws.
+
+    Raises
+    ------
+    ValueError
+        If the requested clones do not overlap the data at both covariates.
+
+    See Also
+    --------
+    phenotypic_entropy : per-clone phenotypic spread at a single covariate.
+
+    Examples
+    --------
+    >>> flux(adata, from_this="T1", to_that="T2").sort_values(ascending=False).head()
     """
     if seed is not None:
         np.random.seed(seed)
