@@ -1,26 +1,48 @@
-/* Custom styles for TCRi documentation */
+/* TCRi documentation — minimal aesthetic with the brand green (#39de2d) as a
+   strong accent. Layered on top of Furo; base colors (white background, near-
+   black text, dark greys, green links) come from light_css_variables /
+   dark_css_variables in conf.py. Everything here is mode-safe: it only sets
+   the bright-green accents and weights, never a fixed foreground/background
+   color, so light and dark modes both stay readable. */
 
-/* Main content area */
-.wy-nav-content {
-    max-width: 1200px;
+:root {
+  --tcri-green: #39de2d;
 }
 
-/* Code blocks */
-.highlight {
-    background: #f5f5f5;
+/* Sidebar wordmark logo. */
+.sidebar-logo {
+  max-height: 3rem;
+  width: auto;
+}
+.sidebar-logo-container {
+  margin: 0.7rem 0 0.3rem;
 }
 
-/* Links */
-a {
-    color: #2980B9;
-}
-
-a:hover {
-    color: #3091d1;
-}
-
-/* Headers */
+/* Headings: bold, with bright-green accent rules. Color is inherited from the
+   theme foreground so it adapts between light and dark. */
 h1, h2, h3, h4, h5, h6 {
-    font-family: 'Roboto', sans-serif;
-    color: #2c3e50;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+h1 {
+  border-bottom: 3px solid var(--tcri-green);
+  padding-bottom: 0.2rem;
+}
+h2 {
+  border-bottom: 1px solid rgba(57, 222, 45, 0.5);
+  padding-bottom: 0.15rem;
+}
+
+/* Green accent bars on admonitions and API signatures. */
+.admonition {
+  border-left: 4px solid var(--tcri-green);
+}
+dl.py > dt {
+  border-left: 3px solid var(--tcri-green);
+  padding-left: 0.6rem;
+}
+
+/* Tables: green header rule. */
+table.docutils thead tr {
+  border-bottom: 2px solid var(--tcri-green);
 }
