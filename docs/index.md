@@ -36,6 +36,7 @@ If you use TCRi in your research, please cite:
 
 usage/installation
 usage/quickstart
+concepts/data-model
 api/model
 api/preprocessing
 api/metrics
