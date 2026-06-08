@@ -1,117 +1,79 @@
 # Quickstart
 
-This guide will help you get started with TCRi by walking through a basic analysis workflow using sample data.
+A minimal end-to-end TCRi workflow. For the concepts behind these objects see
+[Data model & concepts](../concepts/data-model.md); for full signatures see the
+API reference.
 
-## Loading Data
+## Loading data
 
-TCRi works with AnnData objects that contain both gene expression and TCR information. Here's how to load and set up your data:
+TCRi works on an `AnnData` with paired gene expression and TCR information. The
+`.obs` table needs columns identifying each cell's **clonotype**, **phenotype**,
+**covariate** (e.g. timepoint), and **batch** (e.g. patient).
 
 ```python
-import tcri
 import scanpy as sc
+import tcri
+from tcri.model import TCRIModel
 
-# Load your data
 adata = sc.read_h5ad("your_data.h5ad")
-
-# Make sure your AnnData object has the right fields for TCR information
-# Typically, TCR information should be in obs under 'clone_id' or similar
 ```
 
-## Setting up the Model
+## Setting up and training the model
 
 ```python
-# Initialize the model
-model = tcri.TCRIModel(
+TCRIModel.setup_anndata(
     adata,
-    n_latent=10,      # Dimension of latent space
-    n_hidden=128,     # Size of hidden layers
-    global_scale=10.0,
-    local_scale=5.0
+    clonotype_key="clone_id",     # your .obs column names
+    phenotype_key="phenotype",
+    covariate_key="timepoint",
+    batch_key="patient",
 )
 
-# Train the model
-model.train(
-    max_epochs=50,
-    batch_size=128,
-    lr=1e-3,
-    reconstruction_loss_scale=1e-2
-)
-
-# Get latent representations
-latent_z = model.get_latent_representation(adata)
+model = TCRIModel(adata)          # defaults are sensible; tune n_latent, n_hidden, ...
+model.train(max_epochs=200, batch_size=128)
 ```
 
-## Preprocessing
+## Registering model outputs
+
+`register_model` writes the learned distributions, latent embedding, per-cell
+phenotype posteriors, and indexing arrays back onto the `AnnData`
+(`.uns` / `.obsm` / `.obs`) so the metric and plotting functions can read them.
 
 ```python
-# Register model outputs back to the AnnData object
-tcri.pp.register_model(
-    adata,
-    model,
-    phenotype_prob_slot="X_tcri_phenotypes",
-    phenotype_assignment_obs="tcri_phenotype",
-    latent_slot="X_tcri"
-)
-
-# Compute joint distributions
-joint_dist = tcri.pp.joint_distribution(
-    adata,
-    covariate_label="timepoint"  # Replace with your covariate of interest
-)
+tcri.pp.register_model(adata, model, clonotype_key="clone_id")
 ```
 
-## Computing Metrics
+## Computing metrics
 
 ```python
-# Calculate mutual information
-mi = tcri.tl.mutual_information(
-    adata,
-    "timepoint",  # Replace with your covariate of interest
-    temperature=1.0
-)
+covariate = adata.uns["tcri_covariate_categories"][0]
 
-# Calculate clonotypic entropy
-entropy = tcri.tl.clonotypic_entropy(
-    adata,
-    "timepoint",   # Covariate
-    "phenotype"    # Phenotype field
-)
+# Mutual information between clonotype and phenotype (point estimate -> float)
+mi = tcri.tl.mutual_information(adata, covariate)
 
-# Calculate clonality
+# Clonotypic entropy: a value per phenotype (Series). n_samples > 0 draws from
+# the posterior; phenotypic_entropy is the per-clone analogue.
+ce = tcri.tl.clonotypic_entropy(adata, covariate, n_samples=50)
+pe = tcri.tl.phenotypic_entropy(adata, covariate, n_samples=50)
+
+# Clonality per phenotype
 clonality = tcri.tl.clonality(adata)
 ```
 
 ## Visualization
 
+Plotting helpers live under `tcri.pl`:
+
 ```python
-# Mutual information plot
-tcri.pl.mutual_information(
-    adata,
-    splitby="timepoint",  # Replace with your covariate
-    temperature=1.0,
-    figsize=(8,4)
-)
-
-# Polar plot of phenotype distributions
-tcri.pl.polar_plot(
-    adata,
-    statistic="distribution",
-    method="joint_distribution"
-)
-
-# Phenotype probability ternary plot
-tcri.pl.probability_ternary(
-    adata,
-    ["Phenotype1", "Phenotype2", "Phenotype3"],  # Replace with your phenotype names
-    splitby="condition"  # Optional: split by a condition
-)
+# Mutual-information summary across covariate groups
+tcri.pl.mutual_information(adata, splitby=covariate)
 ```
 
-## Next Steps
+Other helpers — phenotype-flux Sankey diagrams (`plot_pheno_sankey`), per-cell
+phenotype probabilities, and more — are documented in the
+[Plotting API](../api/plotting.md).
 
-Explore the API documentation for more detailed information on each function and additional functionality:
+## Next steps
 
-- [Model API](../api/model.md)
-- [Preprocessing API](../api/preprocessing.md)
-- [Metrics API](../api/metrics.md)
-- [Plotting API](../api/plotting.md)
+- [Data model & concepts](../concepts/data-model.md) — how the model and objects fit together
+- [Model API](../api/model.md) · [Preprocessing API](../api/preprocessing.md) · [Metrics API](../api/metrics.md) · [Plotting API](../api/plotting.md)

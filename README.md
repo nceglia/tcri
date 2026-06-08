@@ -28,176 +28,51 @@ It provides tools for:
 - Visualization capabilities
 - Deep learning model for phenotype prediction
 
-## Core Components
-
-### 1. Model (`tcri.model`)
-
-The `TCRIModel` class implements a hierarchical generative Bayesian model for analyzing paired TCR and gene expression data:
+## Quick start
 
 ```python
-import tcri
-
-# Initialize model
-model = tcri.TCRIModel(
-    adata,
-    n_latent=10,
-    n_hidden=128,
-    global_scale=10.0,
-    local_scale=5.0,
-    prior_temperature=1.0,
-    guide_temperature=1.0,
-    use_enumeration=False,
-    device=None
-)
-
-# Train model
-model.train(
-    max_epochs=50,
-    batch_size=128,
-    lr=1e-3,
-    margin_scale=0.0,
-    margin_value=2.0,
-    adaptive_margin=False,
-    reconstruction_loss_scale=1e-2,
-    n_steps_kl_warmup=1000
-)
-
-# Get latent representations
-latent_z = model.get_latent_representation(adata)
-```
-
-### 2. Preprocessing (`tcri.preprocessing`)
-
-Key preprocessing functions:
-
-```python
-# Register model outputs in AnnData
-tcri.pp.register_model(
-    adata,
-    model,
-    phenotype_prob_slot="X_tcri_phenotypes",
-    phenotype_assignment_obs="tcri_phenotype",
-    latent_slot="X_tcri",
-    batch_size=256
-)
-
-# Compute joint distributions
-joint_dist = tcri.pp.joint_distribution(
-    adata,
-    covariate_label="timepoint",
-    temperature=1.0,
-    n_samples=0,
-    clones=None,
-    weighted=False
-)
-
-# Global joint distribution
-global_dist = tcri.pp.global_joint_distribution(
-    adata,
-    temperature=1.0,
-    n_samples=0
-)
-```
-
-### 3. Metrics (`tcri.metrics`)
-
-Information theoretic metrics for analyzing TCR and phenotype relationships:
-
-```python
-# Clonotypic entropy
-clonotypic_entropy = tcri.tl.clonotypic_entropy(adata, covariate, phenotype, temperature=1.0)
-
-# Phenotypic entropy
-phenotypic_entropy = tcri.tl.phenotypic_entropy(adata, covariate, clonotype, temperature=1.0)
-
-# Mutual information
-mutual_info = tcri.tl.mutual_information(adata, covariate, temperature=1.0, weighted=False)
-
-# Clonality
-clonality = tcri.tl.clonality(adata)
-
-# Phenotypic flux
-flux = tcri.tl.flux(adata, from_this="T1", to_that="T2", clones=None, temperature=1.0)
-```
-
-### 4. Plotting (`tcri.plotting`)
-
-Visualization tools for all metrics:
-
-```python
-# Polar plots
-tcri.pl.polar_plot(
-    adata,
-    phenotypes=None,
-    statistic="distribution",
-    method="joint_distribution",
-    splitby=None,
-    color_dict=None,
-    temperature=1.0
-)
-
-# Ternary plots
-tcri.pl.probability_ternary(
-    adata,
-    phenotype_names,
-    splitby=None,
-    conditions=None,
-    top_n=None
-)
-
-# Mutual information plots
-tcri.pl.mutual_information(
-    adata,
-    splitby=None,
-    temperature=1.0,
-    n_samples=0,
-    normalized=True,
-    palette=None,
-    save=None,
-    legend_fontsize=6,
-    bbox_to_anchor=(1.15,1.),
-    figsize=(8,4),
-    rotation=90,
-    weighted=True,
-    return_plot=True
-)
-
-# Clonality plots
-tcri.pl.clonality(
-    adata,
-    groupby=None,
-    splitby=None,
-    s=10,
-    order=None,
-    figsize=(12,5),
-    palette=None
-)
-```
-
-## Example Usage
-
-```python
-import tcri
 import scanpy as sc
+import tcri
+from tcri.model import TCRIModel
 
-# Load data
+# AnnData with paired gene expression and, in .obs, columns identifying each
+# cell's clonotype, phenotype, covariate (e.g. timepoint), and batch (e.g. patient).
 adata = sc.read_h5ad("your_data.h5ad")
 
-# Setup model
-model = tcri.TCRIModel(adata)
-model.train()
+# 1. Register the fields and fit the hierarchical model
+TCRIModel.setup_anndata(
+    adata,
+    clonotype_key="clone_id",     # <- your .obs column names
+    phenotype_key="phenotype",
+    covariate_key="timepoint",
+    batch_key="patient",
+)
+model = TCRIModel(adata)          # defaults are sensible; tune n_latent, n_hidden, ...
+model.train(max_epochs=200, batch_size=128)
 
-# Register model outputs
-tcri.pp.register_model(adata, model)
+# 2. Write learned distributions, latent embedding, and per-cell phenotype
+#    posteriors back onto the AnnData (.uns / .obsm / .obs)
+tcri.pp.register_model(adata, model, clonotype_key="clone_id")
 
-# Compute metrics
-mi = tcri.tl.mutual_information(adata, "timepoint")
-entropy = tcri.tl.clonotypic_entropy(adata, "timepoint", "phenotype")
+# 3. Information-theoretic metrics at a covariate value
+covariate = adata.uns["tcri_covariate_categories"][0]
 
-# Visualize results
-tcri.pl.mutual_information(adata, splitby="timepoint")
-tcri.pl.polar_plot(adata, statistic="entropy")
+mi = tcri.tl.mutual_information(adata, covariate)                 # clone–phenotype coupling (float)
+ce = tcri.tl.clonotypic_entropy(adata, covariate, n_samples=50)  # Series over phenotypes
+pe = tcri.tl.phenotypic_entropy(adata, covariate, n_samples=50)  # Series over clones
 ```
+
+Plotting helpers live under `tcri.pl` — phenotype-flux Sankey diagrams
+(`plot_pheno_sankey`), per-cell phenotype probabilities, mutual-information
+summaries, and more. See the API reference for the full set.
+
+## Documentation
+
+Full documentation — a conceptual overview of the data model plus the complete
+API reference — lives on [Read the Docs](https://tcri.readthedocs.io):
+
+- **Concepts:** the hierarchical model and the objects `register_model` writes onto your AnnData
+- **API reference:** `tcri.model`, `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.ut`
 
 ## Citation
 
@@ -210,4 +85,3 @@ If you use TCRi in your research, please cite:
   year={2022}
 }
 ```
-
