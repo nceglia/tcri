@@ -5,7 +5,7 @@
 # here. Only the Sphinx toolchain plus numpy/pandas (kept real for clean
 # intersphinx type links) are needed.
 sphinx>=7,<9
-sphinx-rtd-theme>=2.0
+furo>=2024.1.29
 myst-parser>=2.0
 numpy
 pandas
