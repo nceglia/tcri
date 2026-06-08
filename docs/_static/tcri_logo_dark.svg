@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="-69.76 6.24 418.56 222.72" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;"><g transform="translate(273.195,220.984) scale(1.12) translate(-273.195,-220.984)">
+    <g transform="matrix(1.10674,0,0,1.10674,9.24765,248.771)">
+        <g>
+            <g transform="matrix(0.965686,0,0,0.963882,-18.0273,-234.03)">
+                
+            </g>
+            <g transform="matrix(0.84247,0,0,0.84247,19.2889,-26.0164)">
+                
+                <g transform="matrix(0.986651,0,0,0.758057,2.77881,-6.37068)">
+                    <path d="M324.7,-144.326L324.7,2.326C324.7,5.458 322.747,8 320.341,8L267.059,8C264.653,8 262.7,5.458 262.7,2.326L262.7,-144.326C262.7,-147.458 264.653,-150 267.059,-150L320.341,-150C322.747,-150 324.7,-147.458 324.7,-144.326Z" style="fill:none;stroke:#ffffff;stroke-width:3.5px;stroke-miterlimit:4;"/>
+                </g>
+                <g transform="matrix(1.2943,0,0,0.730095,-88.1788,-28.8343)">
+                    <path d="M293.7,-162L293.7,-60" style="fill:none;fill-rule:nonzero;stroke:rgb(57,222,45);stroke-width:3.5px;stroke-miterlimit:4;"/>
+                </g>
+                <g transform="matrix(1.2943,0,0,0.730095,-88.1788,-28.8343)">
+                    <path d="M287.7,-62L299.7,-62L293.7,-53L287.7,-62Z" style="fill:rgb(57,222,45);fill-rule:nonzero;stroke:rgb(57,222,45);stroke-width:1.02px;stroke-linecap:butt;stroke-miterlimit:2;"/>
+                </g>
+                <g transform="matrix(1.2943,0,0,1.2943,-88.1788,8.18965)">
+                    <circle cx="293.7" cy="-40" r="16" style="fill:none;stroke:rgb(57,222,45);stroke-width:3.5px;stroke-miterlimit:4;"/>
+                </g>
+                <g transform="matrix(1.2943,0,0,1.2943,-88.1788,75.4934)">
+                    <circle cx="293.7" cy="-178" r="16" style="fill:rgb(57,222,45);stroke:rgb(57,222,45);stroke-width:0.83px;stroke-linecap:butt;stroke-miterlimit:2;"/>
+                </g>
+                <g transform="matrix(1.40202,0,0,1.40202,308.518,-7.51389)">
+                    <g transform="matrix(19,0,0,19,4.22119,0)">
+                    </g>
+                    <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:19px;fill:rgb(57,222,45);stroke:rgb(57,222,45);stroke-width:0.76px;stroke-linecap:butt;stroke-miterlimit:2;">i</text>
+                </g>
+                <g transform="matrix(1.52416,0,0,1.13273,-18.5515,-215.385)">
+                    <g transform="matrix(1.2943,0,0,1.2943,-31.0834,-57.9893)">
+                        
+                    </g>
+                    <g transform="matrix(1.2943,0,0,1.2943,-42.972,-57.9893)">
+                        
+                    </g>
+                    <g transform="matrix(1.2943,0,0,1.2943,-49.7655,-57.9893)">
+                        
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+<g fill="rgb(57,222,45)" stroke="rgb(57,222,45)" stroke-width="8.0" stroke-linecap="butt" stroke-linejoin="round"><line x1="273.5" y1="57.5" x2="256.0" y2="59.5"/><line x1="273.5" y1="57.5" x2="269.5" y2="40.4"/><line x1="273.5" y1="57.5" x2="306.0" y2="80.0"/></g></g>
+<g transform="translate(-61.834,220.984) scale(3.0628)"><path d="M0.0 -37.5H5.357142857142857V-48.21428571428571H10.714285714285714V-53.57142857142857H16.07142857142857V-37.5H26.785714285714285V-26.785714285714285H16.07142857142857V-10.714285714285714H26.785714285714285V0.0H10.714285714285714V-5.357142857142857H5.357142857142857V-26.785714285714285H0.0ZM58.92857142857142 -16.07142857142857H69.64285714285714V-5.357142857142857H64.28571428571428V0.0H37.49999999999999V-5.357142857142857H32.14285714285714V-37.5H37.49999999999999V-42.857142857142854H64.28571428571428V-37.5H69.64285714285714V-26.785714285714285H58.92857142857142V-32.14285714285714H42.857142857142854V-10.714285714285714H58.92857142857142ZM96.42857142857143 -32.14285714285714H91.07142857142857V-26.785714285714285H85.71428571428571V0.0H75.0V-42.857142857142854H85.71428571428571V-37.5H91.07142857142857V-42.857142857142854H101.78571428571428V-37.5H107.14285714285714V-32.14285714285714H101.78571428571428V-26.785714285714285H96.42857142857143Z" fill="#ffffff"/></g>
+</svg>
