@@ -63,7 +63,7 @@ pygments_style = 'sphinx'
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'furo'
 
 # Add any paths that contain custom static files (such as style sheets) here.
 # relative to this directory. They are copied after the builtin static files,
@@ -76,20 +76,30 @@ html_css_files = [
     'css/custom.css',
 ]
 
-html_logo = '../framework.png'
-html_favicon = '../framework.png'
+html_favicon = '_static/favicon.ico'
 
+# -- Furo theme --------------------------------------------------------------
+# Minimal, white-background look with the TCRi brand green (#39de2d) as the
+# accent. The wordmark logo serves as the title, so the text name is hidden.
+# Bright #39de2d is used for non-text accents (heading rules, nav marker,
+# admonition bars) via custom.css; body link text uses a darker green
+# (#1f9e16) that stays readable on white.
 html_theme_options = {
-    'logo_only': False,
-    'prev_next_buttons_location': 'bottom',
-    'style_external_links': False,
-    'style_nav_header_background': '#2980B9',
-    # Toc options
-    'collapse_navigation': True,
-    'sticky_navigation': True,
-    'navigation_depth': 4,
-    'includehidden': True,
-    'titles_only': False
+    "sidebar_hide_name": True,
+    "light_logo": "tcri_logo.svg",
+    "dark_logo": "tcri_logo_dark.svg",
+    "light_css_variables": {
+        "color-brand-primary": "#1f9e16",
+        "color-brand-content": "#1f9e16",
+        "color-brand-visited": "#1f9e16",
+        "color-background-primary": "#ffffff",
+        "color-foreground-primary": "#0a0a0a",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#39de2d",
+        "color-brand-content": "#39de2d",
+        "color-brand-visited": "#39de2d",
+    },
 }
 
 # -- Extension configuration -------------------------------------------------
