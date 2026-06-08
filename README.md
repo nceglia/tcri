@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/nceglia/tcri/blob/main/tcri_logo.png?raw=true" alt="TCRi logo" width="500">
+  <img src="https://github.com/nceglia/tcri/blob/main/tcri_logo.png?raw=true" alt="TCRi logo" width="400">
 </p>
 
 # **TCR**i
