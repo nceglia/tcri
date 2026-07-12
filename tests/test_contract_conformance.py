@@ -1,0 +1,116 @@
+"""Contract conformance — the interface guardrail for the refactor.
+
+``tcri/_contract.pyi`` freezes the target public surface. Each *implemented*
+function's live signature is checked against its ``.pyi`` declaration (parameter
+names, kinds, and which carry defaults). Declared-but-absent functions are the
+worklist. Onboard a newly implemented function by adding it to ``IMPLEMENTED``
+as its PR lands.
+
+AST logic ported from grafiti's ``test_contract_conformance.py``.
+"""
+import ast
+import importlib
+import inspect
+from pathlib import Path
+
+import pytest
+
+import tcri
+
+PYI = Path(tcri.__file__).parent / "_contract.pyi"
+
+# contract key ("Namespace.func" / "TCRIModel.method") -> (module, dotted attr).
+# EMPTY at PR0 — nothing has been migrated to the new surface yet. Each PR adds
+# its landed functions here; the signature test then enforces live == contract.
+IMPLEMENTED: dict[str, tuple[str, str]] = {}
+
+
+def _params_from_ast(a: ast.arguments):
+    """(name, kind, has_default) per parameter of a .pyi FunctionDef."""
+    params = []
+    positional = list(a.posonlyargs) + list(a.args)
+    n_def = len(a.defaults)
+    for i, arg in enumerate(positional):
+        kind = "POSITIONAL_ONLY" if arg in a.posonlyargs else "POSITIONAL_OR_KEYWORD"
+        params.append((arg.arg, kind, i >= len(positional) - n_def))
+    if a.vararg:
+        params.append((a.vararg.arg, "VAR_POSITIONAL", False))
+    for arg, default in zip(a.kwonlyargs, a.kw_defaults):
+        params.append((arg.arg, "KEYWORD_ONLY", default is not None))
+    if a.kwarg:
+        params.append((a.kwarg.arg, "VAR_KEYWORD", False))
+    return params
+
+
+def _strip_receiver(params):
+    """Drop a leading self/cls so contract methods compare to live signatures."""
+    if params and params[0][0] in ("self", "cls"):
+        return params[1:]
+    return params
+
+
+def _live_params(fn):
+    return [
+        (p.name, p.kind.name, p.default is not inspect.Parameter.empty)
+        for p in inspect.signature(fn).parameters.values()
+    ]
+
+
+def _contract_signatures():
+    """Parse the .pyi: {"Namespace.func": [(name, kind, has_default), ...]}.
+
+    Namespace classes (tl/pp/pl/diag/ut) and the real TCRIModel class both hold
+    their functions as method FunctionDefs; keys are ``ClassName.funcname``.
+    """
+    tree = ast.parse(PYI.read_text())
+    sigs = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for m in node.body:
+                if isinstance(m, ast.FunctionDef):
+                    sigs[f"{node.name}.{m.name}"] = _strip_receiver(_params_from_ast(m.args))
+        elif isinstance(node, ast.FunctionDef):
+            sigs[node.name] = _params_from_ast(node.args)
+    return sigs
+
+
+CONTRACT = _contract_signatures()
+
+
+def test_contract_pyi_parses():
+    """The frozen contract is present and declares a non-trivial surface."""
+    assert PYI.exists(), "tcri/_contract.pyi missing"
+    assert len(CONTRACT) >= 20, f"contract looks truncated: {len(CONTRACT)} entries"
+    # every declared key is Namespace-qualified (no accidental bare defs)
+    assert all("." in k for k in CONTRACT), "unexpected un-namespaced contract entry"
+
+
+@pytest.mark.parametrize("key", sorted(IMPLEMENTED))
+def test_signature_matches_contract(key):
+    """Each implemented function's live signature matches the frozen contract."""
+    module, attr = IMPLEMENTED[key]
+    obj = importlib.import_module(module)
+    for part in attr.split("."):
+        obj = getattr(obj, part)
+    live = _strip_receiver(_live_params(obj))
+    assert live == CONTRACT[key], (
+        f"signature drift for {key}:\n  contract={CONTRACT[key]}\n  live    ={live}"
+    )
+
+
+def test_report_unimplemented(capsys):
+    """Informational worklist: declared-but-not-yet-implemented (never fails)."""
+    todo = sorted(set(CONTRACT) - set(IMPLEMENTED))
+    with capsys.disabled():
+        print(f"\n[contract] implemented {len(IMPLEMENTED)}/{len(CONTRACT)}; "
+              f"remaining worklist ({len(todo)}):")
+        for k in todo:
+            print(f"    ☐ {k}")
+    assert True
+
+
+def test_import_smoke():
+    """`import tcri` is green and the public namespaces resolve."""
+    for ns in ("tl", "pp", "pl", "ml", "ut"):
+        assert hasattr(tcri, ns), f"tcri.{ns} missing"
+    # diag is added in Phase 8; assert once it lands.
