@@ -117,7 +117,8 @@ Freeze the map **before** Phase 5 (the first breaking PR). Renames are breaking;
 | `mi_compare`, `delta_entropy_table`, `flux_table`, `delta_clonotypic_entropy`, `phenotypic_entropy_delta` | **deleted** — expressed via `groupby=` + `tl.compare_groups` | Phase 6 |
 | `tl.phenotypic_entropies` / `tl.clonotypic_entropies` (plural batch forms) | **deleted** — subsumed by `groupby=` on the singular metric | Phase 6 |
 | `get_cell_phenotype_probs` | `predict` (scvi/CellAssign idiom; order‑preserving loader, indexed by `obs_names`) | Phase 4 |
-| `register_model` (+ `classify_phenotypes`, `register_*_key`) | `model.to_anndata` (thin) | Phase 4 |
+| `register_model` (+ `register_*_key`) | `model.to_anndata` (thin) | Phase 4 |
+| `classify_phenotypes` | — (DROP; superseded by `REDO_LIST.md`) | Phase 2 ✅ deleted |
 | `register_clonotype_key` / `register_phenotype_key` | folded (private) into `to_anndata` | Phase 4 |
 | `pl.clonotypic_entropy_by_phenotype` | `pl.clonotypic_entropy` | Phase 7 |
 | `plot_pheno_sankey` | `pl.phenotypic_flux` (sankey) | Phase 7 |

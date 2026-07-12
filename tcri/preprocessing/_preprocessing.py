@@ -17,7 +17,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from typing import Optional
-from sklearn.metrics.pairwise import cosine_similarity
 import umap
 import numpy as np, pandas as pd, torch, umap
 from tqdm.auto import tqdm

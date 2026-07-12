@@ -113,7 +113,7 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **Added:** n/a (pure removal PR).
 - **Removed (hard bar):** ✅ all 14 Phase-2 ledger items ticked — `pp.get_latent_embedding`, `pp.group_small_clones`, `pp.register_probability_columns`, `pp.remove_meaningless_genes`, `pp.gene_entropy`, `pp.classify_phenotypes`, `pl.polar_plot`, `pl.probability_distribution`, `pl.bayesian_mutual_information`, `metrics._ent`, `tl.clone_fraction`, `metrics.dkl`, `ut.probabilities` (+ import), `SankeyNode.hex_to_rgb`. Confirmed gone: no `def` remains, no explicit re-export/`__all__` names them.
 - **Test opportunities:** none new (removal); the existing suite is the regression gate and stayed green.
-- **Streamline:** shrinks preprocessing (−129) and plotting (−225) meaningfully ahead of the Phase 3/4/7 splits. Left module-top imports untouched (conservative — genuinely-orphaned imports get swept when each file is split/finalized; the PR1 audit already handled the utils ones).
+- **Streamline:** shrinks preprocessing (−127) and plotting (−225) meaningfully ahead of the Phase 3/4/7 splits. Removed the one import this PR orphaned (`cosine_similarity` — sole user was the deleted `classify_phenotypes`); other module-top imports left for the file-split phases (conservative; the PR1 audit already handled the utils ones).
 - **Usability:** removes broken/dead public entry points (`probability_distribution` self-recursion, `bayesian_mutual_information` bad kwarg, `polar_plot` undefined-name) from the surface so nobody trips on them.
 
 ## PR 3 — Model module split  ·  ☐ todo
