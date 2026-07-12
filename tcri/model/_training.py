@@ -15,6 +15,8 @@ from sklearn.cluster import KMeans
 
 from ._module import TCRIModule
 
+__all__ = ["UnifiedTrainingPlan", "build_archetypes"]
+
 
 def build_archetypes(clone_phenotype_prior, K=4):
     kmeans = KMeans(n_clusters=K, random_state=42)

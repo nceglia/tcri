@@ -1,6 +1,8 @@
 """Phenotype classifier head for the TCRI Pyro module (:class:`~tcri.model._module.TCRIModule`)."""
 import torch.nn as nn
 
+__all__ = ["PhenotypeClassifier"]
+
 
 class PhenotypeClassifier(nn.Module):
     def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, temperature=1.0):

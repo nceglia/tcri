@@ -32,9 +32,8 @@ from scvi.dataloaders import DataSplitter
 
 from ._module import TCRIModule
 from ._training import UnifiedTrainingPlan, build_archetypes
-# re-exported so the public `tcri.model.*` surface is unchanged by the split
-from ._priors import MixtureDirichlet, VampPrior  # noqa: F401
-from ._classifier import PhenotypeClassifier  # noqa: F401
+
+__all__ = ["TCRIModel"]
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 warnings.filterwarnings(

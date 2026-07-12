@@ -15,6 +15,8 @@ from scvi.module.base import PyroBaseModuleClass, auto_move_data
 from ._classifier import PhenotypeClassifier
 from ._priors import VampPrior, MixtureDirichlet
 
+__all__ = ["TCRIModule"]
+
 
 class TCRIModule(PyroBaseModuleClass):
     """

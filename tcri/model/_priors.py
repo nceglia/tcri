@@ -7,6 +7,8 @@ clonotype-level phenotype prior.
 import torch
 import pyro.distributions as dist
 
+__all__ = ["MixtureDirichlet", "VampPrior"]
+
 
 class VampPrior(torch.nn.Module):
     def __init__(self, pseudo_inputs, encoder):
