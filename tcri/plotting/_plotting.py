@@ -279,7 +279,7 @@ def _phenotype_mass_per_clone(adata, covariate, clones, normalize):
     """Per-clone phenotype mass at one covariate.
 
     Returns dict {clone_id -> np.ndarray(n_phen)} aligned to
-    adata.uns[K.PHENOTYPE_CATEGORIES]. Rows of joint_distribution
+    adata.uns['tcri_phenotype_categories']. Rows of joint_distribution
     sum to 1 (per clone-celltype). Multiple ct rows for the same clone
     are summed. With normalize=True, each clone-ct row contributes its
     probability vector unweighted; with normalize=False, each row is
@@ -490,7 +490,7 @@ def phenotypic_flux(
     """Sankey of phenotype flow across `order` values of `splitby`.
 
     Thin wrapper around plot_pheno_sankey. `splitby` is forwarded as the
-    x-axis label and must match adata.uns[K.METADATA]['covariate_col'].
+    x-axis label and must match adata.uns['tcri_metadata']['covariate_col'].
     """
     times = list(range(len(order)))
     if phenotype_colors is None:
@@ -1089,7 +1089,7 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
     adata : AnnData
         AnnData object containing the data with TCR and phenotype information
     splitby : str, optional
-        Column name to split the data by. If None, uses the covariate column stored in adata.uns[K.METADATA]
+        Column name to split the data by. If None, uses the covariate column stored in adata.uns['tcri_metadata']
     temperature : float, default=1.0
         Temperature parameter for softening/sharpening distributions in the joint distribution calculation
     n_samples : int, default=0
@@ -1349,7 +1349,7 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
         AnnData object containing the data with TCR and phenotype information
     phenotypes : list, optional
         List of phenotype names to include in the plot. If None, uses all phenotypes
-        defined in adata.uns[K.METADATA]["phenotype_col"]
+        defined in adata.uns['tcri_metadata']["phenotype_col"]
     statistic : str, default="distribution"
         Type of statistic to plot, one of "distribution" or "entropy"
     method : str, default="joint_distribution"
@@ -1357,7 +1357,7 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
         or "empirical" (raw cell counts)
     splitby : str, optional
         Column name to split the data by. If None, uses the covariate column stored
-        in adata.uns[K.METADATA]["covariate_col"]
+        in adata.uns['tcri_metadata']["covariate_col"]
     color_dict : dict, optional
         Dictionary mapping split categories to colors
     temperature : float, default=1.0
