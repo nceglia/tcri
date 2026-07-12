@@ -591,7 +591,7 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(inplace=True)
         if order == None:
-            order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
+            order = df.groupby("Phenotype")[ylabel].median().sort_values().index.tolist()
         fig,ax=plt.subplots(1,1,figsize=figsize)
         sns.stripplot(data=df,x="Phenotype",y=ylabel,s=s,hue=groupby,ax=ax,order=order, palette=palette)
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, color="#999999",order=order)
@@ -617,7 +617,7 @@ def tcri_boxplot(adata, function, groupby=None,ylabel="", splitby=None,figsize=(
         df.dropna(inplace=True)
         fig,ax=plt.subplots(1,1,figsize=figsize)
         if order == None:
-            order = df.groupby(["Phenotype"]).median(ylabel).sort_values(ylabel).index.tolist()
+            order = df.groupby("Phenotype")[ylabel].median().sort_values().index.tolist()
         sns.boxplot(data=df,x="Phenotype",y=ylabel,ax=ax, hue=splitby,order=order,palette=palette)
         ax.set_ylim(0,max(df[ylabel] + 0.1))
         ax.set_title(ylabel)
