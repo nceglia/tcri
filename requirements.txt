@@ -1,5 +1,5 @@
 # Verified-green dependency lock for tcri (scverse ecosystem).
-# Generated + tested in a fresh Python 3.12 venv; `pytest` = 36 passed / 1 skipped.
+# Generated + tested in a fresh Python 3.12 venv; `pytest` = 44 passed / 0 skipped.
 # pyproject.toml holds the compatible ranges; this file pins the tested-recent set.
 # Regenerate by creating a fresh venv and `pip install -e ".[test]"`.
 

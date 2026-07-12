@@ -54,19 +54,23 @@ CANONICAL_OBSM = [K.X_TCRI, K.X_LOGITS, K.X_LOGPOSTERIOR, K.X_PROBABILITIES]
 
 
 def test_to_anndata_writes_canonical_set(trained_model):
-    """to_anndata writes the full canonical key set incl. the Phase-4 additions;
-    no manager stash."""
-    _, adata = trained_model
+    """to_anndata writes the full canonical key set incl. the Phase-4 additions,
+    with the scalar knobs equal to the model's configured values; no manager stash."""
+    model, adata = trained_model
     for k in CANONICAL_UNS:
         assert k in adata.uns, f"to_anndata did not write uns[{k}]"
     for k in CANONICAL_OBSM:
         assert k in adata.obsm, f"to_anndata did not write obsm[{k}]"
     assert K.PHENOTYPE in adata.obs, "to_anndata did not write the hard-label obs"
     assert "tcri_manager" not in adata.uns, "manager stash was not retired"
-    # Phase-4 additions explicitly present + serializable
-    assert np.isfinite(adata.uns[K.LOCAL_SCALE])
-    assert K.GATE_PROB in adata.uns  # scalar in [0,1] or nan (no gate)
-    assert np.isfinite(adata.uns[K.CLASSIFIER_TEMPERATURE])
+    # Phase-4 scalar knobs: written == the model's configured value (not just finite)
+    assert adata.uns[K.LOCAL_SCALE] == float(model.module.local_scale)
+    assert adata.uns[K.CLASSIFIER_TEMPERATURE] == float(model.module.classifier_temperature)
+    gp = model.module.gate_prob
+    if gp is None:
+        assert np.isnan(adata.uns[K.GATE_PROB])  # no gate -> nan sentinel (serializable)
+    else:
+        assert adata.uns[K.GATE_PROB] == float(gp)
 
 
 def test_setup_anndata_leaves_analysis_obs_untouched(synthetic_adata):

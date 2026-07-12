@@ -121,6 +121,9 @@ def trained_model(synthetic_adata):
     """TCRIModel fit for 50 epochs on synthetic_adata, with to_anndata applied."""
     _seed_all(0)
 
+    import pyro
+    pyro.clear_param_store()  # own the process-global store (§5.2 cross-test contamination)
+
     from tcri.model._model import TCRIModel
 
     adata = synthetic_adata.copy()
