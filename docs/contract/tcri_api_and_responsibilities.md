@@ -392,9 +392,10 @@ Called only by `TCRIModel.to_anndata`; folds in the old `register_phenotype_key`
 joint_distribution(
     adata, *,
     covariate=None,          # None → ALL covariate values in one pass (shared draw)
-    groupby=None,
+    groupby=None,            # NOTE: deferred to Phase 6 in code (raises NotImplementedError until then)
     n_samples=0,
     use_logits=True,         # was posterior=; alias cell_informed=; classifier-mixing switch
+    weighted=False,          # per-clonotype (False) vs cell-weighted (True); ct-keyed
     clones=None,
     temperature=1.0,
     random_state=None,
