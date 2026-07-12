@@ -59,6 +59,7 @@ def test_model_construct_train_predict(synthetic_adata):
     p_ct = model.get_p_ct()
     assert p_ct.ndim == 2 and p_ct.shape[1] == P
 
-    probs = model.get_cell_phenotype_probs()
+    probs = model.predict()
     assert probs.shape == (n_cells, P)
-    np.testing.assert_allclose(probs.sum(axis=1), 1.0, atol=1e-4)
+    assert list(probs.index) == list(adata.obs_names)  # order-preserving, labelled
+    np.testing.assert_allclose(probs.values.sum(axis=1), 1.0, atol=1e-4)

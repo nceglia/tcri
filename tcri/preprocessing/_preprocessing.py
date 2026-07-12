@@ -59,16 +59,7 @@ def _ascii_hist(samples, bins=25, width=40) -> str:
     return "\n".join(lines)
 
 
-def register_phenotype_key(adata, phenotype_key, order=None):
-    assert phenotype_key in adata.obs, "Key {} not found.".format(phenotype_key)
-    if order==None:
-        adata.uns["tcri_unique_phenotypes"] = np.unique(adata.obs[phenotype_key].tolist())
-    adata.uns["tcri_phenotype_key"] = phenotype_key
 
-def register_clonotype_key(adata, tcr_key):
-    assert tcr_key in adata.obs, "Key {} not found.".format(tcr_key)
-    adata.uns["tcri_clone_key"] = tcr_key
-    adata.uns["tcri_unique_clonotypes"] = np.unique(adata.obs[tcr_key].tolist())
 
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
@@ -84,130 +75,8 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
 
 
 # ------------ helper to extract logits -------- #
-@torch.no_grad()
-def _compute_logits_and_prior(model, adata, batch_size=256, eps=1e-8):
-    device   = next(model.module.parameters()).device
-    loader   = model._make_data_loader(adata=adata, batch_size=batch_size)
-    ct_arr   = model.module.ct_array.to(device)
-    p_ct     = model.module.get_p_ct().to(device)
-
-    logits_buf, prior_buf = [], []
-    start = 0
-    for tensors in tqdm(loader, desc="extracting logits", leave=False):
-        x = tensors[REGISTRY_KEYS.X_KEY].to(device)
-        b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-        n = x.size(0)
-
-        z_loc, _, _ = model.module.encoder(x, b)
-        logits      = model.module.classifier(z_loc)
-        prior_log   = torch.log(p_ct[ct_arr[start:start+n]] + eps)
-
-        logits_buf.append(logits.cpu())
-        prior_buf.append(prior_log.cpu())
-        start += n
-
-    return (torch.cat(logits_buf).numpy().astype("float32"),
-            torch.cat(prior_buf).numpy().astype("float32"))
 
 # ------------ main routine -------------------- #
-@torch.no_grad()
-def register_model(
-    adata, model,
-    phenotype_prob_slot=K.X_PROBABILITIES,
-    phenotype_assignment_obs=K.PHENOTYPE,
-    latent_slot=K.X_TCRI,
-    batch_size=256,
-    store_logits=True,
-    store_logposterior=True,
-    compute_umap=False,
-    umap_n_neighbors=50,
-    umap_min_dist=1e-3,
-    umap_metric="euclidean",
-    umap_random_state=42,
-    umap_output_metric="euclidean",
-    clonotype_key="trb_unique",
-):
-    print(f"{BOLD}{MAGENT}🔗  Registering TCRi model outputs …{RESET}")
-
-    # 1) priors & arrays -------------------------------------------------
-    adata.uns[K.P_CT]      = model.module.get_p_ct().cpu().numpy()
-    adata.uns[K.CT_TO_COV] = model.module.ct_to_cov.cpu().numpy()
-    adata.uns[K.CT_TO_C]   = model.module.ct_to_c.cpu().numpy()
-    adata.uns[K.LOCAL_SCALE] = model.module.local_scale
-    _ok("stored hierarchical priors")
-    for k in (K.P_CT,K.CT_TO_COV,K.CT_TO_C):
-        _info(f"uns['{k}']", np.shape(adata.uns[k]))
-
-    # 2) metadata --------------------------------------------------------
-    meta = {
-        "covariate_col": model.adata_manager.registry["covariate_col"],
-        "clone_col":     model.adata_manager.registry["clonotype_col"],
-        "phenotype_col": model.adata_manager.registry["phenotype_col"],
-        "batch_col":     model.adata_manager.registry["batch_col"],
-    }
-    adata.uns[K.METADATA] = meta
-    _ok("stored metadata dictionary")
-
-    # categories
-    for key, col in (("covariate","covariate_col"),
-                     ("clonotype","clone_col"),
-                     ("phenotype","phenotype_col")):
-        cats = adata.obs[meta[col]].astype("category").cat.categories.tolist()
-        adata.uns[f"tcri_{key}_categories"] = cats
-        _info(f"uns['tcri_{key}_categories']", len(cats))
-
-    # per-cell ct / cov arrays
-    ct_arr = model.module.ct_array.cpu().numpy()
-    adata.uns[K.CT_ARRAY] = ct_arr
-    cov_arr = model.module.ct_to_cov.cpu().numpy()[ct_arr]
-    adata.uns[K.COV_ARRAY] = cov_arr
-    _ok("stored per-cell ct / cov indices")
-
-    # 3) latent means ----------------------------------------------------
-    z = model.get_latent_representation(batch_size=batch_size).astype("float32")
-    adata.obsm[latent_slot] = z
-    _ok("stored latent means")
-    _info(f"obsm['{latent_slot}']", z.shape)
-
-    # 4) logits & log-posterior -----------------------------------------
-    cls_logits, prior_log = _compute_logits_and_prior(model, adata, batch_size)
-    if store_logits:
-        adata.obsm[K.X_LOGITS] = cls_logits
-        _info("obsm['X_tcri_logits']", cls_logits.shape)
-    if store_logposterior:
-        adata.obsm[K.X_LOGPOSTERIOR] = cls_logits + prior_log
-        _info("obsm['X_tcri_logposterior']", cls_logits.shape)
-    _ok("computed logits & additive log-posterior")
-
-    # 5) probabilities & hard labels ------------------------------------
-    if phenotype_prob_slot not in adata.obsm:
-        from scipy.special import softmax
-        probs = softmax(cls_logits + prior_log, axis=1).astype("float32")
-        adata.obsm[phenotype_prob_slot] = probs
-        _info(f"obsm['{phenotype_prob_slot}']", probs.shape)
-
-    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
-        adata.obsm[phenotype_prob_slot].argmax(1),
-        categories=adata.uns[K.PHENOTYPE_CATEGORIES],
-    )
-    _ok("stored probabilities and hard labels")
-
-    # 6) optional UMAP ---------------------------------------------------
-    if compute_umap:
-        print(f"{CYAN}🗺️  computing UMAP …{RESET}")
-        reducer = umap.UMAP(
-            n_neighbors=umap_n_neighbors, min_dist=umap_min_dist,
-            metric=umap_metric, random_state=umap_random_state,
-            output_metric=umap_output_metric,
-        )
-        adata.obsm["X_umap"] = reducer.fit_transform(z)
-        _info("obsm['X_umap']", adata.obsm["X_umap"].shape)
-    
-    register_phenotype_key(adata,phenotype_assignment_obs)
-    register_clonotype_key(adata,clonotype_key)
-    
-    print(f"{MAGENT}✨  All TCRi artefacts registered!{RESET}")
-    return adata
 
 
 def joint_distribution_posterior(
@@ -235,7 +104,7 @@ def joint_distribution_posterior(
             f"({n_obs}). This happens when the function is called on a filtered "
             "AnnData view or subset: the 'tcri_*_array_for_cells' arrays in .uns "
             "remain in the original full-cell space while .obs/.obsm are subset, so "
-            "cell indices silently misalign. Re-run register_model(...) on the "
+            "cell indices silently misalign. Re-run model.to_anndata(...) on the "
             "filtered AnnData, or pass the full object and filter with `clones=`."
         )
 

@@ -118,11 +118,10 @@ def synthetic_adata():
 
 @pytest.fixture(scope="session")
 def trained_model(synthetic_adata):
-    """TCRIModel fit for 50 epochs on synthetic_adata, with register_model applied."""
+    """TCRIModel fit for 50 epochs on synthetic_adata, with to_anndata applied."""
     _seed_all(0)
 
     from tcri.model._model import TCRIModel
-    from tcri.preprocessing._preprocessing import register_model
 
     adata = synthetic_adata.copy()
     TCRIModel.setup_anndata(
@@ -151,5 +150,5 @@ def trained_model(synthetic_adata):
             enable_progress_bar=False,
             enable_model_summary=False,
         )
-        register_model(adata, model, clonotype_key="unique_clone_id")
+        model.to_anndata(adata)
     return model, adata
