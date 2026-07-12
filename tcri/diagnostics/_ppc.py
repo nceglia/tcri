@@ -98,7 +98,10 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
             z_loc, _, _ = module.encoder(x, b)
             _px_scale, _px_r, px_rate, px_dropout = module.decoder("gene", z_loc, log_lib, b)
             gate = torch.sigmoid(px_dropout).clamp(1e-3, 1 - 1e-3)
-            nb_logits = (px_rate + 1e-6).log() - (module.px_r.exp() + 1e-6).log()
+            # mirror the module's generative distribution exactly (same eps + [-10,10] clamp,
+            # tcri/model/_module.py) so the PPC samples from what the model actually defines
+            nb_logits = (px_rate + module.eps).log() - (module.px_r.exp() + module.eps).log()
+            nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
             total = module.px_r.exp().clamp(max=1e4)
             xd = dist.ZeroInflatedNegativeBinomial(gate=gate, total_count=total,
                                                    logits=nb_logits, validate_args=False)
