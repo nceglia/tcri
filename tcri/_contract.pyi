@@ -65,7 +65,8 @@ class tl:
     def clonotypic_entropy(
         adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
+        n_clones_ref: Any = ..., random_state: Any = ...,
     ) -> Any: ...
     def phenotypic_entropy(
         adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,

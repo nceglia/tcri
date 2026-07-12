@@ -55,6 +55,24 @@ def clone_col(adata):
     return adata.uns[K.METADATA]["clone_col"]
 
 
+def _validate_group_clones(obs, groupby, cc):
+    """The metric ``groupby`` restricts the engine by clone id (``clones=``), which is only
+    correct when clones are **disjoint across groups** (a clone's cells all live in one group).
+    Raise loudly if a clone id spans groups — otherwise a group's estimate would silently
+    absorb that clone's cells from other groups (§7.1 groupby↔covariate semantics)."""
+    seen = {}
+    for g in obs[groupby].dropna().unique().tolist():
+        for c in obs.loc[obs[groupby] == g, cc].dropna().unique():
+            if c in seen and seen[c] != g:
+                raise ValueError(
+                    f"groupby={groupby!r}: clonotype {c!r} spans groups {seen[c]!r} and {g!r}. "
+                    f"The metric groupby restricts by clone id (clones=), which requires clones "
+                    f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
+                    f"clone-disjoint groupby, or pre-filter with `clones=`."
+                )
+            seen[c] = g
+
+
 def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94):
     """Loop over ``adata.obs[groupby]`` values, restrict to each group's clones, compute a
     scalar-valued metric per group, and tidy into a DataFrame with the ``splitby`` label.
@@ -64,6 +82,7 @@ def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94):
     """
     cc = clone_col(adata)
     obs = adata.obs
+    _validate_group_clones(obs, groupby, cc)
     rows = []
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
@@ -87,6 +106,7 @@ def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_pr
     """
     cc = clone_col(adata)
     obs = adata.obs
+    _validate_group_clones(obs, groupby, cc)
     rows = []
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
