@@ -1,33 +1,40 @@
+"""User-facing scvi-tools model class :class:`TCRIModel`.
+
+The generative model, priors, classifier, and training plan live in sibling
+modules; this file holds only the high-level `BaseModelClass` API
+(`setup_anndata`, `__init__`, `train`, `get_latent_representation`,
+`get_cell_phenotype_probs`, `get_p_ct`, ...):
+
+- :mod:`._module`     -- Pyro model/guide (:class:`TCRIModule`)
+- :mod:`._priors`     -- :class:`MixtureDirichlet`, :class:`VampPrior`
+- :mod:`._classifier` -- :class:`PhenotypeClassifier`
+- :mod:`._training`   -- :class:`UnifiedTrainingPlan`, :func:`build_archetypes`
+"""
 import logging
+import os
+import warnings
+
 import numpy as np
 import pandas as pd
 import torch
-import matplotlib.pyplot as plt
 import torch.nn.functional as F
-import pyro
-import pyro.distributions as dist
-import pyro.poutine as poutine
-import torch.nn as nn
-
+import matplotlib.pyplot as plt
 
 from typing import Dict, Optional
 from anndata import AnnData
-import os
 
-from scvi.data.fields import CategoricalObsField, LayerField
-from scvi.data import AnnDataManager
-from scvi.model.base import BaseModelClass
-from scvi.train import PyroTrainingPlan, TrainRunner
 from scvi import REGISTRY_KEYS
-from scvi.nn import Encoder, DecoderSCVI
-from scvi.module.base import PyroBaseModuleClass, auto_move_data
-from scvi.utils import setup_anndata_dsp
+from scvi.data import AnnDataManager
+from scvi.data.fields import CategoricalObsField, LayerField
+from scvi.model.base import BaseModelClass
+from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
-from torch.nn.functional import cosine_similarity
-from pyro.infer import TraceEnum_ELBO, Trace_ELBO
-from torch.distributions import Categorical, Dirichlet, MixtureSameFamily
-from sklearn.cluster import KMeans
-import warnings
+
+from ._module import TCRIModule
+from ._training import UnifiedTrainingPlan, build_archetypes
+# re-exported so the public `tcri.model.*` surface is unchanged by the split
+from ._priors import MixtureDirichlet, VampPrior  # noqa: F401
+from ._classifier import PhenotypeClassifier  # noqa: F401
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 warnings.filterwarnings(
@@ -41,625 +48,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
-def build_archetypes(c2p_mat, K=4):
-    kmeans = KMeans(n_clusters=K, random_state=42)
-    labels = kmeans.fit_predict(c2p_mat)
-    centers = kmeans.cluster_centers_
-    centers = np.clip(centers, 1e-8, None)
-    centers = centers / centers.sum(axis=1, keepdims=True)
-    return centers, labels
-
-
-class PhenotypeClassifier(nn.Module):
-    def __init__(self, n_latent, classifier_hidden, P, num_layers=3, dropout_rate=0.1, temperature=1.0):
-        super(PhenotypeClassifier, self).__init__()
-        layers = []
-        input_dim = n_latent
-        for _ in range(num_layers):
-            layers.append(nn.Linear(input_dim, classifier_hidden))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_rate))
-            input_dim = classifier_hidden
-        layers.append(nn.Linear(classifier_hidden, P))
-        self.mlp = nn.Sequential(*layers)
-        self.temperature = temperature  # Add temperature parameter
-
-    def forward(self, x):
-        logits = self.mlp(x)
-        return logits / self.temperature
-
-
-class VampPrior(torch.nn.Module):
-    def __init__(self, pseudo_inputs, encoder):
-        """
-        Args:
-            pseudo_inputs (torch.Tensor): Initial pseudo-inputs of shape (K, input_dim).
-            encoder (torch.nn.Module): Encoder that takes an input and returns (mean, log_var)
-                for the approximate posterior q(z|x).
-        """
-        super(VampPrior, self).__init__()
-        # Learnable pseudo-inputs; these are optimized during training.
-        self.pseudo_inputs = torch.nn.Parameter(pseudo_inputs)
-        self.encoder = encoder
-
-    def get_mixture(self):
-        """
-        Constructs the VampPrior as a uniform mixture of q(z|u_k) for each pseudo-input u_k.
-        """
-        # Compute the approximate posterior parameters for each pseudo-input.
-        # Expected output shapes: means and log_vars: (K, latent_dim)
-        K = self.pseudo_inputs.size(0)
-        # Create a dummy categorical argument; unsqueeze to have shape (K, 1)
-        dummy_batch = torch.zeros(K, dtype=torch.long, device=self.pseudo_inputs.device).unsqueeze(1)
-        means, log_vars, _ = self.encoder(self.pseudo_inputs, dummy_batch)
-        scales = torch.sqrt(torch.exp(log_vars))
-        component_dist = dist.Independent(dist.Normal(means, scales), 1)
-        mixture_weights = torch.ones(K, device=self.pseudo_inputs.device) / K
-        mixture = dist.MixtureSameFamily(
-            dist.Categorical(mixture_weights),
-            component_dist
-        )
-        return mixture
-
-    def log_prob(self, z):
-        """
-        Computes log p(z) under the VampPrior.
-        """
-        return self.get_mixture().log_prob(z)
-
-    def sample(self, sample_shape=torch.Size()):
-        """
-        Draws samples from the VampPrior.
-        """
-        return self.get_mixture().sample(sample_shape)
-
-
-###############################################################################
-# 0) Mixture of Dirichlet Distributions - TODO: Refactor
-###############################################################################
-class MixtureDirichlet(dist.TorchDistribution):
-    """
-    Mixture of Dirichlet distributions parameterized by mixture weights and concentration parameters."
-    """
-    arg_constraints = {
-        "mixture_weights": dist.constraints.simplex,  # shape: batch_shape + (B,)
-        "concentration": dist.constraints.positive,  # shape: batch_shape + (B, K)
-    }
-    support = dist.constraints.simplex  # each sample is a simplex over K categories
-    has_rsample = False
-
-    def __init__(
-        self,
-        mixture_weights: torch.Tensor,
-        concentration: torch.Tensor,
-        validate_args=None,
-    ):
-        """
-        mixture_weights: Tensor of shape batch_shape + (B,), with each row summing to 1.
-        concentration: Tensor of shape batch_shape + (B, K), where K is the number of categories.
-        """
-        self.mixture_weights = mixture_weights
-        # Clamp concentrations to ensure positivity.
-        self.concentration = torch.clamp(concentration, min=1e-3)
-        # Determine batch shape, B, and K.
-        batch_shape = self.mixture_weights.shape[:-1]
-        self.B = self.mixture_weights.size(-1)
-        self.K = self.concentration.size(-1)
-        event_shape = (self.K,)
-        super(MixtureDirichlet, self).__init__(
-            batch_shape, event_shape, validate_args=validate_args
-        )
-
-    def sample(self, sample_shape=torch.Size()):
-        """
-        Returns a sample of shape: sample_shape + batch_shape + (K,).
-        For each batch element, first sample a mixture component, then sample from the corresponding Dirichlet.
-        """
-        # Create categorical for mixture weights.
-        cat = dist.Categorical(self.mixture_weights)
-        # Sample mixture indices; shape: sample_shape + batch_shape.
-        mixture_idx = cat.sample(sample_shape)
-        full_shape = mixture_idx.shape  # sample_shape + batch_shape
-
-        # Expand concentration to shape: sample_shape + batch_shape + (B, K).
-        target_shape = sample_shape + self.concentration.shape
-        expanded_concentration = self.concentration.expand(target_shape)
-
-        # Flatten the sample and batch dimensions.
-        flat_shape = (-1, self.B, self.K)
-        flat_concentration = expanded_concentration.reshape(flat_shape)
-        flat_idx = mixture_idx.reshape(-1)  # shape: (num_samples,)
-
-        # Select the concentration parameters corresponding to the sampled mixture index.
-        selected_concentration = flat_concentration[
-            torch.arange(flat_idx.size(0)), flat_idx
-        ]
-
-        # Sample from the Dirichlet for each sample.
-        flat_samples = dist.Dirichlet(selected_concentration).sample()
-        # Reshape to sample_shape + batch_shape + (K,).
-        return flat_samples.reshape(full_shape + (self.K,))
-
-    def log_prob(self, value):
-        device = value.device  # get the device from input tensor
-        
-        # Move tensors explicitly to the same device
-        value_expanded = value.unsqueeze(-2).to(device)
-        expanded_concentration = self.concentration.expand(
-            value.shape[:-1] + (self.B, self.K)
-        ).to(device)
-        
-        d = dist.Dirichlet(expanded_concentration)
-        
-        component_log_probs = d.log_prob(
-            value_expanded.expand(expanded_concentration.shape)
-        )
-        
-        expanded_weights = self.mixture_weights.expand(value.shape[:-1] + (self.B,)).to(device)
-        mixture_log = torch.log(expanded_weights)
-        
-        return torch.logsumexp(mixture_log + component_log_probs, dim=-1)
-
-    def score_parts(self, value):
-        # Compute log probability.
-        lp = self.log_prob(value)
-        # Return dummy zeros for the score function and entropy terms.
-        zeros = torch.zeros_like(lp)
-        return lp, zeros, zeros
-
-    def __call__(self, *args, **kwargs):
-        return self.sample(*args, **kwargs)
-
-
-###############################################################################
-# 1) Pyro Module with CVAE + Hierarchical Priors
-###############################################################################
-class TCRIModule(PyroBaseModuleClass):
-    """
-    Two-level model that incorporates hierarchical priors (clonotype-level)
-    and a CVAE structure that explicitly conditions gene expression on the
-    observed cell-level phenotype.
-    """
-
-    def __init__(  
-        self,
-        n_input: int,
-        n_latent: int,
-        P: int,
-        n_batch: int,
-        global_scale: float = 10.0,
-        local_scale: float = 5.0,
-        prior_temperature: float = 1.0,
-        guide_temperature: float = 1.0,
-        gate_prob: float = 0.5,
-        mixture_concentration: torch.Tensor = None,
-        n_pseudo_obs: int = 10,
-        use_enumeration: bool = False,
-        classifier_hidden: int = 128,
-        classifier_dropout: float = 0.1,
-        classifier_n_layers: int = 3,
-        n_hidden: int = 128,
-        n_layers: int = 3,
-        class_weights: torch.Tensor = None,
-        kl_weight_max: float = 1.0,
-        guide_init_scale: float = 10.0,
-        classifier_temperature: float = 1.0,
-    ):
-        super().__init__()
-        self.n_input = n_input
-        self.n_latent = n_latent
-        self.P = P
-        self.n_hidden = n_hidden
-        self.n_layers = n_layers
-        self.global_scale = global_scale
-        self.local_scale = local_scale
-        self.prior_temperature = prior_temperature
-        self.guide_temperature = guide_temperature
-        self.mixture_concentration = mixture_concentration
-        self.n_pseudo_obs = n_pseudo_obs
-        self.gate_prob = gate_prob
-        # Assert that it is not None
-        assert (
-            self.mixture_concentration is not None
-        ), "mixture_concentration must be provided"
-        self.use_enumeration = use_enumeration
-        self.eps = 1e-6
-        self.classifier_hidden = classifier_hidden
-        self.classifier_dropout = classifier_dropout
-        self.kl_weight_max = kl_weight_max
-        self.classifier_n_layers = classifier_n_layers
-        self.guide_init_scale = guide_init_scale
-        self.classifier_temperature = classifier_temperature
-
-        # Defaults so model()/guide() work before train() sets them
-        self.kl_weight = 1e-6
-        self.reconstruction_loss_scale = 1e-3
-
-        self.encoder = Encoder(
-            n_input=n_input,
-            n_output=n_latent,
-            n_layers=n_layers,
-            n_hidden=n_hidden,
-            n_cat_list=[n_batch],
-            use_layer_norm=True,
-        )
-
-        # VampPrior
-        pseudo_inputs = torch.randn(self.n_pseudo_obs, self.n_input)
-        self.vamp_prior = VampPrior(pseudo_inputs, self.encoder)
-
-        self.decoder_input_dim = self.n_latent
-        self.decoder = DecoderSCVI(
-            self.decoder_input_dim,
-            n_input,
-            n_layers=n_layers,
-            n_hidden=n_hidden,
-            n_cat_list=[n_batch],
-            scale_activation="softplus",
-            use_layer_norm=True,
-        )
-
-        self.px_r = torch.nn.Parameter(torch.ones(n_input))
-
-        self.classifier = PhenotypeClassifier(
-            n_latent=self.n_latent,
-            classifier_hidden=self.classifier_hidden,
-            P=self.P,
-            num_layers=self.classifier_n_layers,
-            temperature=self.classifier_temperature,
-        )
-
-        self.register_buffer("clone_phen_prior", torch.empty(0))
-        self.register_buffer("ct_to_c", torch.empty(0, dtype=torch.long))
-        self.register_buffer("c_array", torch.empty(0, dtype=torch.long))
-        self.register_buffer("ct_array", torch.empty(0, dtype=torch.long))
-        self.register_buffer("ct_to_cov", torch.empty(0, dtype=torch.long))
-        self.c_count = 0
-        self.ct_count = 0
-        self.n_cells = 0
-
-        self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
-
-        # Store or compute log of class weights if provided
-        if class_weights is not None:
-            # Expect a tensor of shape (P,)
-            self.register_buffer("log_class_weights", torch.log(class_weights))
-        else:
-            self.log_class_weights = None
-
-    def prepare_two_level_params(
-        self,
-        c_count: int,
-        ct_count: int,
-        clone_phen_prior_mat: torch.Tensor,
-        ct_to_c_array: torch.Tensor,
-        c_array_for_cells: torch.Tensor,
-        ct_array_for_cells: torch.Tensor,
-        target_phenotypes: torch.Tensor,
-        ct_to_cov_array: torch.Tensor = None,
-    ):
-        self.c_count = c_count
-        self.ct_count = ct_count
-        self.n_cells = c_array_for_cells.shape[0]
-
-        prior_mat = clone_phen_prior_mat + self.eps
-        prior_mat = prior_mat / prior_mat.sum(dim=1, keepdim=True)
-
-        if self.prior_temperature != 1.0:
-            prior_mat = prior_mat ** (1.0 / self.prior_temperature)
-            prior_mat = prior_mat / prior_mat.sum(dim=1, keepdim=True)
-
-        self.register_buffer("clone_phen_prior", prior_mat)
-        self.register_buffer("ct_to_c", ct_to_c_array)
-        self.register_buffer("c_array", c_array_for_cells)
-        self.register_buffer("ct_array", ct_array_for_cells)
-        self.register_buffer("_target_phenotypes", target_phenotypes)
-
-        if ct_to_cov_array is not None:
-            self.register_buffer("ct_to_cov", ct_to_cov_array)
-
-    @property
-    def use_gate(self) -> bool:
-        return self.gate_prob is not None
-
-    @staticmethod
-    def _get_fn_args_from_batch(tensor_dict: Dict[str, torch.Tensor]):
-        x = tensor_dict[REGISTRY_KEYS.X_KEY]
-        batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
-        log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
-        return (x, batch_idx, log_library), {}
-
-    @auto_move_data
-    def model(
-        self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor
-    ):
-        pyro.module("scvi", self)
-
-        kl_weight = self.kl_weight
-        batch_size = x.shape[0]
-
-        with pyro.plate("clonotypes", self.c_count):
-            B = self.mixture_concentration.shape[0]
-            mixture_weights = torch.ones(B, device=x.device) / B
-            # Expand mixture parameters to add a leading dimension for clonotypes.
-            # expanded_conc will have shape (self.c_count, B, K)
-            expanded_conc = self.mixture_concentration.unsqueeze(0).expand(
-                self.c_count, -1, -1
-            )
-            # expanded_weights will have shape (self.c_count, B)
-            expanded_weights = mixture_weights.unsqueeze(0).expand(self.c_count, -1)
-            mixture_dist = MixtureDirichlet(expanded_weights, expanded_conc)
-            p_c = pyro.sample("p_c", mixture_dist)
-            # print("p_c shape:", p_c.shape)
-
-        with pyro.plate("ct_plate", self.ct_count):
-            base_p = p_c[self.ct_to_c] + self.eps
-            conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
-            p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
-
-        # Encoder
-        z_loc, z_scale, _ = self.encoder(x, batch_idx)
-        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
-        with pyro.plate("data", batch_size) as idx:
-
-            with poutine.scale(scale=kl_weight):
-                # vamp_mixture = self.vamp_prior.get_mixture().to_event(1)
-                vamp_mixture = self.vamp_prior.get_mixture()
-                z = pyro.sample("latent", vamp_mixture)
-
-            ct_idx = self.ct_array[idx]
-            prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
-            cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
-
-            px_scale, px_r_out, px_rate, px_dropout = self.decoder(
-                "gene", z, log_library, batch_idx
-            )
-
-            zi_gate_probs = torch.sigmoid(px_dropout).clamp(min=1e-3, max=1.0 - 1e-3)
-            nb_logits = (px_rate + self.eps).log() - (self.px_r.exp() + self.eps).log()
-            nb_logits = torch.clamp(nb_logits, min=-10.0, max=10.0)
-            total_count = self.px_r.exp().clamp(max=1e4)
-
-            x_dist = dist.ZeroInflatedNegativeBinomial(
-                gate=zi_gate_probs,
-                total_count=total_count,
-                logits=nb_logits,
-                validate_args=False,
-            )
-            scale_val = torch.tensor(self.reconstruction_loss_scale, device=x.device)
-            with poutine.scale(scale=scale_val):
-                pyro.sample("obs", x_dist.to_event(1), obs=x)
-
-    @auto_move_data
-    def guide(
-        self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor
-    ):
-        pyro.module("scvi", self)
-        batch_size = x.shape[0]
-
-        with pyro.plate("clonotypes", self.c_count):
-            # Start from a scaled version of the prior.
-            init_mat_c = self.clone_phen_prior * self.guide_init_scale + 1e-3
-            init_mat_c = init_mat_c.to(x.device)
-            
-            # Learnable raw parameters for q(p_c)
-            if "q_p_c_raw" not in pyro.get_param_store():
-                q_p_c_raw = pyro.param(
-                    "q_p_c_raw",
-                    init_mat_c.clone().detach(),
-                    constraint=dist.constraints.positive
-                )
-            else:
-                q_p_c_raw = pyro.param("q_p_c_raw")
-
-            bad_c = ~torch.isfinite(q_p_c_raw)
-            if bad_c.any():
-                q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
-
-            # Apply a sharpening transformation controlled by guide_temperature.
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
-            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
-            q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
-            
-            # Sample p_c from a single learned Dirichlet per clonotype.
-            pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
-
-        with pyro.plate("ct_plate", self.ct_count):
-            init_mat = self.clone_phen_prior[self.ct_to_c, :]
-            init_mat = init_mat * self.guide_init_scale + 1e-3
-            init_mat = init_mat.to(x.device)
-            if "q_p_ct_raw" not in pyro.get_param_store():
-                q_p_ct_raw = pyro.param(
-                    "q_p_ct_raw",
-                    init_mat.clone().detach(),  # Make sure it's not a leaf
-                    constraint=dist.constraints.positive,
-                )
-            else:
-                q_p_ct_raw = pyro.param("q_p_ct_raw")
-
-            bad_ct = ~torch.isfinite(q_p_ct_raw)
-            if bad_ct.any():
-                q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
-
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
-            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
-            pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
-
-        z_loc, z_scale, _ = self.encoder(x, batch_idx)
-        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
-        with pyro.plate("data", batch_size) as idx:
-            latent_posterior = dist.Normal(z_loc, z_scale)
-            with pyro.poutine.scale(scale=self.kl_weight):
-                z = pyro.sample("latent", latent_posterior.to_event(1))
-
-    @auto_move_data
-    def get_latent(self, tensor_dict: Dict[str, torch.Tensor]):
-        x = tensor_dict[REGISTRY_KEYS.X_KEY]
-        batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
-        z_loc, _, _ = self.encoder(x, batch_idx)
-        if z_loc.ndim == 3:
-            z_loc = z_loc.mean(dim=1)
-        return z_loc.cpu()
-
-    @torch.no_grad()
-    def get_p_ct(self):
-        from pyro import get_param_store
-
-        param_store = get_param_store()
-        q_p_ct_raw = param_store["q_p_ct_raw"]
-        bad = ~torch.isfinite(q_p_ct_raw)
-        if bad.any():
-            n_phen = q_p_ct_raw.shape[1]
-            q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / n_phen, q_p_ct_raw)
-        if self.guide_temperature != 1.0:
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-        else:
-            q_p_ct_sharp = q_p_ct_raw / q_p_ct_raw.sum(dim=1, keepdim=True)
-        return q_p_ct_sharp
-
-
-###############################################################################
-# 2) Unified Training Plan with Validation Step for scvi Early Stopping
-###############################################################################
-class UnifiedTrainingPlan(PyroTrainingPlan):
-    """
-    Training plan that includes classification, reconstruction losses,
-    KL warmup, plus a validation_step that logs 'elbo_validation' so scvi's
-    early stopping can monitor it.
-    """
-
-    def __init__(
-        self,
-        module: TCRIModule,
-        n_steps_kl_warmup: int = 1000,
-        reconstruction_loss_scale: float = 1e-2,
-        num_particles: int = 5,
-        optimizer_config: dict = None,
-        class_weights: torch.Tensor = None,
-        **kwargs,
-    ):
-        self.num_particles = num_particles
-        if module.use_enumeration:
-            print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(
-                max_plate_nesting=3, num_particles=self.num_particles
-            )
-        else:
-            self._loss_fn = Trace_ELBO()
-
-        super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
-
-        self.n_steps_kl_warmup = n_steps_kl_warmup
-        self.reconstruction_loss_scale = reconstruction_loss_scale
-        self._my_global_step = 0
-        self.class_weights = class_weights
-        self.optimizer_config = optimizer_config
-
-        if optimizer_config is None:
-            optimizer_config = {"lr":1e-3,"betas":(0.9,0.999),"eps":1e-5,"weight_decay":1e-4}
-        self.optimizer_config = optimizer_config
-
-    @property
-    def loss(self):
-        return self._loss_fn
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            self.module.parameters(),
-            lr=self.optimizer_config["lr"],
-            betas=self.optimizer_config["betas"],
-            eps=self.optimizer_config["eps"],
-            weight_decay=self.optimizer_config["weight_decay"],
-        )
-        return {"optimizer": optimizer}
-    
-    def training_step(self, batch, batch_idx):
-        # ── KL warmup ────────────────────────────────────────────
-        if self.n_steps_kl_warmup > 0 and self._my_global_step < self.n_steps_kl_warmup:
-            kl_weight = max(1e-6, self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup))
-        else:
-            kl_weight = self.module.kl_weight_max
-        self.module.kl_weight = kl_weight
-
-        # ── Pyro ELBO step ───────────────────────────────────────
-        loss_dict = super().training_step(batch, batch_idx)
-        device = next(self.module.parameters()).device
-
-        if not isinstance(loss_dict["loss"], torch.Tensor):
-            loss_dict["loss"] = torch.tensor(loss_dict["loss"], device=device, requires_grad=True)
-        else:
-            loss_dict["loss"] = loss_dict["loss"].to(device)
-
-        # ── Diagnostics (no gradient contribution) ───────────────
-        with torch.no_grad():
-            z_diag = self.module.get_latent(batch).to(device)
-            idx_diag = batch["indices"].long().view(-1).to(device)
-            cls_logits = self.module.classifier(z_diag)
-            ct_idx = self.module.ct_array[idx_diag]
-            p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-            prior_log = torch.log(p_ct_prior + 1e-8)
-
-            if self.module.use_gate:
-                local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-            else:
-                local_logits = cls_logits + prior_log
-
-            probs = F.softmax(local_logits, dim=-1)
-            kl_div = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1).mean()
-            confidence = (probs**2).sum(dim=-1).mean()
-
-        self.log("kl_divergence_with_prior_train", kl_div, prog_bar=False, on_epoch=True)
-        self.log("entropy_train", entropy, prog_bar=False, on_epoch=True)
-        self.log("confidence_train", confidence, prog_bar=False, on_epoch=True)
-
-        self._my_global_step += 1
-        return loss_dict
-    
-    def validation_step(self, batch, batch_idx):
-        with torch.no_grad():
-            self.module.eval()
-            val_dict = super().training_step(batch, batch_idx)
-            self.module.train()
-
-        device = next(self.module.parameters()).device
-
-        if not isinstance(val_dict["loss"], torch.Tensor):
-            val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
-        else:
-            val_dict["loss"] = val_dict["loss"].to(device)
-
-        # ── Diagnostic only ──────────────────────────────────────
-        z_batch = self.module.get_latent(batch).to(device)
-        idx = batch["indices"].long().view(-1).to(device)
-        cls_logits = self.module.classifier(z_batch)
-        ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-        prior_log = torch.log(p_ct_prior + 1e-8)
-
-        if self.module.use_gate:
-            local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-        else:
-            local_logits = cls_logits + prior_log
-
-        probs = F.softmax(local_logits, dim=-1)
-        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
-        self.log("kl_divergence_with_prior_val", kl_divergence, prog_bar=False, on_epoch=True)
-
-        self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
-        return val_dict
-
-
-###############################################################################
-# 3) High-Level scVI Model with scvi Early Stopping
-###############################################################################
 class TCRIModel(BaseModelClass):
     @classmethod
     def setup_anndata(
@@ -742,13 +130,13 @@ class TCRIModel(BaseModelClass):
         c_count = len(cvals.cat.categories)
         c_array_np = cvals.cat.codes.values
         pvals_np = ph_series.cat.codes.values
-        c2p_mat = np.zeros((c_count, P), dtype=np.float32)
+        clone_phenotype_prior = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
-            c2p_mat[c_array_np[i], pvals_np[i]] += 1
-        c2p_mat += 1e-6
-        c2p_mat = c2p_mat / c2p_mat.sum(axis=1, keepdims=True)
-        self.c2p_mat = c2p_mat
-        self.centers, self.labels = build_archetypes(self.c2p_mat, K=K)
+            clone_phenotype_prior[c_array_np[i], pvals_np[i]] += 1
+        clone_phenotype_prior += 1e-6
+        clone_phenotype_prior = clone_phenotype_prior / clone_phenotype_prior.sum(axis=1, keepdims=True)
+        self.clone_phenotype_prior = clone_phenotype_prior
+        self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
@@ -811,7 +199,7 @@ class TCRIModel(BaseModelClass):
             classifier_temperature=classifier_temperature,
         )
         self.init_params_ = self._get_init_params(locals())
-        c2p_torch = torch.tensor(c2p_mat, dtype=torch.float32)
+        c2p_torch = torch.tensor(clone_phenotype_prior, dtype=torch.float32)
         c_array_torch = torch.tensor(c_array_np, dtype=torch.long)
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
@@ -986,11 +374,11 @@ class TCRIModel(BaseModelClass):
             raise ValueError(f"phenotype '{phenotype_name}' not found. Choices: {list(cats)}")
         p_idx = list(cats).index(phenotype_name)
 
-        # 2) clone-level prior  (numpy array stored in model.c2p_mat)
-        mat = self.c2p_mat.copy()
+        # 2) clone-level prior  (numpy array stored in model.clone_phenotype_prior)
+        mat = self.clone_phenotype_prior.copy()
         mat[:, p_idx] *= boost_factor
         mat /= mat.sum(axis=1, keepdims=True)
-        self.c2p_mat = mat                                    # keep external copy
+        self.clone_phenotype_prior = mat                                    # keep external copy
 
         with torch.no_grad():
             new_clone_prior = torch.tensor(mat, dtype=torch.float32,
@@ -1016,7 +404,7 @@ class TCRIModel(BaseModelClass):
 
     def plot_archetypes(self):
         order = np.argsort(self.labels)
-        ordered_mat = self.c2p_mat[order, :]
+        ordered_mat = self.clone_phenotype_prior[order, :]
 
         # Plot heatmap of the clone phenotype distributions
         plt.figure(figsize=(10, 6))

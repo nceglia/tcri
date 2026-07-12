@@ -34,7 +34,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 0 | Contract freeze + CI scaffolding | ✅ | none | — | conformance green |
 | 1 | Shared helpers + `_keys` | ✅ | low | 0 | existing tests green |
 | 2 | Safe deletions | ✅ | very low | 1 | import-graph clean |
-| 3 | Model module split | ☐ | low | 1 | model/pyro tests green |
+| 3 | Model module split | ✅ | low | 1 | model/pyro tests green |
 | 4 | Model→AnnData streamline | ☐ | HIGH | 1,3 | session round-trip |
 | 5 | Engine consolidation | ☐ | HIGH | 4 | joint identities |
 | 6 | Metric-API consolidation | ☐ | HIGH | 5 | metric tests |
@@ -116,7 +116,16 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **Streamline:** shrinks preprocessing (−127) and plotting (−225) meaningfully ahead of the Phase 3/4/7 splits. Removed the one import this PR orphaned (`cosine_similarity` — sole user was the deleted `classify_phenotypes`); other module-top imports left for the file-split phases (conservative; the PR1 audit already handled the utils ones).
 - **Usability:** removes broken/dead public entry points (`probability_distribution` self-recursion, `bayesian_mutual_information` bad kwarg, `polar_plot` undefined-name) from the surface so nobody trips on them.
 
-## PR 3 — Model module split  ·  ☐ todo
+## PR 3 — Model module split  ·  ✅ done (branch `refactor/pr3-model-split`)
+- **Goal:** split the 1074-line `model/_model.py` into scvi-style sibling files (`_model` + `_module` + `_priors` + `_classifier` + `_training`), rename `c2p_mat → clone_phenotype_prior`. Mechanical; **no behavior change**.
+- **What happened:** verified up front that **no code outside `model/` references any moved internal** (only `TCRIModel` is imported externally). Extracted the 7 top-level defs via `ast.get_source_segment` (formatting-preserving) into the target files along the clean dependency DAG `_classifier`/`_priors` (leaf) → `_module` → `_training` → `_model`; `_model` re-imports all six moved symbols so the `tcri.model.*` surface is byte-for-byte unchanged (private helpers carry `# noqa: F401`). Applied the `c2p_mat → clone_phenotype_prior` rename with a word-boundary regex (13 sites; left the unrelated `c2p_torch` local and the module buffer `clone_phen_prior` untouched). Dropped 3 provably-dead top-level imports surfaced by the per-file import rebuild (`setup_anndata_dsp`, `cosine_similarity`, the `torch.distributions` `Categorical/Dirichlet/MixtureSameFamily` trio — all uses were `dist.`-prefixed pyro). File sizes: `_model` 462, `_module` 326, `_training` 154, `_priors` 147, `_classifier` 21.
+- **Issues & fixes:** (1) my first smoke silently imported a **stale `site-packages/tcri`** copy (a script's dir, not the repo, leads `sys.path`) and failed in `setup_anndata` on an old-copy/scvi mismatch — a red herring; forcing the repo copy onto the path, the smoke passes. (The stale install is an env-hygiene note, not a code issue — pytest already uses the repo copy, which is why the suite validates the split.) (2) The train path was **entirely uncovered** by the suite (`trained_model` fixture defined but unused) — so the split was only import-verified. Fixed by adding a real end-to-end smoke test.
+- **Added:** ✅ `tests/test_model_smoke.py` — construct → train (2 epochs) → `get_latent_representation` / `get_p_ct` / `get_cell_phenotype_probs` (asserts shapes + prob normalization), plus asserts the `clone_phenotype_prior` rename landed and `build_archetypes` returns centers **and** labels. Runs in ~1s inside the suite.
+- **Removed (hard bar):** n/a — PR3 is a structural split, not a removal PR. `ml.plot_loss`/`ml.plot_archetypes` stay on `TCRIModel` until `diag/` exists (Phase 8); no Phase-2 style deletions here.
+- **Test opportunities:** ✅ closed the biggest gap (model construct/train/query now covered). The rewritten `test_session_round_trip` (Phase 4) will extend this to save/load.
+- **Streamline:** the split makes Phase 4 (model→AnnData) and Phase 5 (engine) tractable — the pyro module, priors, classifier, and training plan are now editable in isolation.
+- **Usability:** each file now has a docstring stating its role; the model file reads as a clean `BaseModelClass` API surface.
+- **Deferred (logged):** **M5** (`build_archetypes` default `K=4` vs `TCRIModel` `K=10`) — behavior-neutral today (the model always passes `K=10` explicitly), reconciled with persisted `labels` when `diag.archetypes` lands (Phase 8). Not touched here to keep the split purely mechanical.
 ## PR 4 — Model→AnnData streamline  ·  ☐ todo
 ## PR 5 — Engine consolidation  ·  ☐ todo
 ## PR 6 — Metric-API consolidation  ·  ☐ todo
