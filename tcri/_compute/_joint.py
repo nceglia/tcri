@@ -140,6 +140,9 @@ def _joint_draws(
             log_b = torch.log(b_cell + _EPS)
             ell = logits_t[cells_m].unsqueeze(0)          # [1, n_cells_m, P]
             combine = (g * ell + (1.0 - g) * log_b) if use_gate else (ell + log_b)
+            # §7.1: the base is already tempered (b) and the combine is divided by T here;
+            # at T==1 both are the identity, so this reproduces predict() bit-for-bit. T!=1 is
+            # a deliberate analysis-time temper (the two T's do not cancel — documented).
             p_cell = torch.softmax(combine / float(temperature), dim=-1)  # [S, n_cells_m, P]
             J = torch.zeros((S, ct_rows.shape[0], P), dtype=torch.float64, device=dev)
             J.index_add_(1, local_ct, p_cell)             # sum P over cells per clone (row sum == count)

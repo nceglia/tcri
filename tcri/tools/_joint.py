@@ -92,13 +92,36 @@ def joint_distribution(
         except ValueError:
             raise ValueError(f"covariate {covariate!r} not found among {covariate_cats}")
 
+    # subset/filtered-AnnData guard: the per-cell uns arrays live in full-cell space and
+    # are NOT sliced when adata is subset, whereas obsm/obs ARE — so a slice silently
+    # misaligns cells. Fail loudly (mirrors the legacy joint_distribution_posterior guard).
+    n_obs = adata.n_obs
+    n_reg = len(np.asarray(adata.uns[K.CT_ARRAY]))
+    if n_reg != n_obs or len(np.asarray(adata.uns[K.COV_ARRAY])) != n_obs:
+        raise ValueError(
+            f"joint_distribution received an AnnData whose per-cell registration arrays "
+            f"(uns[{K.CT_ARRAY!r}], len {n_reg}) do not match adata.n_obs ({n_obs}). This "
+            f"happens on a filtered/sliced AnnData: the full-space uns arrays misalign against "
+            f"the subset obsm/obs. Re-run model.to_anndata(...) on the filtered object, or pass "
+            f"the full object and filter with `clones=`."
+        )
+
+    # local_scale is required for the Dirichlet draw; refuse to silently fall back at n>0.
+    local_scale = adata.uns.get(K.LOCAL_SCALE, None)
+    if n_samples and int(n_samples) > 0 and local_scale is None:
+        raise RuntimeError(
+            f"n_samples>0 needs uns[{K.LOCAL_SCALE!r}] for the clamped-Dirichlet draw, but it "
+            f"is missing; run model.to_anndata(...)."
+        )
+    local_scale = float(local_scale) if local_scale is not None else 1.0
+
     blocks, n_draws = _joint_draws(
         adata.uns[K.P_CT],
         adata.uns[K.CT_TO_COV],
         adata.uns[K.CT_TO_C],
         adata.uns[K.CT_ARRAY],
         adata.uns[K.COV_ARRAY],
-        local_scale=float(adata.uns.get(K.LOCAL_SCALE, 1.0)),
+        local_scale=local_scale,
         n_samples=n_samples,
         temperature=temperature,
         use_logits=use_logits,
@@ -138,8 +161,13 @@ def joint_distribution(
     if clones is not None:
         clones = list(clones)
         if isinstance(df.index, pd.MultiIndex):
+            # filter to the listed clones (absent dropped, not all-zero) then order by the
+            # requested list — stable within the sample_id/covariate levels (matches the
+            # single-index reindex; §7.1 "reindex to the exact list").
             keep = df.index.get_level_values("clonotype").isin(clones)
             df = df[keep]
+            rank = pd.Index(df.index.get_level_values("clonotype")).map({c: i for i, c in enumerate(clones)})
+            df = df.iloc[np.argsort(np.asarray(rank), kind="stable")]
         else:
             df = df.reindex([c for c in clones if c in df.index])
 
