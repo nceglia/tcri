@@ -215,10 +215,10 @@ def register_model(
     cls_logits, prior_log = _compute_logits_and_prior(model, adata, batch_size)
     if store_logits:
         adata.obsm[K.X_LOGITS] = cls_logits
-        _info("obsm[K.X_LOGITS]", cls_logits.shape)
+        _info("obsm['X_tcri_logits']", cls_logits.shape)
     if store_logposterior:
         adata.obsm[K.X_LOGPOSTERIOR] = cls_logits + prior_log
-        _info("obsm[K.X_LOGPOSTERIOR]", cls_logits.shape)
+        _info("obsm['X_tcri_logposterior']", cls_logits.shape)
     _ok("computed logits & additive log-posterior")
 
     # 5) probabilities & hard labels ------------------------------------

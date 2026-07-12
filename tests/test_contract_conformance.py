@@ -127,7 +127,9 @@ _MIGRATED_KEYS = [
 
 
 def test_no_canonical_key_literals():
-    """Migrated uns/obsm/obs keys must come from `_keys` (K.*), never a string literal."""
+    """Migrated canonical keys must be accessed via `K.*` **in code** (subscripts /
+    `.get(...)`), never a string literal. Docstrings and display/log strings may show
+    the readable key name — this AST check only inspects real key-access code."""
     from tcri import _keys as K
 
     pkg = Path(tcri.__file__).parent
@@ -136,10 +138,18 @@ def test_no_canonical_key_literals():
     for py in pkg.rglob("*.py"):
         if py.name == "_keys.py":
             continue
-        txt = py.read_text()
-        for key in forbidden:
-            if f'"{key}"' in txt or f"'{key}'" in txt:
-                offenders.append(f"{py.relative_to(pkg).as_posix()}: {key!r}")
+        for node in ast.walk(ast.parse(py.read_text())):
+            key = None
+            if (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)):
+                key = node.slice.value
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "get" and node.args
+                  and isinstance(node.args[0], ast.Constant)
+                  and isinstance(node.args[0].value, str)):
+                key = node.args[0].value
+            if key in forbidden:
+                offenders.append(f"{py.relative_to(pkg).as_posix()}:{node.lineno}: {key!r}")
     assert not offenders, (
-        "canonical keys used as string literals (use K.*):\n  " + "\n  ".join(offenders)
+        "canonical keys used as code literals (use K.*):\n  " + "\n  ".join(offenders)
     )

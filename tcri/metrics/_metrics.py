@@ -273,7 +273,7 @@ def clonotypic_entropy(
 
     Examples
     --------
-    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
     >>> ce = clonotypic_entropy(adata, covariate, n_samples=50)
     >>> ce.sort_values(ascending=False).head()
     """
@@ -511,7 +511,7 @@ def phenotypic_entropy(
 
     Examples
     --------
-    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
     >>> pe = phenotypic_entropy(adata, covariate, n_samples=50)
     >>> pe.mean()  # average phenotypic plasticity across clones
     """
@@ -690,7 +690,7 @@ def mutual_information(
 
     Examples
     --------
-    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
+    >>> covariate = adata.uns["tcri_covariate_categories"][0]
     >>> mutual_information(adata, covariate, verbose=False)
     0.42
     """

@@ -28,10 +28,7 @@ import anndata as _ad
 import torch as _torch
 import pyro as _pyro
 
-import math
-import itertools
 import numpy as np
-from sklearn.metrics import roc_auc_score
 
 
 # stars / auc_and_label_permutation / bootstrap_auc → moved to tcri/_stats.py (PR1).
@@ -193,7 +190,7 @@ def load_tcri_session(
         with open(setup_file, "r") as f:
             setup = _json.load(f)
     else:
-        _warnings.warn("setup.json not found; attempting to infer from adata.uns[K.METADATA].")
+        _warnings.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
         setup = _collect_setup_from_adata_or_model(adata, model=None)
     _restore_category_order(adata, setup)
 
