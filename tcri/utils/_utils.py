@@ -236,15 +236,6 @@ def load_tcri_session(
 
 
 
-def probabilities(adata):
-    matrix = adata.obs[adata.uns["probability_columns"]]
-    barcodes = matrix.index.tolist()
-    cells = np.nan_to_num(matrix.to_numpy())
-    index = adata.uns["joint_distribution"].index
-    probabs = dict()
-    for bc, cell in zip(barcodes, cells):
-        probabs[bc] = dict(zip(index, cell))
-    return probabs
 
 
 tcri_colors = [

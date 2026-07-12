@@ -33,7 +33,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 |---|---|---|---|---|---|
 | 0 | Contract freeze + CI scaffolding | ✅ | none | — | conformance green |
 | 1 | Shared helpers + `_keys` | ✅ | low | 0 | existing tests green |
-| 2 | Safe deletions | ☐ | very low | 1 | import-graph clean |
+| 2 | Safe deletions | ✅ | very low | 1 | import-graph clean |
 | 3 | Model module split | ☐ | low | 1 | model/pyro tests green |
 | 4 | Model→AnnData streamline | ☐ | HIGH | 1,3 | session round-trip |
 | 5 | Engine consolidation | ☐ | HIGH | 4 | joint identities |
@@ -47,12 +47,12 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
 
-**Phase 2 (dead / out-of-scope):**
-- [ ] `pp.get_latent_embedding` · [ ] `pp.group_small_clones` · [ ] `pp.register_probability_columns`
-- [ ] `pp.remove_meaningless_genes` · [ ] `pp.gene_entropy` · [ ] `pp.classify_phenotypes`
-- [ ] `pl.polar_plot` · [ ] `pl.probability_distribution` · [ ] `pl.bayesian_mutual_information`
-- [ ] `metrics._ent` · [ ] `tl.clone_fraction` · [ ] `metrics.dkl` (→ `_distance.kl_divergence`)
-- [ ] `ut.probabilities` (+ its `_plotting.py:18` import, same PR) · [ ] `SankeyNode.hex_to_rgb`
+**Phase 2 (dead / out-of-scope):** ✅ ALL DELETED (PR2) — 14 symbols, 384 lines, `import tcri` green.
+- [x] `pp.get_latent_embedding` · [x] `pp.group_small_clones` · [x] `pp.register_probability_columns`
+- [x] `pp.remove_meaningless_genes` · [x] `pp.gene_entropy` · [x] `pp.classify_phenotypes`
+- [x] `pl.polar_plot` · [x] `pl.probability_distribution` · [x] `pl.bayesian_mutual_information`
+- [x] `metrics._ent` · [x] `tl.clone_fraction` · [x] `metrics.dkl` (→ `_distance.kl_divergence`)
+- [x] `ut.probabilities` (+ its `_plotting.py` import, same PR) · [x] `SankeyNode.hex_to_rgb`
 
 **Phase 4 (folded into `to_anndata` / session):**
 - [ ] `pp.register_model` (→ `model.to_anndata`) · [ ] `pp.register_phenotype_key` · [ ] `pp.register_clonotype_key`
@@ -106,8 +106,15 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **Usability:** internal only this step.
 - **`K.*` migration (done):** replaced **85** canonical key literals with `K.*` across preprocessing/metrics/plotting/utils via a verified script (model=0; only legacy keys there); added `test_no_canonical_key_literals` guard — none remain. `dkl` reassigned (dead `metrics.dkl`→Phase 2; `flux` inner→Phase 6). Legacy keys left as literals until their removal phases. **PR1 COMPLETE — 35 passed / 1 skipped.**
 
-## PR 2 — Safe deletions  ·  ☐ todo
-_(diary to be filled — this is a REMOVAL PR; the ledger Phase-2 block must be fully ticked)_
+## PR 2 — Safe deletions  ·  ✅ done (branch `refactor/pr2-safe-deletions`)
+- **Goal:** delete the Phase-2 dead / out-of-scope symbols outright (they go to the trash, not to examples). Zero behavior change to the kept surface; `import tcri` stays green.
+- **What happened:** verified **every** target has zero in-package call-sites (grep for calls/imports, plus a precise `NAME(` call-site check for the three ambiguous ones — `_ent`, module-level `dkl`, `probabilities` — all 0), then deleted via AST-span (top-level `FunctionDef` line ranges; the `SankeyNode.hex_to_rgb` method inside its `ClassDef`; the dead `from ..utils._utils import probabilities` line). **14 symbols, 384 lines removed** across metrics/plotting/sankey/preprocessing/utils. `import tcri` green; **full suite 35 passed / 1 skipped** (unchanged — nothing referenced them).
+- **Why safe (not deferred):** the "dkl" refs that remain are the **string** distance-metric name in `flux` + the `_distance` registry, not the deleted module-level `dkl` function (`flux` keeps its own inner `dkl_func` → Phase 6). The `polar_plot`/`probability_distribution` "callers" were self-referential (own docstring examples / the self-recursion bug). `probabilities` was imported into plotting but never called.
+- **Added:** n/a (pure removal PR).
+- **Removed (hard bar):** ✅ all 14 Phase-2 ledger items ticked — `pp.get_latent_embedding`, `pp.group_small_clones`, `pp.register_probability_columns`, `pp.remove_meaningless_genes`, `pp.gene_entropy`, `pp.classify_phenotypes`, `pl.polar_plot`, `pl.probability_distribution`, `pl.bayesian_mutual_information`, `metrics._ent`, `tl.clone_fraction`, `metrics.dkl`, `ut.probabilities` (+ import), `SankeyNode.hex_to_rgb`. Confirmed gone: no `def` remains, no explicit re-export/`__all__` names them.
+- **Test opportunities:** none new (removal); the existing suite is the regression gate and stayed green.
+- **Streamline:** shrinks preprocessing (−129) and plotting (−225) meaningfully ahead of the Phase 3/4/7 splits. Left module-top imports untouched (conservative — genuinely-orphaned imports get swept when each file is split/finalized; the PR1 audit already handled the utils ones).
+- **Usability:** removes broken/dead public entry points (`probability_distribution` self-recursion, `bayesian_mutual_information` bad kwarg, `polar_plot` undefined-name) from the surface so nobody trips on them.
 
 ## PR 3 — Model module split  ·  ☐ todo
 ## PR 4 — Model→AnnData streamline  ·  ☐ todo

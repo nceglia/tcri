@@ -25,9 +25,6 @@ class SankeyNode(object):
         ax.add_patch(self.patch)
 
 
-    def hex_to_rgb(self, hex_color):
-        hex_color = hex_color.lstrip('#')
-        return tuple(int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4))
 
     def plot_node_connection(self, destination_node, ax, **kwargs):
         num_segments = 500
