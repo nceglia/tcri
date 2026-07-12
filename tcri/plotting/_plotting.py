@@ -1,4 +1,5 @@
 import numpy as np
+from .. import _keys as K
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -182,7 +183,7 @@ def compare_joint_distribution(adata, temperature=1):
     # 1. Get Model-Inferred Distributions
     # -----------------------------
     # Create a dictionary mapping each tissue (treatment group) to its clone phenotype DataFrame
-    covariate_col = adata.uns["tcri_metadata"]["covariate_col"]
+    covariate_col = adata.uns[K.METADATA]["covariate_col"]
     model_dists = dict()
     for tissue in set(adata.obs[covariate_col]):
         # Use your function to get the inferred p_ct distribution (with temperature scaling)
@@ -278,19 +279,19 @@ def _phenotype_mass_per_clone(adata, covariate, clones, normalize):
     """Per-clone phenotype mass at one covariate.
 
     Returns dict {clone_id -> np.ndarray(n_phen)} aligned to
-    adata.uns['tcri_phenotype_categories']. Rows of joint_distribution
+    adata.uns[K.PHENOTYPE_CATEGORIES]. Rows of joint_distribution
     sum to 1 (per clone-celltype). Multiple ct rows for the same clone
     are summed. With normalize=True, each clone-ct row contributes its
     probability vector unweighted; with normalize=False, each row is
     weighted by the clone's cell count at this covariate.
     """
-    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    phenotypes = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     jd = joint_distribution(adata, covariate_label=covariate, clones=clones)
     if jd is None or jd.empty:
         return {}
 
     if not normalize:
-        meta = adata.uns["tcri_metadata"]
+        meta = adata.uns[K.METADATA]
         clone_col = meta["clone_col"]
         cov_col = meta["covariate_col"]
         counts_at_cov = (
@@ -337,7 +338,7 @@ def plot_pheno_sankey(
     construction. Flow geometry preserves the per-clone outer-product
     semantics of the original implementation.
     """
-    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    phenotypes = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     n_phen = len(phenotypes)
     n_reps = len(covariate_order)
     if n_reps == 0:
@@ -489,11 +490,11 @@ def phenotypic_flux(
     """Sankey of phenotype flow across `order` values of `splitby`.
 
     Thin wrapper around plot_pheno_sankey. `splitby` is forwarded as the
-    x-axis label and must match adata.uns['tcri_metadata']['covariate_col'].
+    x-axis label and must match adata.uns[K.METADATA]['covariate_col'].
     """
     times = list(range(len(order)))
     if phenotype_colors is None:
-        phenotype_colors = dict(zip(adata.uns["tcri_phenotype_categories"], tcri_colors))
+        phenotype_colors = dict(zip(adata.uns[K.PHENOTYPE_CATEGORIES], tcri_colors))
     fig, ax = plot_pheno_sankey(
         adata,
         covariate_order=order,
@@ -673,7 +674,7 @@ def clonotypic_entropy_by_phenotype(
     """Box-and-dot plot of clonotypic entropy per phenotype / covariate."""
 
     # ---- meta columns --------------------------------------------- #
-    meta        = adata.uns["tcri_metadata"]
+    meta        = adata.uns[K.METADATA]
     cov_col     = meta["covariate_col"]
     clone_col   = meta["clone_col"]
     phen_col    = meta["phenotype_col"]
@@ -801,7 +802,7 @@ def clonotypic_entropy_by_phenotype(
         return df
 
 def plot_phenotype_probabilities(adata, phenotype_prob_slot="X_tcri_phenotypes", add_outline=False, save=None,ncols=2,cmap="magma"):
-    phenotypes = adata.uns["tcri_phenotype_categories"]
+    phenotypes = adata.uns[K.PHENOTYPE_CATEGORIES]
     prob_labels = []
     adata = adata.copy()
     for y,x in zip(phenotypes, adata.obsm[phenotype_prob_slot].T):
@@ -815,7 +816,7 @@ def clone_size_umap(adata, reduction="umap",figsize=(10,8),size=1,alpha=0.7,pale
     clone_size(adata)
     df = adata.obs
     reduction="umap"
-    sizes = np.log10(adata.obs["clone_size"].to_numpy())
+    sizes = np.log10(adata.obs[K.CLONE_SIZE].to_numpy())
     df["UMAP1"] = [x[0] for x in adata.obsm["X_{}".format(reduction)]]
     df["UMAP2"] = [x[1] for x in adata.obsm["X_{}".format(reduction)]]
     df["log(Clone Size)"] = sizes
@@ -965,10 +966,10 @@ def ridge_delta_entropy(
 def phenotypic_entropy(adata, splitby=None, temperature=1, n_samples=0, normalized=True, palette=None, save=None, legend_fontsize=6, bbox_to_anchor=(1.15,1.), figsize=(8,4), rotation=90):
     if palette == None:
         palette=tcri_colors
-    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clone_col"]
-    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
-    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+    cov_col = adata.uns[K.METADATA]["covariate_col"]
+    clone_col = adata.uns[K.METADATA]["clone_col"]
+    phenotype_col = adata.uns[K.METADATA]["phenotype_col"]
+    batch_col = adata.uns[K.METADATA]["batch_col"]
 
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
     clones = adata.obs[clone_col].astype("category").cat.categories.tolist()
@@ -1088,7 +1089,7 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
     adata : AnnData
         AnnData object containing the data with TCR and phenotype information
     splitby : str, optional
-        Column name to split the data by. If None, uses the covariate column stored in adata.uns["tcri_metadata"]
+        Column name to split the data by. If None, uses the covariate column stored in adata.uns[K.METADATA]
     temperature : float, default=1.0
         Temperature parameter for softening/sharpening distributions in the joint distribution calculation
     n_samples : int, default=0
@@ -1130,10 +1131,10 @@ def mutual_information(adata, splitby=None, temperature=1.0, n_samples=0, normal
         palette = tcri_colors
 
     # Retrieve metadata from adata
-    cov_col = adata.uns["tcri_metadata"]["covariate_col"]
-    clone_col = adata.uns["tcri_metadata"]["clone_col"]
-    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
-    batch_col = adata.uns["tcri_metadata"]["batch_col"]
+    cov_col = adata.uns[K.METADATA]["covariate_col"]
+    clone_col = adata.uns[K.METADATA]["clone_col"]
+    phenotype_col = adata.uns[K.METADATA]["phenotype_col"]
+    batch_col = adata.uns[K.METADATA]["batch_col"]
     
     covs = adata.obs[cov_col].astype("category").cat.categories.tolist()
     batches = adata.obs[batch_col].astype("category").cat.categories.tolist()
@@ -1237,7 +1238,7 @@ def bayesian_mutual_information(
 ):
     np.random.seed(seed)
 
-    meta       = adata.uns["tcri_metadata"]
+    meta       = adata.uns[K.METADATA]
     cov_col    = meta["covariate_col"]
     clone_col  = meta["clone_col"]
 
@@ -1348,7 +1349,7 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
         AnnData object containing the data with TCR and phenotype information
     phenotypes : list, optional
         List of phenotype names to include in the plot. If None, uses all phenotypes
-        defined in adata.uns["tcri_metadata"]["phenotype_col"]
+        defined in adata.uns[K.METADATA]["phenotype_col"]
     statistic : str, default="distribution"
         Type of statistic to plot, one of "distribution" or "entropy"
     method : str, default="joint_distribution"
@@ -1356,7 +1357,7 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
         or "empirical" (raw cell counts)
     splitby : str, optional
         Column name to split the data by. If None, uses the covariate column stored
-        in adata.uns["tcri_metadata"]["covariate_col"]
+        in adata.uns[K.METADATA]["covariate_col"]
     color_dict : dict, optional
         Dictionary mapping split categories to colors
     temperature : float, default=1.0
@@ -1378,10 +1379,10 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
     >>> ax = tcri.pl.polar_plot(adata, statistic="entropy", color_dict=color_dict)
     """
     if phenotypes is None:
-        phenotypes = adata.uns["tcri_metadata"]["phenotype_col"]
+        phenotypes = adata.uns[K.METADATA]["phenotype_col"]
     
     if splitby is None:
-        splitby = adata.uns["tcri_metadata"]["covariate_col"]
+        splitby = adata.uns[K.METADATA]["covariate_col"]
     
     # Get unique splits
     splits = adata.obs[splitby].unique()
@@ -1402,7 +1403,7 @@ def polar_plot(adata, phenotypes=None, statistic="distribution", method="joint_d
                 subset = adata[adata.obs[splitby] == split]
                 values = np.zeros(len(phenotypes))
                 for j, pheno in enumerate(phenotypes):
-                    mask = subset.obs[adata.uns["tcri_metadata"]["phenotype_col"]] == pheno
+                    mask = subset.obs[adata.uns[K.METADATA]["phenotype_col"]] == pheno
                     values[j] = np.sum(mask) / len(subset)
         else:  # entropy
             values = np.zeros(len(phenotypes))

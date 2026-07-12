@@ -114,3 +114,32 @@ def test_import_smoke():
     for ns in ("tl", "pp", "pl", "ml", "ut"):
         assert hasattr(tcri, ns), f"tcri.{ns} missing"
     # diag is added in Phase 8; assert once it lands.
+
+
+# migrated canonical keys (PR1) — must come from _keys.K.*, never a literal.
+# legacy keys (tcri_clone_key/…, X_tcri_phenotypes) are exempt until their removal phase.
+_MIGRATED_KEYS = [
+    "METADATA", "P_CT", "LOCAL_SCALE", "CT_TO_COV", "CT_TO_C", "CT_ARRAY",
+    "COV_ARRAY", "COVARIATE_CATEGORIES", "CLONOTYPE_CATEGORIES",
+    "PHENOTYPE_CATEGORIES", "X_LOGITS", "X_LOGPOSTERIOR", "X_PROBABILITIES",
+    "X_TCRI", "PHENOTYPE", "CLONE_SIZE",
+]
+
+
+def test_no_canonical_key_literals():
+    """Migrated uns/obsm/obs keys must come from `_keys` (K.*), never a string literal."""
+    from tcri import _keys as K
+
+    pkg = Path(tcri.__file__).parent
+    forbidden = {getattr(K, n) for n in _MIGRATED_KEYS}
+    offenders = []
+    for py in pkg.rglob("*.py"):
+        if py.name == "_keys.py":
+            continue
+        txt = py.read_text()
+        for key in forbidden:
+            if f'"{key}"' in txt or f"'{key}'" in txt:
+                offenders.append(f"{py.relative_to(pkg).as_posix()}: {key!r}")
+    assert not offenders, (
+        "canonical keys used as string literals (use K.*):\n  " + "\n  ".join(offenders)
+    )

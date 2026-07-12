@@ -1,5 +1,6 @@
 # Standard library imports
 import warnings
+from .. import _keys as K
 import numpy as np
 import pandas as pd
 import torch
@@ -83,7 +84,7 @@ def _mi_from_joint(pxy: np.ndarray, normalised: bool, mode: str="average") -> fl
 def mi_compare(adata, groupby, groups=None, treatment=None, n_samples=50,
                patient_col=None, clone_col=None, covariate_col=None,
                verbose=True, **mi_kwargs):
-    meta = adata.uns["tcri_metadata"]
+    meta = adata.uns[K.METADATA]
     patient_col = patient_col or meta["batch_col"]
     clone_col = clone_col or meta["clone_col"]
     covariate_col = covariate_col or meta["covariate_col"]
@@ -272,14 +273,14 @@ def clonotypic_entropy(
 
     Examples
     --------
-    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
     >>> ce = clonotypic_entropy(adata, covariate, n_samples=50)
     >>> ce.sort_values(ascending=False).head()
     """
     if n_samples < 1:
         raise ValueError("n_samples must be >= 1")
 
-    phenotypes = list(adata.uns["tcri_phenotype_categories"])
+    phenotypes = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     n_pheno = len(phenotypes)
     samples = np.empty((n_samples, n_pheno), dtype=float)
 
@@ -406,7 +407,7 @@ def delta_entropy_table(
     if seed is not None:
         np.random.seed(seed)
 
-    meta       = adata.uns["tcri_metadata"]
+    meta       = adata.uns[K.METADATA]
     clone_col  = meta["clone_col"]
     phen_col   = meta["phenotype_col"]
 
@@ -510,14 +511,14 @@ def phenotypic_entropy(
 
     Examples
     --------
-    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
     >>> pe = phenotypic_entropy(adata, covariate, n_samples=50)
     >>> pe.mean()  # average phenotypic plasticity across clones
     """
     if n_samples < 1:
         raise ValueError("n_samples must be >= 1")
 
-    meta          = adata.uns["tcri_metadata"]
+    meta          = adata.uns[K.METADATA]
     clone_col     = meta["clone_col"]
     covariate_col = meta["covariate_col"]
 
@@ -689,7 +690,7 @@ def mutual_information(
 
     Examples
     --------
-    >>> covariate = adata.uns["tcri_covariate_categories"][0]
+    >>> covariate = adata.uns[K.COVARIATE_CATEGORIES][0]
     >>> mutual_information(adata, covariate, verbose=False)
     0.42
     """
@@ -778,7 +779,7 @@ def flux_table(
     if seed is not None:
         np.random.seed(seed)
 
-    meta        = adata.uns["tcri_metadata"]
+    meta        = adata.uns[K.METADATA]
     clone_col   = meta["clone_col"]
 
     groups   = sorted(adata.obs[splitby].dropna().unique().tolist())
@@ -911,7 +912,7 @@ def flux(
         np.random.seed(seed)
 
     # ---------- which clones? ----------------------------------
-    clone_col = adata.uns["tcri_metadata"]["clone_col"]
+    clone_col = adata.uns[K.METADATA]["clone_col"]
     if clones is None:
         clones = adata.obs[clone_col].unique().tolist()
     elif isinstance(clones, str):
