@@ -36,7 +36,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 2 | Safe deletions | ✅ | very low | 1 | import-graph clean |
 | 3 | Model module split | ✅ | low | 1 | model/pyro tests green |
 | 4 | Model→AnnData streamline | ✅ | HIGH | 1,3 | session round-trip |
-| 5 | Engine consolidation | ☐ | HIGH | 4 | joint identities |
+| 5 | Engine consolidation | ✅ | HIGH | 4 | joint identities |
 | 6 | Metric-API consolidation | ☐ | HIGH | 5 | metric tests |
 | 7 | Plotting split + pl twins | ☐ | medium | 6,1 | twins render |
 | 8 | `diag/` seeding | ☐ | low-med | 4,5 | PPC columns |
@@ -170,7 +170,15 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **`phenotype_weights`/`class_weights` is dead** for the same root cause (would weight the absent classification loss).
 - **`classifier_dropout` is not plumbed** (separate one-line wiring bug): `TCRIModule.__init__` constructs `PhenotypeClassifier(...)` without `dropout_rate=self.classifier_dropout`, so the knob is inert (the classifier keeps its own default 0.1). Fold the fix into the classifier PR.
 - **Fix (deferred to its own PR, before Phase 6 metrics depend on `predict`):** wire a supervised cross-entropy of `cls_logits` vs the observed phenotype into training so the classifier learns; then add — the perfect-recovery **CI** test (user-provided `create_perfect_synthetic_anndata`), the `gate=1.0` isolated-classifier test, and the ⛔ knob tests above. Model-behavior change (shifts learned metrics + the round-trip fixture values) → isolated PR + re-validation.
-## PR 5 — Engine consolidation  ·  ☐ todo
+## PR 5 — Engine consolidation  ·  ✅ done (branch `refactor/pr5-engine`)
+- **Goal:** build the unified `joint_distribution` engine (`tools/` + `_compute/`) that every metric will consume — the substrate. **Additive** this PR: the old `joint_distribution`/`joint_distribution_posterior` stay until Phase 6 migrates the metrics onto the new engine. HIGH risk (math-heavy).
+- **What happened:** created `_compute/_xp.py` (torch-first device seam — CPU / torch-CUDA, lazy GPU import, `asnumpy` boundary; grafiti parity but torch-first since the draws are torch), `_compute/_joint.py::_joint_draws` (the `[S, n_clones, P]` core), `_compute/_reduce.py` (batched entropy/MI, **bits/log2 default** per the user, float64 accumulators), `tools/_joint.py` (the DataFrame wrapper), re-exported `tcri.joint_distribution`. Onboarded `tl.joint_distribution` into the contract (added `device`).
+- **Engine invariants implemented (§7.1):** temper the base **once** (`T==1` is the *exact* identity — no eps round-trip, so both closed-form identities are exact/near-exact); **draw over all ct rows once then slice per covariate** (shared-draw invariant → draw-count == `n_samples` regardless of #covariates); `n_samples=0` deterministic; `use_logits=True` folds per-cell logits with `log(base)` **gate-aware** and scatter-adds per clone (matching `predict`); `weighted` scales clone rows by the **ct-keyed** cell count (fixes the old clone-indexed `Counter` bug); torch-seeded Dirichlet (`random_state`).
+- **Verified (the gate — `tests/test_tools/test_joint.py`, all green):** `use_logits=False,n=0,T=1 == uns[P_CT]` restricted (**dev 0.0**); `use_logits=True,n=0,T=1 == predict` per-clone aggregation (**dev 4e-8**; compared to the *frozen* `X_PROBABILITIES` so it's store-independent); `n=0` bit-identical; `n>0` seeded-reproducible + Dirichlet mean→base; weighting == clone cell counts; `covariate=None` slice == per-covariate call (shared draw); provenance JSON-serializable. Plus `test_reduce` (entropy of uniform == `log2(P)` bits; MI independent==0, coupled==1 bit). Suite **60 passed**.
+- **Added:** ✅ `_compute/{_xp,_joint,_reduce}.py` ✅ `tools/{__init__,_joint}.py` ✅ `tcri.joint_distribution` re-export ✅ `tests/test_tools/{test_joint,test_reduce}.py`.
+- **Removed (hard bar):** n/a — additive PR; the old engines are deleted in Phase 6 (with the metric migration), per the ledger.
+- **Deferred (deliberate scope boundary, logged):** **`groupby`** — raises `NotImplementedError` for now. Its correct semantics (full-space cell/clone restriction, the clone-determined guard, and sharing the draw across groups) are substantial and land with the Phase-6 metric consumers + `_metric_boxplot` (Phase 7) that actually exercise it. `_compute/_reduce` is created but not yet consumed (Phase-6 metrics use it). The `+1e-8`-vs-clamp draw bug is **fixed** in the new engine (`clamp(local_scale·base, 1e-3)`); the old engines keep the bug until they're deleted.
+- **Decision baked in (user):** all entropy/MI default to **bits (log2)**, consistent with `_distance`.
 ## PR 6 — Metric-API consolidation  ·  ☐ todo
 ## PR 7 — Plotting split + pl twins  ·  ☐ todo
 ## PR 8 — diag/ seeding  ·  ☐ todo
