@@ -32,7 +32,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | # | PR | Status | Risk | Depends | Gate |
 |---|---|---|---|---|---|
 | 0 | Contract freeze + CI scaffolding | ✅ | none | — | conformance green |
-| 1 | Shared helpers + `_keys` | ◐ | low | 0 | existing tests green |
+| 1 | Shared helpers + `_keys` | ✅ | low | 0 | existing tests green |
 | 2 | Safe deletions | ☐ | very low | 1 | import-graph clean |
 | 3 | Model module split | ☐ | low | 1 | model/pyro tests green |
 | 4 | Model→AnnData streamline | ☐ | HIGH | 1,3 | session round-trip |
@@ -93,18 +93,18 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **Streamline:** none this PR.
 - **Usability:** `_contract.pyi` doubles as the one-screen human-readable target signature reference.
 - **Standing Audit:** removed✅(n/a) · added✅ · tests✅(guardrail live) · streamline✅(none) · usability✅ · conformance✅ green · diary✅.
-- **Not committed** — awaiting go-ahead (work sits on the branch, tests green).
+- **Committed** on branch `refactor/pr0-contract-freeze`.
 
-## PR 1 — Shared helpers + `_keys`  ·  ◐ in progress
+## PR 1 — Shared helpers + `_keys`  ·  ✅ done
 - **Goal:** create `_keys`/`_console`/`_stats`/`_distance`; then adopt `_keys` at every read/write site, dedup console, move stats out of utils. API unchanged.
 - **What happened (foundation, done):** created the 4 helper modules — `_keys.py` (all uns/obsm/obs constants incl. NEW `GATE_PROB`/`CLASSIFIER_TEMPERATURE`; legacy keys listed for the removal step); `_console.py` (single `_ok/_info/_warn/_fin` + all ANSI aliases both spellings); `_stats.py` (`stars`/`auc_and_label_permutation`/`bootstrap_auc` + **NEW** true `hdi`, `eti`, `prob_direction`, `mann_whitney`); `_distance.py` (`kl_divergence`/`l1_distance`/`jensen_shannon` + `phenotype_distance` dispatch, single eps, bits). Added `tests/test_helpers.py` (8 tests). Suite green.
 - **Issues & fixes:** **`hdi` off-by-one** — first version spanned `ceil(prob·n)+1` points, so on a right-skewed sample it returned the full range (HDI==ETI). Caught by a sanity assertion; fixed to the arviz `floor(prob·n)` window → now correctly hugs the low-mass region (`HDI=(0,0.2)` vs `ETI=(0,2.12)`). A concrete "validate the math up front" catch.
 - **Added:** ✅ `_keys.py` ✅ `_console.py` ✅ `_stats.py` ✅ `_distance.py` ✅ `tests/test_helpers.py`
-- **Removed / deduped (hard bar):** ✅ console dedup — deleted the **12** copied `_ok/_info/_warn/_fin` defs (metrics+preprocessing+plotting) → one `_console`. ✅ moved `stars`/`auc_and_label_permutation`/`bootstrap_auc` out of `utils` → `_stats` (plotting repointed; dead `stars` import dropped). Suite green (34 passed). **Remaining PR1:** 2 `dkl` copies → `_distance`; `K.*` key migration; then the key-literal test. (`_ascii_hist` removal is deferred to its phase.)
+- **Removed / deduped (hard bar):** ✅ console dedup — deleted the **12** copied `_ok/_info/_warn/_fin` defs (metrics+preprocessing+plotting) → one `_console`. ✅ moved `stars`/`auc_and_label_permutation`/`bootstrap_auc` out of `utils` → `_stats` (plotting repointed; dead `stars` import dropped). Suite green (34 passed).
 - **Test opportunities:** ✅ done — 8 unit tests for pure helpers that were previously embedded/untestable.
 - **Streamline:** foundation enables deleting ~3 console dupes + 2 `dkl` copies + the `utils` stats block on adoption.
 - **Usability:** internal only this step.
-- **Remaining for PR1:** (a) dedup `_console` into metrics/preprocessing/plotting (delete the 3 copies); (b) move `stars`/`auc`/`bootstrap` `utils`→`_stats`, flip the plotting import; (c) adopt `K.*` at every uns/obsm/obs site; (d) add `test_no_tcri_key_literals_in_signatures` (forbid `tcri_*` string-literal defaults, force `K.*` — grafiti's single-source rule).
+- **`K.*` migration (done):** replaced **85** canonical key literals with `K.*` across preprocessing/metrics/plotting/utils via a verified script (model=0; only legacy keys there); added `test_no_canonical_key_literals` guard — none remain. `dkl` reassigned (dead `metrics.dkl`→Phase 2; `flux` inner→Phase 6). Legacy keys left as literals until their removal phases. **PR1 COMPLETE — 35 passed / 1 skipped.**
 
 ## PR 2 — Safe deletions  ·  ☐ todo
 _(diary to be filled — this is a REMOVAL PR; the ledger Phase-2 block must be fully ticked)_

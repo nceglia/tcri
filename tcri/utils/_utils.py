@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+from .. import _keys as K
 import os
 import sys
 import numpy as np
@@ -192,7 +193,7 @@ def load_tcri_session(
         with open(setup_file, "r") as f:
             setup = _json.load(f)
     else:
-        _warnings.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
+        _warnings.warn("setup.json not found; attempting to infer from adata.uns[K.METADATA].")
         setup = _collect_setup_from_adata_or_model(adata, model=None)
     _restore_category_order(adata, setup)
 
@@ -514,7 +515,7 @@ def write_adata_safely(adata: "_ad.AnnData", path: str, *, compression: str = "g
 
 def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict[str, Any]:
     setup: Dict[str, Any] = {}
-    meta = adata.uns.get("tcri_metadata", {})
+    meta = adata.uns.get(K.METADATA, {})
     if meta:
         setup.update({
             "phenotype_col": meta.get("phenotype_col"),
@@ -546,9 +547,9 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
 
 def _restore_category_order(adata: "_ad.AnnData", setup: Dict[str, Any]) -> None:
     mapping = [
-        ("phenotype_col", "tcri_phenotype_categories"),
-        ("clone_col", "tcri_clonotype_categories"),
-        ("covariate_col", "tcri_covariate_categories"),
+        ("phenotype_col", K.PHENOTYPE_CATEGORIES),
+        ("clone_col", K.CLONOTYPE_CATEGORIES),
+        ("covariate_col", K.COVARIATE_CATEGORIES),
     ]
     for col_key, cats_key in mapping:
         col = setup.get(col_key)

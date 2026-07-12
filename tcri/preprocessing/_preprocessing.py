@@ -1,4 +1,5 @@
 from scipy.stats import entropy
+from .. import _keys as K
 import numpy as np
 import tqdm
 import pandas as pd
@@ -82,14 +83,14 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
 
-def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs="tcri_phenotype"):
+def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs=K.PHENOTYPE):
     print("\t...classifying phenotypes...\n")
-    phenotype_col = adata.uns["tcri_metadata"]["phenotype_col"]
-    ct_array = adata.uns["tcri_ct_array_for_cells"]
+    phenotype_col = adata.uns[K.METADATA]["phenotype_col"]
+    ct_array = adata.uns[K.CT_ARRAY]
     unique_cts = np.unique(ct_array)    
-    phenotype_probs_posterior = adata.uns["tcri_p_ct"]
-    phenotypes = adata.uns["tcri_phenotype_categories"]
-    latent_z = adata.obsm["X_tcri"]
+    phenotype_probs_posterior = adata.uns[K.P_CT]
+    phenotypes = adata.uns[K.PHENOTYPE_CATEGORIES]
+    latent_z = adata.obsm[K.X_TCRI]
 
     # Pre-compute phenotype archetype embeddings
     archetype_matrix = np.vstack([
@@ -154,9 +155,9 @@ def _compute_logits_and_prior(model, adata, batch_size=256, eps=1e-8):
 @torch.no_grad()
 def register_model(
     adata, model,
-    phenotype_prob_slot="X_tcri_probabilities",
-    phenotype_assignment_obs="tcri_phenotype",
-    latent_slot="X_tcri",
+    phenotype_prob_slot=K.X_PROBABILITIES,
+    phenotype_assignment_obs=K.PHENOTYPE,
+    latent_slot=K.X_TCRI,
     batch_size=256,
     store_logits=True,
     store_logposterior=True,
@@ -171,12 +172,12 @@ def register_model(
     print(f"{BOLD}{MAGENT}🔗  Registering TCRi model outputs …{RESET}")
 
     # 1) priors & arrays -------------------------------------------------
-    adata.uns["tcri_p_ct"]      = model.module.get_p_ct().cpu().numpy()
-    adata.uns["tcri_ct_to_cov"] = model.module.ct_to_cov.cpu().numpy()
-    adata.uns["tcri_ct_to_c"]   = model.module.ct_to_c.cpu().numpy()
-    adata.uns["tcri_local_scale"] = model.module.local_scale
+    adata.uns[K.P_CT]      = model.module.get_p_ct().cpu().numpy()
+    adata.uns[K.CT_TO_COV] = model.module.ct_to_cov.cpu().numpy()
+    adata.uns[K.CT_TO_C]   = model.module.ct_to_c.cpu().numpy()
+    adata.uns[K.LOCAL_SCALE] = model.module.local_scale
     _ok("stored hierarchical priors")
-    for k in ("tcri_p_ct","tcri_ct_to_cov","tcri_ct_to_c"):
+    for k in (K.P_CT,K.CT_TO_COV,K.CT_TO_C):
         _info(f"uns['{k}']", np.shape(adata.uns[k]))
 
     # 2) metadata --------------------------------------------------------
@@ -186,7 +187,7 @@ def register_model(
         "phenotype_col": model.adata_manager.registry["phenotype_col"],
         "batch_col":     model.adata_manager.registry["batch_col"],
     }
-    adata.uns["tcri_metadata"] = meta
+    adata.uns[K.METADATA] = meta
     _ok("stored metadata dictionary")
 
     # categories
@@ -199,9 +200,9 @@ def register_model(
 
     # per-cell ct / cov arrays
     ct_arr = model.module.ct_array.cpu().numpy()
-    adata.uns["tcri_ct_array_for_cells"] = ct_arr
+    adata.uns[K.CT_ARRAY] = ct_arr
     cov_arr = model.module.ct_to_cov.cpu().numpy()[ct_arr]
-    adata.uns["tcri_cov_array_for_cells"] = cov_arr
+    adata.uns[K.COV_ARRAY] = cov_arr
     _ok("stored per-cell ct / cov indices")
 
     # 3) latent means ----------------------------------------------------
@@ -213,11 +214,11 @@ def register_model(
     # 4) logits & log-posterior -----------------------------------------
     cls_logits, prior_log = _compute_logits_and_prior(model, adata, batch_size)
     if store_logits:
-        adata.obsm["X_tcri_logits"] = cls_logits
-        _info("obsm['X_tcri_logits']", cls_logits.shape)
+        adata.obsm[K.X_LOGITS] = cls_logits
+        _info("obsm[K.X_LOGITS]", cls_logits.shape)
     if store_logposterior:
-        adata.obsm["X_tcri_logposterior"] = cls_logits + prior_log
-        _info("obsm['X_tcri_logposterior']", cls_logits.shape)
+        adata.obsm[K.X_LOGPOSTERIOR] = cls_logits + prior_log
+        _info("obsm[K.X_LOGPOSTERIOR]", cls_logits.shape)
     _ok("computed logits & additive log-posterior")
 
     # 5) probabilities & hard labels ------------------------------------
@@ -229,7 +230,7 @@ def register_model(
 
     adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
         adata.obsm[phenotype_prob_slot].argmax(1),
-        categories=adata.uns["tcri_phenotype_categories"],
+        categories=adata.uns[K.PHENOTYPE_CATEGORIES],
     )
     _ok("stored probabilities and hard labels")
 
@@ -255,12 +256,12 @@ def joint_distribution_posterior(
         adata, covariate_label, *, temperature=1.0, clones=None,
         weighted=False, combine_with_logits=True, precision=3, silent=False):
 
-    meta      = adata.uns["tcri_metadata"];  cov_col = meta["covariate_col"]
-    clone_col = meta["clone_col"];           ph_cats  = adata.uns["tcri_phenotype_categories"]
-    cov_idx   = adata.uns["tcri_covariate_categories"].index(covariate_label)
+    meta      = adata.uns[K.METADATA];  cov_col = meta["covariate_col"]
+    clone_col = meta["clone_col"];           ph_cats  = adata.uns[K.PHENOTYPE_CATEGORIES]
+    cov_idx   = adata.uns[K.COVARIATE_CATEGORIES].index(covariate_label)
 
-    ct_per_cell  = adata.uns["tcri_ct_array_for_cells"]
-    cov_per_cell = adata.uns["tcri_cov_array_for_cells"]
+    ct_per_cell  = adata.uns[K.CT_ARRAY]
+    cov_per_cell = adata.uns[K.COV_ARRAY]
     clone_labels = adata.obs[clone_col].values
 
     # Guard against filtered AnnData (view or subset copy). The per-cell arrays in
@@ -286,8 +287,8 @@ def joint_distribution_posterior(
 
     _ok(f"selected {len(idx_cov):,} cells", silent)
 
-    p_ct_mean   = torch.tensor(adata.uns["tcri_p_ct"])
-    local_scale = adata.uns.get("tcri_local_scale", 1.0)
+    p_ct_mean   = torch.tensor(adata.uns[K.P_CT])
+    local_scale = adata.uns.get(K.LOCAL_SCALE, 1.0)
     bad = ~torch.isfinite(p_ct_mean)
     if bad.any():
         n_phen = p_ct_mean.shape[1]
@@ -296,9 +297,9 @@ def joint_distribution_posterior(
     _ok("sampled one draw from posterior p_ct", silent)
 
     if combine_with_logits:
-        if "X_tcri_logits" not in adata.obsm:
+        if K.X_LOGITS not in adata.obsm:
             raise RuntimeError("X_tcri_logits missing in adata.")
-        logits     = adata.obsm["X_tcri_logits"][idx_cov]
+        logits     = adata.obsm[K.X_LOGITS][idx_cov]
         ct_idx_sel = ct_per_cell[idx_cov]
         log_prior  = np.log(p_ct_sample[ct_idx_sel] + 1e-8)
         probs_cell = softmax((logits + log_prior)/temperature, axis=1)
@@ -360,15 +361,15 @@ def joint_distribution(
     weighted: bool = False,
 ) -> pd.DataFrame:
 
-    p_ct = torch.tensor(adata.uns["tcri_p_ct"])
-    ct_to_cov = torch.tensor(adata.uns["tcri_ct_to_cov"])
-    ct_to_c = torch.tensor(adata.uns["tcri_ct_to_c"])
+    p_ct = torch.tensor(adata.uns[K.P_CT])
+    ct_to_cov = torch.tensor(adata.uns[K.CT_TO_COV])
+    ct_to_c = torch.tensor(adata.uns[K.CT_TO_C])
 
-    covariate_categories = adata.uns["tcri_covariate_categories"]
-    phenotype_categories = adata.uns["tcri_phenotype_categories"]
-    clonotype_categories = adata.uns["tcri_clonotype_categories"]
+    covariate_categories = adata.uns[K.COVARIATE_CATEGORIES]
+    phenotype_categories = adata.uns[K.PHENOTYPE_CATEGORIES]
+    clonotype_categories = adata.uns[K.CLONOTYPE_CATEGORIES]
 
-    metadata = adata.uns["tcri_metadata"]
+    metadata = adata.uns[K.METADATA]
     covariate_col = metadata["covariate_col"]
 
     # Convert covariate_label to index
@@ -390,8 +391,8 @@ def joint_distribution(
     clone_indices = ct_to_c[chosen_idx].numpy()
 
     # Get cell counts for each clonotype-covariate pair (for weighting)
-    ct_array_for_cells = adata.uns["tcri_ct_array_for_cells"]
-    cov_array_for_cells = adata.uns["tcri_cov_array_for_cells"]
+    ct_array_for_cells = adata.uns[K.CT_ARRAY]
+    cov_array_for_cells = adata.uns[K.COV_ARRAY]
 
     from collections import Counter
     cell_mask = (cov_array_for_cells == cov_value)
@@ -432,7 +433,7 @@ def joint_distribution(
 
     else:
         # Sample from Dirichlet distribution
-        local_scale = adata.uns.get("tcri_local_scale", 1.0)
+        local_scale = adata.uns.get(K.LOCAL_SCALE, 1.0)
         conc = local_scale * p_ct_for_cov
         
         samples = Dirichlet(conc).sample((n_samples,))
@@ -481,7 +482,7 @@ def joint_distribution(
 
 def get_latent_embedding(
     adata, 
-    latent_slot: str = "X_tcri",
+    latent_slot: str = K.X_TCRI,
     n_samples: int = 0,
     posterior_scale: float = 1.0
 ) -> "np.ndarray":
@@ -496,7 +497,7 @@ def get_latent_embedding(
 
 def group_small_clones(adata, patient_key=""):
     ct = []
-    for x, s, p in zip(adata.obs["trb"], adata.obs["clone_size"], adata.obs[patient_key]):
+    for x, s, p in zip(adata.obs["trb"], adata.obs[K.CLONE_SIZE], adata.obs[patient_key]):
         if s < 4:
             ct.append("Singleton_{}".format(p))
         else:
@@ -535,7 +536,7 @@ def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
             aggregated_entropies.append(ent)
         adata.var[key_added] = aggregated_entropies
 
-def clone_size(adata, key_added="clone_size", return_counts=False):
+def clone_size(adata, key_added=K.CLONE_SIZE, return_counts=False):
     tcr_key = adata.uns["tcri_clone_key"]
     res = np.unique(adata.obs[tcr_key].tolist(), return_counts=True)
     clone_sizes = dict(zip(res[0],res[1]))
