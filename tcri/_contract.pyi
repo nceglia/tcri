@@ -26,19 +26,23 @@ class TCRIModel:
     def setup_anndata(
         cls, adata: AnnData, *, layer: Optional[str] = ...,
         clonotype_key: str = ..., phenotype_key: str = ...,
-        covariate_key: str = ..., batch_key: str = ...,
+        covariate_key: str = ..., batch_key: str = ..., **kwargs: Any,
     ) -> None: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
-        reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ...,
+        reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ..., **kwargs: Any,
     ) -> None: ...
     def get_latent_representation(
         self, adata: Optional[AnnData] = ..., indices: Any = ...,
         batch_size: Optional[int] = ...,
     ) -> Any: ...
-    def predict(self, adata: Optional[AnnData] = ..., *, batch_size: int = ...) -> pd.DataFrame: ...
+    def predict(
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., eps: float = ...,
+    ) -> pd.DataFrame: ...
     def get_p_ct(self) -> Any: ...
-    def to_anndata(self, adata: AnnData, *, batch_size: int = ..., compute_umap: bool = ...) -> AnnData: ...
+    def to_anndata(
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., compute_umap: bool = ...,
+    ) -> AnnData: ...
 
 
 # ── preprocessing (pp) ───────────────────────────────────────────────────────

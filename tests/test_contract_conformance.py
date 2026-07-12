@@ -20,9 +20,16 @@ import tcri
 PYI = Path(tcri.__file__).parent / "_contract.pyi"
 
 # contract key ("Namespace.func" / "TCRIModel.method") -> (module, dotted attr).
-# EMPTY at PR0 — nothing has been migrated to the new surface yet. Each PR adds
-# its landed functions here; the signature test then enforces live == contract.
-IMPLEMENTED: dict[str, tuple[str, str]] = {}
+# Each PR onboards its landed functions here; the signature test then enforces
+# live == contract. PR4 landed the model→AnnData surface.
+IMPLEMENTED: dict[str, tuple[str, str]] = {
+    "TCRIModel.setup_anndata": ("tcri.model._model", "TCRIModel.setup_anndata"),
+    "TCRIModel.train": ("tcri.model._model", "TCRIModel.train"),
+    "TCRIModel.get_latent_representation": ("tcri.model._model", "TCRIModel.get_latent_representation"),
+    "TCRIModel.predict": ("tcri.model._model", "TCRIModel.predict"),
+    "TCRIModel.get_p_ct": ("tcri.model._model", "TCRIModel.get_p_ct"),
+    "TCRIModel.to_anndata": ("tcri.model._model", "TCRIModel.to_anndata"),
+}
 
 
 def _params_from_ast(a: ast.arguments):

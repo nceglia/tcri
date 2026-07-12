@@ -484,22 +484,7 @@ def _to_jsonable(x: Any) -> Any:
         pass
     return str(x)
 
-def _pop_nonserializables(adata: "_ad.AnnData") -> Dict[str, Any]:
-    sidecar = {}
-    if "tcri_manager" in adata.uns:
-        sidecar["tcri_manager"] = "dropped (AnnDataManager is not serializable)"
-        adata.uns.pop("tcri_manager")
-    return sidecar
 
-def write_adata_safely(adata: "_ad.AnnData", path: str, *, compression: str = "gzip") -> None:
-    removed = {}
-    try:
-        removed = _pop_nonserializables(adata)
-        adata.write_h5ad(path, compression=compression)
-    finally:
-        # We intentionally do not restore removed manager objects back into .uns
-        # because they are session-bound and will be reconstructed on load.
-        pass
 
 def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict[str, Any]:
     setup: Dict[str, Any] = {}
@@ -581,10 +566,12 @@ def save_tcri_session(
         _json.dump(setup, f, indent=2)
     paths["setup"] = _os.path.join(out_dir, SETUP_FILE)
 
-    # 4) Save sanitized AnnData (without tcri_manager)
+    # 4) Save the AnnData (plain h5ad; the manager stash is retired at setup_anndata)
     if save_adata:
-        write_adata_safely(adata, _os.path.join(out_dir, AD_FILE), compression=compression)
-        paths["adata"] = _os.path.join(out_dir, AD_FILE)
+        ad_path = _os.path.join(out_dir, AD_FILE)
+        adata.uns.pop(K.LEGACY_MANAGER, None)  # defensive: never serialize a stray AnnDataManager
+        adata.write_h5ad(ad_path, compression=compression)
+        paths["adata"] = ad_path
 
     # 5) Meta / versions
     meta = {

@@ -227,7 +227,7 @@ def clonotypic_entropy(
     ----------
     adata : AnnData
         Registered object (see
-        :func:`~tcri.preprocessing._preprocessing.register_model`).
+        :meth:`~tcri.model._model.TCRIModel.to_anndata`).
     covariate : str
         Covariate value :math:`m` to condition on (a category of the registered
         covariate column).
@@ -468,7 +468,7 @@ def phenotypic_entropy(
     ----------
     adata : AnnData
         Registered object (see
-        :func:`~tcri.preprocessing._preprocessing.register_model`).
+        :meth:`~tcri.model._model.TCRIModel.to_anndata`).
     covariate : str
         Covariate value :math:`m` to condition on.
     point_estimate : bool, default True
@@ -626,7 +626,7 @@ def mutual_information(
     ----------
     adata : AnnData
         Registered object (see
-        :func:`~tcri.preprocessing._preprocessing.register_model`).
+        :meth:`~tcri.model._model.TCRIModel.to_anndata`).
     covariate : str
         Covariate value :math:`m` to condition on.
     temperature : float, default 1.0
@@ -845,7 +845,7 @@ def flux(
     ----------
     adata : AnnData
         Registered object (see
-        :func:`~tcri.preprocessing._preprocessing.register_model`).
+        :meth:`~tcri.model._model.TCRIModel.to_anndata`).
     from_this, to_that : str
         The two covariate values to compare (e.g. ``"Pre-treatment"`` and
         ``"Post-treatment"``).

@@ -3,7 +3,7 @@
 The generative model, priors, classifier, and training plan live in sibling
 modules; this file holds only the high-level `BaseModelClass` API
 (`setup_anndata`, `__init__`, `train`, `get_latent_representation`,
-`get_cell_phenotype_probs`, `get_p_ct`, ...):
+`predict`, `to_anndata`, `get_p_ct`, ...):
 
 - :mod:`._module`     -- Pyro model/guide (:class:`TCRIModule`)
 - :mod:`._priors`     -- :class:`MixtureDirichlet`, :class:`VampPrior`
@@ -52,13 +52,22 @@ class TCRIModel(BaseModelClass):
     def setup_anndata(
         cls,
         adata: AnnData,
+        *,
         layer: Optional[str] = None,
         clonotype_key: str = "unique_clone_id",
         phenotype_key: str = "phenotype_col",
         covariate_key: str = "timepoint",
         batch_key: str = "patient",
         **kwargs,
-    ):
+    ) -> None:
+        """Register clonotype/phenotype/covariate/batch/count fields with scvi.
+
+        Registration only. Writes ``obs['indices']`` (scvi glue that the
+        training/validation steps consume via ``batch['indices']``) and records the
+        layer, but performs **no** analysis/label ``obs`` mutation and does **not**
+        stash the ``AnnDataManager`` in ``uns`` (the retired ``tcri_manager`` hack) —
+        learned outputs are written solely by :meth:`to_anndata`.
+        """
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
                 raise ValueError(f"{col} not in adata.obs!")
@@ -81,12 +90,10 @@ class TCRIModel(BaseModelClass):
         adata_manager.registry["covariate_col"] = covariate_key
         adata_manager.registry["batch_col"] = batch_key
         cls.register_manager(adata_manager)
-        adata.uns["tcri_manager"] = adata_manager
         if layer is None:
             adata.uns.pop("tcri_layer", None)
         else:
             adata.uns["tcri_layer"] = layer
-        return adata
 
     def __init__(
         self,
@@ -292,71 +299,136 @@ class TCRIModel(BaseModelClass):
         return self.module.get_p_ct().cpu().numpy()
 
     @torch.no_grad()
-    def get_cell_phenotype_probs(
-        self, adata=None, batch_size: int = 256, eps: float = 1e-8
-    ) -> np.ndarray:
-        """
-        Computes the cell-level phenotype probabilities in the same way as training.
+    def predict(self, adata=None, *, batch_size: int = 256, eps: float = 1e-8) -> pd.DataFrame:
+        """Per-cell phenotype-probability ``DataFrame`` (index ``adata.obs_names``,
+        columns = phenotypes) — the single source of phenotype probabilities.
 
-        If ``self.module.gate_prob`` is set (i.e. ``use_gate`` is True), uses:
-            local_logits = gate_prob * cls_logits + (1 - gate_prob) * log(prior)
-        Otherwise uses the additive (Bayesian product) rule:
-            local_logits = cls_logits + log(prior)
-
-        Parameters
-        ----------
-        adata
-            If None, defaults to the AnnData used in training.
-        batch_size : int
-            Mini-batch size for data loader.
-        eps : float
-            Small epsilon for numerical stability in logs.
-
-        Returns
-        -------
-        probs : np.ndarray
-            Array of shape (n_cells, P) of phenotype probabilities.
+        Combines classifier logits with ``log p_ct`` exactly as in training: if
+        ``self.module.gate_prob`` is set (``use_gate``),
+        ``gate_prob * cls_logits + (1 - gate_prob) * log(prior)``; otherwise the
+        additive rule ``cls_logits + log(prior)``. Renamed from
+        ``get_cell_phenotype_probs`` (which returned a bare ``ndarray``). The module
+        is put in ``eval`` mode so classifier dropout is off and the result is
+        deterministic; the sequential loader keeps the row order aligned to
+        ``obs_names``.
         """
         adata = self._validate_anndata(adata)
+        self.module.eval()
         device = next(self.module.parameters()).device
         scdl = self._make_data_loader(adata=adata, batch_size=batch_size)
 
-        # The learned posterior p_ct -> shape (ct_count, P)
         p_ct = self.module.get_p_ct().to(device)
-        # Map each cell to its clonotype-covariate index -> shape (n_cells,)
         ct_array = self.module.ct_array.to(device)
 
         all_probs = []
         current_idx = 0
-
         for tensors in scdl:
             x = tensors[REGISTRY_KEYS.X_KEY].to(device)
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-            this_batch_size = x.shape[0]
-
-            # Which (clonotype, covariate) does each cell belong to?
-            ct_indices = ct_array[current_idx : current_idx + this_batch_size]
-            clone_cov_posterior = p_ct[ct_indices]  # (batch_size, P)
-
-            # Encode to get latent z
+            n = x.shape[0]
+            clone_cov_posterior = p_ct[ct_array[current_idx : current_idx + n]]
             z_loc, _, _ = self.module.encoder(x, b)
-
-            # ----- 1) Compute classifier logits (same as training) -----
             cls_logits = self.module.classifier(z_loc)
-
             prior_log = torch.log(clone_cov_posterior + eps)
             if self.module.use_gate:
                 local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
             else:
                 local_logits = cls_logits + prior_log
+            all_probs.append(F.softmax(local_logits, dim=-1).cpu())
+            current_idx += n
 
-            probs = F.softmax(local_logits, dim=-1) 
+        probs = torch.cat(all_probs, dim=0).numpy()
+        phenotype_col = self.adata_manager.registry["phenotype_col"]
+        pheno_cats = self.adata.obs[phenotype_col].astype("category").cat.categories.tolist()
+        return pd.DataFrame(probs, index=adata.obs_names, columns=pheno_cats)
 
-            all_probs.append(probs.cpu())
-            current_idx += this_batch_size
+    @torch.no_grad()
+    def to_anndata(self, adata=None, *, batch_size: int = 256, compute_umap: bool = False) -> AnnData:
+        """Write the model's learned state onto ``adata`` under the canonical
+        ``tcri_*`` keys (from :mod:`tcri._keys`) and return it. Replaces the old
+        ``preprocessing.register_model``; writes no manager stash.
 
-        # Concatenate into final array of shape (n_cells, P)
-        return torch.cat(all_probs, dim=0).numpy()
+        Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
+        ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
+        ``CT_ARRAY``/``COV_ARRAY``, ``LOCAL_SCALE``, ``GATE_PROB``,
+        ``CLASSIFIER_TEMPERATURE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
+        ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from :meth:`predict`); ``obs``:
+        ``PHENOTYPE`` argmax hard label.
+        """
+        from .. import _keys as K
+
+        adata = self._validate_anndata(adata)
+        self.module.eval()
+        device = next(self.module.parameters()).device
+        reg = self.adata_manager.registry
+
+        # 1) metadata + category orders (order = training) --------------------
+        meta = {
+            K.COVARIATE_COL: reg["covariate_col"],
+            K.CLONE_COL: reg["clonotype_col"],
+            K.PHENOTYPE_COL: reg["phenotype_col"],
+            K.BATCH_COL: reg["batch_col"],
+        }
+        adata.uns[K.METADATA] = meta
+        for col_key, cat_key in (
+            (K.COVARIATE_COL, K.COVARIATE_CATEGORIES),
+            (K.CLONE_COL, K.CLONOTYPE_CATEGORIES),
+            (K.PHENOTYPE_COL, K.PHENOTYPE_CATEGORIES),
+        ):
+            adata.uns[cat_key] = adata.obs[meta[col_key]].astype("category").cat.categories.tolist()
+
+        # 2) learned priors + per-cell index arrays --------------------------
+        ct_arr = self.module.ct_array.cpu().numpy()
+        adata.uns[K.P_CT] = self.module.get_p_ct().cpu().numpy()
+        adata.uns[K.CT_TO_COV] = self.module.ct_to_cov.cpu().numpy()
+        adata.uns[K.CT_TO_C] = self.module.ct_to_c.cpu().numpy()
+        adata.uns[K.CT_ARRAY] = ct_arr
+        adata.uns[K.COV_ARRAY] = self.module.ct_to_cov.cpu().numpy()[ct_arr]
+        adata.uns[K.LOCAL_SCALE] = float(self.module.local_scale)
+        gp = self.module.gate_prob
+        adata.uns[K.GATE_PROB] = float(gp) if gp is not None else float("nan")
+        adata.uns[K.CLASSIFIER_TEMPERATURE] = float(self.module.classifier_temperature)
+
+        # 3) latent mean -----------------------------------------------------
+        adata.obsm[K.X_TCRI] = self.get_latent_representation(
+            adata=adata, batch_size=batch_size
+        ).astype("float32")
+
+        # 4) per-cell logits + additive log-posterior (folds _compute_logits_and_prior)
+        loader = self._make_data_loader(adata=adata, batch_size=batch_size)
+        p_ct_t = self.module.get_p_ct().to(device)
+        ct_arr_t = self.module.ct_array.to(device)
+        logits_buf, prior_buf = [], []
+        start = 0
+        for tensors in loader:
+            x = tensors[REGISTRY_KEYS.X_KEY].to(device)
+            b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
+            n = x.shape[0]
+            z_loc, _, _ = self.module.encoder(x, b)
+            logits_buf.append(self.module.classifier(z_loc).cpu())
+            prior_buf.append(torch.log(p_ct_t[ct_arr_t[start : start + n]] + 1e-8).cpu())
+            start += n
+        cls_logits = torch.cat(logits_buf).numpy().astype("float32")
+        prior_log = torch.cat(prior_buf).numpy().astype("float32")
+        adata.obsm[K.X_LOGITS] = cls_logits
+        adata.obsm[K.X_LOGPOSTERIOR] = cls_logits + prior_log
+
+        # 5) probabilities (gate-aware, canonical) + argmax hard labels ------
+        probs_df = self.predict(adata, batch_size=batch_size)
+        adata.obsm[K.X_PROBABILITIES] = probs_df.values.astype("float32")
+        adata.obs[K.PHENOTYPE] = pd.Categorical.from_codes(
+            probs_df.values.argmax(1), categories=list(probs_df.columns)
+        )
+
+        # 6) legacy compat keys — retired in Phase 6/7 with their readers -----
+        adata.uns[K.LEGACY_CLONE_KEY] = meta[K.CLONE_COL]
+        adata.uns[K.LEGACY_PHENOTYPE_KEY] = K.PHENOTYPE
+
+        if compute_umap:
+            import umap
+            adata.obsm[K.X_UMAP] = umap.UMAP(random_state=42).fit_transform(adata.obsm[K.X_TCRI])
+
+        return adata
 
     def boost_phenotype_prior(
         self,
