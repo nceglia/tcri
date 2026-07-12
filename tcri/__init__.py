@@ -5,14 +5,13 @@ try:
 except PackageNotFoundError:  # running from a source tree without an install
     __version__ = "0.0.0+unknown"
 
-from . import metrics as tl
+from . import tools as tl          # PR6: tl repointed metrics -> tools (engine-backed metrics)
 from . import preprocessing as pp
 from . import plotting as pl
 from . import utils as ut
 from . import model as ml
 
-# PR5: the unified engine, re-exported top-level for prominence. `tl` stays pointed
-# at `metrics` until the four metric twins migrate to `tools` (Phase 6).
+# The unified engine, re-exported top-level for prominence.
 from .tools import joint_distribution
 
 import sys

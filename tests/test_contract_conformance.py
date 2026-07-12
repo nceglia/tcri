@@ -24,6 +24,11 @@ PYI = Path(tcri.__file__).parent / "_contract.pyi"
 # live == contract. PR4 landed the model→AnnData surface.
 IMPLEMENTED: dict[str, tuple[str, str]] = {
     "tl.joint_distribution": ("tcri.tools._joint", "joint_distribution"),
+    "tl.clonotypic_entropy": ("tcri.tools._entropy", "clonotypic_entropy"),
+    "tl.phenotypic_entropy": ("tcri.tools._entropy", "phenotypic_entropy"),
+    "tl.mutual_information": ("tcri.tools._mutual_information", "mutual_information"),
+    "tl.phenotypic_flux": ("tcri.tools._flux", "phenotypic_flux"),
+    "tl.compare_groups": ("tcri.tools._compare", "compare_groups"),
     "TCRIModel.setup_anndata": ("tcri.model._model", "TCRIModel.setup_anndata"),
     "TCRIModel.train": ("tcri.model._model", "TCRIModel.train"),
     "TCRIModel.get_latent_representation": ("tcri.model._model", "TCRIModel.get_latent_representation"),
