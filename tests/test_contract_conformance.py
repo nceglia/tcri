@@ -23,6 +23,7 @@ PYI = Path(tcri.__file__).parent / "_contract.pyi"
 # Each PR onboards its landed functions here; the signature test then enforces
 # live == contract. PR4 landed the model→AnnData surface.
 IMPLEMENTED: dict[str, tuple[str, str]] = {
+    "tl.joint_distribution": ("tcri.tools._joint", "joint_distribution"),
     "TCRIModel.setup_anndata": ("tcri.model._model", "TCRIModel.setup_anndata"),
     "TCRIModel.train": ("tcri.model._model", "TCRIModel.train"),
     "TCRIModel.get_latent_representation": ("tcri.model._model", "TCRIModel.get_latent_representation"),

@@ -60,6 +60,7 @@ class tl:
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
         clones: Any = ..., temperature: float = ..., random_state: Any = ...,
+        device: Any = ...,
     ) -> pd.DataFrame: ...
     def clonotypic_entropy(
         adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
