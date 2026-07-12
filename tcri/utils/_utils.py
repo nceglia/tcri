@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+from .. import _keys as K
 import os
 import sys
 import numpy as np
@@ -27,61 +28,10 @@ import anndata as _ad
 import torch as _torch
 import pyro as _pyro
 
-import math
-import itertools
 import numpy as np
-from sklearn.metrics import roc_auc_score
 
 
-def stars(p):
-    if p < 1e-4: return "****"
-    if p < 1e-3: return "***"
-    if p < 1e-2: return "**"
-    if p < 0.05: return "*"
-    return "ns"
-
-
-def auc_and_label_permutation(scores, labels, pos_label=None,
-                               n_perm=200_000, seed=42, max_exact=200_000):
-    scores = np.asarray(scores, dtype=float)
-    labels = np.asarray(labels)
-    if pos_label is None:
-        pos_label = sorted(set(labels))[-1]
-    y = (labels == pos_label).astype(int)
-    obs_auc = roc_auc_score(y, scores)
-    n_pos = int(y.sum())
-    n_exact = math.comb(len(y), n_pos)
-    if n_exact <= max_exact:
-        perm_stats = np.array([
-            roc_auc_score(np.isin(np.arange(len(y)), idx).astype(int), scores)
-            for idx in itertools.combinations(range(len(y)), n_pos)
-        ])
-        perm_mode = "exact"
-    else:
-        rng = np.random.default_rng(seed)
-        perm_stats = np.array([
-            roc_auc_score(rng.permutation(y), scores) for _ in range(n_perm)
-        ])
-        perm_mode = "mc"
-    p_perm = np.mean(np.abs(perm_stats - 0.5) >= np.abs(obs_auc - 0.5))
-    return obs_auc, p_perm, perm_stats, perm_mode
-
-
-def bootstrap_auc(scores, labels, pos_label=None, n_boot=5000, seed=42):
-    scores = np.asarray(scores, dtype=float)
-    labels = np.asarray(labels)
-    if pos_label is None:
-        pos_label = sorted(set(labels))[-1]
-    y = (labels == pos_label).astype(int)
-    rng = np.random.default_rng(seed)
-    idx = np.arange(len(y))
-    aucs = []
-    while len(aucs) < n_boot:
-        samp = rng.choice(idx, size=len(idx), replace=True)
-        if len(np.unique(y[samp])) < 2:
-            continue
-        aucs.append(roc_auc_score(y[samp], scores[samp]))
-    return np.quantile(aucs, [0.025, 0.975])
+# stars / auc_and_label_permutation / bootstrap_auc → moved to tcri/_stats.py (PR1).
 
 
 def _ensure_pyro_posterior_params(model, adata) -> None:
@@ -562,7 +512,7 @@ def write_adata_safely(adata: "_ad.AnnData", path: str, *, compression: str = "g
 
 def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict[str, Any]:
     setup: Dict[str, Any] = {}
-    meta = adata.uns.get("tcri_metadata", {})
+    meta = adata.uns.get(K.METADATA, {})
     if meta:
         setup.update({
             "phenotype_col": meta.get("phenotype_col"),
@@ -594,9 +544,9 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
 
 def _restore_category_order(adata: "_ad.AnnData", setup: Dict[str, Any]) -> None:
     mapping = [
-        ("phenotype_col", "tcri_phenotype_categories"),
-        ("clone_col", "tcri_clonotype_categories"),
-        ("covariate_col", "tcri_covariate_categories"),
+        ("phenotype_col", K.PHENOTYPE_CATEGORIES),
+        ("clone_col", K.CLONOTYPE_CATEGORIES),
+        ("covariate_col", K.COVARIATE_CATEGORIES),
     ]
     for col_key, cats_key in mapping:
         col = setup.get(col_key)

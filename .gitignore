@@ -9,6 +9,9 @@ __pycache__/
 # Backup / scratch files
 *.bak
 
+# Refactor scratchpad — running notes, intentionally not tracked
+docs/contract/REFACTOR_NOTES.md
+
 # Distribution / packaging
 .Python
 build/
