@@ -131,3 +131,71 @@ def test_groupby_deferred(trained_model):
     import pytest
     with pytest.raises(NotImplementedError, match="groupby"):
         tcri.joint_distribution(adata, covariate=cov, groupby="patient")
+
+
+def test_gate_aware_combine_direct():
+    """use_logits=True with a numeric gate_prob uses g·logits + (1-g)·log(base), then
+    mean per clone — exercised directly (the trained_model fixture has gate_prob=None)."""
+    from tcri._compute._joint import _joint_draws
+
+    p_ct = np.array([[0.7, 0.3], [0.2, 0.8]], dtype=float)  # 2 ct rows == 2 clones
+    ct_to_cov = np.array([0, 0]); ct_to_c = np.array([0, 1])
+    ct_array = np.array([0, 0, 1, 1]); cov_array = np.array([0, 0, 0, 0])
+    logits = np.array([[2.0, -1.0], [1.0, 0.0], [-1.0, 2.0], [0.0, 1.0]], dtype=float)
+    g = 0.5
+    blocks, _ = _joint_draws(
+        p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, local_scale=1.0, n_samples=0,
+        temperature=1.0, use_logits=True, covariate_idx=0, logits=logits, gate_prob=g,
+    )
+    _, _, J = blocks[0]  # [1, 2, 2]
+
+    eps = 1e-8
+    def _sm(x):
+        e = np.exp(x - x.max()); return e / e.sum()
+    exp = np.zeros((2, 2))
+    for c in range(2):
+        cells = [i for i in range(4) if ct_to_c[ct_array[i]] == c]
+        exp[c] = np.mean([_sm(g * logits[i] + (1 - g) * np.log(p_ct[ct_array[i]] + eps)) for i in cells], 0)
+    np.testing.assert_allclose(J[0], exp, atol=1e-10)
+
+
+def test_temperature_tempers_base_on_ct_path(trained_model):
+    """use_logits=False, T!=1 == softmax(log(P_CT+1e-8)/T) restricted to the covariate."""
+    from scipy.special import softmax
+    _, adata = trained_model
+    cov = _first_covariate(adata)
+    df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=2.0)
+    cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
+    rows = np.where(np.asarray(adata.uns[K.CT_TO_COV]) == cov_i)[0]
+    expected = softmax(np.log(np.asarray(adata.uns[K.P_CT])[rows] + 1e-8) / 2.0, axis=1)
+    np.testing.assert_allclose(df.values, expected, atol=1e-5)
+
+
+def test_temperature_changes_use_logits_joint(trained_model):
+    """T!=1 tempers the cell-informed joint too (behavior lock, per §7.1)."""
+    _, adata = trained_model
+    cov = _first_covariate(adata)
+    a = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0)
+    b = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=2.0)
+    assert not np.allclose(a.values, b.values)
+
+
+def test_subset_anndata_raises(trained_model):
+    """A filtered/sliced AnnData (full-space uns vs subset obsm) is refused, not silently
+    misaligned."""
+    import pytest
+    _, adata = trained_model
+    sub = adata[: adata.n_obs // 2].copy()  # uns per-cell arrays stay full-space
+    with pytest.raises(ValueError, match="n_obs|filtered|subset"):
+        tcri.joint_distribution(sub, covariate=_first_covariate(adata))
+
+
+def test_missing_local_scale_raises_only_when_sampling(trained_model):
+    """n_samples>0 without uns[LOCAL_SCALE] errors (no silent 1.0 fallback); n_samples=0 is fine."""
+    import pytest
+    _, adata = trained_model
+    a2 = adata.copy()
+    del a2.uns[K.LOCAL_SCALE]
+    with pytest.raises(RuntimeError, match="LOCAL_SCALE|local_scale"):
+        tcri.joint_distribution(a2, covariate=_first_covariate(adata), n_samples=4)
+    tcri.joint_distribution(a2, covariate=_first_covariate(adata), n_samples=0)  # ok

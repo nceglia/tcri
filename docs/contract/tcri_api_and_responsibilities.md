@@ -139,8 +139,8 @@ tcri/
   _stats.py                 # stars, AUROC+permutation, bootstrap, MWU, prob_direction, hdi, summarize
   _distance.py              # kl_divergence, l1_distance, js_divergence, phenotype_distance dispatcher
   _compute/                 # NEW private numeric+device seam (grafiti-mirrored)
-    _xp.py                  #   resolve_device, get_xp, asnumpy (torch-first, cupy optional, CPU default)
-    _joint.py               #   _joint_draws(...) -> ndarray[n_samples, n_clones, P] (scatter-add core)
+    _xp.py                  #   resolve_device, torch_device, asnumpy (torch-first, cupy optional later, CPU default)
+    _joint.py               #   _joint_draws(p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, *, ...) -> (blocks, n_draws)
     _reduce.py              #   batched entropy / mutual-information / distance reductions over the stack
   model/                    # ml
     _model.py               #   TCRIModel
@@ -289,12 +289,12 @@ The engine's numeric core is written **once** as a batched, device-routable func
 | Signature | Responsibility |
 |---|---|
 | `resolve_device(device)` | `None`/`"cpu"`→`"cpu"`; `"mps"`→`"cpu"`; `"cuda"`/`"gpu"`/`"auto"`→GPU **iff** the backend imports AND a device is present (`getDeviceCount()>0`), else CPU. Explicit `"cuda"` warns on fallback; `"auto"`/`"gpu"` silent; unknown warns. |
-| `get_xp(device)` | Return the array module — torch(-cuda) preferred (already a hard dep → zero new deps), cupy optional, numpy default. GPU libs imported **lazily inside** the function. |
+| `torch_device(device)` | Return the resolved `torch.device` (`resolve_device` maps the ladder to cpu/cuda). torch-first (already a hard dep → zero new deps); cupy optional later. GPU libs imported **lazily inside** the function. |
 | `asnumpy(x)` | Host-boundary shim: `cupy.asnumpy(x)` / `x.cpu().numpy()` / `np.asarray(x)`. Every accelerated function returns a plain numpy array. |
 
 ### 4.2 `_joint.py` / `_reduce.py` — the batched core
 
-- **`_joint_draws(adata, *, covariate, clones, n_samples, use_logits, temperature, gate_prob, random_state, device) -> np.ndarray`** — returns the `[max(n_samples,1), n_clones, P]` joint stack. Precomputes clone integer codes **once**; draws all `n_samples` Dirichlet samples in one batched kernel from `clamp(s·m̃, 1e-3)`; softmaxes the (optionally gated) per-cell combination batched on the leading axis; reduces per clone with a **constant-index scatter-add** (`np.add.at` / `torch.index_add_` / `cupy.bincount`) instead of a per-draw `pandas.groupby` — the dominant win. Validates finiteness / nonnegativity / per-row sum $\approx1$ **on device** before returning; `float64` accumulators for CPU/GPU parity; `asnumpy` at the boundary; chunked over cells/draws to bound device memory.
+- **`_joint_draws(p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, *, local_scale, n_samples, temperature, use_logits, covariate_idx, logits, gate_prob, weighted, random_state, device) -> (blocks, n_draws)`** — the adata-unpacking lives in the `tools/_joint` wrapper; this core takes **decomposed uns arrays** and returns a **list of per-covariate `(cov_idx, clone_idx, J[S, n_rows, P])` blocks** plus the draw count (`covariate=None` stacks variable-length per-covariate blocks). Draws all `n_samples` Dirichlet samples over **all ct rows in one batched kernel** from `clamp(s·m̃, 1e-3)` (the shared-draw invariant), then slices per covariate; softmaxes the (optionally gated) per-cell combination batched on the leading axis; reduces per clone with a **scatter-add** (`torch.index_add_`) instead of a per-draw `pandas.groupby` — the dominant win. `float64` accumulators for CPU/GPU parity; `asnumpy` at the boundary. **Phase-6 (with the GPU path / `_reduce` wiring):** on-device per-row-sum $\approx1$ validation + chunking over cells/draws (§7.4 guardrails 5/7/8).
 - **`_reduce.py`** — batched `entropy`, `mutual_information`, `distance` as `xlogx`/outer-product reductions over the whole stack (no per-draw scipy call, no per-clone `.loc`), plus the `summarize`/`hdi` reduction over the sample axis.
 
 ### 4.3 GPU guardrails (replicated uniformly from grafiti)
