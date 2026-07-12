@@ -1,0 +1,72 @@
+"""Unit tests for the shared helper modules introduced in PR1
+(`_keys`, `_console`, `_stats`, `_distance`). These are pure and fast — no model."""
+import numpy as np
+import pytest
+
+from tcri import _console, _distance as D, _keys as K, _stats as S
+
+
+def test_keys_constants():
+    assert K.P_CT == "tcri_p_ct"
+    assert K.X_LOGITS == "X_tcri_logits"
+    assert K.METADATA == "tcri_metadata"
+    assert K.X_PROBABILITIES == "X_tcri_probabilities"
+    # legacy keys are present (so the removal step can target them) but distinct
+    assert K.LEGACY_CLONE_KEY == "tcri_clone_key" != K.CLONE_COL
+
+
+def test_console_aliases_and_callables():
+    assert _console.MAG == _console.MAGENT
+    assert _console.GRN == _console.GREEN
+    assert _console.CYN == _console.CYAN
+    for fn in (_console._ok, _console._info, _console._warn, _console._fin):
+        callable(fn)
+    _console._ok("x", quiet=True)  # quiet path prints nothing, must not raise
+
+
+def test_stars_thresholds():
+    assert S.stars(1e-5) == "****"
+    assert S.stars(5e-4) == "***"
+    assert S.stars(5e-3) == "**"
+    assert S.stars(0.04) == "*"
+    assert S.stars(0.2) == "ns"
+
+
+def test_hdi_hugs_skew_and_matches_eti_on_symmetric():
+    x = np.array([0, 0, 0, 0, 0.1, 0.2, 5.0])
+    hlo, hhi = S.hdi(x, prob=0.8)
+    elo, ehi = S.eti(x, prob=0.8)
+    assert (hhi - hlo) <= (ehi - elo)          # HDI no wider than ETI on skew
+    assert hhi < ehi                            # and it excludes the far tail
+    g = np.random.default_rng(0).normal(size=20000)
+    assert np.allclose(S.hdi(g, prob=0.94), S.eti(g, prob=0.94), atol=0.08)
+
+
+def test_prob_direction():
+    p_gt, p_lt = S.prob_direction([1, 1, -1, 1.0])
+    assert abs(p_gt - 0.75) < 1e-9 and abs(p_lt - 0.25) < 1e-9
+
+
+def test_auc_helpers_on_perfect_separation():
+    scores = np.array([0.1, 0.2, 0.8, 0.9]); labels = np.array([0, 0, 1, 1])
+    auc, p_perm, perm, mode = S.auc_and_label_permutation(scores, labels)
+    assert auc == 1.0 and mode == "exact" and 0.0 <= p_perm <= 1.0
+    lo, hi = S.bootstrap_auc(scores, labels)
+    assert 0.0 <= lo <= hi <= 1.0
+
+
+def test_distance_kernels():
+    assert abs(D.kl_divergence([1, 0], [1, 0])) < 1e-9        # KL(p‖p)=0
+    assert D.kl_divergence([0.9, 0.1], [0.1, 0.9]) > 0        # asymmetric, positive
+    assert D.jensen_shannon([1, 0], [0, 1]) == pytest.approx(1.0, abs=1e-6)  # ~1 bit disjoint
+    assert D.jensen_shannon([0.5, 0.5], [0.5, 0.5]) < 1e-9    # symmetric, self=0
+    assert D.l1_distance([1, 0], [0, 1]) == pytest.approx(2.0)
+
+
+def test_distance_dispatch():
+    assert D.phenotype_distance("l1")([1, 0], [0, 1]) == pytest.approx(2.0)
+    assert D.phenotype_distance("dkl") is D.kl_divergence
+    f = lambda p, q: 0.0
+    assert D.phenotype_distance(f) is f
+    with pytest.raises(ValueError):
+        D.phenotype_distance("nope")
