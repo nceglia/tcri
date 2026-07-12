@@ -50,10 +50,10 @@ def compare_groups(df, *, value, splitby, reference=None, paired=False, pair_on=
             delta = np.concatenate(diffs) if diffs else np.array([])
             if delta.size == 0:
                 continue
-            p_gt, _p_lt = prob_direction(delta)
+            p_gt, p_lt = prob_direction(delta)
             lo, hi = hdi(delta, prob=hdi_prob) if delta.size > 1 else (float(delta[0]), float(delta[0]))
-            rows.append({"group_a": a, "group_b": b, "delta": float(np.mean(delta)),
-                         "p_gt": float(p_gt), "hdi_low": lo, "hdi_high": hi})
+            rows.append(_row(a, b, delta=float(np.mean(delta)), p_gt=float(p_gt),
+                             p_lt=float(p_lt), hdi_low=lo, hdi_high=hi))
         else:
             va = pd.to_numeric(da[value], errors="coerce").dropna().to_numpy()
             vb = pd.to_numeric(db[value], errors="coerce").dropna().to_numpy()
@@ -63,8 +63,19 @@ def compare_groups(df, *, value, splitby, reference=None, paired=False, pair_on=
                 U, p = mann_whitney(va, vb, alternative=alternative)
             except ValueError:  # e.g. all-identical values
                 U, p = np.nan, np.nan
-            delta = float(np.mean(vb) - np.mean(va))
-            rows.append({"group_a": a, "group_b": b, "mean_a": float(np.mean(va)),
-                         "mean_b": float(np.mean(vb)), "delta": delta, "U": float(U),
-                         "p": float(p), "stars": stars(p)})
-    return pd.DataFrame(rows)
+            rows.append(_row(a, b, mean_a=float(np.mean(va)), mean_b=float(np.mean(vb)),
+                             delta=float(np.mean(vb) - np.mean(va)), U=float(U), p=float(p),
+                             stars=stars(p)))
+    return pd.DataFrame(rows, columns=_COLUMNS)
+
+
+_COLUMNS = ["group_a", "group_b", "mean_a", "mean_b", "delta", "U", "p", "stars",
+            "p_gt", "p_lt", "hdi_low", "hdi_high"]
+
+
+def _row(a, b, **vals):
+    """A contrast row with the unified §7.6 schema; inapplicable stats are NaN."""
+    row = {c: np.nan for c in _COLUMNS}
+    row["group_a"], row["group_b"] = a, b
+    row.update(vals)
+    return row

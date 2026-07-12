@@ -42,6 +42,9 @@ def mutual_information(
     """I(c;φ|covariate) in bits. ``groupby`` → tidy DataFrame (one row per group);
     otherwise a scalar (``n_samples=0``) or a mean/sd/hdi summary (``n_samples>0``)."""
     if groupby is not None:
+        if is_precomputed_joint(adata_or_jd):
+            raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")
+
         def _compute(cl):
             draws, cols = joint_draws(
                 adata_or_jd, covariate, n_samples=n_samples, weighted=weighted,

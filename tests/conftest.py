@@ -102,13 +102,16 @@ def synthetic_adata():
 
     X = rng.poisson(lam=1.5, size=(n_cells, n_genes)).astype(np.float32)
 
+    patient = rng.choice(batches, size=n_cells)
+    base_clone = rng.choice([f"clone_{i}" for i in range(n_clones)], size=n_cells)
+
     obs = pd.DataFrame({
-        "unique_clone_id": rng.choice(
-            [f"clone_{i}" for i in range(n_clones)], size=n_cells
-        ),
+        # patient-specific clone ids (disjoint across patients), as real `trb_unique` is —
+        # so metric groupby='patient' is valid (clones don't span groups).
+        "unique_clone_id": [f"{c}_{p}" for c, p in zip(base_clone, patient)],
         "phenotype_col": rng.choice(phenotypes, size=n_cells),
         "timepoint": rng.choice(covariates, size=n_cells),
-        "patient": rng.choice(batches, size=n_cells),
+        "patient": patient,
     })
     for col in obs.columns:
         obs[col] = obs[col].astype("category")
