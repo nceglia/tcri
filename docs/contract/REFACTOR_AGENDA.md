@@ -35,7 +35,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 1 | Shared helpers + `_keys` | ✅ | low | 0 | existing tests green |
 | 2 | Safe deletions | ✅ | very low | 1 | import-graph clean |
 | 3 | Model module split | ✅ | low | 1 | model/pyro tests green |
-| 4 | Model→AnnData streamline | ☐ | HIGH | 1,3 | session round-trip |
+| 4 | Model→AnnData streamline | ✅ | HIGH | 1,3 | session round-trip |
 | 5 | Engine consolidation | ☐ | HIGH | 4 | joint identities |
 | 6 | Metric-API consolidation | ☐ | HIGH | 5 | metric tests |
 | 7 | Plotting split + pl twins | ☐ | medium | 6,1 | twins render |
@@ -54,10 +54,11 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 - [x] `metrics._ent` · [x] `tl.clone_fraction` · [x] `metrics.dkl` (→ `_distance.kl_divergence`)
 - [x] `ut.probabilities` (+ its `_plotting.py` import, same PR) · [x] `SankeyNode.hex_to_rgb`
 
-**Phase 4 (folded into `to_anndata` / session):**
-- [ ] `pp.register_model` (→ `model.to_anndata`) · [ ] `pp.register_phenotype_key` · [ ] `pp.register_clonotype_key`
-- [ ] `pp._compute_logits_and_prior` · [ ] `ut.write_adata_safely` · [ ] `ut._pop_nonserializables`
-- [ ] uns keys `tcri_manager`, `tcri_clone_key`, `tcri_phenotype_key`, obsm `X_tcri_phenotypes`
+**Phase 4 (folded into `to_anndata` / session):** ✅ functions folded + manager stash retired (PR4).
+- [x] `pp.register_model` (→ `model.to_anndata`) · [x] `pp.register_phenotype_key` · [x] `pp.register_clonotype_key`
+- [x] `pp._compute_logits_and_prior` · [x] `ut.write_adata_safely` · [x] `ut._pop_nonserializables`
+- [x] uns key `tcri_manager` (retired at `setup_anndata`; `test_model_setup` asserts it's gone)
+- [ ] `tcri_clone_key` / `tcri_phenotype_key` / obsm `X_tcri_phenotypes` **→ DEFERRED to Phase 6/7**: still read by not-yet-refactored `metrics`/`plotting`; `to_anndata` writes the two `tcri_*_key` shims until their readers move. (Logged in `REFACTOR_NOTES`.)
 
 **Phase 5/6 (consolidated away — delete WITH replacement, never before):**
 - [ ] `pp.joint_distribution_posterior` (→ unified `joint_distribution`) · [ ] `metrics._mi_from_joint` (→ `_mutual_information`)
@@ -127,7 +128,44 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 - **Usability:** each file now has a docstring stating its role; the model file reads as a clean `BaseModelClass` API surface.
 - **Deferred (logged):** **M5** (`build_archetypes` default `K=4` vs `TCRIModel` `K=10`) — behavior-neutral today (the model always passes `K=10` explicitly), reconciled with persisted `labels` when `diag.archetypes` lands (Phase 8). Not touched here to keep the split purely mechanical. Also deferred (auditor's own recommendation): the stale `c2p_mat` descriptors in the contract **generator** (`build_tcri_contract.py:81,267`) + regenerating the contract HTML — bundled with the Phase-8 `diag.archetypes`/M5 pass (they describe that future function). The inventory rename-table row (`c2p_mat → clone_phenotype_prior`) is correct and stays.
 - **Audit (workflow — 3 lenses × adversarial verify, 8 agents):** 2 lenses PASS, plan-contract FIX. 5 findings, **all confirmed, all LOW/MED** — no behavior/correctness defect (behavior lens confirmed byte-identical class bodies + zero F821 undefined-names + suite green). Fixed here: the **MED** — explicit `__all__` per module (plan §Phase 3) was omitted — now added to all 5 files, which also resolves the two LOW "surface not byte-for-byte" findings (surface is now the explicit `{TCRIModel}`; diary wording corrected; the 3 `# noqa: F401` re-exports removed as no longer needed). Suite 36 passed / 1 skipped.
-## PR 4 — Model→AnnData streamline  ·  ☐ todo
+## PR 4 — Model→AnnData streamline  ·  ✅ done (branch `refactor/pr4-model-anndata`)
+- **Goal:** kill the `uns['tcri_manager']` hack; fold `register_model → model.to_anndata` (writing the full canonical set incl. new `GATE_PROB`/`CLASSIFIER_TEMPERATURE`); rename `get_cell_phenotype_probs → predict` (labelled DataFrame); rewrite the round-trip gate. Behavior change.
+- **Env (prereq):** built a fresh py3.12 venv on the latest scverse stack (anndata 0.13.1, scanpy 1.12.2, **scvi-tools 1.5.0**, torch 2.13, numpy 2.4, **pandas 3.0.3**), pinned in `requirements.txt`; all runs use `.venv`. One pandas-3.0 compat fix (legacy `tcri_boxplot` `groupby.median()` positional `numeric_only`). Suite green in the new env.
+- **What happened:** `setup_anndata` → keyword-only, returns `None`, no manager stash (registration only). `predict` → labelled `DataFrame` (obs_names × phenotypes), `eval()` → deterministic. `to_anndata` → metadata + categories, `P_CT`/`CT_TO_COV`/`CT_TO_C`/per-cell `CT_ARRAY`/`COV_ARRAY`, `LOCAL_SCALE`, **`GATE_PROB`**, **`CLASSIFIER_TEMPERATURE`**, `X_TCRI`/`X_LOGITS`/`X_LOGPOSTERIOR`, `X_PROBABILITIES` (from `predict`) + argmax labels. Deleted the register cluster + `write_adata_safely`/`_pop_nonserializables` (inlined h5ad write). Onboarded the 6 `TCRIModel` methods into the contract (`IMPLEMENTED`) — conformance now enforces the model surface.
+- **Issues & fixes:** the rewritten round-trip test passed in isolation but failed in the full suite — the **process-global pyro param store** (§5.2) is clobbered by other model-training tests, so the session-scoped `trained_model`'s store isn't its own at save-time. Fixed with a function-scoped `fresh_trained_model` fixture that trains inside the test and owns the store.
+- **Correction to the PR3 note:** my "train path was uncovered" claim was wrong — the fixture is `trained_model` (I grepped the wrong name `fitted_model`), and `test_session_round_trip` consumes it, so train WAS covered. The PR3 smoke is still a faster/targeted guard; the framing was off.
+- **Added:** ✅ rewritten `test_session_round_trip.py` (canonical write-set · setup-obs invariant · reloaded model reproduces p_ct/latent/predict) ✅ `dev/real_data_to_anndata.py` — **LOCAL-only, gitignored, not CI** — builds the 50-largest patient-specific clones of yost (`trb_unique = trb+patient`; 7682 cells / 10 patients) and runs setup→train→to_anndata (canonical keys OK; prior-driven recovery 0.90).
+- **Removed (hard bar):** ✅ `register_model`, `register_phenotype_key`, `register_clonotype_key`, `_compute_logits_and_prior`, `write_adata_safely`, `_pop_nonserializables`; `uns['tcri_manager']` stash. Legacy `tcri_clone_key`/`tcri_phenotype_key`/`X_tcri_phenotypes` deferred to Phase 6/7 (live readers).
+- **Test opportunities:** the **Model knob-test matrix** below (new deliverable). **Two dead knobs surfaced** — see "Model correctness debt."
+- **Streamline / Usability:** `predict` returns a labelled DataFrame; `to_anndata` is one call replacing the heavy `register_model`; save/load is plain h5ad.
+
+---
+
+# MODEL KNOB-TEST MATRIX  *(PR4 deliverable — each knob gets ≥1 correctness test by end of refactor, or a justification)*
+
+**Legend for "Test":** the mathematically-correct input→output assertion. **Status:** ✅ tested · ◐ partial · ☐ planned (target PR) · ⛔ blocked (see debt).
+
+| Knob (default) | Category | Hooked up? | Mathematically-correct input→output test | Status |
+|---|---|---|---|---|
+| `n_latent` (128) | structural | yes | `to_anndata` ⇒ `obsm[X_tcri].shape[1] == n_latent`; `get_latent_representation` width | ☐ PR8-diag / a model-unit test |
+| `n_pseudo_obs` (10) | structural | yes | `module.vamp_prior.pseudo_inputs.shape[0] == n_pseudo_obs` | ☐ model-unit |
+| `K` (10) | structural | yes | `model.centers.shape[0] == K` **and** `module.mixture_concentration.shape[0] == K`; `build_archetypes` returns `centers,(labels)` with `K` clusters | ◐ smoke asserts `build_archetypes` K; add centers/mixture shape |
+| `n_hidden`,`n_layers` (128,3) | structural | yes | encoder/decoder layer count/width from `module` submodules | ☐ model-unit (low value) |
+| `local_scale` (3.0) | serialized + distributional | yes | (a) `to_anndata` ⇒ `uns[LOCAL_SCALE]==local_scale` ✅; (b) it is the Dirichlet total-concentration of the `p_ct` draw ⇒ **draw variance ∝ 1/local_scale** | ◐ (a) ✅ round-trip; (b) ☐ Phase-5 `test_joint` |
+| `gate_prob` (None) | serialized + predict-mix | yes | (a) `uns[GATE_PROB]` written ✅; (b) `predict`: `gate=0` ⇒ **pure prior** (== prior-only argmax), `gate=1` ⇒ pure classifier | ◐ (a) ✅; (b) `gate=0` ☐ model-unit, `gate=1` ⛔ |
+| `classifier_temperature` (1.0) | serialized + functional | yes (division only) | (a) `uns[CLASSIFIER_TEMPERATURE]` written ✅; (b) `PhenotypeClassifier.forward` divides logits by `T` ⇒ `logits(T=2)==logits(T=1)/2` for fixed weights | ◐ (a) ✅; (b) ☐ classifier-unit (division is live even if training isn't) |
+| `prior_temperature` (1.0) | distributional | yes | `prepare_two_level_params`: `clone_phen_prior = normalize(prior**(1/T))` ⇒ `T>1` **raises** the row-entropy of `module.clone_phen_prior` vs `T=1` | ☐ model-unit / Phase-8 |
+| `guide_temperature` (1.0) | distributional | yes | `get_p_ct` sharpens `q**(1/T)` ⇒ `T<1` **lowers** row-entropy of `get_p_ct()` vs `T=1` | ☐ model-unit / Phase-8 |
+| `global_scale` (5.0) | distributional | yes | Dirichlet total-concentration of the `p_c` guide draw ⇒ draw variance ∝ 1/global_scale | ☐ Phase-8 diag |
+| `batch_size` (train/predict) | invariance | yes | order/size invariance: `predict(batch_size=a).values ≈ predict(batch_size=b).values` | ☐ model-unit (cheap; add next) |
+| `max_epochs`,`lr`,`n_steps_kl_warmup`,`kl_weight_max`,`guide_init_scale`,`patience`,`reconstruction_loss_scale`,`use_enumeration` | training dynamics | yes | **Justification:** no closed-form per-call output; correctness is convergence, covered by the perfect-recovery test (post-classifier-fix) + the smoke/round-trip trains. `use_enumeration` additionally: both ELBO paths train without error (smoke both ways). | ☐ justification accepted |
+| `classifier_hidden`,`classifier_n_layers`,`classifier_dropout` | classifier | **NO (untrained)** | ⛔ **BLOCKED** — the classifier never receives gradient (debt below); functional tests land **with** the classification-loss fix | ⛔ |
+| `phenotype_weights` (None) | class-imbalance | **NO (dead)** | ⛔ **BLOCKED** — `log_class_weights` registered but never read; belongs to the missing classification loss | ⛔ |
+
+### Model correctness debt  *(surfaced in PR4; fix scheduled per user — "add it to the agenda for the correct PR")*
+- **The phenotype classifier is never trained.** `TCRIModule.model()` computes `cls_logits = self.classifier(z)` but never uses it in any `pyro.sample`/ELBO factor; the training plan only evaluates the classifier under `torch.no_grad()`. Verified: classifier weight **Δ = 0.0** over 150 epochs; isolated (`gate=1.0`) recovery = **chance**. End-to-end `predict` perfect-data recovery (1.0) is entirely **prior-driven** (`p_ct`).
+- **`phenotype_weights`/`class_weights` is dead** for the same root cause (would weight the absent classification loss).
+- **Fix (deferred to its own PR, before Phase 6 metrics depend on `predict`):** wire a supervised cross-entropy of `cls_logits` vs the observed phenotype into training so the classifier learns; then add — the perfect-recovery **CI** test (user-provided `create_perfect_synthetic_anndata`), the `gate=1.0` isolated-classifier test, and the ⛔ knob tests above. Model-behavior change (shifts learned metrics + the round-trip fixture values) → isolated PR + re-validation.
 ## PR 5 — Engine consolidation  ·  ☐ todo
 ## PR 6 — Metric-API consolidation  ·  ☐ todo
 ## PR 7 — Plotting split + pl twins  ·  ☐ todo
