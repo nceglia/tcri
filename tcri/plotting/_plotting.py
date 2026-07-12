@@ -34,17 +34,7 @@ sc._settings.settings._vector_friendly=True
 RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
 GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED = "\x1b[31m"
 
-def _ok(msg:str, quiet=False):    # success mark
-    if not quiet: print(f"{GRN}✅ {msg}{RESET}")
-
-def _info(key:str, txt:str, quiet=False):       # key-value info line
-    if not quiet: print(f"   {CYN}🎯 {key:<22}{DIM}{txt}{RESET}")
-
-def _warn(msg:str, quiet=False):   # warning line
-    if not quiet: print(f"{YLW}⚠️  {msg}{RESET}")
-
-def _fin(quiet=False):             # final flourish
-    if not quiet: print(f"{MAG}✨  Done!{RESET}")
+from .._console import _ok, _info, _warn, _fin
 # ╰──────────────────────────────────────────────────────────────────────────╯
 
 red = "#cd442a"
@@ -89,7 +79,7 @@ tcri_colors = [
 sns.set_palette(sns.color_palette(tcri_colors))
 
 from ..metrics._metrics import mi_compare as mi_compare_tl
-from ..utils._utils import auc_and_label_permutation, bootstrap_auc, stars
+from .._stats import auc_and_label_permutation, bootstrap_auc
 
 
 def mi_compare(adata, groupby, groups=None, treatment=None, n_samples=50,
