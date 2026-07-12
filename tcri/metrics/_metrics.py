@@ -147,11 +147,6 @@ def mi_compare(adata, groupby, groups=None, treatment=None, n_samples=50,
     }
 
 
-def dkl(p, q):
-    epsilon = 1e-10
-    p = np.clip(p, epsilon, 1)
-    q = np.clip(q, epsilon, 1)
-    return entropy(p, q) 
 
 import numpy as np, pandas as pd
 from   scipy.stats import entropy        # Shannon entropy
@@ -165,11 +160,6 @@ RESET="\x1b[0m"; BOLD="\x1b[1m"; DIM="\x1b[2m"
 GRN="\x1b[32m"; CYN="\x1b[36m"; MAG="\x1b[35m"; YLW="\x1b[33m"
 
 # small helper ----------------------------------------------
-def _ent(p, base=2):
-    p   = np.asarray(p, dtype=float)
-    eps = 1e-15
-    p   = p.clip(eps) / p.sum()
-    return entropy(p, base=base)
 
 def clonotypic_entropy_base(
     adata,
@@ -609,16 +599,6 @@ def clonality(adata):
         entropys[phenotype] = np.nan_to_num(clonality)
     return entropys
 
-def clone_fraction(adata, groupby):
-    frequencies = dict()
-    for group in set(adata.obs[groupby]):
-        frequencies[group] = dict()
-        sdata = adata[adata.obs[groupby] == group]
-        total_cells = len(sdata.obs.index.tolist())
-        clones = sdata.obs[sdata.uns["tcri_clone_key"]].tolist()
-        for c in set(clones):
-            frequencies[group][c] = clones.count(c) / total_cells
-    return frequencies
 
 
 def mutual_information(

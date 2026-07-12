@@ -83,47 +83,6 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
 
-def classify_phenotypes(adata, phenotype_prob_slot="X_tcri_phenotypes", phenotype_assignment_obs=K.PHENOTYPE):
-    print("\t...classifying phenotypes...\n")
-    phenotype_col = adata.uns[K.METADATA]["phenotype_col"]
-    ct_array = adata.uns[K.CT_ARRAY]
-    unique_cts = np.unique(ct_array)    
-    phenotype_probs_posterior = adata.uns[K.P_CT]
-    phenotypes = adata.uns[K.PHENOTYPE_CATEGORIES]
-    latent_z = adata.obsm[K.X_TCRI]
-
-    # Pre-compute phenotype archetype embeddings
-    archetype_matrix = np.vstack([
-        latent_z[adata.obs[phenotype_col].values == phenotype].mean(axis=0) 
-        for phenotype in phenotypes
-    ])
-
-    all_probs = np.zeros((adata.n_obs, len(phenotypes)))
-
-    # Iterate over each unique ct
-    for ct in unique_cts:
-        ct_indices = np.where(ct_array == ct)[0]
-        ct_embeddings = latent_z[ct_indices]
-
-        # Cosine similarity (cells x phenotypes)
-        similarity = cosine_similarity(ct_embeddings, archetype_matrix)
-        similarity = (similarity + 1) / 2  # Normalize cosine similarity to [0,1]
-
-        # Adjust similarity scores by posterior phenotype probabilities
-        adjusted_scores = similarity * phenotype_probs_posterior[ct]
-
-        # Normalize to probabilities per cell
-        probs_normalized = adjusted_scores / adjusted_scores.sum(axis=1, keepdims=True)
-        all_probs[ct_indices] = probs_normalized
-
-    # Store the normalized probabilities in AnnData
-    adata.obsm[phenotype_prob_slot] = all_probs
-
-    # Assign phenotype with highest probability
-    assignments = all_probs.argmax(axis=1)
-    adata.obs[phenotype_assignment_obs] = pd.Categorical.from_codes(
-        assignments, categories=phenotypes
-    )
 
 # ------------ helper to extract logits -------- #
 @torch.no_grad()
@@ -319,38 +278,6 @@ def joint_distribution_posterior(
     _info("resulting DataFrame", df.shape, silent); _fin(silent)
     return df.round(precision)
 
-def remove_meaningless_genes(adata, include_mt=True, include_rp=True, include_mtrn=True, include_hsp=True, include_tcr=True):
-    genes = [x for x in adata.var.index.tolist() if "RIK" not in x.upper()]
-    genes = [x for x in genes if "GM" not in x]
-    genes = [x for x in genes if "-" not in x or "HLA" in x]
-    genes = [x for x in genes if "." not in x or "HLA" in x]
-    genes = [x for x in genes if "LINC" not in x.upper()]
-    if include_mtrn:
-        genes = [x for x in adata.var.index.tolist() if "MTRN" not in x]
-    if include_hsp:
-        genes = [x for x in adata.var.index.tolist() if "HSP" not in x]
-    if include_mt:
-        genes = [x for x in genes if "MT-" not in x.upper()]
-    if include_rp:
-        genes = [x for x in genes if "RP" not in x.upper()]
-    if include_tcr:
-        genes = [x for x in genes if "TRAV" not in x]
-        genes = [x for x in genes if "TRAJ" not in x]
-        genes = [x for x in genes if "TRAD" not in x]
-
-        genes = [x for x in genes if "TRBV" not in x]
-        genes = [x for x in genes if "TRBJ" not in x]
-        genes = [x for x in genes if "TRBD" not in x]
-
-        genes = [x for x in genes if "TRGV" not in x]
-        genes = [x for x in genes if "TRGJ" not in x]
-        genes = [x for x in genes if "TRGD" not in x]
-
-        genes = [x for x in genes if "TRDV" not in x]
-        genes = [x for x in genes if "TRDJ" not in x]
-        genes = [x for x in genes if "TRDD" not in x]
-    adata = adata[:,genes]
-    return adata.copy()
 
 def joint_distribution(
     adata, 
@@ -480,61 +407,9 @@ def joint_distribution(
         df_samples = df_samples[[col for col in df_samples.columns if col not in ["clonotype_id","clonotype_index","sample_id"]]]
         return df_samples
 
-def get_latent_embedding(
-    adata, 
-    latent_slot: str = K.X_TCRI,
-    n_samples: int = 0,
-    posterior_scale: float = 1.0
-) -> "np.ndarray":
-    mean_z = adata.obsm[latent_slot] 
-    n_cells, latent_dim = mean_z.shape
-    samples = np.random.normal(
-        loc=mean_z, 
-        scale=posterior_scale, 
-        size=(n_samples, n_cells, latent_dim)
-    )
-    return samples
 
-def group_small_clones(adata, patient_key=""):
-    ct = []
-    for x, s, p in zip(adata.obs["trb"], adata.obs[K.CLONE_SIZE], adata.obs[patient_key]):
-        if s < 4:
-            ct.append("Singleton_{}".format(p))
-        else:
-            ct.append("{}_{}".format(x,p))
-    adata.obs["trb_unique"] = ct
 
-def register_probability_columns(adata, probability_columns):
-    adata.uns["probability_columns"] = probability_columns
 
-def gene_entropy(adata, key_added="entropy", batch_key=None, agg_function=None):
-    import tqdm
-    if batch_key == None:
-        X = adata.X.todense()
-        X = np.array(X.T)
-        gene_to_row = list(zip(adata.var.index.tolist(), X))
-        entropies = []
-        for _, exp in tqdm.tqdm(gene_to_row):
-            counts = np.unique(exp, return_counts = True)
-            entropies.append(entropy(counts[1][1:]))
-        adata.var[key_added] = entropies
-    else:
-        if agg_function == None:
-            agg_function = np.mean
-        entropies = collections.defaultdict(list)
-        for x in tqdm.tqdm(list(set(adata.obs[batch_key]))):
-            sdata = adata[adata.obs[batch_key]==x]
-            X = sdata.X.todense()
-            X = np.array(X.T)
-            gene_to_row = list(zip(sdata.var.index.tolist(), X))
-            for symbol, exp in gene_to_row:
-                counts = np.unique(exp, return_counts = True)
-                entropies[symbol].append(entropy(counts[1][1:]))
-        aggregated_entropies = []
-        for g in adata.var.index.tolist():
-            ent = agg_function(entropies[g])
-            aggregated_entropies.append(ent)
-        adata.var[key_added] = aggregated_entropies
 
 def clone_size(adata, key_added=K.CLONE_SIZE, return_counts=False):
     tcr_key = adata.uns["tcri_clone_key"]
