@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
-from typing import Dict, Optional
+from typing import Optional
 from anndata import AnnData
 
 from scvi import REGISTRY_KEYS
@@ -112,11 +112,11 @@ class TCRIModel(BaseModelClass):
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
         K: int = 10,
-        phenotype_weights: Optional[Dict[str, float]] = None,
-        gate_prob: Optional[float] = None,
+        gate_prob: Optional[float] = 0.5,  # π (gating weight, methods §Generative Model); None = additive
         kl_weight_max: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
+        phenotype_kl_weight: float = 1.0,
         **kwargs,
     ):
         super().__init__(adata)
@@ -163,24 +163,6 @@ class TCRIModel(BaseModelClass):
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
 
-        if phenotype_weights is None:
-            # Automatically compute inverse-frequency weights for each phenotype
-            freq_count = ph_series.value_counts(sort=False) 
-            class_weights_arr = []
-            for cat_name in ph_series.cat.categories:
-                c = freq_count[cat_name]
-                # inverse-frequency weight
-                weight = 1.0 / c
-                class_weights_arr.append(weight)
-            class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
-        else:
-            class_weights_arr = []
-            for cat_name in ph_series.cat.categories:
-                weight = phenotype_weights.get(cat_name, 1.0)
-                class_weights_arr.append(weight)
-            class_weights = torch.tensor(class_weights_arr, dtype=torch.float32)
-
-        self.class_weights = class_weights
         self.module = TCRIModule(
             n_input=n_vars,
             n_latent=n_latent,
@@ -197,12 +179,12 @@ class TCRIModel(BaseModelClass):
             use_enumeration=use_enumeration,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
-            class_weights=self.class_weights,
             gate_prob=gate_prob,
             kl_weight_max=kl_weight_max,
             n_pseudo_obs=n_pseudo_obs,
             guide_init_scale=guide_init_scale,
             classifier_temperature=classifier_temperature,
+            phenotype_kl_weight=phenotype_kl_weight,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(clone_phenotype_prior, dtype=torch.float32)
@@ -254,7 +236,6 @@ class TCRIModel(BaseModelClass):
             module=self.module,
             n_steps_kl_warmup=n_steps_kl_warmup,
             reconstruction_loss_scale=reconstruction_loss_scale,
-            class_weights=self.class_weights,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
