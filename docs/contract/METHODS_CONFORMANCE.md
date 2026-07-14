@@ -90,8 +90,8 @@ no code path yet.
 | C | `classifier_dropout` constructed but not passed to `PhenotypeClassifier` | LOW | **fixed** — plumbed |
 | D | `class_weights`/`log_class_weights` — not in the note; was dead (computed + plumbed through 3 signatures, never read) | LOW | **fixed** — removed (with `phenotype_weights`) from `_model`/`_module`/`_training` |
 | H | dead per-cell `encoder(x)` forward in `model()` (result discarded; the VampPrior carries its own encoder) | INFO | **fixed** — removed |
-| E | `reconstruction_loss_scale=1e-3` down-weights ZINB ~1000× vs eq-7 full weight; live test shows decoder over-generates counts | MED | **deferred** — changes fitted results; needs author sign-off (raise to 1.0 or document as intentional β-VAE reweighting) |
-| G | α (`global_scale`) not applied to the clonotype prior (eq 1) in `model()`; concentration = normalized archetype centroid (sum≈1, U-shaped), so the prior is far more diffuse than `Dir(α·ψ_b)`; α used only in the guide `q(ω_c)` — a prior/guide scale mismatch | MED | **deferred** — changes the generative prior/objective; needs author sign-off (`expanded_conc = global_scale * centroids`) |
+| G | α (`global_scale`) not applied to the clonotype prior (eq 1) in `model()`; concentration = normalized archetype centroid (sum≈1, U-shaped), so the prior was far more diffuse than `Dir(α·ψ_b)` and scaled inconsistently with the guide `q(ω_c)` | MED | **fixed** — `expanded_conc = global_scale * centroids` (eq 1); classifier recovery unchanged (1.000), suite green |
+| E | `reconstruction_loss_scale=1e-3` down-weights ZINB ~1000× vs eq-7 full weight; live test shows decoder over-generates counts | MED | **deferred** (author decision) — 1e-3 may be an intentional β-VAE reweighting; raising it changes every fitted result so it needs a retrain + R/NR revalidation. Tracked as a follow-up investigation. |
 | F | in-silico perturbation (eqs 8–12) not implemented | — | deferred — additive feature |
 
 **Training-only deviations from eq 7 (intentional, documented here):**

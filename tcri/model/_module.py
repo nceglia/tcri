@@ -189,10 +189,14 @@ class TCRIModule(PyroBaseModuleClass):
             B = self.mixture_concentration.shape[0]
             mixture_weights = torch.ones(B, device=x.device) / B
             # Expand mixture parameters to add a leading dimension for clonotypes.
-            # expanded_conc will have shape (self.c_count, B, K)
-            expanded_conc = self.mixture_concentration.unsqueeze(0).expand(
-                self.c_count, -1, -1
-            )
+            # expanded_conc will have shape (self.c_count, B, K).
+            # eq 1: ω_c ~ (1/B) Σ_b Dir(α·ψ_b) — scale the archetype vectors ψ_b by
+            # α (global_scale), mirroring eq 2's β on the covariate prior. Without α
+            # the concentration sums to ~1 (U-shaped, mass at the simplex corners) and
+            # is scaled inconsistently with the guide q(ω_c), which does apply α.
+            expanded_conc = self.global_scale * self.mixture_concentration.unsqueeze(
+                0
+            ).expand(self.c_count, -1, -1)
             # expanded_weights will have shape (self.c_count, B)
             expanded_weights = mixture_weights.unsqueeze(0).expand(self.c_count, -1)
             mixture_dist = MixtureDirichlet(expanded_weights, expanded_conc)
