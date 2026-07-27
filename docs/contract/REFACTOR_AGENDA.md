@@ -41,8 +41,7 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 7 | Plotting split + pl twins | ✅ | medium | 6,1 | twins render |
 | 8 | `diag/` seeding | ✅ | low-med | 4,5 | PPC columns |
 | 9 | PGM→docs; utils finalize | ✅ | low | 1,8 | import green sans daft |
-| 10 | Notebook rewrite (fresh) | ☐ | low | 4–8 | nbmake tutorial |
-| 11 | Public API + scverse CI | ☐ | low-med | all | ecosystem checklist |
+| 10 | Public API + scverse CI | ☐ | low-med | all | ecosystem checklist |
 
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
@@ -187,8 +186,14 @@ _(committed together on a single branch per the `/goal` directive — one multi-
 - **PR 9 (PGM→docs):** moved `build_nested_tcri_pgm`/`draw_tcri_pgm_nested` out to `docs/model_pgm.py`; dropped `daft` from runtime deps (`import tcri` no longer imports daft).
 - **Gate:** full suite **82 passed** (default pytest config) in the pinned venv; contract conformance green (all metrics + diag enforced).
 - **Deferred (logged):** engine `groupby` param (metrics use the metric-level path); `_provenance` sidecar + GPU guardrails (PR5); the §7.2–§7.6 api-doc code blocks still lag the frozen `.pyi` (reconcile in the docs pass); the classifier-training fix (its own PR); flux Sankey (twin renders a box for now).
-## PR 10 — Notebook rewrite  ·  ☐ todo
-## PR 11 — Public API + scverse CI  ·  ☐ todo
+## Model PR — classifier training + methods conformance  ·  ✅ done (branch `model/classifier-fix`)
+_(the deferred "classifier-training fix, its own PR" above — plus a full audit of the model vs the Supplementary Methods note.)_
+- **The classifier now trains.** Two coupled bugs: (1) `cls_logits` never entered the ELBO → added `pyro.factor("phenotype_alignment", −γ·KL(probs‖φ))` in `model()` (the note's "Inference Details" surrogate, `γ=phenotype_kl_weight`); (2) the alignment target `φ=p_ct[ct_idx]` was indexed by the **local** pyro plate index → scrambled labels across shuffled minibatches → `f_cls` collapsed to a constant. Fixed by threading **global** cell `indices` through `_get_fn_args_from_batch → model()/guide()`; the `indices=None` path now `assert`s rather than silently falling back. Pure-classifier (gate=1.0) recovery on the perfect dataset: **0.200 (chance) → 1.000**.
+- **Note conformance (new `docs/contract/METHODS_CONFORMANCE.md`).** Eq-by-eq code↔note map + deviation table. Fixed alongside: `gate_prob` default `None→0.5` (π), `classifier_dropout` plumbed into `PhenotypeClassifier`, dead `class_weights`/`phenotype_weights` removed (3 signatures), dead `encoder(x)` forward in `model()` removed.
+- **Tests:** new `tests/test_model_classifier.py` (perfect-recovery guard at gate 1.0 + 0.5, asserts f_cls weights actually move — with a module-local param-store isolation fixture); round-trip now guards `phenotype_kl_weight`/`gate_prob`/`classifier_dropout`. Full suite **89 passed**.
+- **[G] fixed (author-approved):** α (`global_scale`) now applied to the eq-1 clonotype prior (`expanded_conc = global_scale * centroids`), removing the prior/guide scale mismatch; classifier recovery unchanged (1.000), suite green.
+- **Deferred:** **[E]** `reconstruction_loss_scale=1e-3` vs eq-7 full weight (over-generation symptom) — author deferred; may be an intentional β-VAE reweighting, and raising it needs a retrain + R/NR revalidation. Tracked as a follow-up investigation. **[F]** in-silico perturbation (eqs 8–12) not implemented (additive).
+## PR 10 — Public API + scverse CI  ·  ☐ todo
 - **Logged test (from grafiti parity):** once `pl.__all__` exists, add a conformance assertion `set(pl.__all__) == {pl entries in _contract.pyi}` — catches *extra/missing* plot functions (whole-surface), not just signature drift on onboarded ones. (tcri's namespaced `.pyi` checks drift incrementally via `IMPLEMENTED`; this closes the whole-surface gap grafiti gets from its markdown+`__all__` channel.)
 
 ---
@@ -196,6 +201,7 @@ _(committed together on a single branch per the `/goal` directive — one multi-
 # AUDIT LOG
 _(dated entries; what was audited, findings, actions)_
 
+- **(MODEL PR — methods-conformance audit vs Supplementary Note 1 — WORKFLOW, 6 lenses × 2 adversarial verifiers, 53 agents):** **22 findings survived adversarial verification, 1 refuted.** Verdict: the classifier fix (ELBO factor + global-index alignment target) is **correct and faithful to the note's surrogate**. Caught a real **HIGH the local run missed**: the new `test_model_classifier.py` leaked the process-global Pyro param store → the *full* suite was RED (1 failed / 88 passed) though the file passed in isolation — fixed with a **module-local** autouse `clear_param_store` fixture (a conftest autouse would wipe the session-scoped `trained_model`). **Fixed now:** dead `class_weights`/`phenotype_weights` removed ([D]); `indices=None` silent fallback → `assert` (re-hardens A2); dead `encoder(x)` forward in `model()` removed; `gate_prob: Optional[float]`; surrogate-KL **sign** clarified in the doc (code's `−γ·KL` realizes the note's `+γ` *penalty* intent under SVI-maximization); KL-warmup z-only scope + `num_particles` enumeration-only scope documented; round-trip now guards the new scalars. Suite **89 passed**. **Confirmed CONFORMANT:** ZINB (eq 5), β (eq 2), VampPrior (eq 3), gated ℓ rule in `predict`. **Deferred (author sign-off, change fitted results):** [E] `reconstruction_loss_scale=1e-3` vs eq-7 full weight; [G] α not applied to the eq-1 clonotype prior (prior/guide scale mismatch). [F] perturbation (eqs 8–12) additive/not implemented.
 - **(PR0 ✅):** agenda + removal ledger established; standing-audit checklist defined. Contract frozen (27 fns) + conformance guardrail live. Full suite 26 passed / 1 skipped, zero regressions.
 - **(PR1 ◐):** shared-helper foundation created (`_keys`/`_console`/`_stats`/`_distance`) + 8 unit tests. Caught & fixed an `hdi` off-by-one before it shipped. **Adoption pending** (dedup, stats-move, `K.*` migration) — no ledger items ticked yet; foundation is additive, suite green. Logged: key-literal test (PR1), `pl.__all__` whole-surface test (PR11).
 - **(PR0+PR1 multi-agent audit — 3 lenses):** verdict FIX. Caught a real regression — the `K.*` find/replace over-reached into **10** display/warning/docstring strings (`register_model`/`load_tcri_session` printed `"K.X_LOGITS"` etc.). **Fixed:** restored readable key text in all 10 (AST-span, delimiter-safe); made the key-literal guard **AST-based** (checks real subscripts/`.get`, ignores prose); removed 3 dead `utils` imports the audit flagged. Suite 35 passed. Two non-blocking items deferred to `REFACTOR_NOTES` (contract↔api-doc reconciliation; helper-name canonicalization) — noted in the PR body.

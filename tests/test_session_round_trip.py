@@ -129,3 +129,9 @@ def test_session_round_trip(fresh_trained_model, tmp_path):
     np.testing.assert_allclose(
         adata.obsm[K.X_PROBABILITIES], loaded_model.predict(loaded).values, atol=1e-4
     )
+
+    # 4) the model scalars carried only in init_params_ (not in the AnnData) survive
+    #    the save/load — guards the classifier knobs added in the model PR.
+    assert loaded_model.module.phenotype_kl_weight == model.module.phenotype_kl_weight
+    assert loaded_model.module.gate_prob == model.module.gate_prob
+    assert loaded_model.module.classifier_dropout == model.module.classifier_dropout
