@@ -41,7 +41,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 5,
         optimizer_config: dict = None,
-        class_weights: torch.Tensor = None,
         **kwargs,
     ):
         self.num_particles = num_particles
@@ -58,7 +57,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.n_steps_kl_warmup = n_steps_kl_warmup
         self.reconstruction_loss_scale = reconstruction_loss_scale
         self._my_global_step = 0
-        self.class_weights = class_weights
         self.optimizer_config = optimizer_config
 
         if optimizer_config is None:

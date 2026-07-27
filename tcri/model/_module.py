@@ -1,7 +1,7 @@
 """The TCRI Pyro module: a CVAE (encoder/decoder over gene expression) coupled to
 two-level hierarchical Dirichlet priors (clonotype -> clonotype x covariate) and a
 phenotype classifier head."""
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import pyro
@@ -35,7 +35,7 @@ class TCRIModule(PyroBaseModuleClass):
         local_scale: float = 5.0,
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
-        gate_prob: float = 0.5,
+        gate_prob: Optional[float] = 0.5,  # None = additive (no gating)
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
         use_enumeration: bool = False,
@@ -44,10 +44,10 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_n_layers: int = 3,
         n_hidden: int = 128,
         n_layers: int = 3,
-        class_weights: torch.Tensor = None,
         kl_weight_max: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
+        phenotype_kl_weight: float = 1.0,
     ):
         super().__init__()
         self.n_input = n_input
@@ -74,6 +74,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_n_layers = classifier_n_layers
         self.guide_init_scale = guide_init_scale
         self.classifier_temperature = classifier_temperature
+        self.phenotype_kl_weight = phenotype_kl_weight  # γ (methods §Inference Details)
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
@@ -110,6 +111,7 @@ class TCRIModule(PyroBaseModuleClass):
             classifier_hidden=self.classifier_hidden,
             P=self.P,
             num_layers=self.classifier_n_layers,
+            dropout_rate=self.classifier_dropout,
             temperature=self.classifier_temperature,
         )
 
@@ -123,13 +125,6 @@ class TCRIModule(PyroBaseModuleClass):
         self.n_cells = 0
 
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
-
-        # Store or compute log of class weights if provided
-        if class_weights is not None:
-            # Expect a tensor of shape (P,)
-            self.register_buffer("log_class_weights", torch.log(class_weights))
-        else:
-            self.log_class_weights = None
 
     def prepare_two_level_params(
         self,
@@ -171,11 +166,19 @@ class TCRIModule(PyroBaseModuleClass):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
         batch_idx = tensor_dict[REGISTRY_KEYS.BATCH_KEY].long()
         log_library = torch.log(torch.sum(x, dim=1, keepdim=True) + 1e-6)
-        return (x, batch_idx, log_library), {}
+        # Global cell indices for this minibatch. Needed so model()/guide() can map
+        # each cell to its (clonotype x covariate) group via ``ct_array``; the pyro
+        # data-plate index is LOCAL (0..batch_size-1) and must NOT be used for this.
+        indices = tensor_dict["indices"].long().view(-1)
+        return (x, batch_idx, log_library, indices), {}
 
     @auto_move_data
     def model(
-        self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor
+        self,
+        x: torch.Tensor,
+        batch_idx: torch.Tensor,
+        log_library: torch.Tensor,
+        indices: torch.Tensor = None,
     ):
         pyro.module("scvi", self)
 
@@ -186,10 +189,14 @@ class TCRIModule(PyroBaseModuleClass):
             B = self.mixture_concentration.shape[0]
             mixture_weights = torch.ones(B, device=x.device) / B
             # Expand mixture parameters to add a leading dimension for clonotypes.
-            # expanded_conc will have shape (self.c_count, B, K)
-            expanded_conc = self.mixture_concentration.unsqueeze(0).expand(
-                self.c_count, -1, -1
-            )
+            # expanded_conc will have shape (self.c_count, B, K).
+            # eq 1: ω_c ~ (1/B) Σ_b Dir(α·ψ_b) — scale the archetype vectors ψ_b by
+            # α (global_scale), mirroring eq 2's β on the covariate prior. Without α
+            # the concentration sums to ~1 (U-shaped, mass at the simplex corners) and
+            # is scaled inconsistently with the guide q(ω_c), which does apply α.
+            expanded_conc = self.global_scale * self.mixture_concentration.unsqueeze(
+                0
+            ).expand(self.c_count, -1, -1)
             # expanded_weights will have shape (self.c_count, B)
             expanded_weights = mixture_weights.unsqueeze(0).expand(self.c_count, -1)
             mixture_dist = MixtureDirichlet(expanded_weights, expanded_conc)
@@ -201,10 +208,6 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
 
-        # Encoder
-        z_loc, z_scale, _ = self.encoder(x, batch_idx)
-        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
-
         with pyro.plate("data", batch_size) as idx:
 
             with poutine.scale(scale=kl_weight):
@@ -212,9 +215,33 @@ class TCRIModule(PyroBaseModuleClass):
                 vamp_mixture = self.vamp_prior.get_mixture()
                 z = pyro.sample("latent", vamp_mixture)
 
-            ct_idx = self.ct_array[idx]
-            prior_log = torch.log(p_ct[ct_idx] + 1e-8)  # log of local p_ct
-            cls_logits = self.classifier(z)# + self.phenotype_decoder(z)
+            # Map each cell to its (clonotype x covariate) group using GLOBAL indices,
+            # not the local plate index `idx` (which is 0..batch_size-1 and would
+            # scramble the alignment target across shuffled minibatches). Fail loudly
+            # rather than silently falling back to the (wrong) local index.
+            assert indices is not None, (
+                "model() requires global cell indices (supplied by "
+                "_get_fn_args_from_batch); the local plate index must not be used "
+                "for the clonotype x covariate lookup."
+            )
+            ct_idx = self.ct_array[indices]
+            cls_logits = self.classifier(z)  # l_i = f_cls(z_i)  (eq. 4)
+
+            # Phenotype-alignment surrogate (Supplementary Note, "Inference Details"):
+            #   ℓ_i = π·f_cls(z_i) + (1-π)·log φ_{g(i)},  probs_i = softmax(ℓ_i);
+            #   add -γ·KL(probs_i ‖ φ_{g(i)}) to the log-joint so the ELBO trains the
+            #   classifier f_cls (η_cls). φ (the covariate-level distribution) is the
+            #   DETACHED alignment target. Without this factor cls_logits never enters
+            #   the ELBO and f_cls receives no gradient.
+            phi = p_ct[ct_idx].detach()
+            log_phi = torch.log(phi + 1e-8)
+            if self.gate_prob is not None:
+                ell = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi
+            else:
+                ell = cls_logits + log_phi
+            probs = torch.softmax(ell, dim=-1)
+            pheno_kl = (probs * (torch.log(probs + 1e-8) - log_phi)).sum(dim=-1)
+            pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
 
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
@@ -237,7 +264,11 @@ class TCRIModule(PyroBaseModuleClass):
 
     @auto_move_data
     def guide(
-        self, x: torch.Tensor, batch_idx: torch.Tensor, log_library: torch.Tensor
+        self,
+        x: torch.Tensor,
+        batch_idx: torch.Tensor,
+        log_library: torch.Tensor,
+        indices: torch.Tensor = None,
     ):
         pyro.module("scvi", self)
         batch_size = x.shape[0]
