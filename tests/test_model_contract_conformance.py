@@ -214,14 +214,26 @@ def test_alpha_scales_the_clonotype_prior(traced):
 
 
 def test_beta_scales_the_covariate_prior(traced):
-    """eq 2: p_ct prior concentration must scale with β (local_scale)."""
+    """eq 2: p_ct concentration must be β·ω_h(m) — the SAMPLED ω under ct_to_c.
+
+    Asserted as an elementwise identity against the same trace, which pins three
+    things at once: the scale (β), the source tensor (the sampled ``p_c``, not the
+    static empirical prior), and the index map (``ct_to_c`` = h(m)). A scalar
+    "totals ≈ β" check cannot do this — every simplex row totals 1, so any tensor
+    under any permutation would satisfy it while the hierarchy is severed.
+    """
     model, m_trace, _, _, _ = traced
+    mod = model.module
     conc = _unwrap(m_trace.nodes["p_ct"]["fn"]).concentration
-    beta = float(model.module.local_scale)
-    live_total = float(conc.sum(-1).mean())
-    assert live_total == pytest.approx(beta, rel=0.05), (
-        f"p_ct concentration totals {live_total:.4f}, expected ≈β={beta}. "
-        f"{MC.SEMANTIC_INVARIANTS['beta_scales_covariate_prior']}"
+    omega = m_trace.nodes["p_c"]["value"]  # the sampled ω_c from THIS trace
+    beta = float(mod.local_scale)
+
+    expected = torch.clamp(beta * (omega[mod.ct_to_c] + mod.eps), min=1e-3)
+    assert torch.allclose(conc, expected, rtol=1e-5, atol=1e-6), (
+        "p_ct concentration is not β·ω_h(m) built from the sampled p_c under "
+        f"ct_to_c (max|diff|={float((conc - expected).abs().max()):.3e}). "
+        f"{MC.SEMANTIC_INVARIANTS['beta_scales_covariate_prior']} "
+        f"{MC.SEMANTIC_INVARIANTS['hierarchy_ct_depends_on_c']}"
     )
 
 
@@ -242,25 +254,74 @@ def test_alignment_factor_is_a_negative_kl(traced):
     )
 
 
-def test_alignment_target_uses_global_indices():
-    """The ϕ target must be indexed by global cell indices, not the local plate index."""
-    import inspect
+def test_alignment_target_uses_global_indices(traced):
+    """The ϕ target must be indexed by GLOBAL cell indices, not the local plate index.
 
-    from tcri.model._module import TCRIModule
+    Checked *behaviorally*: trace a minibatch whose global indices differ from the
+    local plate positions (0..B−1), then recompute the surrogate from the global
+    map and compare to the traced factor. Under the local-index bug the two differ.
+    A source-text assertion cannot do this — it is defeated by any rename or by
+    routing the same wrong lookup through ``index_select``.
+    """
+    model, _, _, _, _ = traced
+    mod = model.module
 
-    src = inspect.getsource(TCRIModule.model)
-    assert "self.ct_array[indices]" in src, (
-        "model() must map cells to their clonotype×covariate group with the GLOBAL "
-        f"`indices`. {MC.SEMANTIC_INVARIANTS['alignment_target_uses_global_indices']}"
+    # a batch whose global indices are NOT 0..B-1 (so local != global)
+    loader = model._make_data_loader(adata=model.adata, batch_size=16, shuffle=False)
+    batches = list(loader)
+    assert len(batches) >= 2, "need >1 batch for local-vs-global to differ"
+    args, kwargs = mod._get_fn_args_from_batch(batches[1])
+    global_idx = args[3]
+    assert not torch.equal(
+        global_idx, torch.arange(global_idx.numel(), device=global_idx.device)
+    ), "fixture batch must have global indices != local positions"
+
+    # eval mode: classifier dropout is stochastic in train mode, which would make
+    # the recomputation below irreproducible. Restored afterwards.
+    was_training = mod.training
+    mod.eval()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            tr = poutine.trace(mod.model).get_trace(*args, **kwargs)
+    finally:
+        if was_training:
+            mod.train()
+
+    z = tr.nodes["latent"]["value"]
+    p_ct = tr.nodes["p_ct"]["value"]
+    live = torch.as_tensor(tr.nodes["phenotype_alignment"]["fn"].log_factor).detach()
+
+    def _surrogate(ct_index):
+        phi = p_ct[ct_index].detach()
+        log_phi = torch.log(phi + 1e-8)
+        with torch.no_grad():
+            mod.eval()
+            logits = mod.classifier(z)
+            if was_training:
+                mod.train()
+        ell = (
+            mod.gate_prob * logits + (1.0 - mod.gate_prob) * log_phi
+            if mod.gate_prob is not None
+            else logits + log_phi
+        )
+        probs = torch.softmax(ell, dim=-1)
+        kl = (probs * (torch.log(probs + 1e-8) - log_phi)).sum(-1)
+        return (-mod.phenotype_kl_weight * kl).detach()
+
+    expected_global = _surrogate(mod.ct_array[global_idx])
+    local_idx = torch.arange(global_idx.numel(), device=global_idx.device)
+    expected_local = _surrogate(mod.ct_array[local_idx])
+
+    # the local-index variant must be a genuinely different target, or this
+    # fixture cannot discriminate and the test would be vacuous
+    assert not torch.allclose(expected_global, expected_local, rtol=1e-4, atol=1e-6), (
+        "fixture cannot distinguish global from local indexing — strengthen it."
     )
-    assert "self.ct_array[idx]" not in src, (
-        "model() indexes ct_array with the LOCAL plate index `idx`. "
+    assert torch.allclose(live, expected_global, rtol=1e-4, atol=1e-5), (
+        "the phenotype_alignment target does not match the GLOBAL-index mapping "
+        f"(max|diff| vs global={float((live - expected_global).abs().max()):.3e}, "
+        f"vs local={float((live - expected_local).abs().max()):.3e}). "
         f"{MC.SEMANTIC_INVARIANTS['alignment_target_uses_global_indices']}"
-    )
-    # the batch must actually carry them
-    fn_src = inspect.getsource(TCRIModule._get_fn_args_from_batch)
-    assert "indices" in fn_src, (
-        "_get_fn_args_from_batch must pass global cell indices through to model()/guide()."
     )
 
 
