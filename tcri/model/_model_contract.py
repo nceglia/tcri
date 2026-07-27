@@ -140,6 +140,14 @@ SEMANTIC_INVARIANTS = {
         "eq 2: the p_ct prior concentration must scale with β (local_scale), i.e. "
         "conc = β·ω_h(m), so the total concentration is ~β."
     ),
+    "hierarchy_ct_depends_on_c": (
+        "eq 2 is HIERARCHICAL: p_ct's concentration must be built from the SAMPLED "
+        "ω_c (site 'p_c') indexed by ct_to_c = h(m) — not from the static empirical "
+        "`clone_phen_prior`, and not under any other index map. Severing this makes "
+        "ϕ_m independent of its clonotype (p_c becomes a dangling latent contributing "
+        "only its own KL) and no clonotype-level information reaches the covariate "
+        "level, which is the entire point of the two-level model."
+    ),
     "factor_is_negative_kl": (
         "Inference Details: the phenotype_alignment factor must be −γ·KL(probs‖ϕ) "
         "(≤ 0). SVI MAXIMIZES the log-joint and the note's γ·KL is a PENALTY, so the "

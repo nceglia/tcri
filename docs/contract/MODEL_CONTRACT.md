@@ -122,8 +122,21 @@ test asserts they stay in sync).
 - every declared site exists with the right distribution family, plate, event-dim,
   observed-flag — **and no undeclared site exists** (an extra site changes the joint);
 - the guide's variational family + learnable params (λ_c, λ'_m), and that `z^ϕ` is not sampled;
-- α scales eq 1's concentration; β scales eq 2's;
+- α scales eq 1's concentration;
+- **eq 2 is hierarchical**: `p_ct`'s concentration is asserted *elementwise* to equal
+  `clamp(β·(ω_c[ct_to_c] + eps))` against the sampled `p_c` **from the same trace** —
+  pinning the scale, the source tensor, and the index map h(m) together;
 - the surrogate factor is a *negative*, non-zero KL;
-- the alignment target is indexed globally, not by the plate index;
+- **the alignment target is verified behaviorally**: on a minibatch whose global
+  indices differ from the local plate positions, the traced factor must equal the
+  surrogate recomputed under the *global* map and must differ from the local one;
 - π endpoints reduce `predict()` to classifier / prior;
 - every sanctioned deviation is documented here.
+
+**Assertions are behavioral, not textual.** Two earlier drafts of this test were
+defeated in an adversarial audit: a scalar "concentration totals ≈ β" check passed
+even with the clonotype→covariate hierarchy severed (every simplex row totals 1, so
+any tensor under any permutation satisfies it), and a source-grep for
+`ct_array[indices]` was defeated by routing the same wrong lookup through
+`index_select`. Prefer assertions computed from a live trace over ones that read
+source text or scalar summaries.
