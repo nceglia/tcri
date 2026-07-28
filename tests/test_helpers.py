@@ -55,6 +55,43 @@ def test_auc_helpers_on_perfect_separation():
     assert 0.0 <= lo <= hi <= 1.0
 
 
+def test_auc_permutation_matches_sklearn_exactly_with_ties():
+    """The Mann–Whitney rank-sum identity must reproduce ``roc_auc_score`` exactly.
+
+    Guards the O(n log n) -> O(n_pos) optimization of the permutation loop. Ties are
+    the failure mode that matters: the identity is only equivalent under *midranks*,
+    so scores are rounded here to force repeated values.
+    """
+    import itertools
+
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(0)
+    for _ in range(40):
+        n = int(rng.integers(4, 11))
+        scores = np.round(rng.normal(size=n), int(rng.integers(0, 2)))  # forces ties
+        labels = rng.integers(0, 2, n)
+        if labels.sum() in (0, n):
+            continue
+        auc, _, perm, mode = S.auc_and_label_permutation(scores, labels)
+        assert mode == "exact"
+        y = (labels == 1).astype(int)
+        assert auc == pytest.approx(roc_auc_score(y, scores), abs=1e-12)
+        ref = sorted(
+            roc_auc_score(np.isin(np.arange(n), idx).astype(int), scores)
+            for idx in itertools.combinations(range(n), int(y.sum()))
+        )
+        np.testing.assert_allclose(sorted(perm), ref, atol=1e-12)
+
+
+def test_auc_permutation_degenerate_single_class():
+    """A single-class label vector has no defined AUROC — report, don't crash."""
+    auc, p, perm, mode = S.auc_and_label_permutation(
+        np.array([0.1, 0.2, 0.3]), np.array([1, 1, 1])
+    )
+    assert mode == "degenerate" and np.isnan(p) and perm.size == 0
+
+
 def test_distance_kernels():
     assert abs(D.kl_divergence([1, 0], [1, 0])) < 1e-9        # KL(p‖p)=0
     assert D.kl_divergence([0.9, 0.1], [0.1, 0.9]) > 0        # asymmetric, positive
