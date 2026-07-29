@@ -59,7 +59,12 @@ class TCRIModule(PyroBaseModuleClass):
         self.local_scale = local_scale
         self.prior_temperature = prior_temperature
         self.guide_temperature = guide_temperature
-        self.mixture_concentration = mixture_concentration
+        # register_buffer (not a plain attribute) so module.to(device) moves it with
+        # the rest of the module — as a bare Tensor it stays on CPU and the eq-1 prior
+        # then needs an ad-hoc .to() at every use, or fails outright on GPU.
+        if mixture_concentration is not None and not torch.is_tensor(mixture_concentration):
+            mixture_concentration = torch.as_tensor(mixture_concentration)
+        self.register_buffer("mixture_concentration", mixture_concentration)
         self.n_pseudo_obs = n_pseudo_obs
         self.gate_prob = gate_prob
         # Assert that it is not None
@@ -258,8 +263,10 @@ class TCRIModule(PyroBaseModuleClass):
                 logits=nb_logits,
                 validate_args=False,
             )
-            scale_val = torch.tensor(self.reconstruction_loss_scale, device=x.device)
-            with poutine.scale(scale=scale_val):
+            # plain float, not torch.tensor(..., device=x.device): poutine.scale takes a
+            # scalar, and materializing one on the device is a host->device copy (and a
+            # sync point) on every SVI step for a value that never changes mid-epoch.
+            with poutine.scale(scale=float(self.reconstruction_loss_scale)):
                 pyro.sample("obs", x_dist.to_event(1), obs=x)
 
     @auto_move_data

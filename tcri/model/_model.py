@@ -314,7 +314,7 @@ class TCRIModel(BaseModelClass):
         return
 
     @torch.no_grad()
-    def get_latent_representation(self, adata=None, indices=None, batch_size=None):
+    def get_latent_representation(self, adata=None, indices=None, batch_size=4096):
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(
             adata=adata, indices=indices, batch_size=batch_size
@@ -331,7 +331,7 @@ class TCRIModel(BaseModelClass):
         return self.module.get_p_ct().cpu().numpy()
 
     @torch.no_grad()
-    def predict(self, adata=None, *, batch_size: int = 256, eps: float = 1e-8) -> pd.DataFrame:
+    def predict(self, adata=None, *, batch_size: int = 4096, eps: float = 1e-8) -> pd.DataFrame:
         """Per-cell phenotype-probability ``DataFrame`` (index ``adata.obs_names``,
         columns = phenotypes) — the single source of phenotype probabilities.
 
@@ -375,7 +375,7 @@ class TCRIModel(BaseModelClass):
         return pd.DataFrame(probs, index=adata.obs_names, columns=pheno_cats)
 
     @torch.no_grad()
-    def to_anndata(self, adata=None, *, batch_size: int = 256, compute_umap: bool = False) -> AnnData:
+    def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
         ``tcri_*`` keys (from :mod:`tcri._keys`) and return it. Replaces the old
         ``preprocessing.register_model``; writes no manager stash.
