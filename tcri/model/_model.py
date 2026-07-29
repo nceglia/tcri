@@ -246,7 +246,7 @@ class TCRIModel(BaseModelClass):
         max_epochs: int = 1000,
         batch_size: int = 1000,
         lr: float = 1e-3,
-        reconstruction_loss_scale: float = 1e-3,
+        reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):

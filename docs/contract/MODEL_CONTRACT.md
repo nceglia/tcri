@@ -110,7 +110,31 @@ test asserts they stay in sync).
 
 | key | departure | rationale |
 |---|---|---|
-| `E_reconstruction_loss_scale` | eq 7 weights `E[log p(x\|z)]` at 1; the `obs` site is scaled by `reconstruction_loss_scale` (default `1e-3`) | β-VAE-style reweighting. Known to under-weight the decoder (over-generates counts). Deferred pending a retrain + R/NR revalidation. |
+| `E_reconstruction_loss_scale` | eq 7 weights `E[log p(x\|z)]` at 1; the `obs` site is scaled by `reconstruction_loss_scale` (default **`1e-2`**) | β-VAE-style reweighting, **re-measured and recalibrated** — see below. |
+
+### On `reconstruction_loss_scale` (deviation [E], resolved)
+
+Re-measured after the phantom optimizer was removed. Posterior-predictive library
+ratio (simulated ÷ observed; 1.00 is calibrated):
+
+| scale | real yost (2259×1000) | synthetic (3000×60) |
+|---|---|---|
+| `1e-3` (old default) | **1.40** | 1.00 |
+| **`1e-2` (new default)** | **0.99** | 1.00 |
+| `1e-1` | 1.00 | 1.00 |
+| `1.0` (eq-7 full weight) | — | **0.91** (over-corrects) |
+
+Dropout fraction matches observed at every setting (0.870 vs ~0.873 on real data).
+Classifier recovery (1.000) and latent separation (7.19) are **unchanged** across
+`1e-3`→`1e-1`, so the recalibration costs nothing.
+
+The originally-reported **~6× over-generation was mostly the phantom second
+optimizer** shrinking the decoder (see `optimizer_weight_decay`); removing it took the
+ratio 6× → 1.40, and this default closes the remainder. Note the synthetic data could
+not detect this — only the real 1000-gene, 87%-dropout data discriminates.
+
+Three inconsistent defaults (`_model.train`=1e-3, `_module`=1e-3, `_training`=1e-2)
+were unified to `1e-2`.
 | `kl_warmup_z_only` | `kl_weight` anneals only the `latent` KL; the Dirichlet KLs are unscaled | Standard annealing; training-only, not part of eq 7. |
 | `num_particles_enumeration_only` | `num_particles` applies only on the `TraceEnum_ELBO` path | Default `Trace_ELBO` uses 1 MC particle. |
 | `F_perturbation_not_implemented` | in-silico perturbation (eqs 8–12) absent | Additive feature; explicitly out of scope for this release. |
