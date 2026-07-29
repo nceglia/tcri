@@ -114,6 +114,31 @@ test asserts they stay in sync).
 | `kl_warmup_z_only` | `kl_weight` anneals only the `latent` KL; the Dirichlet KLs are unscaled | Standard annealing; training-only, not part of eq 7. |
 | `num_particles_enumeration_only` | `num_particles` applies only on the `TraceEnum_ELBO` path | Default `Trace_ELBO` uses 1 MC particle. |
 | `F_perturbation_not_implemented` | in-silico perturbation (eqs 8–12) absent | Additive feature; explicitly out of scope for this release. |
+| `optimizer_weight_decay` | the SVI optimizer applies Adam weight decay (default `1e-4`) to the network parameters | The note fixes the *objective* (eq 7 + the surrogate), not the optimizer. Applied inside Pyro's optimizer so it acts on the ELBO gradients. See the note below. |
+
+### On the optimizer (history worth keeping)
+
+Weight decay was previously applied by a **second** `torch.optim.Adam` over every
+module parameter, installed by overriding `UnifiedTrainingPlan.configure_optimizers`.
+That override replaced scvi's *deliberate no-op shim* — scvi returns
+`Adam([self._dummy_param])` purely to advance Lightning's step counter — and it ran
+**after** `SVI.step()` had already stepped and **zeroed the gradients**.
+
+Stepping Adam on zero gradients is not a no-op. The weight-decay term becomes the
+entire gradient (`g = wd·p`), and Adam's normalization `g/√(g²)` then strips its
+magnitude, so the update degenerates to **≈ `lr·sign(p)`** — a *scale-free* shrink of
+roughly `lr` per step rather than proportional L2. Measured in isolation: a weight of
+0.1 is driven to 5e-5 within 1000 steps, where true L2 (`(1−lr·wd)^n`) would leave it
+at 0.9998. In the fitted model SVI pushed back, but the equilibrium sat at **~2.4×
+smaller network weights** (encoder 0.107 vs 0.240).
+
+It also meant `train(lr=...)` never reached the optimizer that fits the model — Pyro
+always used scvi's hard-coded `1e-3`, and `lr` only set the shrink rate.
+
+The override is removed; `lr`/`weight_decay`/`betas`/`eps` now go to Pyro's optimizer
+via `optim_kwargs`, which is where the original intent belongs. `lr` is consequently a
+**live** knob for the first time (verified: it moves recovery, weight scale, and the
+final ELBO), so fits are not comparable across this change.
 
 ## What the conformance test checks
 
