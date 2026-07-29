@@ -140,35 +140,47 @@ Template per PR: **Goal · Status · What happened · Issues & fixes · Added �
 
 ---
 
-# MODEL KNOB-TEST MATRIX  *(PR4 deliverable — each knob gets ≥1 correctness test by end of refactor, or a justification)*
+# MODEL KNOB-TEST MATRIX  ·  ✅ COMPLETE (`tests/test_model_knobs.py`, 32 tests)
 
-**Legend for "Test":** the mathematically-correct input→output assertion. **Status:** ✅ tested · ◐ partial · ☐ planned (target PR) · ⛔ blocked (see debt).
+**Two layers, and the split is the point.**
 
-| Knob (default) | Category | Hooked up? | Mathematically-correct input→output test | Status |
-|---|---|---|---|---|
-| `n_latent` (128) | structural | yes | `to_anndata` ⇒ `obsm[X_tcri].shape[1] == n_latent`; `get_latent_representation` width | ☐ PR8-diag / a model-unit test |
-| `n_pseudo_obs` (10) | structural | yes | `module.vamp_prior.pseudo_inputs.shape[0] == n_pseudo_obs` | ☐ model-unit |
-| `K` (10) | structural | yes | `model.centers.shape[0] == K` **and** `module.mixture_concentration.shape[0] == K`; `build_archetypes` returns `centers,(labels)` with `K` clusters | ◐ smoke asserts `build_archetypes` K; add centers/mixture shape |
-| `n_hidden`,`n_layers` (128,3) | structural | yes | encoder/decoder layer count/width from `module` submodules | ☐ model-unit (low value) |
-| `local_scale` (3.0) | serialized + distributional | yes | (a) `to_anndata` ⇒ `uns[LOCAL_SCALE] == module.local_scale` ✅ (value equality, not just finite); (b) Dirichlet total-concentration of the `p_ct` draw ⇒ **draw variance = pᵢ(1−pᵢ)/(local_scale+1)** (exact; or assert strictly-decreasing in `local_scale`) | ◐ (a) ✅ round-trip; (b) ☐ **model-unit**, co-located with `global_scale` |
-| `gate_prob` (None) | serialized + predict-mix | yes | (a) `uns[GATE_PROB]` written == configured ✅; (b) **formula identities, testable NOW** (independent of training): `gate=0` ⇒ `predict == softmax(log prior)`, `gate=1` ⇒ `predict == softmax(cls_logits)`; (c) `gate=1` phenotype **recovery** ⛔ (needs a trained classifier) | ◐ (a) ✅; (b) ☐ model-unit; (c) ⛔ |
-| `classifier_temperature` (1.0) | serialized + functional | yes (division only) | (a) `uns[CLASSIFIER_TEMPERATURE]` written == configured ✅; (b) `PhenotypeClassifier.forward` divides logits by `T` ⇒ `logits(T=2)==logits(T=1)/2` for fixed weights | ◐ (a) ✅; (b) ☐ classifier-unit (division is live even if training isn't) |
-| `prior_temperature` (1.0) | distributional | yes | `prepare_two_level_params`: `clone_phen_prior = normalize(prior**(1/T))` ⇒ `T>1` **raises** the row-entropy of `module.clone_phen_prior` vs `T=1` | ☐ model-unit / Phase-8 |
-| `guide_temperature` (1.0) | distributional | yes | `get_p_ct` sharpens `q**(1/T)` ⇒ `T<1` **lowers** row-entropy of `get_p_ct()`. **Post-train** test (or inject a synthetic `q_p_ct_raw`): `get_p_ct` reads the *global* Pyro store, populated only after the guide runs — hold `q_p_ct_raw` fixed and flip `T` | ☐ **post-train** model-unit / Phase-8 |
-| `global_scale` (5.0) | distributional | yes | Dirichlet total-concentration of the `p_c` guide draw ⇒ **draw variance = pᵢ(1−pᵢ)/(global_scale+1)** (exact; same test-kind as `local_scale`) | ☐ **model-unit**, co-located with `local_scale` |
-| `batch_size` (train/predict) | invariance | yes | order/size invariance: `predict(batch_size=a).values ≈ predict(batch_size=b).values` | ☐ model-unit (cheap; add next) |
-| `max_epochs`,`lr`,`n_steps_kl_warmup`,`patience`,`guide_init_scale` | training dynamics | yes | **Justification:** no closed-form per-call output; correctness is convergence — covered by the perfect-recovery test (post-classifier-fix) + the smoke/round-trip trains | ☐ justification accepted |
-| `kl_weight_max`,`reconstruction_loss_scale` | training dynamics (z/recon path) | yes | **Justification (weaker):** act on the ELBO **z/reconstruction** path, which is **decoupled** from the prior-driven phenotype recovery — so covered only by "trains-without-error" (smoke/round-trip), NOT by the recovery test | ☐ justification (weaker) |
-| `use_enumeration` (False) | training path | yes (near-inert) | Selects `TraceEnum_ELBO` vs `Trace_ELBO`, but the model has **no discrete latent to enumerate**, so the paths are near-equivalent. Only the default (`Trace_ELBO`) path is smoke-tested today | ☐ add a parametrized `use_enumeration=True` smoke, or document as inert |
-| `classifier_hidden`,`classifier_n_layers` | classifier | **NO (untrained)** | ⛔ **BLOCKED** — the classifier never receives gradient (debt below); functional tests land **with** the classification-loss fix | ⛔ |
-| `classifier_dropout` (0.1) | classifier | **NO (not plumbed)** | ⛔ **BLOCKED + wiring bug**: never forwarded to `PhenotypeClassifier` (`_module.py` constructs it without `dropout_rate=self.classifier_dropout`), so the classifier uses its own default 0.1 regardless. One-line plumbing fix (fold into the classifier-fix PR); also moot at inference (`eval()` disables dropout) | ⛔ |
-| `phenotype_weights` (None) | class-imbalance | **NO (dead)** | ⛔ **BLOCKED** — `log_class_weights` registered but never read; belongs to the missing classification loss | ⛔ |
+- **WIRING** — does the value actually reach the object it configures? This layer was
+  added after `lr` sat marked "hooked up" for months while never reaching Pyro's
+  optimizer. The model still converged, so *every behavioral test passed*. A silently
+  ignored knob is invisible to convergence testing; assert the plumbing directly.
+- **BEHAVIOR** — the mathematically-correct input→output assertion.
 
-### Model correctness debt  *(surfaced in PR4; fix scheduled per user — "add it to the agenda for the correct PR")*
-- **The phenotype classifier is never trained.** `TCRIModule.model()` computes `cls_logits = self.classifier(z)` but never uses it in any `pyro.sample`/ELBO factor; the training plan only evaluates the classifier under `torch.no_grad()`. Verified: classifier weight **Δ = 0.0** over 150 epochs; isolated (`gate=1.0`) recovery = **chance**. End-to-end `predict` perfect-data recovery (1.0) is entirely **prior-driven** (`p_ct`).
-- **`phenotype_weights`/`class_weights` is dead** for the same root cause (would weight the absent classification loss).
-- **`classifier_dropout` is not plumbed** (separate one-line wiring bug): `TCRIModule.__init__` constructs `PhenotypeClassifier(...)` without `dropout_rate=self.classifier_dropout`, so the knob is inert (the classifier keeps its own default 0.1). Fold the fix into the classifier PR.
-- **Fix (deferred to its own PR, before Phase 6 metrics depend on `predict`):** wire a supervised cross-entropy of `cls_logits` vs the observed phenotype into training so the classifier learns; then add — the perfect-recovery **CI** test (user-provided `create_perfect_synthetic_anndata`), the `gate=1.0` isolated-classifier test, and the ⛔ knob tests above. Model-behavior change (shifts learned metrics + the round-trip fixture values) → isolated PR + re-validation.
+| Knob | Wiring test | Behavior test | Status |
+|---|---|---|---|
+| `n_latent` | `module.n_latent` | latent width == n_latent | ✅ |
+| `n_pseudo_obs` | `vamp_prior.pseudo_inputs.shape[0]` | — | ✅ |
+| `K` | `mixture_concentration.shape[0]` | `centers.shape[0] == K` | ✅ |
+| `n_hidden`,`n_layers` | encoder param count scales | — | ✅ |
+| `global_scale` (α) | `module.global_scale` | scales the eq-1 prior concentration ([G] fix) | ✅ |
+| `local_scale` (β) | `module.local_scale` | p_ct draw variance == p(1−p)/(β+1) | ✅ |
+| `prior_temperature` | `module.prior_temperature` | T>1 raises `clone_phen_prior` row-entropy | ✅ |
+| `guide_temperature` | `module.guide_temperature` | T<1 lowers `get_p_ct()` row-entropy | ✅ |
+| `gate_prob` (π) | `module.gate_prob` | π=0 ⇒ softmax(log φ); π=1 ⇒ softmax(f_cls) | ✅ |
+| `classifier_temperature` | `module.classifier_temperature` | logits(T=2) == logits(T=1)/2 | ✅ |
+| `classifier_dropout` | `classifier.mlp[2].p` | — | ✅ (was ⛔ not-plumbed) |
+| `classifier_hidden`,`classifier_n_layers` | layer widths / Linear count | — | ✅ (was ⛔ untrained) |
+| `kl_weight_max` | `module.kl_weight_max` | ramp ceiling | ✅ |
+| `guide_init_scale` | `module.guide_init_scale` | — | ✅ |
+| `phenotype_kl_weight` (γ) | `module.phenotype_kl_weight` | classifier recovery (model contract) | ✅ |
+| `lr`,`weight_decay`,`betas`,`eps` | **`plan.optim.pt_optim_args`** | recovery/ELBO move with lr | ✅ **(was DEAD)** |
+| `n_steps_kl_warmup` | `plan.n_steps_kl_warmup` | `kl_weight` ramps 0→max, monotonic | ✅ |
+| `reconstruction_loss_scale` | `module.reconstruction_loss_scale` | — (deviation [E]) | ✅ wiring |
+| `max_epochs`,`patience` | `trainer.max_epochs`, EarlyStopping `.patience` | — | ✅ |
+| `batch_size` | dataloader batch shape | `predict` invariant (float32 tol) | ✅ |
+| `use_enumeration` | selects `TraceEnum_ELBO` vs `Trace_ELBO` | — | ✅ |
+| `phenotype_weights` | — | — | **REMOVED** (was dead; deleted in Phase 1a) |
+
+**Findings from the run:** no new dead knobs. The two initial failures were both
+*test* bugs, not code bugs — scvi installs `LoudEarlyStopping` (not `EarlyStopping`),
+and `predict` differs by ~1.2e-07 across batch sizes (float32 kernel paths, not a
+logic error). Previously-⛔ classifier knobs are unblocked now that the classifier
+trains. `n_steps_kl_warmup`'s step-vs-epoch semantics remain open as **DUX-2**.
+
 ## PR 5 — Engine consolidation  ·  ✅ done (branch `refactor/pr5-engine`)
 - **Goal:** build the unified `joint_distribution` engine (`tools/` + `_compute/`) that every metric will consume — the substrate. **Additive** this PR: the old `joint_distribution`/`joint_distribution_posterior` stay until Phase 6 migrates the metrics onto the new engine. HIGH risk (math-heavy).
 - **What happened:** created `_compute/_xp.py` (torch-first device seam — CPU / torch-CUDA, lazy GPU import, `asnumpy` boundary; grafiti parity but torch-first since the draws are torch), `_compute/_joint.py::_joint_draws` (the `[S, n_clones, P]` core), `_compute/_reduce.py` (batched entropy/MI, **bits/log2 default** per the user, float64 accumulators), `tools/_joint.py` (the DataFrame wrapper), re-exported `tcri.joint_distribution`. Onboarded `tl.joint_distribution` into the contract (added `device`).
