@@ -57,7 +57,7 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 - [x] `pp.register_model` (→ `model.to_anndata`) · [x] `pp.register_phenotype_key` · [x] `pp.register_clonotype_key`
 - [x] `pp._compute_logits_and_prior` · [x] `ut.write_adata_safely` · [x] `ut._pop_nonserializables`
 - [x] uns key `tcri_manager` (retired at `setup_anndata`; `test_model_setup` asserts it's gone)
-- [ ] `tcri_clone_key` / `tcri_phenotype_key` / obsm `X_tcri_phenotypes` **→ DEFERRED to Phase 6/7**: still read by not-yet-refactored `metrics`/`plotting`; `to_anndata` writes the two `tcri_*_key` shims until their readers move. (Logged in `REFACTOR_NOTES`.)
+- [x] `tcri_clone_key` / `tcri_phenotype_key` / obsm `X_tcri_phenotypes` — **DONE**. The deferral said "still read by not-yet-refactored `metrics`/`plotting`", but those were rewritten in PR6/PR7; the last reader was a raw literal in `pp.clone_size`, now migrated to `uns[METADATA][CLONE_COL]` with a clear error. `to_anndata` no longer writes the shims and the three `LEGACY_*` constants are deleted (`LEGACY_MANAGER` stays — `save_tcri_session` still pops it defensively).
 
 **Phase 5/6 (consolidated away — delete WITH replacement, never before):**
 - [ ] `pp.joint_distribution_posterior` (→ unified `joint_distribution`) · [ ] `metrics._mi_from_joint` (→ `_mutual_information`)
@@ -75,7 +75,7 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 - [ ] `ut.build_nested_tcri_pgm` (→ `docs/`) · [ ] `ut.draw_tcri_pgm_nested` (→ `docs/`) · [ ] `daft` runtime dep
 
 **Phase 3/9 (model/utils cleanup):**
-- [ ] `_ascii_hist` (+ all `graph=`/ASCII paths) · [ ] `ml.plot_loss` (→ `diag.loss`) · [ ] `ml.plot_archetypes` (→ `diag.archetypes`)
+- [x] `_ascii_hist` (dead: zero callers) · [x] `ml.plot_loss` (→ `diag.loss`) · [x] `ml.plot_archetypes` (→ `diag.archetypes`)
 
 ---
 

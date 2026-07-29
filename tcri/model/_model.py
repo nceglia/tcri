@@ -452,10 +452,6 @@ class TCRIModel(BaseModelClass):
             probs_df.values.argmax(1), categories=list(probs_df.columns)
         )
 
-        # 6) legacy compat keys — retired in Phase 6/7 with their readers -----
-        adata.uns[K.LEGACY_CLONE_KEY] = meta[K.CLONE_COL]
-        adata.uns[K.LEGACY_PHENOTYPE_KEY] = K.PHENOTYPE
-
         if compute_umap:
             import umap
             adata.obsm[K.X_UMAP] = umap.UMAP(random_state=42).fit_transform(adata.obsm[K.X_TCRI])

@@ -11,8 +11,12 @@ def test_keys_constants():
     assert K.X_LOGITS == "X_tcri_logits"
     assert K.METADATA == "tcri_metadata"
     assert K.X_PROBABILITIES == "X_tcri_probabilities"
-    # legacy keys are present (so the removal step can target them) but distinct
-    assert K.LEGACY_CLONE_KEY == "tcri_clone_key" != K.CLONE_COL
+    # the legacy shadow keys are GONE (Phase 4 removal completed); only the
+    # defensively-popped manager stash name remains
+    assert not hasattr(K, "LEGACY_CLONE_KEY")
+    assert not hasattr(K, "LEGACY_PHENOTYPE_KEY")
+    assert not hasattr(K, "LEGACY_X_PHENOTYPES")
+    assert K.LEGACY_MANAGER == "tcri_manager"
 
 
 def test_console_aliases_and_callables():
