@@ -96,6 +96,38 @@ def test_batch_size_at_or_above_n_obs_warns(tiny_adata):
                         enable_progress_bar=False, enable_model_summary=False)
 
 
+def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
+    """The optimizer settings must configure SVI, not a side optimizer.
+
+    ``UnifiedTrainingPlan`` used to override ``configure_optimizers`` with a real
+    torch Adam over every module parameter. That replaced scvi's deliberate no-op
+    shim and ran *after* ``SVI.step()`` had already zeroed the gradients, so it
+    only ever applied a scale-free ~lr*sign(p) shrink — and ``lr`` never reached
+    the optimizer that actually descends the ELBO (Pyro stayed at scvi's 1e-3).
+    """
+    from tcri.model._training import UnifiedTrainingPlan
+
+    model = _model(tiny_adata, K=5)
+    plan = UnifiedTrainingPlan(
+        module=model.module, n_steps_kl_warmup=10, reconstruction_loss_scale=1e-3,
+        optimizer_config={"lr": 0.05, "betas": (0.9, 0.999), "eps": 1e-5,
+                          "weight_decay": 1e-4},
+    )
+    args = plan.optim.pt_optim_args
+    assert args["lr"] == 0.05, f"lr did not reach Pyro's SVI optimizer: {args}"
+    assert args["weight_decay"] == 1e-4, f"weight_decay did not reach Pyro: {args}"
+
+    # and the Lightning-facing optimizer must be scvi's dummy shim, not the module
+    opt = plan.configure_optimizers()
+    opt = opt["optimizer"] if isinstance(opt, dict) else opt
+    n_opt = sum(p.numel() for g in opt.param_groups for p in g["params"])
+    n_module = sum(p.numel() for p in model.module.parameters())
+    assert n_opt == 1 < n_module, (
+        f"configure_optimizers covers {n_opt} params (module has {n_module}); it must "
+        "stay scvi's single-dummy-param shim so nothing steps on zeroed gradients."
+    )
+
+
 def test_trainer_knobs_are_overridable(tiny_adata):
     """These were hard-coded keywords: passing them raised 'got multiple values'."""
     pyro.clear_param_store()

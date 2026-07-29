@@ -187,4 +187,17 @@ SANCTIONED_DEVIATIONS = {
         "In-silico perturbation (eqs 8-12) is not implemented. Additive feature; "
         "explicitly out of scope for this release."
     ),
+    "optimizer_weight_decay": (
+        "Training-only: the SVI optimizer applies Adam weight decay (default 1e-4) "
+        "to the network parameters. The note specifies the objective (eq 7 + the "
+        "surrogate) but not the optimizer, so this is an L2 regularizer on top of "
+        "it. Applied inside Pyro's optimizer, where it acts on the ELBO gradients. "
+        "NOTE (history): this used to be applied by a second torch Adam installed "
+        "over `configure_optimizers`, which overrode scvi's deliberate no-op shim "
+        "and stepped AFTER `SVI.step()` had already zeroed the gradients. With zero "
+        "gradients Adam's normalization turns weight decay into a scale-free "
+        "shrink of ~lr per step (not proportional L2), which held the networks at "
+        "~2.4x smaller weights, and `train(lr=)` never reached the real optimizer. "
+        "Removed; see MODEL_CONTRACT.md."
+    ),
 }

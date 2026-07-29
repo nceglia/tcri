@@ -52,31 +52,46 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         else:
             self._loss_fn = Trace_ELBO()
 
-        super().__init__(module, n_steps_kl_warmup=n_steps_kl_warmup, **kwargs)
+        if optimizer_config is None:
+            optimizer_config = {"lr": 1e-3, "betas": (0.9, 0.999), "eps": 1e-5,
+                                "weight_decay": 1e-4}
+        self.optimizer_config = optimizer_config
+
+        # Hand the optimizer settings to PYRO's optimizer — the one inside SVI that
+        # actually descends the ELBO gradients. Previously this class overrode
+        # `configure_optimizers` with a real torch Adam over every module parameter;
+        # that override replaced scvi's deliberate no-op shim ("a shim optimizer ...
+        # to keep Lightning happy") and ran AFTER SVI.step() had already stepped and
+        # ZEROED the gradients. Stepping Adam on zero gradients is not a no-op: the
+        # weight-decay term becomes the whole gradient, and Adam's own normalization
+        # (g/sqrt(g^2)) strips its magnitude, so the update degenerates to ~lr*sign(p)
+        # — a scale-free shrink, not proportional L2. Measured effect: network weights
+        # held at ~2.4x smaller than without it. It also meant `lr` never reached the
+        # real optimizer (Pyro always used scvi's hard-coded 1e-3).
+        super().__init__(
+            module,
+            n_steps_kl_warmup=n_steps_kl_warmup,
+            optim_kwargs={
+                "lr": optimizer_config["lr"],
+                "betas": optimizer_config["betas"],
+                "eps": optimizer_config["eps"],
+                "weight_decay": optimizer_config["weight_decay"],
+            },
+            **kwargs,
+        )
 
         self.n_steps_kl_warmup = n_steps_kl_warmup
         self.reconstruction_loss_scale = reconstruction_loss_scale
         self._my_global_step = 0
-        self.optimizer_config = optimizer_config
-
-        if optimizer_config is None:
-            optimizer_config = {"lr":1e-3,"betas":(0.9,0.999),"eps":1e-5,"weight_decay":1e-4}
-        self.optimizer_config = optimizer_config
 
     @property
     def loss(self):
         return self._loss_fn
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            self.module.parameters(),
-            lr=self.optimizer_config["lr"],
-            betas=self.optimizer_config["betas"],
-            eps=self.optimizer_config["eps"],
-            weight_decay=self.optimizer_config["weight_decay"],
-        )
-        return {"optimizer": optimizer}
-    
+    # NOTE: configure_optimizers is deliberately NOT overridden — scvi's base class
+    # returns a shim over a single dummy parameter purely to advance Lightning's step
+    # counter. All real optimization happens in Pyro's SVI (see __init__).
+
     def training_step(self, batch, batch_idx):
         # ── KL warmup ────────────────────────────────────────────
         if self.n_steps_kl_warmup > 0 and self._my_global_step < self.n_steps_kl_warmup:
