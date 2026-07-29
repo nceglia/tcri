@@ -52,7 +52,10 @@ def _phenotypic_one(clone_ids, J, cols, *, normalized):
             out[c] = np.nan
             continue
         p = row / s
-        H = float(-np.sum(np.where(p > 0, p * np.log2(p), 0.0)))
+        # 0*log0 := 0. Mask first rather than np.where(p>0, p*log2(p), 0): numpy
+        # evaluates BOTH branches, so log2(0) still fires divide-by-zero warnings.
+        nz = p[p > 0]
+        H = float(-np.sum(nz * np.log2(nz)))
         if normalized and P > 1:
             H /= np.log2(P)
         out[c] = H

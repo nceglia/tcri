@@ -16,6 +16,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import pyro
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -120,6 +121,25 @@ class TCRIModel(BaseModelClass):
         **kwargs,
     ):
         super().__init__(adata)
+
+        # Pyro's param store is PROCESS-GLOBAL: a second TCRIModel in the same session
+        # silently inherits the first model's fitted q_p_c_raw/q_p_ct_raw and network
+        # weights, so it starts from the previous fit instead of from scratch. We warn
+        # rather than clearing, because clearing here would destroy the params of a
+        # model loaded earlier in the session (load_tcri_session restores the store
+        # after construction). Proper per-instance namespacing is a design change.
+        _tcri_params = [k for k in pyro.get_param_store().keys() if k.startswith(("q_p_c", "q_p_ct", "scvi$$$"))]
+        if _tcri_params:
+            warnings.warn(
+                "The global Pyro param store already holds TCRI parameters "
+                f"({len(_tcri_params)} entries). This model will CONTINUE that fit "
+                "rather than start fresh. Call `pyro.clear_param_store()` before "
+                "constructing a new model (note this invalidates any model already "
+                "loaded in this session).",
+                UserWarning,
+                stacklevel=2,
+            )
+
         n_vars = self.summary_stats["n_vars"]
         clonotype_col = self.adata_manager.registry["clonotype_col"]
         phenotype_col = self.adata_manager.registry["phenotype_col"]
@@ -142,6 +162,18 @@ class TCRIModel(BaseModelClass):
         clone_phenotype_prior += 1e-6
         clone_phenotype_prior = clone_phenotype_prior / clone_phenotype_prior.sum(axis=1, keepdims=True)
         self.clone_phenotype_prior = clone_phenotype_prior
+        # K archetypes are k-means centroids over clonotypes, so K > n_clonotypes is
+        # not satisfiable (sklearn raises "n_samples < n_clusters"). Clamp instead of
+        # crashing — a dataset with few clones is legitimate (and is exactly what the
+        # synthetic examples use).
+        if K > c_count:
+            warnings.warn(
+                f"K={K} archetypes requested but the data has only {c_count} "
+                f"clonotype(s); using K={c_count}.",
+                UserWarning,
+                stacklevel=2,
+            )
+            K = c_count
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = cov_series.cat.codes.values
@@ -214,7 +246,7 @@ class TCRIModel(BaseModelClass):
         max_epochs: int = 1000,
         batch_size: int = 1000,
         lr: float = 1e-3,
-        reconstruction_loss_scale: float = 1e-3,
+        reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):
@@ -225,6 +257,21 @@ class TCRIModel(BaseModelClass):
         """
         # Create a train/val split
         self.module.reconstruction_loss_scale = reconstruction_loss_scale
+
+        # batch_size >= n_obs means ONE optimizer step per epoch, so the fixed
+        # per-epoch overhead is paid per gradient update — the pathology behind the
+        # "9-hour" synthetic run (1000 cells, batch_size=20000, max_epochs=1e6).
+        n_obs = self.adata.n_obs
+        if batch_size >= n_obs:
+            warnings.warn(
+                f"batch_size={batch_size} >= n_obs={n_obs}: each epoch is a SINGLE "
+                "optimizer step, so per-epoch overhead dominates and `max_epochs` "
+                "becomes the number of gradient updates. Use a smaller batch_size "
+                "(e.g. 256-1024) for a comparable number of updates in far less time.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         splitter = DataSplitter(
             self.adata_manager,
             train_size=0.9,
@@ -244,18 +291,22 @@ class TCRIModel(BaseModelClass):
             },
         )
 
+        # Defaults the caller can override: setdefault (not hard-coded keywords) so
+        # passing e.g. early_stopping_patience=10 or accelerator="gpu" through
+        # train(**kwargs) works instead of raising "got multiple values for keyword".
+        kwargs.setdefault("early_stopping", True)
+        kwargs.setdefault("early_stopping_monitor", "elbo_validation")
+        kwargs.setdefault("early_stopping_mode", "min")
+        kwargs.setdefault("early_stopping_patience", self.patience)
+        kwargs.setdefault("check_val_every_n_epoch", 5)
+        kwargs.setdefault("accelerator", "auto")
+        kwargs.setdefault("devices", "auto")
+
         runner = TrainRunner(
             self,
             training_plan=plan,
             data_splitter=splitter,
             max_epochs=max_epochs,
-            early_stopping=True,
-            early_stopping_monitor="elbo_validation",
-            early_stopping_mode="min",
-            early_stopping_patience=self.patience,
-            check_val_every_n_epoch=5,
-            accelerator="auto",
-            devices="auto",
             **kwargs,
         )
 
@@ -263,7 +314,7 @@ class TCRIModel(BaseModelClass):
         return
 
     @torch.no_grad()
-    def get_latent_representation(self, adata=None, indices=None, batch_size=None):
+    def get_latent_representation(self, adata=None, indices=None, batch_size=4096):
         adata = self._validate_anndata(adata)
         scdl = self._make_data_loader(
             adata=adata, indices=indices, batch_size=batch_size
@@ -280,7 +331,7 @@ class TCRIModel(BaseModelClass):
         return self.module.get_p_ct().cpu().numpy()
 
     @torch.no_grad()
-    def predict(self, adata=None, *, batch_size: int = 256, eps: float = 1e-8) -> pd.DataFrame:
+    def predict(self, adata=None, *, batch_size: int = 4096, eps: float = 1e-8) -> pd.DataFrame:
         """Per-cell phenotype-probability ``DataFrame`` (index ``adata.obs_names``,
         columns = phenotypes) — the single source of phenotype probabilities.
 
@@ -324,7 +375,7 @@ class TCRIModel(BaseModelClass):
         return pd.DataFrame(probs, index=adata.obs_names, columns=pheno_cats)
 
     @torch.no_grad()
-    def to_anndata(self, adata=None, *, batch_size: int = 256, compute_umap: bool = False) -> AnnData:
+    def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
         ``tcri_*`` keys (from :mod:`tcri._keys`) and return it. Replaces the old
         ``preprocessing.register_model``; writes no manager stash.
@@ -400,10 +451,6 @@ class TCRIModel(BaseModelClass):
         adata.obs[K.PHENOTYPE] = pd.Categorical.from_codes(
             probs_df.values.argmax(1), categories=list(probs_df.columns)
         )
-
-        # 6) legacy compat keys — retired in Phase 6/7 with their readers -----
-        adata.uns[K.LEGACY_CLONE_KEY] = meta[K.CLONE_COL]
-        adata.uns[K.LEGACY_PHENOTYPE_KEY] = K.PHENOTYPE
 
         if compute_umap:
             import umap

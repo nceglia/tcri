@@ -17,54 +17,27 @@ from .._compute._joint import _joint_draws
 __all__ = ["joint_distribution"]
 
 
-def joint_distribution(
+def _engine_blocks(
     adata,
     *,
-    covariate=None,
-    groupby=None,
-    n_samples=0,
-    use_logits=True,
-    weighted=False,
-    clones=None,
-    temperature=1.0,
-    random_state=None,
-    device=None,
-) -> pd.DataFrame:
-    """Clone×phenotype distribution from the learned posterior of ``p_ct``.
+    covariate,
+    groupby,
+    n_samples,
+    use_logits,
+    weighted,
+    temperature,
+    random_state,
+    device,
+):
+    """Validate, then run the numeric core; return the raw per-covariate blocks.
 
-    Parameters
-    ----------
-    covariate : str | None
-        A covariate value; ``None`` computes all covariate values in one shared-draw
-        pass (adds a leading ``covariate`` index level).
-    groupby : str | None
-        Not yet implemented in the engine (lands with the metric migration, Phase 6);
-        restrict with ``clones=`` for now.
-    n_samples : int
-        ``0`` → deterministic posterior-mean table; ``N`` → ``N`` clamped-Dirichlet
-        draws (adds a ``sample_id`` index level). Only place ``local_scale`` enters.
-    use_logits : bool
-        ``True`` → fold per-cell classifier logits with ``log(base)`` (gate-aware) and
-        aggregate per clone, matching :meth:`~tcri.model._model.TCRIModel.predict`;
-        ``False`` → the ct-level base table. Neither touches the generative prior.
-    weighted : bool
-        ``False`` → each clone is one unit (per-clone simplex). ``True`` → each clone
-        row is scaled by its (ct-keyed) cell count (cell-weighted).
-    temperature : float
-        Tempers the base once; ``T=1`` is the identity (and reproduces ``predict()``
-        on the ``use_logits=True`` path).
-    random_state : int | numpy.Generator | torch.Generator | None
-        Seeds the torch Dirichlet generator for ``n_samples>0``; ignored at ``0``.
-    device : str | None
-        Routes the numeric core through ``_compute/_xp`` (CPU / torch-CUDA). Result is
-        always a host DataFrame.
+    Shared by :func:`joint_distribution` (which formats them into a labelled
+    DataFrame) and the metric fast path (which consumes the arrays directly), so
+    both see identical validation, the same engine call, and one shared draw.
 
-    Returns
-    -------
-    pandas.DataFrame
-        Columns = phenotype categories. Index = clonotype (``+ sample_id`` for
-        ``n_samples>0``, ``+ covariate`` leading level for ``covariate=None``).
-        Provenance in ``df.attrs["params"]``.
+    Returns ``(blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats)``
+    where ``blocks`` is a list of ``(covariate_index, clone_idx, J)`` and ``J`` has
+    shape ``[S, n_rows, P]``.
     """
     if groupby is not None:
         raise NotImplementedError(
@@ -129,6 +102,69 @@ def joint_distribution(
         logits=logits,
         gate_prob=adata.uns.get(K.GATE_PROB, None),
         weighted=weighted,
+        random_state=random_state,
+        device=device,
+    )
+    return blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats
+
+
+def joint_distribution(
+    adata,
+    *,
+    covariate=None,
+    groupby=None,
+    n_samples=0,
+    use_logits=True,
+    weighted=False,
+    clones=None,
+    temperature=1.0,
+    random_state=None,
+    device=None,
+) -> pd.DataFrame:
+    """Clone×phenotype distribution from the learned posterior of ``p_ct``.
+
+    Parameters
+    ----------
+    covariate : str | None
+        A covariate value; ``None`` computes all covariate values in one shared-draw
+        pass (adds a leading ``covariate`` index level).
+    groupby : str | None
+        Not yet implemented in the engine (lands with the metric migration, Phase 6);
+        restrict with ``clones=`` for now.
+    n_samples : int
+        ``0`` → deterministic posterior-mean table; ``N`` → ``N`` clamped-Dirichlet
+        draws (adds a ``sample_id`` index level). Only place ``local_scale`` enters.
+    use_logits : bool
+        ``True`` → fold per-cell classifier logits with ``log(base)`` (gate-aware) and
+        aggregate per clone, matching :meth:`~tcri.model._model.TCRIModel.predict`;
+        ``False`` → the ct-level base table. Neither touches the generative prior.
+    weighted : bool
+        ``False`` → each clone is one unit (per-clone simplex). ``True`` → each clone
+        row is scaled by its (ct-keyed) cell count (cell-weighted).
+    temperature : float
+        Tempers the base once; ``T=1`` is the identity (and reproduces ``predict()``
+        on the ``use_logits=True`` path).
+    random_state : int | numpy.Generator | torch.Generator | None
+        Seeds the torch Dirichlet generator for ``n_samples>0``; ignored at ``0``.
+    device : str | None
+        Routes the numeric core through ``_compute/_xp`` (CPU / torch-CUDA). Result is
+        always a host DataFrame.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns = phenotype categories. Index = clonotype (``+ sample_id`` for
+        ``n_samples>0``, ``+ covariate`` leading level for ``covariate=None``).
+        Provenance in ``df.attrs["params"]``.
+    """
+    blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
+        adata,
+        covariate=covariate,
+        groupby=groupby,
+        n_samples=n_samples,
+        use_logits=use_logits,
+        weighted=weighted,
+        temperature=temperature,
         random_state=random_state,
         device=device,
     )

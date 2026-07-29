@@ -6,9 +6,9 @@ a ``"tcri_*"`` string literal in a function signature or body** — a PR1
 conformance test forbids it. Migrating a reader/writer means swapping the
 literal for the constant here.
 
-The two legacy shadow keys (``tcri_clone_key`` / ``tcri_phenotype_key``) and the
-legacy ``X_tcri_phenotypes`` obsm slot are listed only so the removal step can
-find and delete them; new code uses ``METADATA`` + ``X_PROBABILITIES``.
+The legacy shadow keys (``tcri_clone_key`` / ``tcri_phenotype_key``) and the old
+``X_tcri_phenotypes`` obsm slot have been removed — use ``METADATA`` and
+``X_PROBABILITIES``.
 """
 
 # ── uns: metadata + learned priors ───────────────────────────────────────────
@@ -45,8 +45,10 @@ CLONE_COL = "clone_col"
 PHENOTYPE_COL = "phenotype_col"
 BATCH_COL = "batch_col"
 
-# ── legacy — declared ONLY so the removal step can find + delete them ─────────
-LEGACY_MANAGER = "tcri_manager"                    # non-picklable AnnDataManager stash → drop
-LEGACY_CLONE_KEY = "tcri_clone_key"                # shadow of METADATA[CLONE_COL] → drop
-LEGACY_PHENOTYPE_KEY = "tcri_phenotype_key"        # shadow of METADATA[PHENOTYPE_COL] → drop
-LEGACY_X_PHENOTYPES = "X_tcri_phenotypes"          # old prob slot → X_PROBABILITIES
+# ── legacy ───────────────────────────────────────────────────────────────────
+# The shadow keys `tcri_clone_key` / `tcri_phenotype_key` and the old
+# `X_tcri_phenotypes` obsm slot are GONE: `to_anndata` no longer writes them and
+# nothing reads them (`pp.clone_size`, the last reader, now uses METADATA).
+# `LEGACY_MANAGER` stays because it still does defensive work — `save_tcri_session`
+# pops it so a stray non-picklable AnnDataManager can never be serialized.
+LEGACY_MANAGER = "tcri_manager"                    # popped defensively before save
