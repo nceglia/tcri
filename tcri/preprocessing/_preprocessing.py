@@ -49,18 +49,6 @@ GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED =
 
 from .._console import _ok, _info, _warn, _fin
 
-def _ascii_hist(samples, bins=25, width=40) -> str:
-    hist, edges = np.histogram(samples, bins=bins)
-    top = hist.max()
-    lines=[]
-    for h,e0,e1 in zip(hist, edges[:-1], edges[1:]):
-        bar = "█"*int(width*h/top) if top else ""
-        lines.append(f"{e0:7.3f}-{e1:7.3f} | {bar}")
-    return "\n".join(lines)
-
-
-
-
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
     clone_counts = adata.obs["trb_candidate"].value_counts()
@@ -87,7 +75,17 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
 
 
 def clone_size(adata, key_added=K.CLONE_SIZE, return_counts=False):
-    tcr_key = adata.uns["tcri_clone_key"]
+    # Canonical source is uns[METADATA]['clone_col'] (written by to_anndata). This
+    # used to read the legacy uns['tcri_clone_key'] shadow key — the last reader of
+    # it, which is why the shim outlived Phase 4.
+    meta = adata.uns.get(K.METADATA)
+    if not meta or K.CLONE_COL not in meta:
+        raise KeyError(
+            f"adata.uns[{K.METADATA!r}][{K.CLONE_COL!r}] is missing — run "
+            "model.to_anndata(adata) first (or load a session) so the clonotype "
+            "column is registered."
+        )
+    tcr_key = meta[K.CLONE_COL]
     res = np.unique(adata.obs[tcr_key].tolist(), return_counts=True)
     clone_sizes = dict(zip(res[0],res[1]))
     sizes = []

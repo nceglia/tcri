@@ -1,5 +1,10 @@
 # Methods Conformance — code ↔ Supplementary Note 1
 
+> **This is the eq-by-eq map + deviation history.** The *enforced* contract is
+> `docs/contract/MODEL_CONTRACT.md` (prose) + `tcri/model/_model_contract.py`
+> (manifest), checked by `tests/test_model_contract_conformance.py`. Model math
+> changes require updating that contract **first**.
+
 Maps the TCRi generative model in **Supplementary Note 1: Methods for Information
 theoretic metrics for single cell RNA and T-cell receptor sequencing**
 (`tcri_supplementary_methods_04_30_26.pdf`) to the implementation, and records
@@ -31,7 +36,7 @@ Code: `tcri/model/_module.py` (`TCRIModule.model`/`.guide`), `tcri/model/_priors
 
 | Eq | Note | Code (`_module.py::model`) | Status |
 |---|---|---|---|
-| 1 | `ω_c ~ (1/B_c) Σ_b Dir(α ψ_b)` | plate `"clonotypes"` → `MixtureDirichlet(weights, mixture_concentration)`, sampled `"p_c"`. `ψ_b` = archetype centroids (`build_archetypes`). | ⚠ **[G]** α not applied in the prior (concentration = normalized centroid; α enters only the guide) |
+| 1 | `ω_c ~ (1/B_c) Σ_b Dir(α ψ_b)` | plate `"clonotypes"` → `MixtureDirichlet(weights, global_scale * mixture_concentration)`, sampled `"p_c"`. `ψ_b` = archetype centroids (`build_archetypes`). | ✅ α = `global_scale` (**[G]** fixed) |
 | 2 | `ϕ_m \| ω_h(m) ~ Dir(β ω_h(m))` | plate `"ct_plate"` → `conc_ct = clamp(local_scale * p_c[ct_to_c])`, sampled `"p_ct"` | ✅ β = `local_scale` |
 | 3 | `z_i ~ (1/B_z) Σ_k q(z\|u_k)` | `VampPrior.get_mixture()` (mixture of encoder-posteriors at learnable pseudo-inputs), sampled `"latent"` | ✅ |
 | 4 | `l_i = f_cls(z_i)`, `ℓ_i = π l_i + (1-π) log ϕ_g(i)`; `z^ϕ_i ~ Cat(softmax(ℓ_i))` | `cls_logits = classifier(z)`; `ell = gate_prob*cls_logits + (1-gate_prob)*log_phi`; discrete `z^ϕ` **not** sampled — see surrogate | ◐ via surrogate (below) |
@@ -91,12 +96,21 @@ no code path yet.
 | D | `class_weights`/`log_class_weights` — not in the note; was dead (computed + plumbed through 3 signatures, never read) | LOW | **fixed** — removed (with `phenotype_weights`) from `_model`/`_module`/`_training` |
 | H | dead per-cell `encoder(x)` forward in `model()` (result discarded; the VampPrior carries its own encoder) | INFO | **fixed** — removed |
 | G | α (`global_scale`) not applied to the clonotype prior (eq 1) in `model()`; concentration = normalized archetype centroid (sum≈1, U-shaped), so the prior was far more diffuse than `Dir(α·ψ_b)` and scaled inconsistently with the guide `q(ω_c)` | MED | **fixed** — `expanded_conc = global_scale * centroids` (eq 1); classifier recovery unchanged (1.000), suite green |
-| E | `reconstruction_loss_scale=1e-3` down-weights ZINB ~1000× vs eq-7 full weight; live test shows decoder over-generates counts | MED | **deferred** (author decision) — 1e-3 may be an intentional β-VAE reweighting; raising it changes every fitted result so it needs a retrain + R/NR revalidation. Tracked as a follow-up investigation. |
+| E | `reconstruction_loss_scale` down-weights ZINB vs eq-7 full weight | MED | **resolved** — default raised 1e-3 → 1e-2; real-data library ratio 1.40 → 0.99 (recovery/latent unchanged). The original ~6× over-generation was mostly the phantom optimizer shrinking the decoder. |
 | F | in-silico perturbation (eqs 8–12) not implemented | — | deferred — additive feature |
 
 **Training-only deviations from eq 7 (intentional, documented here):**
 - **KL warmup + z-only scope.** `UnifiedTrainingPlan` ramps `kl_weight` over `n_steps_kl_warmup`, and it scales only the `latent` (z) KL — the two Dirichlet KLs (`p_c`, `p_ct`) are unscaled. A standard annealing schedule; symmetric (no correctness bug) but not part of eq 7's full-weight KL.
 - **`num_particles`** on `UnifiedTrainingPlan` is honored only on the enumeration path (`TraceEnum_ELBO`); the default `Trace_ELBO` uses 1 MC particle regardless.
 
-A/A2/B/C/D/H are fixed in the model PR that introduced this file. E/G/F are tracked here
-and in `REFACTOR_NOTES.md`; E and G change fitted results and await author sign-off.
+A/A2/B/C/D/H were fixed in the model PR that introduced this file. **G and E are now
+resolved too** — α is applied to the eq-1 prior, and `reconstruction_loss_scale` was
+re-measured and recalibrated to `1e-2` (real-data library ratio 1.40 → 0.99). Both
+change fitted results, so runs are not comparable across them. **F** (in-silico
+perturbation) remains out of scope for this release.
+
+A further training-only deviation was found and removed: a **second torch Adam over all
+module parameters**, installed by overriding scvi's deliberate no-op `configure_optimizers`
+shim. It stepped after `SVI.step()` had zeroed the gradients, so weight decay degenerated
+to a scale-free `~lr·sign(p)` shrink (networks held ~2.4× small), and `train(lr=)` never
+reached Pyro's optimizer. See `optimizer_weight_decay` in the model contract.

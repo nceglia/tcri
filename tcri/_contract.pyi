@@ -5,6 +5,10 @@ The conformance test (``tests/test_contract_conformance.py``) checks each
 but-absent functions are the refactor worklist. Prose spec:
 ``docs/contract/tcri_api_and_responsibilities.md``.
 
+This freezes the public *interface*. Its sibling — ``tcri/model/_model_contract.py``
+(prose: ``docs/contract/MODEL_CONTRACT.md``) — freezes the model's *mathematics*
+(Supplementary Note 1).
+
 RULES this file encodes:
 - Only the KEPT surface is declared. A symbol NOT in this file must NOT be public
   after the refactor (see the Removal Ledger in ``docs/contract/REFACTOR_AGENDA.md``).
