@@ -23,19 +23,60 @@ def is_precomputed_joint(x) -> bool:
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
                 use_logits=True):
     """Return ``(draws, phenotype_cols)`` where ``draws`` is a list of ``(clone_ids, [C, P])``
-    per posterior draw (length 1 for ``n_samples=0``)."""
-    jd = joint_distribution(
-        adata, covariate=covariate, use_logits=use_logits, n_samples=n_samples,
-        weighted=weighted, temperature=temperature, clones=clones, random_state=random_state,
+    per posterior draw (length 1 for ``n_samples=0``).
+
+    Consumes the engine's raw blocks directly. Going through
+    :func:`~tcri.tools._joint.joint_distribution` would flatten ``[S, n_rows, P]``
+    into a MultiIndex DataFrame only for this function to ``groupby('sample_id')``
+    and unpack it straight back to arrays — measured at ~2x the engine core itself.
+    Ordering matches the DataFrame path exactly (blocks in covariate order, clones in
+    block order, then the ``clones=`` filter applied as a stable reorder).
+    """
+    from ._joint import _engine_blocks
+
+    blocks, _n_draws, clonotype_cats, _cov_cats, cols = _engine_blocks(
+        adata,
+        covariate=covariate,
+        groupby=None,
+        n_samples=n_samples,
+        use_logits=use_logits,
+        weighted=weighted,
+        temperature=temperature,
+        random_state=random_state,
+        device=None,
     )
-    cols = list(jd.columns)
-    if n_samples and int(n_samples) > 0:
-        draws = []
-        for _sid, sub in jd.groupby(level="sample_id", sort=True):
-            sub = sub.droplevel("sample_id")
-            draws.append((list(sub.index), sub.values.astype(float)))
-        return draws, cols
-    return [(list(jd.index), jd.values.astype(float))], cols
+
+    # Row labels in DataFrame-concat order (per covariate block, per clone). When
+    # covariate is None the DataFrame carries a leading `covariate` index level, so
+    # its labels are (covariate, clonotype) TUPLES — reproduce that exactly, since
+    # callers key on whatever this returns.
+    all_cov = covariate is None
+    clone_names, ids = [], []
+    for m, clone_idx, _J in blocks:
+        for i in clone_idx:
+            c = clonotype_cats[i]
+            clone_names.append(c)
+            ids.append((_cov_cats[m], c) if all_cov else c)
+
+    keep = None
+    if clones is not None:
+        clones = list(clones)
+        rank = {c: i for i, c in enumerate(clones)}
+        sel = [j for j, c in enumerate(clone_names) if c in rank]
+        # stable sort by requested order — mirrors the MultiIndex argsort(kind="stable"),
+        # which ranks on the clonotype level only
+        keep = sorted(sel, key=lambda j: rank[clone_names[j]])
+        ids = [ids[j] for j in keep]
+
+    n_draws_out = blocks[0][2].shape[0] if blocks else 1
+    draws = []
+    for s in range(n_draws_out):
+        arr = np.concatenate([J[s] for _m, _ci, J in blocks], axis=0) if blocks else np.empty((0, len(cols)))
+        arr = arr.astype(float, copy=False)
+        if keep is not None:
+            arr = arr[keep]
+        draws.append((list(ids), arr))
+    return draws, list(cols)
 
 
 def summarize(values, *, hdi_prob=0.94) -> dict:
