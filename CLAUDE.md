@@ -2,15 +2,16 @@
 
 Single-cell TCR+RNA information-theory metrics on scvi-tools / pyro / scanpy.
 
-## The two contracts
+## The three contracts
 
-This repo is governed by two frozen contracts. Both are machine-checked; a failing
+This repo is governed by three frozen contracts. All are machine-checked; a failing
 conformance test means **stop and decide**, not "adjust the contract until it passes."
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
 | **API contract** | the public *interface* | `tcri/_contract.pyi` | `docs/contract/tcri_api_and_responsibilities.md` | `tests/test_contract_conformance.py` |
-| **Model contract** | the *mathematics* | `tcri/model/_model_contract.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
+| **Model contract** | the generative *mathematics* | `tcri/model/_model_contract.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
+| **Metrics contract** | what the *metrics compute* | `tcri/tools/_metrics_contract.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
 
 ### Model integrity (read before touching `tcri/model/`)
 
@@ -35,6 +36,22 @@ Accepted departures from the note live in `SANCTIONED_DEVIATIONS`
 not listed there that departs from the note is a defect.
 
 `docs/contract/METHODS_CONFORMANCE.md` is the eq-by-eq code map + deviation history.
+
+### Metric integrity (read before touching `tcri/tools/`)
+
+The entropies and mutual information are frozen by the **metrics contract**. Changing
+a definition means changing what every published number means. Same rule: update
+`_metrics_contract.py` + `METRICS_CONTRACT.md` first, then the code.
+
+The conformance test pins numeric identities, the keystone being
+`I(c;φ) = H(c) − Σ_φ P(φ)·H[P(c|φ)]` — it ties the entropy and MI families together so
+neither can be redefined alone.
+
+**Note 1's eqs 3–4 are mistranscribed** (they weight by the marginal, making them
+cross-entropies, and eq 4's label is wrong). The code is correct — proven by the
+decomposition above, which the literal equations violate by producing a *negative*
+mutual information. These are recorded in `SOURCE_ERRATA`; do **not** "fix" the code to
+match them.
 
 ## Working agreement
 
