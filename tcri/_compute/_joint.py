@@ -136,16 +136,27 @@ def _joint_draws(
             lut = torch.full((n_ct,), -1, dtype=torch.long, device=dev)
             lut[ct_rows] = torch.arange(ct_rows.shape[0], device=dev)
             local_ct = lut[ct_of_cell]                    # [n_cells_m] local clone-row index
-            b_cell = bases[:, ct_of_cell, :]              # [S, n_cells_m, P]
-            log_b = torch.log(b_cell + _EPS)
             ell = logits_t[cells_m].unsqueeze(0)          # [1, n_cells_m, P]
-            combine = (g * ell + (1.0 - g) * log_b) if use_gate else (ell + log_b)
-            # §7.1: the base is already tempered (b) and the combine is divided by T here;
-            # at T==1 both are the identity, so this reproduces predict() bit-for-bit. T!=1 is
-            # a deliberate analysis-time temper (the two T's do not cancel — documented).
-            p_cell = torch.softmax(combine / float(temperature), dim=-1)  # [S, n_cells_m, P]
             J = torch.zeros((S, ct_rows.shape[0], P), dtype=torch.float64, device=dev)
-            J.index_add_(1, local_ct, p_cell)             # sum P over cells per clone (row sum == count)
+            # Chunk over draws. The per-cell chain below needs four live
+            # [S, n_cells_m, P] float64 tensors at once (~2.9 GB each at S=500,
+            # 60k cells, P=12 — 11 GB measured). Draws are independent, so chunking
+            # is bit-identical and caps peak memory at a few hundred MB.
+            n_cells_m = cells_m.shape[0]
+            per_draw = max(1, n_cells_m * P)
+            chunk = max(1, min(S, int(8_000_000 // per_draw)))  # ~64 MB/temp in float64
+            for s0 in range(0, S, chunk):
+                s1 = min(s0 + chunk, S)
+                b_cell = bases[s0:s1][:, ct_of_cell, :]   # [c, n_cells_m, P]
+                log_b = torch.log(b_cell + _EPS)
+                combine = (g * ell + (1.0 - g) * log_b) if use_gate else (ell + log_b)
+                # §7.1: the base is already tempered (b) and the combine is divided by T here;
+                # at T==1 both are the identity, so this reproduces predict() bit-for-bit. T!=1 is
+                # a deliberate analysis-time temper (the two T's do not cancel — documented).
+                p_cell = torch.softmax(combine / float(temperature), dim=-1)
+                Jc = torch.zeros((s1 - s0, ct_rows.shape[0], P), dtype=torch.float64, device=dev)
+                Jc.index_add_(1, local_ct, p_cell)        # sum P over cells per clone (row sum == count)
+                J[s0:s1] = Jc
             if not weighted:
                 J = J / J.sum(-1, keepdim=True).clamp_min(_EPS)
 
