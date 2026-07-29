@@ -83,7 +83,7 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
-        self.reconstruction_loss_scale = 1e-3
+        self.reconstruction_loss_scale = 1e-2
 
         self.encoder = Encoder(
             n_input=n_input,

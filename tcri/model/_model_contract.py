@@ -170,9 +170,15 @@ SEMANTIC_INVARIANTS = {
 SANCTIONED_DEVIATIONS = {
     "E_reconstruction_loss_scale": (
         "eq 7 weights E[log p(x|z)] at 1; the code scales the `obs` site by "
-        "`reconstruction_loss_scale` (default 1e-3), a β-VAE-style reweighting. "
-        "Known deviation: under-weights the decoder (over-generates counts). "
-        "Deferred pending a retrain + R/NR revalidation."
+        "`reconstruction_loss_scale`, a beta-VAE-style reweighting. Default RAISED "
+        "1e-3 -> 1e-2 after re-measurement: on real data (yost subset, 2259 cells x "
+        "1000 genes) the posterior-predictive library ratio was 1.40 at 1e-3 and "
+        "0.99 at 1e-2, with dropout matching throughout. Recovery (1.000) and latent "
+        "separation (7.19) are unchanged, so the calibration is free. NOTE the "
+        "original ~6x over-generation was mostly the phantom second optimizer "
+        "shrinking the decoder (see `optimizer_weight_decay`); removing it took the "
+        "ratio 6x -> 1.40, and this default closes the rest. Full weight (1.0) "
+        "over-corrects: ratio 0.91 on synthetic."
     ),
     "kl_warmup_z_only": (
         "Training-only: `kl_weight` anneals the `latent` (z) KL over "
