@@ -1,0 +1,294 @@
+"""Statistical **recovery** tests — the only tests in this suite with an accuracy oracle.
+
+Everything else here checks *structure* (contracts, identities, wiring). Those cannot
+catch an estimator that is well-formed but wrong. These use
+:func:`tcri.datasets.simulate_tcri`, whose mutual information is known in closed form,
+and ask: **does the number come out right?**
+
+Tiering (see ``conftest.py``):
+
+* unmarked — oracle self-consistency, exactness of the metric against an independent
+  MI implementation, and metamorphic invariances. Model-free, so fast; runs every commit.
+* ``@pytest.mark.slow`` — needs model fits and/or replication over seeds. Skipped unless
+  ``--runslow``. Run nightly / before a release.
+
+Two honest caveats baked into the assertions below:
+
+1. **Finite-sample bias.** The plug-in MI estimator is biased *upward* by roughly
+   ``(C-1)(P-1)/(2N ln2)`` bits, so a realized sample's MI exceeds the population value.
+   Tests compare against the *realized* oracle where that matters, and use
+   bias-aware tolerances where they compare against the population value.
+2. **Single-seed monotonicity is flaky.** Sampling noise can make a larger N land
+   *further* from the truth on one seed (observed: gap +0.003 at N=5000 vs +0.012 at
+   N=20000 on the same seed). Convergence is therefore asserted on a **mean over
+   seeds**, never on one draw.
+"""
+from __future__ import annotations
+
+import contextlib
+import io
+
+import numpy as np
+import pandas as pd
+import pyro
+import pytest
+
+import tcri
+from tcri.datasets import mi_from_joint_oracle, simulate_tcri
+
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+def _empirical_joint(adata, phenotype_col="phenotype"):
+    """Realized clone x phenotype count table as a DataFrame (a precomputed joint)."""
+    return pd.crosstab(adata.obs["clone_id"], adata.obs[phenotype_col])
+
+
+def _truth(adata):
+    return adata.uns["tcri_truth"]
+
+
+# ══════════════════════ TIER A — the oracle itself ══════════════════════════
+def test_oracle_respects_information_bounds():
+    """MI <= min(H(c), H(phi)), and both normalizations land in [0, 1]."""
+    for conc in (0.05, 0.5, 5.0):
+        t = _truth(simulate_tcri(omega_concentration=conc, n_cells=500, seed=0))
+        assert t["true_mi"] >= -1e-12
+        assert t["true_mi"] <= min(t["true_h_clone"], t["true_h_phenotype"]) + 1e-9
+        assert 0.0 - 1e-12 <= t["true_nmi_min"] <= 1.0 + 1e-9
+        assert 0.0 - 1e-12 <= t["true_nmi_average"] <= 1.0 + 1e-9
+
+
+def test_omega_concentration_controls_the_true_mi():
+    """The difficulty knob must actually move the ground truth, monotonically.
+
+    Small Dirichlet concentration => near-one-hot P(phi|c) => MI approaches H(phi).
+    Large => near-uniform rows => MI approaches 0. Averaged over seeds so the
+    ordering reflects the parameter, not one draw.
+    """
+    means = []
+    for conc in (0.05, 0.5, 5.0, 50.0):
+        vals = [
+            _truth(simulate_tcri(omega_concentration=conc, n_cells=300, seed=s))["true_mi"]
+            for s in range(4)
+        ]
+        means.append(float(np.mean(vals)))
+    assert means == sorted(means, reverse=True), f"MI must fall as concentration rises: {means}"
+    assert means[0] > 10 * means[-1], f"knob has too little range: {means}"
+
+
+def test_fuzziness_changes_difficulty_not_truth():
+    """fuzziness blends the expression programs only — the true MI must be identical.
+
+    This separation is what lets a benchmark vary estimation difficulty while holding
+    the estimand fixed; if it leaked into the truth, MAE-vs-fuzziness would be
+    uninterpretable.
+    """
+    ref = _truth(simulate_tcri(fuzziness=0.0, n_cells=400, seed=3))["true_mi"]
+    for f in (0.25, 0.5, 1.0):
+        t = _truth(simulate_tcri(fuzziness=f, n_cells=400, seed=3))
+        assert t["true_mi"] == pytest.approx(ref, abs=1e-12), f"fuzziness={f} moved the truth"
+
+
+def test_simulation_is_deterministic_given_a_seed():
+    a = simulate_tcri(n_cells=250, seed=7)
+    b = simulate_tcri(n_cells=250, seed=7)
+    np.testing.assert_array_equal(a.X, b.X)
+    assert list(a.obs["clone_id"]) == list(b.obs["clone_id"])
+    assert _truth(a)["true_mi"] == _truth(b)["true_mi"]
+    c = simulate_tcri(n_cells=250, seed=8)
+    assert not np.array_equal(a.X, c.X), "different seeds must differ"
+
+
+def test_label_error_degrades_the_realized_coupling_only():
+    """Corrupting labels must lower the *realized* MI while the population truth stands."""
+    clean = _truth(simulate_tcri(label_error_rate=0.0, n_cells=3000, seed=4))
+    noisy = _truth(simulate_tcri(label_error_rate=0.6, n_cells=3000, seed=4))
+    assert noisy["empirical_mi"] < clean["empirical_mi"], "label noise must reduce realized MI"
+    assert noisy["true_mi"] == pytest.approx(clean["true_mi"], abs=1e-12)
+
+
+# ══════════════ TIER B — does tcri's metric equal an independent oracle? ════
+def test_tcri_mi_matches_an_independent_implementation():
+    """``tl.mutual_information`` on a realized joint == the oracle, both normalizations.
+
+    The strongest fast test available: the oracle in ``tcri.datasets`` is a separate,
+    deliberately independent implementation, so agreement is real evidence rather
+    than a tautology. Catches sign errors, wrong log base, and denominator swaps.
+    """
+    for seed in range(3):
+        adata = simulate_tcri(n_cells=1500, n_clones=15, n_phenotypes=4, seed=seed)
+        jd = _empirical_joint(adata)
+        oracle = mi_from_joint_oracle(jd.values)
+
+        raw = tcri.tl.mutual_information(jd, normalized=False)
+        assert raw == pytest.approx(oracle["mi"], rel=1e-9, abs=1e-12)
+
+        nmi_min = tcri.tl.mutual_information(jd, normalized=True, normalize_mode="min")
+        assert nmi_min == pytest.approx(oracle["nmi_min"], rel=1e-9, abs=1e-12)
+
+        nmi_avg = tcri.tl.mutual_information(jd, normalized=True, normalize_mode="average")
+        assert nmi_avg == pytest.approx(oracle["nmi_average"], rel=1e-9, abs=1e-12)
+
+
+def test_the_two_normalizations_are_not_interchangeable():
+    """Guards the benchmark trap: tcri defaults to 'min', the note's grid used the mean.
+
+    ``min <= average`` denominators means nmi_min >= nmi_average, so comparing a
+    'min'-normalized estimate to a mean-normalized ground truth silently inflates the
+    estimate. A benchmark must pick deliberately.
+    """
+    adata = simulate_tcri(n_cells=1200, n_clones=25, n_phenotypes=4, seed=1)
+    jd = _empirical_joint(adata)
+    nmi_min = tcri.tl.mutual_information(jd, normalize_mode="min")
+    nmi_avg = tcri.tl.mutual_information(jd, normalize_mode="average")
+    assert nmi_min > nmi_avg
+    t = _truth(adata)
+    assert t["empirical_nmi_min"] > t["empirical_nmi_average"]
+
+
+def test_empirical_mi_is_biased_upward_at_small_n():
+    """The plug-in estimator over-reports on small samples — assert the known sign.
+
+    Documents why a recovery test cannot demand ``estimate == truth`` at small N.
+    """
+    gaps = [
+        _truth(simulate_tcri(n_cells=150, n_clones=25, n_phenotypes=5, seed=s))["empirical_mi"]
+        - _truth(simulate_tcri(n_cells=150, n_clones=25, n_phenotypes=5, seed=s))["true_mi"]
+        for s in range(8)
+    ]
+    assert float(np.mean(gaps)) > 0, f"expected upward plug-in bias, got {np.mean(gaps):+.4f}"
+
+
+# ══════════════════ TIER D — metamorphic invariances ════════════════════════
+def test_mi_is_invariant_to_relabeling():
+    """Renaming clones or phenotypes cannot change an information quantity."""
+    adata = simulate_tcri(n_cells=900, n_clones=12, n_phenotypes=4, seed=2)
+    jd = _empirical_joint(adata)
+    base = tcri.tl.mutual_information(jd, normalized=False)
+
+    rng = np.random.default_rng(0)
+    shuffled = jd.iloc[rng.permutation(jd.shape[0]), rng.permutation(jd.shape[1])]
+    assert tcri.tl.mutual_information(shuffled, normalized=False) == pytest.approx(base, rel=1e-9)
+
+
+def test_mi_is_invariant_to_uniform_replication():
+    """Doubling every count is the same distribution — MI must not move."""
+    adata = simulate_tcri(n_cells=800, n_clones=10, n_phenotypes=3, seed=5)
+    jd = _empirical_joint(adata)
+    base = tcri.tl.mutual_information(jd, normalized=False)
+    assert tcri.tl.mutual_information(jd * 7, normalized=False) == pytest.approx(base, rel=1e-9)
+
+
+# ══════════════════════ TIER C/E — slow, model-based ════════════════════════
+@pytest.mark.slow
+def test_empirical_mi_converges_to_the_population_value():
+    """|empirical - true| must shrink with N **on average over seeds**.
+
+    Deliberately not a single-seed monotonicity check: one draw can land further away
+    at larger N (observed +0.003 at N=5000 vs +0.012 at N=20000, same seed).
+    """
+    n_seeds = 6
+    mae = {}
+    for n in (250, 1000, 4000):
+        errs = [
+            abs(_truth(simulate_tcri(n_cells=n, n_clones=20, n_phenotypes=4, seed=s))["empirical_mi"]
+                - _truth(simulate_tcri(n_cells=n, n_clones=20, n_phenotypes=4, seed=s))["true_mi"])
+            for s in range(n_seeds)
+        ]
+        mae[n] = float(np.mean(errs))
+    assert mae[250] > mae[1000] > mae[4000], f"MAE must fall with N: {mae}"
+
+
+@pytest.mark.slow
+def test_model_mi_tracks_the_true_mi_across_difficulty():
+    """A *fitted* model's MI must respond to the ground truth, not sit at a constant.
+
+    The weakest defensible claim about the full pipeline: three datasets with very
+    different true MI must come back ordered correctly. Not an equality test — the
+    model estimator is posterior-based and differs from the plug-in value.
+    """
+    from tcri.model._model import TCRIModel
+
+    got = []
+    for conc in (0.05, 1.0, 20.0):
+        pyro.clear_param_store()
+        adata = simulate_tcri(
+            omega_concentration=conc, n_cells=1200, n_clones=20,
+            n_phenotypes=4, n_genes=40, seed=11,
+        )
+        TCRIModel.setup_anndata(
+            adata, layer="counts", clonotype_key="clone_id",
+            phenotype_key="phenotype", covariate_key="covariate", batch_key="batch",
+        )
+        model = TCRIModel(
+            adata, n_latent=16, n_hidden=32, n_layers=1,
+            classifier_n_layers=1, classifier_hidden=32, K=4,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            model.train(max_epochs=60, batch_size=256,
+                        enable_progress_bar=False, enable_model_summary=False)
+            model.to_anndata(adata)
+        est = tcri.tl.mutual_information(
+            adata, covariate="cov_0", weighted=True, normalize_mode="average",
+        )
+        got.append((_truth(adata)["true_nmi_average"], float(est)))
+
+    truths = [g[0] for g in got]
+    ests = [g[1] for g in got]
+    assert truths == sorted(truths, reverse=True), f"fixture truths not ordered: {truths}"
+    assert ests == sorted(ests, reverse=True), (
+        f"model MI did not track the truth: truths={truths} estimates={ests}"
+    )
+
+
+@pytest.mark.slow
+def test_posterior_hdi_covers_the_truth():
+    """Calibration: the 94% HDI from ``n_samples>0`` should contain the realized MI.
+
+    Coverage testing (the lightweight form of simulation-based calibration). Validates
+    the whole Dirichlet-draw path — nothing else in the suite asserts that the
+    posterior interval *means* anything.
+
+    Measured at design time over 8 independent replicates: **8/8 covered** (mean HDI
+    width 0.103), with posterior means tracking the realized value closely (e.g.
+    truth 0.2868 vs mean 0.2825). With only 8 replicates that is consistent with true
+    coverage anywhere from roughly 70% to 100%, so this is evidence of *no
+    miscalibration* rather than proof of calibration — establishing 94% would need
+    ~50+ replicates and belongs in ``benchmarks/``, not a test.
+
+    The bar (>=6/8) is set to catch gross miscalibration or a degenerate/inverted
+    interval while tolerating sampling noise. It is deliberately not >=2/5, which
+    would pass even at 40% coverage.
+    """
+    from tcri.model._model import TCRIModel
+
+    covered = 0
+    n_rep = 8
+    for seed in range(n_rep):
+        pyro.clear_param_store()
+        adata = simulate_tcri(
+            n_cells=1200, n_clones=18, n_phenotypes=4, n_genes=40,
+            omega_concentration=0.4, seed=100 + seed,
+        )
+        TCRIModel.setup_anndata(
+            adata, layer="counts", clonotype_key="clone_id",
+            phenotype_key="phenotype", covariate_key="covariate", batch_key="batch",
+        )
+        model = TCRIModel(
+            adata, n_latent=16, n_hidden=32, n_layers=1,
+            classifier_n_layers=1, classifier_hidden=32, K=4,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            model.train(max_epochs=60, batch_size=256,
+                        enable_progress_bar=False, enable_model_summary=False)
+            model.to_anndata(adata)
+        summary = tcri.tl.mutual_information(
+            adata, covariate="cov_0", n_samples=100, weighted=True,
+            normalize_mode="average", random_state=seed,
+        )
+        lo, hi = summary["hdi_low"], summary["hdi_high"]
+        assert hi > lo and np.isfinite(lo) and np.isfinite(hi), f"degenerate HDI: {summary}"
+        assert hi - lo < 0.5, f"HDI too wide to be informative: [{lo}, {hi}]"
+        if lo <= _truth(adata)["empirical_nmi_average"] <= hi:
+            covered += 1
+    assert covered >= 6, f"94% HDI covered only {covered}/{n_rep} replicates"
