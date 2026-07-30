@@ -102,13 +102,16 @@ def synthetic_adata():
 
     X = rng.poisson(lam=1.5, size=(n_cells, n_genes)).astype(np.float32)
 
+    patient = rng.choice(batches, size=n_cells)
+    base_clone = rng.choice([f"clone_{i}" for i in range(n_clones)], size=n_cells)
+
     obs = pd.DataFrame({
-        "unique_clone_id": rng.choice(
-            [f"clone_{i}" for i in range(n_clones)], size=n_cells
-        ),
+        # patient-specific clone ids (disjoint across patients), as real `trb_unique` is —
+        # so metric groupby='patient' is valid (clones don't span groups).
+        "unique_clone_id": [f"{c}_{p}" for c, p in zip(base_clone, patient)],
         "phenotype_col": rng.choice(phenotypes, size=n_cells),
         "timepoint": rng.choice(covariates, size=n_cells),
-        "patient": rng.choice(batches, size=n_cells),
+        "patient": patient,
     })
     for col in obs.columns:
         obs[col] = obs[col].astype("category")
@@ -118,11 +121,13 @@ def synthetic_adata():
 
 @pytest.fixture(scope="session")
 def trained_model(synthetic_adata):
-    """TCRIModel fit for 50 epochs on synthetic_adata, with register_model applied."""
+    """TCRIModel fit for 50 epochs on synthetic_adata, with to_anndata applied."""
     _seed_all(0)
 
+    import pyro
+    pyro.clear_param_store()  # own the process-global store (§5.2 cross-test contamination)
+
     from tcri.model._model import TCRIModel
-    from tcri.preprocessing._preprocessing import register_model
 
     adata = synthetic_adata.copy()
     TCRIModel.setup_anndata(
@@ -151,5 +156,5 @@ def trained_model(synthetic_adata):
             enable_progress_bar=False,
             enable_model_summary=False,
         )
-        register_model(adata, model, clonotype_key="unique_clone_id")
+        model.to_anndata(adata)
     return model, adata

@@ -45,7 +45,6 @@ dependencies = [
     "seaborn>=0.13.2",
     "mpltern>=1.0.4",
     "gseapy>=1.1.4",
-    "daft",
     "tqdm>=4.66.5",
 ]
 

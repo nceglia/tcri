@@ -20,9 +20,33 @@ import tcri
 PYI = Path(tcri.__file__).parent / "_contract.pyi"
 
 # contract key ("Namespace.func" / "TCRIModel.method") -> (module, dotted attr).
-# EMPTY at PR0 — nothing has been migrated to the new surface yet. Each PR adds
-# its landed functions here; the signature test then enforces live == contract.
-IMPLEMENTED: dict[str, tuple[str, str]] = {}
+# Each PR onboards its landed functions here; the signature test then enforces
+# live == contract. PR4 landed the model→AnnData surface.
+IMPLEMENTED: dict[str, tuple[str, str]] = {
+    "tl.joint_distribution": ("tcri.tools._joint", "joint_distribution"),
+    "tl.clonotypic_entropy": ("tcri.tools._entropy", "clonotypic_entropy"),
+    "tl.phenotypic_entropy": ("tcri.tools._entropy", "phenotypic_entropy"),
+    "tl.mutual_information": ("tcri.tools._mutual_information", "mutual_information"),
+    "tl.phenotypic_flux": ("tcri.tools._flux", "phenotypic_flux"),
+    "tl.compare_groups": ("tcri.tools._compare", "compare_groups"),
+    "diag.joint_distribution_ppc": ("tcri.diagnostics._ppc", "joint_distribution_ppc"),
+    "diag.phenotype_calibration": ("tcri.diagnostics._ppc", "phenotype_calibration"),
+    "diag.reconstruction_ppc": ("tcri.diagnostics._ppc", "reconstruction_ppc"),
+    "diag.permutation_null": ("tcri.diagnostics._ppc", "permutation_null"),
+    "diag.loss": ("tcri.diagnostics._training", "loss"),
+    "diag.archetypes": ("tcri.diagnostics._training", "archetypes"),
+    "pl.clonotypic_entropy": ("tcri.plotting._entropy", "clonotypic_entropy"),
+    "pl.phenotypic_entropy": ("tcri.plotting._entropy", "phenotypic_entropy"),
+    "pl.mutual_information": ("tcri.plotting._mutual_information", "mutual_information"),
+    "pl.phenotypic_flux": ("tcri.plotting._flux", "phenotypic_flux"),
+    "pl.resolve_palette": ("tcri.plotting._colors", "resolve_palette"),
+    "TCRIModel.setup_anndata": ("tcri.model._model", "TCRIModel.setup_anndata"),
+    "TCRIModel.train": ("tcri.model._model", "TCRIModel.train"),
+    "TCRIModel.get_latent_representation": ("tcri.model._model", "TCRIModel.get_latent_representation"),
+    "TCRIModel.predict": ("tcri.model._model", "TCRIModel.predict"),
+    "TCRIModel.get_p_ct": ("tcri.model._model", "TCRIModel.get_p_ct"),
+    "TCRIModel.to_anndata": ("tcri.model._model", "TCRIModel.to_anndata"),
+}
 
 
 def _params_from_ast(a: ast.arguments):

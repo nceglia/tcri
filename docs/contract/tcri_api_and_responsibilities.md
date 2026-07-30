@@ -139,8 +139,8 @@ tcri/
   _stats.py                 # stars, AUROC+permutation, bootstrap, MWU, prob_direction, hdi, summarize
   _distance.py              # kl_divergence, l1_distance, js_divergence, phenotype_distance dispatcher
   _compute/                 # NEW private numeric+device seam (grafiti-mirrored)
-    _xp.py                  #   resolve_device, get_xp, asnumpy (torch-first, cupy optional, CPU default)
-    _joint.py               #   _joint_draws(...) -> ndarray[n_samples, n_clones, P] (scatter-add core)
+    _xp.py                  #   resolve_device, torch_device, asnumpy (torch-first, cupy optional later, CPU default)
+    _joint.py               #   _joint_draws(p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, *, ...) -> (blocks, n_draws)
     _reduce.py              #   batched entropy / mutual-information / distance reductions over the stack
   model/                    # ml
     _model.py               #   TCRIModel
@@ -289,12 +289,12 @@ The engine's numeric core is written **once** as a batched, device-routable func
 | Signature | Responsibility |
 |---|---|
 | `resolve_device(device)` | `None`/`"cpu"`→`"cpu"`; `"mps"`→`"cpu"`; `"cuda"`/`"gpu"`/`"auto"`→GPU **iff** the backend imports AND a device is present (`getDeviceCount()>0`), else CPU. Explicit `"cuda"` warns on fallback; `"auto"`/`"gpu"` silent; unknown warns. |
-| `get_xp(device)` | Return the array module — torch(-cuda) preferred (already a hard dep → zero new deps), cupy optional, numpy default. GPU libs imported **lazily inside** the function. |
+| `torch_device(device)` | Return the resolved `torch.device` (`resolve_device` maps the ladder to cpu/cuda). torch-first (already a hard dep → zero new deps); cupy optional later. GPU libs imported **lazily inside** the function. |
 | `asnumpy(x)` | Host-boundary shim: `cupy.asnumpy(x)` / `x.cpu().numpy()` / `np.asarray(x)`. Every accelerated function returns a plain numpy array. |
 
 ### 4.2 `_joint.py` / `_reduce.py` — the batched core
 
-- **`_joint_draws(adata, *, covariate, clones, n_samples, use_logits, temperature, gate_prob, random_state, device) -> np.ndarray`** — returns the `[max(n_samples,1), n_clones, P]` joint stack. Precomputes clone integer codes **once**; draws all `n_samples` Dirichlet samples in one batched kernel from `clamp(s·m̃, 1e-3)`; softmaxes the (optionally gated) per-cell combination batched on the leading axis; reduces per clone with a **constant-index scatter-add** (`np.add.at` / `torch.index_add_` / `cupy.bincount`) instead of a per-draw `pandas.groupby` — the dominant win. Validates finiteness / nonnegativity / per-row sum $\approx1$ **on device** before returning; `float64` accumulators for CPU/GPU parity; `asnumpy` at the boundary; chunked over cells/draws to bound device memory.
+- **`_joint_draws(p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, *, local_scale, n_samples, temperature, use_logits, covariate_idx, logits, gate_prob, weighted, random_state, device) -> (blocks, n_draws)`** — the adata-unpacking lives in the `tools/_joint` wrapper; this core takes **decomposed uns arrays** and returns a **list of per-covariate `(cov_idx, clone_idx, J[S, n_rows, P])` blocks** plus the draw count (`covariate=None` stacks variable-length per-covariate blocks). Draws all `n_samples` Dirichlet samples over **all ct rows in one batched kernel** from `clamp(s·m̃, 1e-3)` (the shared-draw invariant), then slices per covariate; softmaxes the (optionally gated) per-cell combination batched on the leading axis; reduces per clone with a **scatter-add** (`torch.index_add_`) instead of a per-draw `pandas.groupby` — the dominant win. `float64` accumulators for CPU/GPU parity; `asnumpy` at the boundary. **Phase-6 (with the GPU path / `_reduce` wiring):** on-device per-row-sum $\approx1$ validation + chunking over cells/draws (§7.4 guardrails 5/7/8).
 - **`_reduce.py`** — batched `entropy`, `mutual_information`, `distance` as `xlogx`/outer-product reductions over the whole stack (no per-draw scipy call, no per-clone `.loc`), plus the `summarize`/`hdi` reduction over the sample axis.
 
 ### 4.3 GPU guardrails (replicated uniformly from grafiti)
@@ -317,7 +317,7 @@ Lazy GPU imports (never at module top — `import tcri` never touches a GPU lib;
 | `get_latent_representation(self, adata=None, *, indices=None, batch_size=None) -> np.ndarray` | Batched encode to the `(n_cells, n_latent)` posterior-mean latent. |
 | `predict(self, adata=None, *, batch_size=256, eps=1e-8) -> pd.DataFrame` | **(renamed from `get_cell_phenotype_probs`)** Per-cell phenotype-probability `DataFrame` (index = `adata.obs_names`, columns = phenotypes). Combines classifier logits with $\log p_{ct}$ (gate or additive), matching training (scvi/CellAssign idiom). **Reference the `use_logits=True` joint must reproduce at $T=1$** (§0.9, §7.1). Uses an **order-preserving loader** (shuffle=False / sequential sampler) and the registered `indices` field so ct-lookup and barcode labels cannot drift. |
 | `get_p_ct(self, *, guide_temperature=1.0) -> np.ndarray` | Return the learned `(ct_count, P)` posterior mean $m=\text{normalize}(q\_p\_ct\_raw)$. At the default `guide_temperature=1.0` this equals `uns[K.P_CT]` exactly. |
-| `to_anndata(self, adata=None, *, latent_key="X_tcri", logits_key="X_tcri_logits", predictions_key="X_tcri_probabilities", label_key="tcri_phenotype") -> AnnData` | **(replaces the heavy `register_model`)** Thin writer of the **canonical minimum**: metadata + categories (from registry); `X_tcri` latent; **`obsm[K.X_LOGITS]` per-cell logits** (restored — the `use_logits=True` engine path hard-requires them); `predict()` probs + argmax hard labels; `p_ct` (+ `ct_to_cov`, `ct_to_c`, per-cell ct/cov arrays); **`local_scale`**, **`gate_prob`**, **`classifier_temperature`**. No manager stash; no other writes. |
+| `to_anndata(self, adata=None, *, batch_size=256, compute_umap=False) -> AnnData` | **(replaces the heavy `register_model`; signature matches the frozen `_contract.pyi` as of PR4 — the canonical key names come from `_keys`, NOT per-call arguments)** Thin writer of the **canonical minimum**: metadata + categories (from registry); `X_tcri` latent; **`obsm[K.X_LOGITS]` per-cell logits** (restored — the `use_logits=True` engine path hard-requires them); `predict()` probs + argmax hard labels; `p_ct` (+ `ct_to_cov`, `ct_to_c`, per-cell ct/cov arrays); **`local_scale`**, **`gate_prob`**, **`classifier_temperature`**. No manager stash; no other writes. |
 
 > Relocated off the model: `plot_archetypes`→`diag.archetypes`; `plot_loss`→`diag.loss`. `boost_phenotype_prior`, `use_gate` remain internal.
 
@@ -392,9 +392,10 @@ Called only by `TCRIModel.to_anndata`; folds in the old `register_phenotype_key`
 joint_distribution(
     adata, *,
     covariate=None,          # None → ALL covariate values in one pass (shared draw)
-    groupby=None,
+    groupby=None,            # NOTE: deferred to Phase 6 in code (raises NotImplementedError until then)
     n_samples=0,
     use_logits=True,         # was posterior=; alias cell_informed=; classifier-mixing switch
+    weighted=False,          # per-clonotype (False) vs cell-weighted (True); ct-keyed
     clones=None,
     temperature=1.0,
     random_state=None,
@@ -716,8 +717,8 @@ Read-only checks on the finalized model. PPCs return `DataFrame`s; the two reloc
 |---|---|
 | `joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", temperature=1.0) -> pandas.DataFrame` | **(fixed `compare_joint_distribution`)** Model vs empirical per-clone phenotype frequencies. $P_{\text{model}}(\phi\mid c,m)=\texttt{joint\_distribution}(adata, covariate=m)[c]$; $P_{\text{emp}}(\phi\mid c,m)=\frac{\#\{i\in c,m:\text{pheno}_i=\phi\}}{\#\{i\in c,m\}}$; per-clone $\delta_c=\text{L1}$ or $\text{KL}(P_{\text{emp}}\Vert P_{\text{model}})$, plus per-covariate aggregate. **Model-free (adata only).** **Bug fix:** reads `clonotype_col`/`phenotype_col` from `uns[K.METADATA]` instead of the undefined global `model` (repairs the `NameError`). |
 | `phenotype_calibration(adata, *, n_bins=10) -> pandas.DataFrame` | Reliability of `predict()` probabilities: bin cells by predicted max-prob; per bin compare mean predicted prob to empirical accuracy; $\text{ECE}=\sum_b\frac{n_b}{N}|\text{acc}_b-\text{conf}_b|$. **adata only.** Returns `(bin, mean_pred, emp_freq, count)` + scalar `ECE`. |
-| `reconstruction_ppc(model, adata=None, *, n_samples=100, seed=0) -> pandas.DataFrame` | ZINB reconstruction PPC: simulate from the fitted decoder ($\mu,\theta,\pi_{\text{dropout}}$), compare library size / per-gene dropout / mean–variance vs observed. **`model` REQUIRED** (live decoder lives on the module, not in `adata`). Returns statistic × {observed, simulated, discrepancy}. |
-| `permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None, n_permutations=1000, seed=0) -> pandas.DataFrame` | Permute phenotype labels within each covariate $R$ times, recompute the metric to form a null; $p=\text{mean}(\text{null}\ge\text{obs})$, $z=\frac{\text{obs}-\overline{\text{null}}}{\text{sd(null)}}$. **adata only.** One shared draw stack (§7.8). Returns per stratum: `observed, null_mean, null_sd, z, p`. |
+| `reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0) -> pandas.DataFrame` | ZINB reconstruction PPC: simulate from the fitted decoder ($\mu,\theta,\pi_{\text{dropout}}$), compare library size / per-gene dropout / mean–variance vs observed. **`model` REQUIRED** (live decoder lives on the module, not in `adata`). Returns statistic × {observed, simulated, discrepancy}. |
+| `permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None, n_perm=1000, random_state=None) -> pandas.DataFrame` | Permute phenotype labels within each covariate $R$ times, recompute the metric to form a null; $p=\text{mean}(\text{null}\ge\text{obs})$, $z=\frac{\text{obs}-\overline{\text{null}}}{\text{sd(null)}}$. **adata only.** One shared draw stack (§7.8). Returns per stratum: `observed, null_mean, null_sd, z, p`. |
 
 `__all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_ppc", "permutation_null"]`
 

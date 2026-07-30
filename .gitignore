@@ -144,3 +144,6 @@ example/*.pdf
 .DS_Store
 
 
+
+# local-only dev harnesses (real-data tests; NOT CI)
+dev/

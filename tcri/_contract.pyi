@@ -5,6 +5,10 @@ The conformance test (``tests/test_contract_conformance.py``) checks each
 but-absent functions are the refactor worklist. Prose spec:
 ``docs/contract/tcri_api_and_responsibilities.md``.
 
+This freezes the public *interface*. Its sibling — ``tcri/model/_model_contract.py``
+(prose: ``docs/contract/MODEL_CONTRACT.md``) — freezes the model's *mathematics*
+(Supplementary Note 1).
+
 RULES this file encodes:
 - Only the KEPT surface is declared. A symbol NOT in this file must NOT be public
   after the refactor (see the Removal Ledger in ``docs/contract/REFACTOR_AGENDA.md``).
@@ -26,19 +30,23 @@ class TCRIModel:
     def setup_anndata(
         cls, adata: AnnData, *, layer: Optional[str] = ...,
         clonotype_key: str = ..., phenotype_key: str = ...,
-        covariate_key: str = ..., batch_key: str = ...,
+        covariate_key: str = ..., batch_key: str = ..., **kwargs: Any,
     ) -> None: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
-        reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ...,
+        reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ..., **kwargs: Any,
     ) -> None: ...
     def get_latent_representation(
         self, adata: Optional[AnnData] = ..., indices: Any = ...,
         batch_size: Optional[int] = ...,
     ) -> Any: ...
-    def predict(self, adata: Optional[AnnData] = ..., *, batch_size: int = ...) -> pd.DataFrame: ...
+    def predict(
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., eps: float = ...,
+    ) -> pd.DataFrame: ...
     def get_p_ct(self) -> Any: ...
-    def to_anndata(self, adata: AnnData, *, batch_size: int = ..., compute_umap: bool = ...) -> AnnData: ...
+    def to_anndata(
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., compute_umap: bool = ...,
+    ) -> AnnData: ...
 
 
 # ── preprocessing (pp) ───────────────────────────────────────────────────────
@@ -56,11 +64,13 @@ class tl:
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
         clones: Any = ..., temperature: float = ..., random_state: Any = ...,
+        device: Any = ...,
     ) -> pd.DataFrame: ...
     def clonotypic_entropy(
         adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
+        n_clones_ref: Any = ..., random_state: Any = ...,
     ) -> Any: ...
     def phenotypic_entropy(
         adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
@@ -114,7 +124,7 @@ class pl:
         distance_metric: str = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_axes: bool = ...,
     ) -> Any: ...
-    def resolve_palette(adata: AnnData, columns: Any) -> Any: ...
+    def resolve_palette(adata: AnnData, columns: Any, *, palette: Any = ...) -> Any: ...
 
 
 # ── diagnostics (diag) — returns DataFrames ──────────────────────────────────

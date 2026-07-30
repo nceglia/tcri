@@ -11,8 +11,12 @@ def test_keys_constants():
     assert K.X_LOGITS == "X_tcri_logits"
     assert K.METADATA == "tcri_metadata"
     assert K.X_PROBABILITIES == "X_tcri_probabilities"
-    # legacy keys are present (so the removal step can target them) but distinct
-    assert K.LEGACY_CLONE_KEY == "tcri_clone_key" != K.CLONE_COL
+    # the legacy shadow keys are GONE (Phase 4 removal completed); only the
+    # defensively-popped manager stash name remains
+    assert not hasattr(K, "LEGACY_CLONE_KEY")
+    assert not hasattr(K, "LEGACY_PHENOTYPE_KEY")
+    assert not hasattr(K, "LEGACY_X_PHENOTYPES")
+    assert K.LEGACY_MANAGER == "tcri_manager"
 
 
 def test_console_aliases_and_callables():
@@ -53,6 +57,43 @@ def test_auc_helpers_on_perfect_separation():
     assert auc == 1.0 and mode == "exact" and 0.0 <= p_perm <= 1.0
     lo, hi = S.bootstrap_auc(scores, labels)
     assert 0.0 <= lo <= hi <= 1.0
+
+
+def test_auc_permutation_matches_sklearn_exactly_with_ties():
+    """The Mann–Whitney rank-sum identity must reproduce ``roc_auc_score`` exactly.
+
+    Guards the O(n log n) -> O(n_pos) optimization of the permutation loop. Ties are
+    the failure mode that matters: the identity is only equivalent under *midranks*,
+    so scores are rounded here to force repeated values.
+    """
+    import itertools
+
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(0)
+    for _ in range(40):
+        n = int(rng.integers(4, 11))
+        scores = np.round(rng.normal(size=n), int(rng.integers(0, 2)))  # forces ties
+        labels = rng.integers(0, 2, n)
+        if labels.sum() in (0, n):
+            continue
+        auc, _, perm, mode = S.auc_and_label_permutation(scores, labels)
+        assert mode == "exact"
+        y = (labels == 1).astype(int)
+        assert auc == pytest.approx(roc_auc_score(y, scores), abs=1e-12)
+        ref = sorted(
+            roc_auc_score(np.isin(np.arange(n), idx).astype(int), scores)
+            for idx in itertools.combinations(range(n), int(y.sum()))
+        )
+        np.testing.assert_allclose(sorted(perm), ref, atol=1e-12)
+
+
+def test_auc_permutation_degenerate_single_class():
+    """A single-class label vector has no defined AUROC — report, don't crash."""
+    auc, p, perm, mode = S.auc_and_label_permutation(
+        np.array([0.1, 0.2, 0.3]), np.array([1, 1, 1])
+    )
+    assert mode == "degenerate" and np.isnan(p) and perm.size == 0
 
 
 def test_distance_kernels():
