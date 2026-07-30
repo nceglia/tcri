@@ -10,10 +10,37 @@ from anndata import AnnData
 from scipy import sparse
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--runslow", action="store_true", default=False,
+        help="run slow statistical-recovery tests (model fits over many configs)",
+    )
+
+
 def pytest_configure(config):
     """Deterministic RNG for all tests (Notion T13)."""
     np.random.seed(42)
     torch.manual_seed(42)
+    config.addinivalue_line(
+        "markers",
+        "slow: statistical-recovery test that fits models over several configs; "
+        "skipped unless --runslow is passed",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip ``@pytest.mark.slow`` unless ``--runslow``.
+
+    Recovery tests fit real models across a grid, so they are minutes-scale and do
+    not belong in the per-commit suite — but they are the only tests with an
+    accuracy oracle, so they must stay runnable (nightly / pre-release).
+    """
+    if config.getoption("--runslow"):
+        return
+    skip_slow = pytest.mark.skip(reason="needs --runslow")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
 
 
 def _seed_all(seed: int = 0) -> None:
