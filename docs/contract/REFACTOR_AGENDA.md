@@ -60,19 +60,19 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 - [x] `tcri_clone_key` / `tcri_phenotype_key` / obsm `X_tcri_phenotypes` — **DONE**. The deferral said "still read by not-yet-refactored `metrics`/`plotting`", but those were rewritten in PR6/PR7; the last reader was a raw literal in `pp.clone_size`, now migrated to `uns[METADATA][CLONE_COL]` with a clear error. `to_anndata` no longer writes the shims and the three `LEGACY_*` constants are deleted (`LEGACY_MANAGER` stays — `save_tcri_session` still pops it defensively).
 
 **Phase 5/6 (consolidated away — delete WITH replacement, never before):**
-- [ ] `pp.joint_distribution_posterior` (→ unified `joint_distribution`) · [ ] `metrics._mi_from_joint` (→ `_mutual_information`)
-- [ ] `tl.mi_compare` (→ `compare_groups`) · [ ] `tl.delta_clonotypic_entropy` · [ ] `tl.delta_entropy_table` · [ ] `tl.flux_table`
-- [ ] `tl.clonotypic_entropy_base` · [ ] `tl.clonality` · [ ] `tl.dkl` local `dkl_func`
-- [ ] plural `*_entropies` shims · [ ] `metrics/` package (after migration to `tools/`)
+- [x] `pp.joint_distribution_posterior` · [x] `metrics._mi_from_joint` (verified: no `def` remains in `tcri/`)
+- [x] `tl.mi_compare` · [x] `tl.delta_clonotypic_entropy` · [x] `tl.delta_entropy_table` · [x] `tl.flux_table`
+- [x] `tl.clonotypic_entropy_base` · [x] `tl.clonality` · [x] `tl.dkl` local `dkl_func`
+- [x] plural `*_entropies` shims · [x] `metrics/` package — the `.py` files went in PR6 but an **empty dir with a `.DS_Store` survived**; removed now
 
 **Phase 7 (non-core plots — DROP, not to examples):**
-- [ ] `pl.probability_ternary` · [ ] `pl.top_clone_umap` · [ ] `pl.clone_size_umap` · [ ] `pl.plot_phenotype_probabilities`
-- [ ] `pl.compare_phenotypes` · [ ] `pl.ridge_delta_entropy` · [ ] `pl.flux` boxplot · [ ] `pl.clonality` plot
-- [ ] `pl.tcri_boxplot` (→ private `_metric_boxplot`) · [ ] `pl.set_color_palette` (→ `resolve_palette`)
-- [ ] `pl.plot_pheno_sankey` (→ private `_sankey`) · [ ] leaked aliases `centropy`/`pentropy`/`*_tl`
+- [x] `pl.probability_ternary` · [x] `pl.top_clone_umap` · [x] `pl.clone_size_umap` · [x] `pl.plot_phenotype_probabilities`
+- [x] `pl.compare_phenotypes` · [x] `pl.ridge_delta_entropy` · [x] `pl.flux` boxplot · [x] `pl.clonality` plot
+- [x] `pl.tcri_boxplot` (→ `_metric_boxplot`) · [x] `pl.set_color_palette` (→ `resolve_palette`)
+- [x] `pl.plot_pheno_sankey` (→ `_sankey`) · [x] leaked aliases `centropy`/`pentropy`/`*_tl`
 
 **Phase 9 (out of the package):**
-- [ ] `ut.build_nested_tcri_pgm` (→ `docs/`) · [ ] `ut.draw_tcri_pgm_nested` (→ `docs/`) · [ ] `daft` runtime dep
+- [x] `ut.build_nested_tcri_pgm` (→ `docs/`) · [x] `ut.draw_tcri_pgm_nested` (→ `docs/`) · [x] `daft` runtime dep
 
 **Phase 3/9 (model/utils cleanup):**
 - [x] `_ascii_hist` (dead: zero callers) · [x] `ml.plot_loss` (→ `diag.loss`) · [x] `ml.plot_archetypes` (→ `diag.archetypes`)
