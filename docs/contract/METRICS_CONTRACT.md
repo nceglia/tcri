@@ -73,29 +73,6 @@ different clone counts.**
 That last one is the keystone: it ties entropy and MI together, so you cannot change
 one without breaking it.
 
-## Errata in Supplementary Note 1 (the code is correct)
-
-The note's eqs 3–4, read literally, do **not** match the implementation — and the note
-is the one that is wrong. Recorded here so nobody "fixes" the code to match a typo.
-
-1. **Eq 3** reads `H(p(c|φ)) = − Σ_c p(c) log p(c|φ)` — it weights by the **marginal**
-   `p(c)` while taking the log of the **conditional**. That is a cross-entropy, not an
-   entropy.
-2. **Eq 4** is labelled `H(p(c))` but its right-hand side sums over φ and uses `p(φ|c)`,
-   so the label is wrong; it also weights by the marginal.
-3. The **prose** introduces both as "the entropy of the marginal distributions", but the
-   equations are conditionals.
-
-**Why the code is right.** Mutual information must satisfy
-`I(c;φ) = H(c) − E_φ[H(c|φ)]`. On a test joint with true MI **0.288703**:
-
-- the implemented conditional entropy reproduces it **exactly** (0.288703);
-- the note's literal formula yields **−0.345883** — a *negative* mutual information,
-  which is impossible.
-
-The literal equations are inconsistent with the note's own MI, so they cannot be what
-was intended. `test_note_literal_formula_would_break_the_decomposition` pins this.
-
 ## Sanctioned extensions (the note does not specify these)
 
 - **bits / log₂** — the note writes an unspecified `log`.
