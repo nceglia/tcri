@@ -31,10 +31,120 @@ def test_manifest_is_complete():
     assert MC.LOG_BASE == 2
 
 
-def test_source_errata_are_documented():
-    """The note's eq 3/4 errors must stay recorded, with the justification."""
-    for key in ("eq3_weights_marginal", "eq4_label_and_weights", "why_the_code_is_right"):
-        assert key in MC.SOURCE_ERRATA and len(MC.SOURCE_ERRATA[key]) > 40
+# ── the manuscript equations, transcribed literally ─────────────────────────
+# These are the primary definitional tests: each transcribes an equation from
+# Supplementary Note 1 straight from the manuscript and asserts the code computes
+# exactly that. Stronger than the identity tests below, which pin *consequences* of
+# the formula (uniform -> log2 k, degenerate -> 0) rather than the formula itself.
+
+def _joint():
+    """A small, deliberately asymmetric clone x phenotype count table."""
+    return np.array([[4.0, 1.0], [1.0, 1.0], [1.0, 6.0]])
+
+
+def test_eq2_joint_entropy():
+    """Eq 2: H(p(c,phi)) = -sum_{c,phi} p(c,phi) log p(c,phi)."""
+    J = _joint()
+    P = J / J.sum()
+    eq2 = -np.sum(P[P > 0] * np.log2(P[P > 0]))
+    # the package does not expose joint entropy directly, so assert the identity that
+    # ties it to the quantities that ARE exposed: H(c,phi) = H(c) + H(phi) - I(c;phi)
+    p_c, p_ph = P.sum(1), P.sum(0)
+    h_c = -np.sum(p_c * np.log2(p_c))
+    h_ph = -np.sum(p_ph * np.log2(p_ph))
+    mi = _mi_from_joint(J, normalized=False)
+    assert eq2 == pytest.approx(h_c + h_ph - mi, abs=1e-12)
+
+
+def test_eq3_clonotypic_entropy_matches_the_manuscript():
+    """Eq 3: H(p(c|phi)) = -sum_{c in C} p(c|phi) log(p(c|phi)).
+
+    Note the weight is the CONDITIONAL p(c|phi), matching the log — an earlier
+    revision weighted by the marginal p(c), which is a cross-entropy and can exceed
+    log2(|C|) (see ``test_marginal_weighting_is_not_an_entropy``).
+    """
+    J = _joint()
+    cols = ["phen_A", "phen_B"]
+    code = _clonotypic_one(J, cols, normalized=False)
+    for j, ph in enumerate(cols):
+        col = J[:, j]
+        p_c_given_phi = col / col.sum()          # p(c|phi)
+        eq3 = -np.sum(p_c_given_phi * np.log2(p_c_given_phi))
+        assert code[ph] == pytest.approx(eq3, abs=1e-12), f"eq 3 mismatch for {ph}"
+
+
+def test_eq4_phenotypic_entropy_matches_the_manuscript():
+    """Eq 4: H(p(phi|c)) = -sum_{phi in Phi} p(phi|c) log(p(phi|c))."""
+    J = _joint()
+    ids, cols = ["c0", "c1", "c2"], ["phen_A", "phen_B"]
+    code = _phenotypic_one(ids, J, cols, normalized=False)
+    for i, c in enumerate(ids):
+        row = J[i]
+        p_phi_given_c = row / row.sum()          # p(phi|c)
+        eq4 = -np.sum(p_phi_given_c * np.log2(p_phi_given_c))
+        assert code[c] == pytest.approx(eq4, abs=1e-12), f"eq 4 mismatch for {c}"
+
+
+def test_eq5_mutual_information_matches_the_manuscript():
+    """Eq 5: I(c,phi) = sum_{c,phi} p(phi,c) log( p(c,phi) / (p(phi) p(c)) )."""
+    J = _joint()
+    P = J / J.sum()
+    p_c, p_ph = P.sum(1), P.sum(0)
+    eq5 = np.sum(P * np.log2(P / np.outer(p_c, p_ph)))
+    assert _mi_from_joint(J, normalized=False) == pytest.approx(eq5, abs=1e-12)
+
+
+def test_eq6_nmi_is_the_average_denominator():
+    """Eq 6: NMI = I / ( (1/2)(H(c) + H(phi)) ) — the MEAN denominator.
+
+    The package exposes this as ``normalize_mode="average"``. Its DEFAULT is
+    ``"min"``, which is a deliberate deviation (the mean denominator scales with
+    log2(C) and so is not comparable across groups with different clone counts) —
+    recorded in ``SANCTIONED_EXTENSIONS['normalize_mode_default']``. This test pins
+    both: that 'average' reproduces eq 6, and that the default does NOT, so the
+    divergence can never become silent.
+    """
+    J = _joint()
+    P = J / J.sum()
+    p_c, p_ph = P.sum(1), P.sum(0)
+    mi = np.sum(P * np.log2(P / np.outer(p_c, p_ph)))
+    h_c = -np.sum(p_c * np.log2(p_c))
+    h_ph = -np.sum(p_ph * np.log2(p_ph))
+    eq6 = mi / (0.5 * (h_c + h_ph))
+
+    assert _mi_from_joint(J, normalized=True, mode="average") == pytest.approx(eq6, abs=1e-12)
+    assert _mi_from_joint(J, normalized=True) != pytest.approx(eq6, abs=1e-6), (
+        "the default normalize_mode now equals eq 6 — update the contract deliberately"
+    )
+
+
+def test_marginal_weighting_is_not_an_entropy():
+    """Weighting by the marginal instead of the conditional is provably wrong.
+
+    Kept as a standing guard rather than an erratum: it is the natural way to
+    mis-transcribe eqs 3-4, and it fails two ways at once — the value can exceed
+    log2(|C|) (impossible for an entropy over |C| outcomes), and substituting it into
+    the MI decomposition yields a NEGATIVE mutual information, which is impossible
+    for a KL divergence.
+    """
+    J = _joint()
+    P = J / J.sum()
+    p_c, p_ph = P.sum(1), P.sum(0)
+    n_clones = J.shape[0]
+
+    # the marginal-weighted quantity for phenotype A
+    col = J[:, 0]
+    wrong = -np.sum(p_c * np.log2(col / col.sum()))
+    assert wrong > np.log2(n_clones), "expected the bound violation that flags it"
+
+    # and it breaks the decomposition
+    h_c = -np.sum(p_c * np.log2(p_c))
+    expected_wrong = sum(
+        p_ph[j] * (-np.sum(p_c * np.log2(J[:, j] / J[:, j].sum())))
+        for j in range(J.shape[1])
+    )
+    assert h_c - expected_wrong < 0, "expected a negative (impossible) MI"
+    assert _mi_from_joint(J, normalized=False) > 0
 
 
 # ── entropy identities ──────────────────────────────────────────────────────

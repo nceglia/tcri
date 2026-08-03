@@ -16,8 +16,9 @@ by **numeric identities** — uniform → log₂(k), independent → MI 0, and t
 entropy/MI decomposition. Folding them together would force one mechanism to do a job
 it is bad at.
 
-Source of truth: **Supplementary Note 1**, "Entropy" section (eqs 2–4) — with the
-errata below.
+Source of truth: **Supplementary Note 1**, "Entropy" section (eqs 2–6). Each equation
+is transcribed literally into the conformance test; the one deliberate divergence
+(`normalize_mode`) is documented below.
 
 **Governance: update this file and the manifest FIRST, then the code.** A failing
 conformance test means the *meaning of a published number* changed. Never relax an
@@ -73,28 +74,49 @@ different clone counts.**
 That last one is the keystone: it ties entropy and MI together, so you cannot change
 one without breaking it.
 
-## Errata in Supplementary Note 1 (the code is correct)
+## Conformance with the manuscript equations
 
-The note's eqs 3–4, read literally, do **not** match the implementation — and the note
-is the one that is wrong. Recorded here so nobody "fixes" the code to match a typo.
+The manuscript's Entropy section (eqs 2–6) and the implementation agree. Each equation
+is transcribed **literally** from the note in
+`tests/test_metrics_contract_conformance.py` and asserted against the code — a stronger
+check than the identity tests below, which pin *consequences* of a formula
+(uniform → log₂ k, degenerate → 0) rather than the formula itself.
 
-1. **Eq 3** reads `H(p(c|φ)) = − Σ_c p(c) log p(c|φ)` — it weights by the **marginal**
-   `p(c)` while taking the log of the **conditional**. That is a cross-entropy, not an
-   entropy.
-2. **Eq 4** is labelled `H(p(c))` but its right-hand side sums over φ and uses `p(φ|c)`,
-   so the label is wrong; it also weights by the marginal.
-3. The **prose** introduces both as "the entropy of the marginal distributions", but the
-   equations are conditionals.
+| eq | manuscript | enforced by |
+|---|---|---|
+| 2 | `H(p(c,φ)) = −Σ p(c,φ) log p(c,φ)` | `test_eq2_joint_entropy` (via `H(c,φ) = H(c)+H(φ)−I`) |
+| 3 | `H(p(c\|φ)) = −Σ_c p(c\|φ) log p(c\|φ)` | `test_eq3_clonotypic_entropy_matches_the_manuscript` |
+| 4 | `H(p(φ\|c)) = −Σ_φ p(φ\|c) log p(φ\|c)` | `test_eq4_phenotypic_entropy_matches_the_manuscript` |
+| 5 | `I(c,φ) = Σ p(φ,c) log( p(c,φ)/(p(φ)p(c)) )` | `test_eq5_mutual_information_matches_the_manuscript` |
+| 6 | `NMI = I / (½(H(c)+H(φ)))` | `test_eq6_nmi_is_the_average_denominator` — **see the deviation below** |
 
-**Why the code is right.** Mutual information must satisfy
-`I(c;φ) = H(c) − E_φ[H(c|φ)]`. On a test joint with true MI **0.288703**:
+> **Historical note.** An earlier revision of the note mistranscribed eqs 3–4: both
+> weighted by the **marginal** while taking the log of the **conditional** (a
+> cross-entropy, not an entropy), and eq 4's left-hand side read `H(p(c))` while its
+> right-hand side summed over φ. The code was correct throughout and was left
+> unchanged; **the manuscript has since been corrected** and the erratum is retired.
+> `test_marginal_weighting_is_not_an_entropy` remains as a standing guard, because
+> marginal-weighting is the natural way to mis-transcribe these equations: it fails
+> two ways at once — the value can exceed `log₂|C|` (impossible for an entropy over
+> `|C|` outcomes), and substituting it into the MI decomposition yields a **negative**
+> mutual information, impossible for a KL divergence.
 
-- the implemented conditional entropy reproduces it **exactly** (0.288703);
-- the note's literal formula yields **−0.345883** — a *negative* mutual information,
-  which is impossible.
+### The one live deviation: `normalize_mode`
 
-The literal equations are inconsistent with the note's own MI, so they cannot be what
-was intended. `test_note_literal_formula_would_break_the_decomposition` pins this.
+Eq 6 specifies the **mean** denominator. tcri's default is **`min`**:
+
+| | denominator | value on the contract's test joint |
+|---|---|---|
+| eq 6 / `normalize_mode="average"` | `½(H(c)+H(φ))` | **0.238915** |
+| tcri default `normalize_mode="min"` | `min(H(c), H(φ))` | **0.293032** |
+
+`min` is the default because the mean denominator scales with `log₂(C)`, making it
+**not comparable across groups with different clone counts** — the blocking issue for
+any per-group or per-patient comparison. The two differ materially, so **anything
+reproducing the note's benchmark must pass `normalize_mode="average"` explicitly.**
+`test_eq6_nmi_is_the_average_denominator` asserts both halves — that `"average"`
+reproduces eq 6, and that the default does *not* — so the divergence can never become
+silent.
 
 ## Sanctioned extensions (the note does not specify these)
 

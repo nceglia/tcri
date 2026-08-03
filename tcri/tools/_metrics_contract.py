@@ -12,7 +12,7 @@ entropy/MI decomposition) in
 ``tests/test_metrics_contract_conformance.py``.
 
 Source of truth: **Supplementary Note 1**, "Entropy" section (eqs 2-4) and the mutual
-information it defines — with the erratum recorded in ``SOURCE_ERRATA`` below.
+information it defines (eqs 2-6).
 
 Changing any definition here means changing what the published numbers mean.
 **Update this manifest and ``docs/contract/METRICS_CONTRACT.md`` FIRST, then the
@@ -24,7 +24,6 @@ __all__ = [
     "LOG_BASE",
     "METRIC_SPECS",
     "IDENTITIES",
-    "SOURCE_ERRATA",
     "SANCTIONED_EXTENSIONS",
     "MetricSpec",
 ]
@@ -62,7 +61,7 @@ METRIC_SPECS = {
         ),
         normalizer="log2(#supported clones), or log2(n_clones_ref) when given",
         empty="NaN when the phenotype column has no positive mass",
-        note_eq="eq 3 (see SOURCE_ERRATA['eq3_weights_marginal'])",
+        note_eq="eq 3",
     ),
     "phenotypic_entropy": MetricSpec(
         name="phenotypic_entropy",
@@ -75,7 +74,7 @@ METRIC_SPECS = {
         ),
         normalizer="log2(P), P = number of phenotype categories",
         empty="NaN when the clone row has no positive mass",
-        note_eq="eq 4 (see SOURCE_ERRATA['eq4_label_and_weights'])",
+        note_eq="eq 4",
     ),
     "mutual_information": MetricSpec(
         name="mutual_information",
@@ -130,36 +129,6 @@ IDENTITIES = {
 }
 
 
-#: Errors in the source document, kept explicit so nobody "fixes" the code to match a
-#: typo. The code is correct; the note's transcription is not.
-SOURCE_ERRATA = {
-    "eq3_weights_marginal": (
-        "Note eq 3 reads H(p(c|phi)) = -sum_c p(c) log p(c|phi) — it weights by the "
-        "MARGINAL p(c) while taking the log of the CONDITIONAL. That is a "
-        "cross-entropy, not an entropy. The intended (and implemented) quantity is "
-        "-sum_c p(c|phi) log p(c|phi)."
-    ),
-    "eq4_label_and_weights": (
-        "Note eq 4 is labelled H(p(c)) but its right-hand side sums over phi and uses "
-        "p(phi|c), so the label is wrong; it also weights by the marginal p(phi) "
-        "rather than the conditional. The intended (and implemented) quantity is "
-        "-sum_phi p(phi|c) log p(phi|c)."
-    ),
-    "prose_says_marginal": (
-        "The prose introduces eqs 3-4 as 'the entropy of the marginal distributions', "
-        "but both equations are conditionals. A marginal entropy would be "
-        "-sum_c p(c) log p(c)."
-    ),
-    "why_the_code_is_right": (
-        "Decisive check: mutual information must satisfy "
-        "I(c;phi) = H(c) - E_phi[H(c|phi)]. On a test joint with true MI 0.288703, the "
-        "implemented conditional entropy reproduces it exactly, while the note's "
-        "literal formula gives -0.345883 — a negative mutual information, which is "
-        "impossible. The literal equations are inconsistent with the note's own MI."
-    ),
-}
-
-
 #: Deliberate additions beyond the note. Not deviations from its mathematics — the
 #: note simply does not specify them.
 SANCTIONED_EXTENSIONS = {
@@ -170,7 +139,21 @@ SANCTIONED_EXTENSIONS = {
     "normalization": (
         "`normalized=True` divides by the maximum-entropy value so results land in "
         "[0,1] and compare across groups of different size. The note defines only the "
-        "raw entropies."
+        "raw entropies for eqs 3-4."
+    ),
+    "normalize_mode_default": (
+        "DEVIATION FROM eq 6. The note's eq 6 defines "
+        "NMI = I / ((1/2)(H(c) + H(phi))) -- the MEAN denominator, exposed here as "
+        "normalize_mode='average'. tcri's DEFAULT is 'min' (I / min(H(c), H(phi))), "
+        "the coefficient of constraint, because the mean denominator scales with "
+        "log2(C) and is therefore NOT comparable across groups with different clone "
+        "counts -- the blocking issue for any per-group or per-patient comparison. "
+        "The two differ materially (0.293 vs 0.239 on the contract's test joint), so "
+        "anything reproducing the note's benchmark MUST pass "
+        "normalize_mode='average' explicitly. Pinned by "
+        "test_eq6_nmi_is_the_average_denominator, which asserts BOTH that 'average' "
+        "reproduces eq 6 and that the default does not -- so the divergence can never "
+        "become silent."
     ),
     "n_clones_ref": (
         "clonotypic_entropy accepts `n_clones_ref` to FIX the normalizer across groups; "
