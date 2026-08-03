@@ -1,53 +1,15 @@
-from scipy.stats import entropy
+"""Preprocessing helpers: clonotype grouping and clone sizes.
+
+Deliberately light on imports — this module is loaded by ``import tcri``, so an
+eager ``import umap`` here cost ~2.9 s of every import (umap → pynndescent →
+numba/llvmlite) for a dependency this file never used.
+"""
+import numpy as np
+
 from .. import _keys as K
-import numpy as np
-import tqdm
-import pandas as pd
-import collections
-import warnings
-import torch
-import torch.nn.functional as F
-import datetime
-import pyro.distributions as dist
-from pyro.distributions import Dirichlet
-import pyro
-import scanpy as sc
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
-from typing import Optional
-import umap
-import numpy as np, pandas as pd, torch, umap
-from tqdm.auto import tqdm
-from scvi import REGISTRY_KEYS
 
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn.functional as F
-from torch.distributions import Dirichlet
-import numpy as np
-import pandas as pd
-from   scipy.special import softmax
-from   torch.distributions import Dirichlet
-import torch
-import warnings
+__all__ = ["group_singletons", "clone_size"]
 
-warnings.filterwarnings('ignore')
-
-# ------------ simple ANSI helpers ------------ #
-RESET  = "\x1b[0m"
-BOLD   = "\x1b[1m"
-DIM    = "\x1b[2m"
-GREEN  = "\x1b[32m"
-CYAN   = "\x1b[36m"
-MAGENT = "\x1b[35m"
-# ╭─ colour / pretty-print helpers ─────────────────────────────────────────╮
-RESET  = "\x1b[0m";  BOLD  = "\x1b[1m";  DIM  = "\x1b[2m"
-GRN = "\x1b[32m";  CYN = "\x1b[36m";  MAG = "\x1b[35m";  YLW = "\x1b[33m"; RED = "\x1b[31m"
-
-from .._console import _ok, _info, _warn, _fin
 
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)

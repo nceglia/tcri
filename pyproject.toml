@@ -43,8 +43,6 @@ dependencies = [
     "umap-learn>=0.5.6",
     "matplotlib>=3.9.2",
     "seaborn>=0.13.2",
-    "mpltern>=1.0.4",
-    "gseapy>=1.1.4",
     "tqdm>=4.66.5",
 ]
 
