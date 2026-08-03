@@ -18,11 +18,11 @@ __all__ = ["phenotypic_flux"]
 
 
 def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clones,
-               distance_metric, random_state):
+               distance_metric, random_state, device=None):
     dist_fn = phenotype_distance(distance_metric)
-    draws_from, _ = joint_draws(adata, cov_from, n_samples=n_samples, weighted=weighted,
+    draws_from, _ = joint_draws(adata, cov_from, n_samples=n_samples, weighted=weighted, device=device,
                                 temperature=temperature, clones=clones, random_state=random_state)
-    draws_to, _ = joint_draws(adata, cov_to, n_samples=n_samples, weighted=weighted,
+    draws_to, _ = joint_draws(adata, cov_to, n_samples=n_samples, weighted=weighted, device=device,
                               temperature=temperature, clones=clones, random_state=random_state)
     per = []
     for (ids_f, Jf), (ids_t, Jt) in zip(draws_from, draws_to):
@@ -47,20 +47,22 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
 
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, weighted=False, distance_metric="l1",
-                    random_state=None):
+                    random_state=None, device=None):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
     kl/jsd). ``groupby`` → tidy DataFrame (one row per group×clone)."""
     if groupby is not None:
         def _compute(cl):
             return _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
                               weighted=weighted, temperature=temperature, clones=cl,
-                              distance_metric=distance_metric, random_state=random_state)
+                              distance_metric=distance_metric, random_state=random_state,
+                              device=device)
         return grouped_series(adata, groupby=groupby, splitby=splitby, item_name="clonotype",
                               value="phenotypic_flux", compute=_compute)
 
     point, drawsd = _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
                                weighted=weighted, temperature=temperature, clones=clones,
-                               distance_metric=distance_metric, random_state=random_state)
+                               distance_metric=distance_metric, random_state=random_state,
+                              device=device)
     if n_samples and int(n_samples) > 0:
         return pd.DataFrame({c: summarize(drawsd[c]) for c in point}).T
     return pd.Series(point, name="phenotypic_flux")
