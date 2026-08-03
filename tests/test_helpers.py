@@ -19,6 +19,47 @@ def test_keys_constants():
     assert K.LEGACY_MANAGER == "tcri_manager"
 
 
+def test_import_tcri_does_not_hijack_global_warning_filters():
+    """A library must not silence the application's warnings.
+
+    ``_preprocessing`` used to call a blanket ``warnings.filterwarnings('ignore')``
+    at module scope, which runs on ``import tcri`` and silenced EVERY warning in the
+    user's session — including this package's own guardrails (the K clamp, the
+    param-store-reuse notice, the batch_size warning). Narrow message-specific
+    filters are tolerated; a catch-all is not.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import warnings, io, contextlib; import tcri; "
+        "buf = io.StringIO()\n"
+        "with contextlib.redirect_stderr(buf): warnings.warn('probe', UserWarning)\n"
+        "print('VISIBLE' if 'probe' in buf.getvalue() else 'SILENCED')"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert "VISIBLE" in out.stdout, (
+        "importing tcri silenced a user warning — something re-added a blanket "
+        f"filterwarnings('ignore'). stdout={out.stdout!r}"
+    )
+
+
+def test_preprocessing_import_is_light():
+    """``import tcri`` must not drag in umap (~2.9 s via pynndescent/numba).
+
+    umap is only needed for the opt-in ``to_anndata(compute_umap=True)`` path, which
+    imports it locally. An eager module-level import cost every user ~2.9 s.
+    """
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-c", "import tcri, sys; print('umap' in sys.modules)"],
+        capture_output=True, text=True,
+    )
+    assert "False" in out.stdout, f"import tcri eagerly loaded umap: {out.stdout!r}"
+
+
 def test_console_aliases_and_callables():
     assert _console.MAG == _console.MAGENT
     assert _console.GRN == _console.GREEN
