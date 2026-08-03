@@ -47,11 +47,13 @@ The conformance test pins numeric identities, the keystone being
 `I(c;φ) = H(c) − Σ_φ P(φ)·H[P(c|φ)]` — it ties the entropy and MI families together so
 neither can be redefined alone.
 
-**Note 1's eqs 3–4 are mistranscribed** (they weight by the marginal, making them
-cross-entropies, and eq 4's label is wrong). The code is correct — proven by the
-decomposition above, which the literal equations violate by producing a *negative*
-mutual information. These are recorded in `SOURCE_ERRATA`; do **not** "fix" the code to
-match them.
+**`normalize_mode` deviates from the note deliberately.** Eq 6 defines
+`NMI = I/(½(H(c)+H(φ)))` (the mean denominator, `normalize_mode="average"`), but the
+default is `"min"` — the mean denominator scales with `log2(C)` and so is not
+comparable across groups with different clone counts. Anything reproducing the note's
+benchmark must pass `normalize_mode="average"` explicitly. Recorded in
+`SANCTIONED_EXTENSIONS['normalize_mode_default']` and pinned by a test that asserts the
+default does *not* equal eq 6, so the divergence cannot go silent.
 
 ## Working agreement
 
