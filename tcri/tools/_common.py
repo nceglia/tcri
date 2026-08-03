@@ -21,7 +21,7 @@ def is_precomputed_joint(x) -> bool:
 
 
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
-                use_logits=True):
+                use_logits=True, device=None):
     """Return ``(draws, phenotype_cols)`` where ``draws`` is a list of ``(clone_ids, [C, P])``
     per posterior draw (length 1 for ``n_samples=0``).
 
@@ -43,7 +43,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
         weighted=weighted,
         temperature=temperature,
         random_state=random_state,
-        device=None,
+        device=device,
     )
 
     # Row labels in DataFrame-concat order (per covariate block, per clone). When
