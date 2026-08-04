@@ -36,6 +36,12 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+# the published benchmark's axes (Supplementary Note 1, Benchmarks)
+PUBLISHED = dict(fuzziness=[round(0.1*i,1) for i in range(10)],
+                 n_cells=[250,500,1000,2000,5000],
+                 k_infer=[8,10,12], temperature=[0.1,0.5,1.0],
+                 seeds=list(range(10)))
+
 PRESETS = {
     # shake-out grid: proves the pipeline and gives a real MAE-vs-fuzziness curve
     "smoke":   dict(fuzziness=[0.0, 0.9], n_cells=[1000], k_infer=[5], seeds=[0]),
@@ -45,6 +51,11 @@ PRESETS = {
     "full":    dict(fuzziness=[round(0.1 * i, 1) for i in range(10)],
                     n_cells=[250, 500, 1000, 2000, 5000],
                     k_infer=[4, 5, 6], seeds=list(range(10))),
+    # reproduce the published figures: needs --fit-params
+    "published":       PUBLISHED,
+    "published_quick": dict(fuzziness=[0.1], n_cells=[250,1000,5000],
+                            k_infer=[10], temperature=[0.1,0.5,1.0],
+                            seeds=list(range(3))),
 }
 
 
@@ -73,7 +84,7 @@ def _baseline_nmi(adata, k, seed, method="kmeans"):
 
 
 def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
-             normalize_mode, baseline, profile=False):
+             normalize_mode, baseline, temperature=1.0, fit_params=None, profile=False):
     """One grid point -> a dict of results."""
     import pyro
 
@@ -82,10 +93,17 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     from tcri.model._model import TCRIModel
 
     t_all = time.time()
-    adata = simulate_tcri(
-        n_clones=40, n_phenotypes=5, n_genes=200, n_cells=n_cells,
-        omega_concentration=0.4, fuzziness=fuzz, seed=seed,
-    )
+    if fit_params is not None:
+        from tcri.datasets import simulate_from_fit_params
+        adata = simulate_from_fit_params(
+            fit_params, n_cells=n_cells, temperature=temperature,
+            fuzziness=fuzz, seed=seed,
+        )
+    else:
+        adata = simulate_tcri(
+            n_clones=40, n_phenotypes=5, n_genes=200, n_cells=n_cells,
+            omega_concentration=0.4, fuzziness=fuzz, seed=seed,
+        )
     truth = adata.uns["tcri_truth"]
 
     pyro.clear_param_store()
@@ -117,6 +135,7 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
 
     row = dict(
         fuzziness=fuzz, n_cells=n_cells, k_infer=k_infer, seed=seed, device=device,
+        temperature=temperature,
         true_nmi=true_v, empirical_nmi=emp_v, tcri_nmi=est_mean,
         ae_vs_true=abs(est_mean - true_v), ae_vs_empirical=abs(est_mean - emp_v),
         t_train=t_train, t_metric=t_metric, t_total=time.time() - t_all,
@@ -143,23 +162,29 @@ def main():
     ap.add_argument("--baseline", choices=["kmeans", "gmm", "none"], default="kmeans")
     ap.add_argument("--out", default="benchmark_results.csv")
     ap.add_argument("--profile", action="store_true", help="torch profiler on one cell")
+    ap.add_argument("--fit-params", default=None,
+                    help="path to a fitted params.pkl -> reproduce the published benchmark")
     args = ap.parse_args()
 
     grid = PRESETS[args.preset]
+    temps = grid.get("temperature", [1.0])
+    if args.fit_params is None and temps != [1.0]:
+        ap.error("--fit-params is required for a preset that sweeps temperature "
+                 "(the synthetic omega cannot reproduce the published anchors)")
     combos = list(itertools.product(grid["fuzziness"], grid["n_cells"],
-                                    grid["k_infer"], grid["seeds"]))
+                                    grid["k_infer"], temps, grid["seeds"]))
     baseline = None if args.baseline == "none" else args.baseline
     print(f"preset={args.preset}  cells={len(combos)}  device={args.device}  "
           f"normalize_mode={args.normalize_mode}  baseline={baseline}", flush=True)
 
     rows = []
     t0 = time.time()
-    for i, (f, n, k, s) in enumerate(combos, 1):
+    for i, (f, n, k, T, s) in enumerate(combos, 1):
         r = run_cell(f, n, k, s, device=args.device, n_samples=args.n_samples,
                      epochs=args.epochs, normalize_mode=args.normalize_mode,
-                     baseline=baseline)
+                     baseline=baseline, temperature=T, fit_params=args.fit_params)
         rows.append(r)
-        print(f"[{i:>4}/{len(combos)}] f={f} N={n} K={k} s={s} | "
+        print(f"[{i:>4}/{len(combos)}] f={f} N={n} K={k} T={T} s={s} | "
               f"tcri={r['tcri_nmi']:.4f} true={r['true_nmi']:.4f} "
               f"AE={r['ae_vs_true']:.4f} | {r['t_total']:.1f}s", flush=True)
 
