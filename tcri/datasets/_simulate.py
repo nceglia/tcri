@@ -297,7 +297,10 @@ def simulate_from_fit_params(
         omega = temperature_scale(omega, temperature)
     omega = omega / omega.sum(axis=1, keepdims=True)
 
-    V = np.asarray(params["V"], dtype=float)          # (L, D)
+    # NB the fit stores V as (D, L) and the reference sampler does U @ V.T
+    V = np.asarray(params["V"], dtype=float)
+    if V.shape[0] != int(params.get("L", V.shape[1])):
+        V = V.T                                        # -> (L, D)
     L, D = V.shape
     n_clones, P = omega.shape
 
