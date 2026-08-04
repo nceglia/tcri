@@ -84,7 +84,8 @@ def _baseline_nmi(adata, k, seed, method="kmeans"):
 
 
 def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
-             normalize_mode, baseline, temperature=1.0, fit_params=None, profile=False):
+             normalize_mode, baseline, temperature=1.0, fit_params=None, profile=False,
+             local_scale=None):
     """One grid point -> a dict of results."""
     import pyro
 
@@ -111,8 +112,16 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
         adata, layer="counts", clonotype_key="clone_id", phenotype_key="phenotype",
         covariate_key="covariate", batch_key="batch",
     )
-    model = TCRIModel(adata, n_latent=32, n_hidden=64, n_layers=2,
-                      classifier_n_layers=1, classifier_hidden=64, K=k_infer)
+    # local_scale sets the TOTAL Dirichlet concentration on p_ct, so per-entry
+    # concentration is local_scale/P. Below 1 the draws are corner-seeking, which is the
+    # proposed source of the upward NMI bias. Note it moves BOTH sides at once: the guide's
+    # posterior and, via uns, the metric's draw -- so a change here is not attributable to
+    # one or the other without a follow-up that pins the metric side separately.
+    mk = dict(n_latent=32, n_hidden=64, n_layers=2,
+              classifier_n_layers=1, classifier_hidden=64, K=k_infer)
+    if local_scale is not None:
+        mk["local_scale"] = float(local_scale)
+    model = TCRIModel(adata, **mk)
 
     acc = "gpu" if device == "cuda" else "cpu"
     t0 = time.time()
@@ -154,6 +163,7 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     row = dict(
         fuzziness=fuzz, n_cells=n_cells, k_infer=k_infer, seed=seed, device=device,
         temperature=temperature, epochs=epochs,
+        local_scale=(local_scale if local_scale is not None else float("nan")),
         true_nmi=true_v, empirical_nmi=emp_v, tcri_nmi=est_mean,
         tcri_nmi_meanjoint=mean_joint_nmi,
         jensen_gap=est_mean - mean_joint_nmi,
@@ -193,6 +203,9 @@ def main():
                     help="override the preset's temperature sweep with a single value")
     ap.add_argument("--n-cells", type=int, default=None,
                     help="override the preset's n_cells sweep with a single value")
+    ap.add_argument("--local-scale", type=float, default=None,
+                    help="total Dirichlet concentration on p_ct (per-entry = local_scale/P). "
+                         "Below 1 per entry the posterior draws are corner-seeking.")
     args = ap.parse_args()
 
     grid = PRESETS[args.preset]
@@ -217,7 +230,8 @@ def main():
     for i, (f, n, k, T, s) in enumerate(combos, 1):
         r = run_cell(f, n, k, s, device=args.device, n_samples=args.n_samples,
                      epochs=args.epochs, normalize_mode=args.normalize_mode,
-                     baseline=baseline, temperature=T, fit_params=args.fit_params)
+                     baseline=baseline, temperature=T, fit_params=args.fit_params,
+                     local_scale=args.local_scale)
         rows.append(r)
         print(f"[{i:>4}/{len(combos)}] f={f} N={n} K={k} T={T} s={s} | "
               f"tcri={r['tcri_nmi']:.4f} true={r['true_nmi']:.4f} "
