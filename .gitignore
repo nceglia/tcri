@@ -147,3 +147,4 @@ example/*.pdf
 
 # local-only dev harnesses (real-data tests; NOT CI)
 dev/
+docs/contract/ss-small-team-handbook.md
