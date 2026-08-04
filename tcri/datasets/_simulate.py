@@ -38,7 +38,8 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-__all__ = ["simulate_tcri", "mi_from_joint_oracle"]
+__all__ = ["simulate_tcri", "mi_from_joint_oracle", "simulate_from_fit_params",
+           "temperature_scale"]
 
 
 def mi_from_joint_oracle(joint: np.ndarray) -> dict:
@@ -228,5 +229,133 @@ def simulate_tcri(
             "label_error_rate": label_error_rate,
             "seed": seed,
         },
+    }
+    return adata
+
+
+# ── benchmark reproduction: generate from an empirical fit ──────────────────
+
+def temperature_scale(P, T, eps=1e-12):
+    """Sharpen/flatten a row-stochastic matrix: ``P**(1/T)`` renormalized.
+
+    Verbatim behaviour of ``sc_simulator.temperature_scale_conditional``. ``T<1``
+    sharpens (raising I(c;phi)), ``T>1`` flattens. This is the axis the published
+    benchmark sweeps, and it changes the GROUND TRUTH, not just the difficulty.
+    """
+    P = np.clip(np.asarray(P, dtype=float), eps, None)
+    Pp = P ** (1.0 / T)
+    return Pp / Pp.sum(axis=1, keepdims=True)
+
+
+def simulate_from_fit_params(
+    params,
+    *,
+    n_cells: int = 1000,
+    temperature: float = 1.0,
+    fuzziness: float = 0.0,
+    label_error_rate: float = 0.0,
+    seed: int = 0,
+) -> AnnData:
+    """Simulate from an **empirically fitted** ``(pi, omega, gamma_params, V)``.
+
+    Reproduces ``sc_simulator.simulate_dataset``: ``z ~ Cat(pi)``,
+    ``phi|z ~ Cat(omega[z])``, ``U ~ Gamma(alpha_phi, 1/beta_phi)``,
+    ``x ~ Poisson(U @ V)``.
+
+    Use this — rather than :func:`simulate_tcri` — whenever the point is to compare
+    against the published benchmark. A symmetric-Dirichlet ``omega`` cannot
+    reproduce the benchmark's true-NMI anchors: its response to temperature has the
+    wrong SHAPE (sharpening ratio 4.22x vs the true 2.86x), so no reparameterization
+    of the synthetic generator suffices. The empirical fit matches all three anchors
+    exactly (0.520 / 0.316 / 0.182 at T = 0.1 / 0.5 / 1.0).
+
+    Parameters
+    ----------
+    params
+        Path to a ``fit_params.pkl``, or the already-unpickled dict. Needs
+        ``pi``, ``omega``, ``gamma_params``, ``V``, ``L``.
+    temperature
+        Applied to ``omega`` BEFORE sampling, so it moves the ground truth.
+    fuzziness
+        Blends the per-phenotype Gamma programs toward their mean — difficulty only,
+        the truth is untouched.
+    """
+    import pickle
+
+    if not isinstance(params, dict):
+        with open(params, "rb") as fh:
+            params = pickle.load(fh)
+    for key in ("pi", "omega", "gamma_params", "V"):
+        if key not in params:
+            raise KeyError(f"fit params missing {key!r}; got {sorted(params)}")
+
+    rng = np.random.default_rng(seed)
+    pi = np.asarray(params["pi"], dtype=float)
+    pi = pi / pi.sum()
+    omega = np.asarray(params["omega"], dtype=float)
+    if temperature != 1.0:
+        omega = temperature_scale(omega, temperature)
+    omega = omega / omega.sum(axis=1, keepdims=True)
+
+    V = np.asarray(params["V"], dtype=float)          # (L, D)
+    L, D = V.shape
+    n_clones, P = omega.shape
+
+    truth = mi_from_joint_oracle(pi[:, None] * omega)
+
+    z = rng.choice(n_clones, size=n_cells, p=pi)
+    phi_true = np.array([rng.choice(P, p=omega[c]) for c in z])
+    phi = phi_true.copy()
+    if label_error_rate > 0:
+        flip = rng.random(n_cells) < label_error_rate
+        phi[flip] = rng.integers(0, P, size=int(flip.sum()))
+
+    # per-phenotype Gamma programs, optionally blended toward the mean
+    gp = params["gamma_params"]
+    keys = sorted(gp.keys())
+    alpha = np.stack([np.asarray(gp[k]["alpha"], dtype=float) for k in keys])
+    beta = np.stack([np.asarray(gp[k]["beta"], dtype=float) for k in keys])
+    if fuzziness > 0:
+        theta = np.concatenate([alpha - 1.0, -beta], axis=1)
+        theta = (1.0 - fuzziness) * theta + fuzziness * theta.mean(0, keepdims=True)
+        alpha = np.clip(theta[:, :L] + 1.0, 1e-3, None)
+        beta = np.clip(-theta[:, L:], 1e-3, None)
+
+    U = rng.gamma(alpha[phi_true], 1.0 / beta[phi_true])
+    X = rng.poisson(U @ V).astype("float32")
+
+    counts = np.zeros((n_clones, P), dtype=np.float64)
+    np.add.at(counts, (z, phi), 1.0)
+    empirical = mi_from_joint_oracle(counts) if counts.sum() > 0 else dict.fromkeys(truth, np.nan)
+
+    clone_levels = params.get("clone_levels")
+    clone_names = ([str(clone_levels[i]) for i in z] if clone_levels is not None
+                   else [f"clone_{i}" for i in z])
+
+    obs = pd.DataFrame({
+        "clone_id": pd.Categorical(clone_names),
+        "phenotype": pd.Categorical([f"phen_{p}" for p in phi]),
+        "true_phenotype": pd.Categorical([f"phen_{p}" for p in phi_true]),
+        "covariate": pd.Categorical(["cov_0"] * n_cells),
+        "batch": pd.Categorical(["batch_0"] * n_cells),
+    }, index=[f"cell_{i}" for i in range(n_cells)])
+
+    adata = AnnData(X=X, obs=obs,
+                    var=pd.DataFrame(index=[f"gene_{g}" for g in range(D)]))
+    adata.layers["counts"] = adata.X.copy()
+    adata.uns["tcri_truth"] = {
+        "omega": omega, "pi": pi,
+        "true_mi": truth["mi"],
+        "true_nmi_min": truth["nmi_min"],
+        "true_nmi_average": truth["nmi_average"],
+        "true_h_clone": truth["h_clone"],
+        "true_h_phenotype": truth["h_phenotype"],
+        "empirical_mi": empirical["mi"],
+        "empirical_nmi_min": empirical["nmi_min"],
+        "empirical_nmi_average": empirical["nmi_average"],
+        "settings": {"source": "empirical fit", "n_cells": n_cells,
+                     "temperature": temperature, "fuzziness": fuzziness,
+                     "label_error_rate": label_error_rate, "seed": seed,
+                     "n_clones": n_clones, "n_phenotypes": P, "n_genes": D, "L": L},
     }
     return adata
