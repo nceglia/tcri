@@ -164,9 +164,15 @@ def main():
     ap.add_argument("--profile", action="store_true", help="torch profiler on one cell")
     ap.add_argument("--fit-params", default=None,
                     help="path to a fitted params.pkl -> reproduce the published benchmark")
+    ap.add_argument("--k-infer", type=int, default=None,
+                    help="override the preset's k_infer. Needed when sweeping FIXTURES: the "
+                         "presets pin k_infer=10, so running a K=8 or K=12 fit unchanged would "
+                         "conflate 'different omega' with 'wrong K at inference'.")
     args = ap.parse_args()
 
     grid = PRESETS[args.preset]
+    if args.k_infer is not None:
+        grid = dict(grid, k_infer=[args.k_infer])
     temps = grid.get("temperature", [1.0])
     if args.fit_params is None and temps != [1.0]:
         ap.error("--fit-params is required for a preset that sweeps temperature "
