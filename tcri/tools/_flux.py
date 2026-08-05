@@ -2,8 +2,10 @@
 shift between two covariate values (§7.5), engine-backed.
 
 For each clone in the ``cov_from`` ∩ ``cov_to`` intersection, the distance between its
-phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (l1 / kl / jsd,
-KL & JSD in **bits**). ``n_samples=0`` is the plug-in (a clone with no real shift reads
+phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l1 / jsd,
+KL & JSD in **bits**). **KL is the default**: the metrics document's eq 7 defines
+phenotypic flux AS the KL divergence, and l1/jsd are tcri extensions for when a bounded or
+symmetric measure is wanted. ``n_samples=0`` is the plug-in (a clone with no real shift reads
 exactly 0); ``n_samples>0`` redraws both sides coherently (same seed) and summarizes.
 """
 from __future__ import annotations
@@ -46,10 +48,12 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
 
 
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
-                    temperature=1.0, clones=None, weighted=False, distance_metric="l1",
+                    temperature=1.0, clones=None, weighted=False, distance_metric="kl",
                     random_state=None, device=None):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl/jsd). ``groupby`` → tidy DataFrame (one row per group×clone)."""
+    kl/jsd). ``distance_metric`` defaults to ``"kl"`` — METRICS eq 7 defines flux as the KL
+    divergence; ``"l1"`` and ``"jsd"`` remain available. ``groupby`` → tidy DataFrame (one
+    row per group×clone)."""
     if groupby is not None:
         def _compute(cl):
             return _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
