@@ -1,6 +1,6 @@
 # TCRI Model Contract (FROZEN)
 
-**The model this package implements is Supplementary Note 1** (`tcri_supplementary_methods_04_30_26.pdf`).
+**The model this package implements is Supplementary Note 1** (`docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf`).
 This document is the prose contract; `tcri/model/_model_contract.py` is its
 machine-checkable form; `tests/test_model_contract_conformance.py` enforces it.
 

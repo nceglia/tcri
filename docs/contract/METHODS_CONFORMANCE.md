@@ -7,7 +7,7 @@
 
 Maps the TCRi generative model in **Supplementary Note 1: Methods for Information
 theoretic metrics for single cell RNA and T-cell receptor sequencing**
-(`tcri_supplementary_methods_04_30_26.pdf`) to the implementation, and records
+(`docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf`) to the implementation, and records
 every known deviation. The PDF is the source of truth; this file is the living
 conformance record (update it whenever the model changes).
 
@@ -44,8 +44,17 @@ Code: `tcri/model/_module.py` (`TCRIModule.model`/`.guide`), `tcri/model/_priors
 
 ## Variational family (eq 6) — `_module.py::guide`
 
-- `q(ω_c) = Dir(λ_c)` — `q_p_c_raw` param → `conc_c_guide = clamp(global_scale * q_p_c_sharp)`. α = `global_scale`.
-- `q(ϕ_m) = Dir(λ'_m)` — `q_p_ct_raw` param → `conc_ct_guide = clamp(local_scale * q_p_ct_sharp)`.
+- `q(ω_c) = Dir(λ_c)` — `q_p_c_raw` param → `conc_c_guide = clamp(global_scale * q_p_c_sharp)`. ⚠️ **[I]** — see below; λ_c's total is pinned to α, not learned.
+- `q(ϕ_m) = Dir(λ'_m)` — `q_p_ct_raw` param → `conc_ct_guide = clamp(local_scale * q_p_ct_sharp)`. ⚠️ **[I]**
+
+> **These two lines record a correspondence that was never verified, and it is false.**
+> `q_p_ct_sharp` is row-normalized before scaling, so the concentration's TOTAL is exactly
+> `local_scale` — a fixed constant — whereas the note's notation table gives
+> λ'_m ∈ ℝ^P_{>0}, a free variational parameter whose magnitude is learned. Writing
+> `Dir(λ'_m)` on one side and `β · (a row summing to 1)` on the other and drawing an arrow
+> between them is how this survived: the conformance test traces sites, families, plates and
+> event dims, and the *structure* of a concentration is not a traced property. See
+> deviation **[I]**.
 - `q(z_i\|x_i) = N(μ_i, σ_i²)` — `encoder(x, batch)` → `Normal(z_loc, z_scale)`, sampled `"latent"`.
 - `q(z^ϕ_i\|z_i, ϕ) = Cat(softmax(ℓ_i))` — represented by the surrogate, not an explicit categorical sample.
 
@@ -102,6 +111,43 @@ no code path yet.
 **Training-only deviations from eq 7 (intentional, documented here):**
 - **KL warmup + z-only scope.** `UnifiedTrainingPlan` ramps `kl_weight` over `n_steps_kl_warmup`, and it scales only the `latent` (z) KL — the two Dirichlet KLs (`p_c`, `p_ct`) are unscaled. A standard annealing schedule; symmetric (no correctness bug) but not part of eq 7's full-weight KL.
 - **`num_particles`** on `UnifiedTrainingPlan` is honored only on the enumeration path (`TraceEnum_ELBO`); the default `Trace_ELBO` uses 1 MC particle regardless.
+
+### [I] — guide concentration is pinned where eq 6 specifies a free parameter (OPEN)
+
+| id | deviation | severity | status |
+|---|---|---|---|
+| I | `q(ϕ_m)`/`q(ω_c)` concentrations are `scale · (normalized row)`, so their TOTAL is fixed at β/α regardless of how many cells the group has. Note 1 eq 6 + the notation table specify λ'_m, λ_c ∈ ℝ^P_{>0} — free variational parameters with learned magnitude. | MED–HIGH | **open** — needs a contract decision |
+
+**Consequence.** The posterior cannot concentrate with data: a clone-covariate group with 3
+cells and one with 3,000 get the same posterior width. So every credible interval reported at
+`n_samples>0` is prior-set rather than data-informed, and comparisons between groups of very
+different size are the worst case. Per-entry concentration is `scale/P` (0.3 at the shipped
+`local_scale=3`, P=10), which is below 1 and therefore corner-seeking — measured to inflate
+`E[NMI(J)]` by +0.10 at weak coupling versus +0.017 at strong coupling.
+
+**Why the contract did not catch it.** The manifest was written by reading the code
+(2026-07-27) two weeks after the code was refactored into place, and it recorded what the code
+does. A spec validated only against the implementation converges on the implementation. The
+conformance test then verified agreement between manifest and code — both of which disagreed
+with the note.
+
+**Settled: a straight divergence from a spec that was always clear.** Checked against the
+2026-04-30 note — eq 6 and the definition of Λ are word-for-word identical to the 2026-08-03
+version, and the *same* expanded notation table is present in both. Both list `λ_c` and `λ'_m`
+as "Dirichlet concentration for q(ω_c)/q(ϕ_m)" with domain **ℝ^P_{>0}**, i.e. vectors, and
+members of Λ — the set being optimized. Separately they list `α, β` as scalar "Dirichlet
+concentration scales (global, local)", `> 0`, appearing only in the conditioning of
+`p(· | x; α, β, {ψ_b}, {u_k})`.
+
+The code uses the scalar β as the vector's total. That conflates a variational parameter with
+a prior hyperparameter — two rows of the same table, distinguished by name and by domain. No
+reading of either note makes them the same object, so this is not an ambiguity that was
+resolved the wrong way.
+
+**Expect the benchmark to get worse, not better.** The pinned concentration inflates the
+estimate, and that inflation is currently compensating for a separate downward error in the
+gate fold. Fixing one side alone moves the net error the wrong way — this must not be judged
+by whether NMI error dropped, but by whether the posterior concentrates with cells-per-group.
 
 A/A2/B/C/D/H were fixed in the model PR that introduced this file. **G and E are now
 resolved too** — α is applied to the eq-1 prior, and `reconstruction_loss_scale` was
