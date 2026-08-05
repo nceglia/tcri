@@ -37,7 +37,7 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min")
 def mutual_information(
     adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
     temperature=1.0, clones=None, weighted=False, normalized=True,
-    normalize_mode="min", random_state=None,
+    normalize_mode="min", random_state=None, device=None,
 ):
     """I(c;φ|covariate) in bits. ``groupby`` → tidy DataFrame (one row per group);
     otherwise a scalar (``n_samples=0``) or a mean/sd/hdi summary (``n_samples>0``)."""
@@ -47,7 +47,7 @@ def mutual_information(
 
         def _compute(cl):
             draws, cols = joint_draws(
-                adata_or_jd, covariate, n_samples=n_samples, weighted=weighted,
+                adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
                 temperature=temperature, clones=cl, random_state=random_state,
             )
             vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
@@ -60,7 +60,7 @@ def mutual_information(
         return _mi_from_joint(adata_or_jd.values, normalized=normalized, mode=normalize_mode)
 
     draws, cols = joint_draws(
-        adata_or_jd, covariate, n_samples=n_samples, weighted=weighted,
+        adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
         temperature=temperature, clones=clones, random_state=random_state,
     )
     vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]

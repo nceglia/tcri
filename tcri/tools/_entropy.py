@@ -63,7 +63,7 @@ def _phenotypic_one(clone_ids, J, cols, *, normalized):
 
 
 def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples, temperature,
-                    clones, weighted, normalized, random_state, n_clones_ref=None):
+                    clones, weighted, normalized, random_state, n_clones_ref=None, device=None):
     item_name = "phenotype" if kind == "clonotypic" else "clonotype"
     value = f"{kind}_entropy"
 
@@ -77,7 +77,7 @@ def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples
             raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")
 
         def _compute(cl):
-            draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted,
+            draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
                                       temperature=temperature, clones=cl, random_state=random_state)
             per = [_one(ids, J, cols) for ids, J in draws]
             keys = list(per[0].keys())
@@ -93,7 +93,7 @@ def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples
         one = _one(list(adata_or_jd.index), adata_or_jd.values, list(adata_or_jd.columns))
         return pd.Series(one, name=value)
 
-    draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted,
+    draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
                               temperature=temperature, clones=clones, random_state=random_state)
     per = [_one(ids, J, cols) for ids, J in draws]
     keys = list(per[0].keys())
@@ -104,20 +104,21 @@ def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples
 
 def clonotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
-                       n_clones_ref=None, random_state=None):
+                       n_clones_ref=None, random_state=None, device=None):
     """H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the normalizer for cross-group
     comparability (else per-group #supported clones). See module docstring."""
     return _entropy_metric(adata_or_jd, kind="clonotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,
-                           random_state=random_state, n_clones_ref=n_clones_ref)
+                           random_state=random_state, n_clones_ref=n_clones_ref,
+                           device=device)
 
 
 def phenotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
-                       random_state=None):
+                       random_state=None, device=None):
     """H[P(φ|c)] per clone (bits). See module docstring."""
     return _entropy_metric(adata_or_jd, kind="phenotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,
-                           random_state=random_state)
+                           random_state=random_state, device=device)

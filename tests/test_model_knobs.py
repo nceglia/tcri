@@ -325,3 +325,60 @@ def test_predict_is_invariant_to_batch_size(adata):
     np.testing.assert_allclose(a, b, atol=1e-6, rtol=1e-5)
     # rows must still be probability vectors regardless of chunking
     np.testing.assert_allclose(a.sum(1), 1.0, atol=1e-5)
+
+
+# ══════════════════════ device seam (CU-01) ═════════════════════════════════
+
+def test_device_reaches_the_engine_from_every_metric(adata):
+    """``device=`` must actually configure the numeric core.
+
+    The seam existed in ``_compute/_xp`` from PR5 but no metric exposed it, so it was
+    unreachable — GPU was documented and dead. This asserts the value arrives at
+    ``_joint_draws`` for every public metric, which is the only thing that makes a
+    GPU run possible.
+    """
+    import tcri
+    import tcri._compute._joint as CJ
+    import tcri.tools._joint as TJ
+
+    m = _model(adata)
+    _train(m)
+    m.to_anndata(adata)
+    covs = list(adata.uns["tcri_covariate_categories"])
+
+    seen = []
+    orig = CJ._joint_draws
+
+    def spy(*a, **k):
+        seen.append(k.get("device"))
+        return orig(*a, **k)
+
+    TJ._joint_draws = spy
+    try:
+        for call in (
+            lambda: tcri.tl.mutual_information(adata, covariate=covs[0], device="cpu"),
+            lambda: tcri.tl.clonotypic_entropy(adata, covariate=covs[0], device="cpu"),
+            lambda: tcri.tl.phenotypic_entropy(adata, covariate=covs[0], device="cpu"),
+            lambda: tcri.tl.phenotypic_flux(
+                adata, cov_from=covs[0], cov_to=covs[1], device="cpu"),
+        ):
+            seen.clear()
+            call()
+            assert seen and all(d == "cpu" for d in seen), (
+                f"device did not reach the engine: {seen}"
+            )
+    finally:
+        TJ._joint_draws = orig
+
+
+def test_device_does_not_change_results(adata):
+    """Routing through the device seam is a placement detail, not a numerical one."""
+    import tcri
+
+    m = _model(adata)
+    _train(m)
+    m.to_anndata(adata)
+    cov = list(adata.uns["tcri_covariate_categories"])[0]
+    a = tcri.tl.mutual_information(adata, covariate=cov, device=None)
+    b = tcri.tl.mutual_information(adata, covariate=cov, device="cpu")
+    assert a == pytest.approx(b, rel=1e-12)
