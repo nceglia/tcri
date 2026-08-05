@@ -23,12 +23,53 @@ from tcri.tools._mutual_information import _mi_from_joint
 def test_manifest_is_complete():
     """Every public metric is specified, and every spec field is filled in."""
     assert set(MC.METRIC_SPECS) == {
-        "clonotypic_entropy", "phenotypic_entropy", "mutual_information"
+        "clonotypic_entropy", "phenotypic_entropy", "mutual_information",
+        "phenotypic_flux",
     }
     for name, spec in MC.METRIC_SPECS.items():
         for field in ("formula", "per", "support", "normalizer", "empty", "note_eq"):
             assert getattr(spec, field), f"{name}.{field} is empty"
     assert MC.LOG_BASE == 2
+
+
+def test_every_spec_names_its_source_document():
+    """Equation numbers COLLIDE between the two source documents — "eq 3" is the clonotypic
+    entropy in one and the VampPrior in the other — so a bare "eq 3" is ambiguous. This makes
+    that ambiguity un-shippable."""
+    for name, spec in MC.METRIC_SPECS.items():
+        assert any(src in spec.note_eq for src in MC.SOURCES), (
+            f"{name}.note_eq must name its source document (one of {sorted(MC.SOURCES)}); "
+            f"got {spec.note_eq!r}"
+        )
+    assert "NOTE_1" not in " ".join(s.note_eq for s in MC.METRIC_SPECS.values()), (
+        "Supplementary Note 1 carries no entropy/MI definitions — a metric citing it is "
+        "citing the wrong document."
+    )
+
+
+def test_sources_are_archived_with_a_hash():
+    """The upstream documents live in the repo, not on someone's desktop, and the recorded
+    hash turns a silent revision into a failing build."""
+    import hashlib
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for key, src in MC.SOURCES.items():
+        f = root / src["file"]
+        assert f.exists(), f"SOURCES[{key!r}] missing from the repo: {src['file']}"
+        got = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+        assert got == src["sha256_16"], (
+            f"{src['file']} changed (hash {got}, manifest says {src['sha256_16']}). The "
+            f"source document is UPSTREAM of this contract — reconcile the manifest to the "
+            f"new document; do not edit the hash to silence this."
+        )
+
+
+def test_open_questions_are_not_quietly_sanctioned():
+    """A live disagreement with the source document must not be filed as an 'extension'.
+    Extensions are things the document does not specify; these are things it does."""
+    for key in ("flux_distance_default", "posterior_summary_of_a_nonlinear_metric"):
+        assert key in MC.OPEN_QUESTIONS and len(MC.OPEN_QUESTIONS[key]) > 40
+        assert key not in MC.SANCTIONED_EXTENSIONS
 
 
 # ── the manuscript equations, transcribed literally ─────────────────────────

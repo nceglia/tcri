@@ -1,0 +1,34 @@
+# Contract ownership.
+#
+# The three contracts and the source documents they derive from may only be changed with
+# an approving review from an owner listed here. Everything else in the repo is open to
+# normal review.
+#
+# ENFORCEMENT: this file is ADVISORY on its own. GitHub only blocks a merge when the
+# branch protection rule for `main` has "Require review from Code Owners" enabled. That
+# is a repository setting and has to be turned on in the GitHub UI; a CODEOWNERS file
+# without it changes nothing except who gets auto-requested for review.
+
+# --- source documents: upstream of every contract ---------------------------------
+/docs/contract/source/                    @nceglia @salehis
+
+# --- machine-checked manifests ----------------------------------------------------
+/tcri/_contract.pyi                       @nceglia @salehis
+/tcri/model/_model_contract.py            @nceglia @salehis
+/tcri/tools/_metrics_contract.py          @nceglia @salehis
+
+# --- the conformance tests that give the manifests teeth --------------------------
+# Weakening a test is equivalent to weakening the contract, so these carry the same bar.
+/tests/test_contract_conformance.py           @nceglia @salehis
+/tests/test_model_contract_conformance.py     @nceglia @salehis
+/tests/test_metrics_contract_conformance.py   @nceglia @salehis
+
+# --- the prose twins --------------------------------------------------------------
+/docs/contract/MODEL_CONTRACT.md          @nceglia @salehis
+/docs/contract/METRICS_CONTRACT.md        @nceglia @salehis
+/docs/contract/METHODS_CONFORMANCE.md     @nceglia @salehis
+/docs/contract/tcri_api_and_responsibilities.md  @nceglia @salehis
+
+# --- the governance rule itself ---------------------------------------------------
+/CLAUDE.md                                @nceglia @salehis
+/.github/CODEOWNERS                       @nceglia @salehis
