@@ -2,6 +2,28 @@
 
 Single-cell TCR+RNA information-theory metrics on scvi-tools / pyro / scanpy.
 
+## Source of truth, and who may change it
+
+**The manuscript is upstream of the contracts.** Sohrab Salehi's Supplementary Note is
+ground truth for the model; the metrics document is ground truth for the metrics. Where a
+contract disagrees with them, **the contract is wrong**. The documents are the first line:
+if one is ambiguous, **ASK** — never infer a definition from what makes the code, a test,
+or a benchmark come out right.
+
+Both are archived in `docs/contract/source/` with their hashes recorded in the metrics
+manifest and checked by a test, so a revision is detectable rather than something someone
+has to notice.
+
+**Their equation numbers COLLIDE.** Note 1 numbers eqs 1–12 (generative model, variational
+family, ELBO, perturbation). The metrics document independently numbers eqs 2–7
+(entropies, MI, NMI, KL). "eq 3" means the VampPrior in one and the clonotypic entropy in
+the other — every reference must name its document. Note 1 contains **no** entropy or MI
+definitions at all; a metric citing it is citing the wrong source.
+
+**Only @nceglia and @salehis may change a contract, a conformance test, or a source
+document.** Enforced by `.github/CODEOWNERS`, which requires "Require review from Code
+Owners" on the `main` branch protection rule to actually block a merge.
+
 ## The three contracts
 
 This repo is governed by three frozen contracts. All are machine-checked; a failing
@@ -15,7 +37,7 @@ conformance test means **stop and decide**, not "adjust the contract until it pa
 
 ### Model integrity (read before touching `tcri/model/`)
 
-The model implements **Supplementary Note 1** (`tcri_supplementary_methods_04_30_26.pdf`)
+The model implements **Supplementary Note 1** (`docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf`)
 — the source of truth. Changing its mathematics means: adding/removing a stochastic
 site, changing a distribution family or plate, altering the ELBO or the phenotype
 surrogate, or changing what a prior is scaled by (α on eq 1, β on eq 2).
@@ -64,3 +86,17 @@ default does *not* equal eq 6, so the divergence cannot go silent.
 - **Never read the `example/` notebooks.** They are disposable *outputs* of the
   refactor, never an input — no caller census, no "is-it-used" checks.
 - Run tests with the pinned venv: `MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q`.
+
+### Branching (this has gone wrong more than once)
+
+- **Always branch from a fresh `main`.** `git checkout main && git pull` first. Never
+  branch off a branch that has an open PR: the second PR then *contains* the first, and it
+  goes stale the moment the first merges.
+- **After a PR merges, return to `main` and pull** before starting the next piece of work.
+- **Before pushing to a branch with an open PR**, check it is not behind:
+  `git fetch && git rev-list --count <branch>..origin/main` must be `0`. If it is not,
+  rebase — and read what landed on `main` first, because someone else's work may already
+  cover what you were about to write.
+- Duplicated work is the symptom to watch for. The eq 3–4 erratum was addressed in three
+  separate PRs (#41 closed, #42 and #44 both merged with identical titles) because each was
+  started from a stale base.
