@@ -37,7 +37,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def __init__(
         self,
         module: TCRIModule,
-        n_steps_kl_warmup: int = 1000,
+        n_steps_kl_warmup: int = 2000,   # must match TCRIModel.train, which overrides it
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 5,
         optimizer_config: dict = None,

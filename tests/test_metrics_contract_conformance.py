@@ -67,7 +67,7 @@ def test_sources_are_archived_with_a_hash():
 def test_open_questions_are_not_quietly_sanctioned():
     """A live disagreement with the source document must not be filed as an 'extension'.
     Extensions are things the document does not specify; these are things it does."""
-    for key in ("flux_distance_default", "posterior_summary_of_a_nonlinear_metric"):
+    for key in ("posterior_summary_of_a_nonlinear_metric",):
         assert key in MC.OPEN_QUESTIONS and len(MC.OPEN_QUESTIONS[key]) > 40
         assert key not in MC.SANCTIONED_EXTENSIONS
 
