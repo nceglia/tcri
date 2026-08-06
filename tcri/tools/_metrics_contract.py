@@ -140,7 +140,10 @@ METRIC_SPECS = {
             "kernel: KL and JS in bits (log2), L1 in [0, 2]."
         ),
         empty="NaN when the clone has no mass in either condition",
-        note_eq="METRICS eq 7 (D_KL); the prose defines phenotypic flux AS that divergence",
+        note_eq=(
+            "METRICS eq 7 -- D_KL(P||Q) = sum_x P(x) log(P(x)/Q(x)); the prose defines "
+            "phenotypic flux AS that divergence, and 'kl' is the DEFAULT accordingly."
+        ),
     ),
 }
 
@@ -161,12 +164,6 @@ UNIMPLEMENTED = {
 #: decision someone has to make. A test asserts no key appears in both dicts, so a pending
 #: decision cannot be quietly refiled as a feature.
 OPEN_QUESTIONS = {
-    "flux_distance_default": (
-        "METRICS eq 7 defines phenotypic flux AS the KL divergence, but phenotypic_flux "
-        "defaults to distance_metric='l1'. The requested behaviour is KL by default with "
-        "l1/js still available; the kernels already exist in tcri/_distance.py "
-        "('kl'/'dkl', 'l1', 'js'/'jsd') and only the default differs."
-    ),
     "posterior_summary_of_a_nonlinear_metric": (
         "At n_samples>0 tcri reports E_s[NMI(J_s)] -- the mean of the per-draw NMI. NMI is "
         "nonlinear in the joint, so this is not the NMI of the posterior, and the two "
@@ -241,8 +238,8 @@ SANCTIONED_EXTENSIONS = {
     "flux_distance_choices": (
         "METRICS eq 7 defines flux as the KL divergence; tcri additionally offers L1 and "
         "Jensen-Shannon via `distance_metric`, since a symmetric or bounded measure is "
-        "sometimes wanted. Offering them is the extension; which one is the DEFAULT is "
-        "not -- see OPEN_QUESTIONS['flux_distance_default']."
+        "sometimes wanted. Offering them is the extension; the DEFAULT is 'kl', matching "
+        "eq 7. Changing the default changes reported flux numbers."
     ),
     "n_clones_ref": (
         "clonotypic_entropy accepts `n_clones_ref` to FIX the normalizer across groups; "

@@ -31,8 +31,8 @@ class TCRIModule(PyroBaseModuleClass):
         n_latent: int,
         P: int,
         n_batch: int,
-        global_scale: float = 10.0,
-        local_scale: float = 5.0,
+        global_scale: float = 5.0,   # must match TCRIModel.__init__, which overrides it
+        local_scale: float = 3.0,   # must match TCRIModel.__init__, which overrides it
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
         gate_prob: Optional[float] = 0.5,  # None = additive (no gating)
