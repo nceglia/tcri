@@ -1200,7 +1200,66 @@ every row. So DE-5's fix does not make the posterior data-informed; it makes it 
 to the pin, and DE-5's proposed test would pass only by non-convergence. DE-3, DE-6, DE-10 and
 DE-12 are each conditional in the same way.
 
-**Decision required — this is a model-mathematics question, not a coding one.** Note 1 defines
+**DECIDED 2026-08-07 — fix it (option C). @nceglia is taking the reading to @salehis; a
+revised supplementary note is expected.**
+
+### Why the implementation appears to work
+
+`q_p_ct_raw` is initialised from `clone_phen_prior` — the observed crosstab — which is itself a
+reasonable plug-in estimator of `P(φ|c)`. So at short training the numbers are approximately
+right *for the wrong reason*: they are the empirical crosstab, lightly smoothed, not an
+inference. They degrade toward the archetype prior as training continues. **The observed data
+enters through initialisation instead of through the likelihood**, which is why the failure is
+a slow drift rather than an obviously wrong answer, and why it stood for so long.
+
+### Why removing the detach alone is not enough
+
+The surrogate's target is `probs_i = softmax(π·cls_logits + (1−π)·log φ)` — a function of φ
+itself. Un-detaching makes it self-referential: the optimum drives `cls_logits → log φ + const`
+and admits a degenerate solution where `KL(probs ‖ φ) → 0` by mutual agreement, regardless of
+data. No observed label enters that loop.
+
+Structurally, under eqs 4–5, `x` depends on `z` only, so `x ⊥ z^φ | z`. A latent `z^φ`
+marginalises out — the optimal `q(z^φ) = p(z^φ|z,φ)` makes the term exactly zero — so φ_m is
+**unidentifiable** whether or not the surrogate is used. Either `z^φ` is observed, or φ carries
+no information from the data.
+
+### The fix
+
+Inside the data plate, condition on the observed phenotype:
+
+```python
+pyro.sample("phenotype", dist.Categorical(logits=ell),
+            obs=self._target_phenotypes[indices])
+```
+
+This is eq 4 with `z^φ` observed. Since `ℓ_i = π·cls_logits + (1−π)·log φ`, the label gives
+gradient to both the classifier and φ. Enumeration is then unnecessary, so the surrogate's
+original justification disappears — it is kept as a γ-weighted regulariser or dropped. If
+partial labelling is wanted, the same site takes a mask.
+
+Expected side effect: this plausibly resolves the classifier collapse, since `cls_logits` would
+receive gradient from real labels for the first time.
+
+### What the model is for, once φ is observed
+
+Worth stating in the contract, because it will be asked: if φ is observed for every cell, the
+crosstab is already a sufficient statistic, and what the model adds is shrinkage across clones
+through the archetype → clone → covariate hierarchy, uncertainty quantification, and imputation
+for unlabelled cells. The architecture is already built for exactly that. The missing likelihood
+is what lets the shrinkage run to completion instead of balancing against data.
+
+### On the note
+
+The note is not ambiguous — the notation table declares `z^φ` a latent and the introduction
+lists the inputs without phenotype labels, consistently. The issue is that what it specifies
+leaves φ_m unidentified. The one constructive suggestion for the revision: declare which
+quantities are **observed** and which are **inferred**; a single line would have made this
+visible at writing time.
+
+### Original framing (kept)
+
+**This is a model-mathematics question, not a coding one.** Note 1 defines
 `L_new = L# + γ Σ_i KL(probs_i ‖ φ_g(i))` and optimises Λ, which contains `λ'_m`. Read
 literally, φ should receive gradient from the surrogate and the detach is a deviation. Whether
 that is intended is for @nceglia / @salehis, and per `CLAUDE.md` the model contract is updated
