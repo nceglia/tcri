@@ -22,7 +22,7 @@ Code: `tcri/model/_module.py` (`TCRIModule.model`/`.guide`), `tcri/model/_priors
 | `ω_c` | clonotype-level phenotype dist | `p_c` (sample site `"p_c"`) |
 | `ϕ_m` | covariate-level phenotype dist | `p_ct` (sample site `"p_ct"`); `get_p_ct()` |
 | `z_i` | continuous latent embedding | `z` (sample site `"latent"`) |
-| `z^ϕ_i` | discrete phenotype — **OBSERVED** (DE-18) | sampled `"phenotype"` with `obs=_target_phenotypes` |
+| `z^ϕ_i` | discrete phenotype — **LATENT**, replaced by the surrogate | not sampled; `pheno_kl` factor (DE-18 withdrawn) |
 | `x_i` | gene expression | `x` (sample site `"obs"`) |
 | `f_cls` | classifier `R^L → R^P` (η_cls) | `self.classifier` |
 | `π` | gating weight | `gate_prob` (default **0.5**) |
@@ -39,7 +39,7 @@ Code: `tcri/model/_module.py` (`TCRIModule.model`/`.guide`), `tcri/model/_priors
 | 1 | `ω_c ~ (1/B_c) Σ_b Dir(α ψ_b)` | plate `"clonotypes"` → `MixtureDirichlet(weights, global_scale * mixture_concentration)`, sampled `"p_c"`. `ψ_b` = archetype centroids (`build_archetypes`). | ✅ α = `global_scale` (**[G]** fixed) |
 | 2 | `ϕ_m \| ω_h(m) ~ Dir(β ω_h(m))` | plate `"ct_plate"` → `conc_ct = clamp(local_scale * p_c[ct_to_c])`, sampled `"p_ct"` | ✅ β = `local_scale` |
 | 3 | `z_i ~ (1/B_z) Σ_k q(z\|u_k)` | `VampPrior.get_mixture()` (mixture of encoder-posteriors at learnable pseudo-inputs), sampled `"latent"` | ✅ |
-| 4 | `l_i = f_cls(z_i)`, `ℓ_i = π l_i + (1-π) log ϕ_g(i)`; `z^ϕ_i ~ Cat(softmax(ℓ_i))` | `cls_logits = classifier(z)`; `ell = gate_prob*cls_logits + (1-gate_prob)*log_phi_live`; sampled `"phenotype"` with `obs=_target_phenotypes[indices]` | ✅ observed (**[I]**/DE-18) |
+| 4 | `l_i = f_cls(z_i)`, `ℓ_i = π l_i + (1-π) log ϕ_g(i)`; `z^ϕ_i ~ Cat(softmax(ℓ_i))` | `cls_logits = classifier(z)`; `ell = gate_prob*cls_logits + (1-gate_prob)*log_phi`; z^ϕ marginalised, surrogate `pheno_kl` in its place | ✅ latent (Inference Details) |
 | 5 | `x_i ~ ZINB(g'_i, r_i, μ_i)` | `DecoderSCVI` → `ZeroInflatedNegativeBinomial(gate, total_count, logits)`, sampled `"obs"` | ✅ (scaled — **[E]**) |
 
 ## Variational family (eq 6) — `_module.py::guide`
@@ -72,19 +72,19 @@ sign** — `−γ·KL`. (Reading the note's `+γ·ΣKL` as something to maximize
 Implemented in `model()`'s `"data"` plate:
 
 ```python
-phi_live = p_ct[ct_idx]                   # carries gradient -> p_ct gets a data term
-ell      = gate_prob*cls_logits + (1-gate_prob)*log(phi_live)      # ℓ_i  (eq 4)
-pyro.sample("phenotype", Categorical(logits=ell), obs=target[indices])   # eq 4, OBSERVED
-
-phi      = phi_live.detach()              # the surrogate's target must stay CONSTANT,
+phi      = p_ct[ct_idx].detach()          # the surrogate's target must stay CONSTANT,
+ell      = gate_prob*cls_logits + (1-gate_prob)*log(phi)   # ℓ_i  (eq 4)
 probs    = softmax(ell)                   # or -γ·KL(probs‖ϕ) is self-referential
 pheno_kl = (probs * (log(probs) - log(phi))).sum(-1)
 pyro.factor("phenotype_alignment", -phenotype_kl_weight * pheno_kl)
 ```
 
-Building `ell` from the DETACHED view was the first attempt at DE-18 and was a no-op: the
-likelihood reached the classifier only, and `p_ct`'s L1 to the observed crosstab still grew
-0.286 → 0.510 over 900 epochs. Two views of ϕ are required, and they are not interchangeable.
+`z^ϕ` is **latent** and is never conditioned on the input phenotype labels. DE-18 briefly added
+`pyro.sample("phenotype", Categorical(ell), obs=...)` on the argument that x ⊥ z^ϕ | z leaves ϕ_m
+unidentifiable; that has been **withdrawn**. The hierarchical branch ω_c → ϕ_m → z^ϕ is a prior
+over phenotype composition and is meant not to see `x` directly — that separation is why the
+model is a VAE. Data reaches the hierarchy through `z` alone. `_model_contract.FORBIDDEN_MODEL_SITES`
+now blocks the site's return.
 
 - `ct_idx = ct_array[indices]` uses **global** cell indices (threaded in via
   `_get_fn_args_from_batch`), never the local pyro plate index — indexing with the
@@ -120,7 +120,7 @@ no code path yet.
 
 | id | deviation | severity | status |
 |---|---|---|---|
-| I | `q(ϕ_m)`/`q(ω_c)` concentrations were `scale · (normalized row)`, so their TOTAL was fixed at β/α regardless of how many cells the group has. Note 1 eq 6 + the notation table specify λ'_m, λ_c ∈ ℝ^P_{>0} — free variational parameters with learned magnitude. | MED–HIGH | **fixed** — magnitude freed on both guide sites; `guide_temperature` now sharpens the direction only. Landed with DE-18, since a free magnitude is inert without a data term (the argmax returns to β·ω). |
+| I | `q(ϕ_m)`/`q(ω_c)` concentrations were `scale · (normalized row)`, so their TOTAL was fixed at β/α regardless of how many cells the group has. Note 1 eq 6 + the notation table specify λ'_m, λ_c ∈ ℝ^P_{>0} — free variational parameters with learned magnitude. | MED–HIGH | **fixed** — magnitude freed on both guide sites; `guide_temperature` now sharpens the direction only. Landed alongside DE-18, which was subsequently **withdrawn**; DE-5 stands on its own — eq 6 specifies a free λ'_m irrespective of that question. |
 
 **Consequence.** The posterior cannot concentrate with data: a clone-covariate group with 3
 cells and one with 3,000 get the same posterior width. So every credible interval reported at

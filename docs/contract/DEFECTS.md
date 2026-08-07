@@ -1162,7 +1162,29 @@ D. **Remove the parallel dead schedule** — pass `n_epochs_kl_warmup=None` to `
 6. **Suite regression**: 177 passed / 3 skipped baseline preserved, plus the new tests; all three conformance tests green.
 
 ---
-## DE-18 — `p_ct` has no data term in the ELBO · S1 · BLOCKING · needs an author decision
+## DE-18 — `p_ct` has no data term in the ELBO · WITHDRAWN — NOT A DEFECT
+
+> **WITHDRAWN 2026-08-07 by @nceglia. The premise was wrong, and the fix has been reverted.**
+>
+> The hierarchical branch (ω_c → φ_m → z^φ) is a **prior** over phenotype composition, and it
+> is *supposed* to never see `x` directly — that separation is the reason the model is a VAE at
+> all. Data reaches the hierarchy only through `z`. So "`p_ct` has no data term" describes the
+> architecture; it is not a missing piece to be supplied.
+>
+> `z^φ` is **latent**. The step below from "x ⊥ z^φ | z, so φ_m is unidentifiable" to
+> "therefore z^φ must be observed" does not follow, and conditioning the site on the input
+> phenotype labels turns an unsupervised phenotype model into a supervised one — every metric
+> then becomes partly a readout of the labels it was handed.
+>
+> Reverted in `_module.py` (back to `phi = p_ct[ct_idx].detach()`), the `phenotype` SiteSpec
+> removed from `_model_contract.py`, and `FORBIDDEN_MODEL_SITES` added so the site cannot be
+> re-introduced without deliberately editing the contract.
+>
+> **DE-5 is unaffected and stays.** It was landed in the same commit but is an independent fix
+> to the guide's concentration (eq 6, λ'_m free), and its justification never depended on DE-18.
+>
+> Everything below is the original, superseded analysis, kept because five other defects were
+> argued from it and those arguments have to be re-derived rather than silently inherited.
 
 **Confirmed on `main` at `46490e6`, statically.** Inside `TCRIModule.model`, `p_c` is used at
 exactly one place — `base_p = p_c[self.ct_to_c] + self.eps`, forming `p_ct`'s prior
@@ -1392,11 +1414,30 @@ worth chasing, since it is an order of magnitude below anything the stack is try
 
 ---
 
-## DE-18 + DE-5 — RESOLVED TOGETHER (PR 3)
+## DE-18 + DE-5 — SUPERSEDED: DE-18 WITHDRAWN, DE-5 STANDS
 
-**Decision taken: land DE-18 and DE-5 together.** Either alone is insufficient — DE-18 supplies
-the evidence, DE-5 lets the posterior respond to it — and the combination reverses the
-degradation that motivated the whole investigation.
+> **2026-08-07.** DE-18 is withdrawn as not-a-defect (see its entry above) and the observed
+> phenotype likelihood has been reverted. DE-5 — the free guide concentration, eq 6 — is an
+> independent fix and remains landed.
+>
+> One measurement below is worth keeping, because it now reads the other way round. In the
+> table, the **pre-DE-18 configuration is the most accurate one**: surrogate-only reads NMI
+> 0.170 against a true 0.2145 at 600 epochs (error 0.045), while likelihood + surrogate reads
+> 0.122 (error 0.093). At the time this was written up as "the data term works, but NMI
+> accuracy gets worse," and the accuracy loss was set aside as possible synthetic circularity.
+> With the premise withdrawn, the simpler reading is that the accuracy loss was the signal:
+> conditioning on the labels degraded the metric because it was the wrong model.
+>
+> The drift number is still real and still unexplained: with φ detached, `p_ct`'s L1 to the
+> observed crosstab grows 0.242 → 0.321 over 600 epochs as the guide relaxes toward the
+> archetype prior. That is the state the rollback returns to. Whether that relaxation is
+> intended behaviour for a prior branch, or wants a different guide initialisation or a
+> stronger coupling through `z`, is a model question for the forthcoming supplemental note —
+> **not** grounds for re-adding a label likelihood.
+
+**Superseded decision (kept for the record): land DE-18 and DE-5 together.** Either alone is
+insufficient — DE-18 supplies the evidence, DE-5 lets the posterior respond to it — and the
+combination reverses the degradation that motivated the whole investigation.
 
 ### Two implementation attempts; the first was a no-op
 
