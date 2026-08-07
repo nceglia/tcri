@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import ast
 import inspect
+import pathlib
+import re
 import textwrap
 
 import pytest
@@ -39,15 +41,59 @@ def test_derived_and_authored_stay_separate():
     assert not (set(TC.DERIVED_INVARIANTS) & set(TC.AUTHORED_BOUNDS))
 
 
-def test_open_invariants_are_labelled_open():
-    """I3 and I4 are not satisfied yet. They must say so rather than reading as settled — a
-    contract that overstates its own coverage is worse than one that admits a gap."""
-    for key in ("I3_monitored_quantity_is_a_fixed_objective",
-                "I4_reported_model_is_the_selected_one"):
-        assert key in TC.DERIVED_INVARIANTS
-        assert TC.DERIVED_INVARIANTS[key]["status"].startswith("OPEN"), (
-            f"{key} is marked satisfied. If PR 4 landed, move it to 'holds' and point "
-            f"enforced_by at the test that proves it."
+def test_a_holds_claim_names_a_test_that_exists():
+    """An invariant may only claim 'holds' if the test it names is real.
+
+    This replaces a hardcoded assertion that I3/I4 read OPEN. That version had to be edited by
+    hand the moment either was resolved, which makes it a reminder rather than a check — and it
+    could not stop an invariant being flipped to 'holds' while pointing at a test nobody wrote.
+
+    A contract that overstates its own coverage is worse than one that admits a gap, so the
+    rule is general: 'holds' requires a file that exists and, when a ``::test_name`` is given,
+    a function by that name inside it. Any other status ('OPEN', 'SPECIFIED', 'partial') may
+    name a pending test freely — that is what those statuses are for.
+    """
+    repo = pathlib.Path(__file__).resolve().parents[1]
+
+    for key, inv in TC.DERIVED_INVARIANTS.items():
+        status, enforced = inv["status"], inv["enforced_by"]
+        if not status.startswith("holds"):
+            continue
+        assert not enforced.lstrip().startswith("pending"), (
+            f"{key} claims 'holds' but enforced_by is still 'pending'. Either the test exists "
+            f"— name it — or the status is not 'holds'."
+        )
+        for ref in re.findall(r"tests/[\w/]+\.py(?:::\w+)?", enforced):
+            path, _, func = ref.partition("::")
+            full = repo / path
+            assert full.exists(), (
+                f"{key} claims 'holds' and cites {path}, which does not exist. An invariant "
+                f"cannot be enforced by a file nobody wrote."
+            )
+            if func:
+                assert re.search(rf"^def {re.escape(func)}\b", full.read_text(), re.M), (
+                    f"{key} claims 'holds' and cites {ref}, but {full.name} defines no "
+                    f"function named {func}."
+                )
+
+
+def test_specified_invariants_are_not_claimed_to_hold():
+    """'SPECIFIED' means the design is settled but unimplemented. It must not read as done.
+
+    I3 and I4 are written out in full in the manifest — criterion, scope, and the two
+    param-store/BatchNorm hazards — ahead of the code, per the repo rule that the contract is
+    updated first. Until the implementation lands they must not claim to hold.
+    """
+    for key, inv in TC.DERIVED_INVARIANTS.items():
+        if not inv["status"].startswith("SPECIFIED"):
+            continue
+        assert "does not implement it yet" in inv["status"], (
+            f"{key} is SPECIFIED but does not say plainly that the code has not landed."
+        )
+        assert inv["enforced_by"].lstrip().startswith("pending"), (
+            f"{key} is SPECIFIED, so enforced_by must be marked pending. If the test now "
+            f"exists, move the status to 'holds' — test_a_holds_claim_names_a_test_that_exists "
+            f"will then verify the reference."
         )
 
 
