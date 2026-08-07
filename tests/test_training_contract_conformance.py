@@ -146,7 +146,17 @@ def test_validation_step_does_not_call_training_step():
         "validation_step calls training_step again — that reaches SVI.step() and the Pyro "
         "optimizer, so validation would update the guide parameters every metric reads (DE-1)"
     )
-    assert "evaluate_loss" in src, (
-        "validation_step should evaluate via SVI.evaluate_loss, which uses the same wrapped "
-        "model/guide with no param_capture, no optim() and no zero_grads"
+    assert "_objective_blocks" in src, (
+        "validation_step should evaluate through _objective_blocks, which traces guide and "
+        "replayed model with no param_capture, no optim() and no zero_grads. It replaced "
+        "SVI.evaluate_loss because I3 needs the per-cell and global blocks separated -- "
+        "evaluate_loss returns only their sum."
+    )
+    assert "kl_weight_max" in src and "finally" in src, (
+        "validation_step must pin kl_weight to kl_weight_max for the check (I3) and restore "
+        "the schedule value in a finally (B1)"
+    )
+    assert "fork_rng" in src and "manual_seed" in src, (
+        "validation_step must draw under a forked, fixed seed -- an estimator redrawn each "
+        "check is not a function of the parameters, so its argmin is an argmin over noise (I3)"
     )

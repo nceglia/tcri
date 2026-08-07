@@ -90,12 +90,15 @@ DERIVED_INVARIANTS = {
             "therefore different objects. A series of DIFFERENT functions has no argmin to take. "
             "This follows from what 'argmin' means, not from taste."
         ),
-        "status": "SPECIFIED -- the criterion is decided and written below; the code does not "
-                  "implement it yet. Monitor will be `objective_validation_percell`, evaluated "
-                  "at kl_weight_max under a forked, fixed RNG, in eval mode, on the validation "
-                  "split. Moves to 'holds' only when the enforcing test exists and passes.",
-        "enforced_by": "pending -- tests/test_training_invariants.py::"
-                       "test_monitor_is_invariant_to_ramp_position",
+        "status": "holds -- monitor is `objective_validation_percell`: the per-cell block "
+                  "only, at a pinned kl_weight_max, in eval mode, under a forked fixed seed.",
+        "enforced_by": (
+            "tests/test_training_invariants.py::test_monitor_is_invariant_to_ramp_position "
+            "(the five clauses) and "
+            "tests/test_training_invariants.py::test_monitor_excludes_the_global_block "
+            "(the scope departure -- it needs its own test, because including the global "
+            "block does NOT break ramp-invariance and the first test cannot see it)"
+        ),
         "history": (
             "validation_step deliberately did not set kl_weight, so elbo_validation inherited "
             "whatever the last training batch left. The stated reason was that this keeps "
@@ -144,12 +147,9 @@ DERIVED_INVARIANTS = {
             "  - the Pyro param store -- q_p_c_raw and q_p_ct_raw are NOT in state_dict() at "
             "    all, and they are what every metric reads."
         ),
-        "status": "SPECIFIED -- the mechanism is decided and written below; the code does not "
-                  "implement it yet. Best-by-monitor snapshot at each gated improving check, "
-                  "restored in place at on_fit_end across BOTH state_dict and the param store. "
-                  "Moves to 'holds' only when the enforcing test exists and passes.",
-        "enforced_by": "pending -- tests/test_training_invariants.py::"
-                       "test_restored_model_is_the_selected_one",
+        "status": "holds -- best-by-monitor snapshot at each gated check, restored in place "
+                  "at on_fit_end across module.state_dict() AND the Pyro param store.",
+        "enforced_by": "tests/test_training_invariants.py::test_restored_model_is_the_selected_one",
         "param_store_hazard": (
             "The param store MUST be snapshotted and restored through "
             "store.named_parameters() in UNCONSTRAINED space, never through store.items().\n"
