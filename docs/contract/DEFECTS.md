@@ -1420,20 +1420,22 @@ worth chasing, since it is an order of magnitude below anything the stack is try
 > phenotype likelihood has been reverted. DE-5 — the free guide concentration, eq 6 — is an
 > independent fix and remains landed.
 >
-> One measurement below is worth keeping, because it now reads the other way round. In the
-> table, the **pre-DE-18 configuration is the most accurate one**: surrogate-only reads NMI
-> 0.170 against a true 0.2145 at 600 epochs (error 0.045), while likelihood + surrogate reads
-> 0.122 (error 0.093). At the time this was written up as "the data term works, but NMI
-> accuracy gets worse," and the accuracy loss was set aside as possible synthetic circularity.
-> With the premise withdrawn, the simpler reading is that the accuracy loss was the signal:
-> conditioning on the labels degraded the metric because it was the wrong model.
+> One measurement below now reads the other way round. The **pre-DE-18 configuration is the
+> most accurate**: surrogate-only reads NMI 0.170 against a true 0.2145 at 600 epochs (error
+> 0.045), while likelihood + surrogate reads 0.122 (error 0.093). This was written up at the
+> time as "the data term works, but NMI accuracy gets worse," and the accuracy loss was set
+> aside as possible synthetic circularity. It was the signal.
 >
-> The drift number is still real and still unexplained: with φ detached, `p_ct`'s L1 to the
-> observed crosstab grows 0.242 → 0.321 over 600 epochs as the guide relaxes toward the
-> archetype prior. That is the state the rollback returns to. Whether that relaxation is
-> intended behaviour for a prior branch, or wants a different guide initialisation or a
-> stronger coupling through `z`, is a model question for the forthcoming supplemental note —
-> **not** grounds for re-adding a label likelihood.
+> Two behaviours of the detached hierarchy are expected, not defects, and are recorded here
+> **once** so they are not re-litigated from new symptoms:
+> 1. `q(ϕ_m)`'s concentration does not track clone size (measured r = −0.038 on Yost top-50).
+>    With no direct data term the optimum over a free λ'_m is β·ω for every row. DE-5 frees the
+>    parameter, as eq 6 requires; it does not make it data-informed.
+> 2. `p_ct`'s L1 to the observed crosstab grows 0.242 → 0.321 over 600 epochs as the guide
+>    relaxes toward the archetype prior.
+>
+> Whether the hierarchy should concentrate with data, and through what coupling, is a model
+> question for the forthcoming supplemental note.
 
 **Superseded decision (kept for the record): land DE-18 and DE-5 together.** Either alone is
 insufficient — DE-18 supplies the evidence, DE-5 lets the posterior respond to it — and the

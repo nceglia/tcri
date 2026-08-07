@@ -186,31 +186,3 @@ def test_posterior_concentration_is_not_pinned_to_beta(fitted):
         f"concentration totals are effectively constant across groups "
         f"({totals.min():.3f}–{totals.max():.3f}); λ'_m is still pinned (DE-5)"
     )
-
-
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Concentration does NOT track clone size, and after DE-18's withdrawal we do not "
-        "expect it to. The hierarchical branch ω_c -> ϕ_m -> z^ϕ has no direct data term by "
-        "design, so the only ϕ-bearing ELBO term is −KL(q(ϕ_m) ‖ Dir(β·ω)), whose optimum over "
-        "a free λ'_m is λ'_m = β·ω — a total of β for every row, independent of how many cells "
-        "the group has. Measured r = -0.038 on Yost top-50. DE-5 correctly frees the parameter; "
-        "whether the posterior should also CONCENTRATE with data, and through what coupling, is "
-        "an open model question for the forthcoming supplemental note. Kept as a live "
-        "measurement rather than deleted, so the answer is recorded when it arrives."
-    ),
-)
-def test_posterior_concentration_tracks_clone_size(fitted):
-    import pyro
-
-    _m, a = fitted
-    totals = pyro.get_param_store()["q_p_ct_raw"].detach().cpu().numpy().sum(axis=1)
-    sizes = np.bincount(_m.module.ct_array.cpu().numpy(), minlength=len(totals))[: len(totals)]
-    keep = sizes > 0
-    assert keep.sum() > 2 and totals[keep].std() > 0, "not enough spread to correlate"
-    r = float(np.corrcoef(totals[keep], sizes[keep])[0, 1])
-    assert r > 0.0, (
-        f"posterior concentration correlates {r:+.3f} with clone-covariate group size; it "
-        f"should INCREASE with more data, not decrease"
-    )
