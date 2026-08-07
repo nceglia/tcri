@@ -45,17 +45,20 @@ separate file from the manifest checks.
 |---|---|---|
 | I1 | one objective: `−(L# + γ·Σ KL(probs‖φ))` | holds |
 | I2 | no **optimizer** update outside `training_step` | **holds** — DE-1 fixed |
-| I3 | the monitored quantity is a fixed objective | **specified, not implemented** — criterion decided below; code pending |
-| I4 | the reported model is the one the criterion selected | **specified, not implemented** — mechanism decided below; code pending |
+| I3 | the monitored quantity is a fixed objective | **holds** — `objective_validation_percell`, pinned + seeded; scope has its own test |
+| I4 | the reported model is the one the criterion selected | **holds** — snapshot spans `state_dict()` **and** the param store |
 | I5 | annealing is schedule-only and terminates | **holds** — DE-4 fixed |
 | I7 | a declared knob changes an observable | partial |
 
-`SPECIFIED` is a third status, added with this revision. It means the design is settled and
-written into the manifest but the code does not do it yet. A contract that overstates its
-coverage is worse than one that admits a gap — that is what the ✅ on `patience` did — so
-`holds` is now machine-checked: an invariant may only claim it if `enforced_by` names a test
-file that exists, and a function inside it that exists
-(`test_a_holds_claim_names_a_test_that_exists`).
+`SPECIFIED` — design settled, code not written — was used for I3/I4 in the contract-only PR
+that preceded the implementation. Both now read `holds`, and that claim is machine-checked:
+an invariant may only claim it if `enforced_by` names a test file that exists, and a function
+inside it that exists (`test_a_holds_claim_names_a_test_that_exists`).
+
+Every clause above is mutation-checked. Reverting the pin, dropping the evaluation seed,
+leaving the pin in place, re-including the global block, silently dropping the excluded
+series, snapshotting `named_parameters()` instead of `state_dict()`, restoring the param store
+through `items()`, skipping the restore, or removing the ramp gate — all nine fail a test.
 
 ## The stopping policy (I3 + I4)
 

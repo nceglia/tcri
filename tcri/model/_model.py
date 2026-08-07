@@ -32,7 +32,13 @@ from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
 from ._module import TCRIModule
+from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
+
+#: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
+#: per-cell block only, at a pinned kl_weight_max under a fixed evaluation seed. The name
+#: says so on purpose; calling it an ELBO is what let the old monitor look well-posed.
+MONITOR = "objective_validation_percell"
 
 __all__ = ["TCRIModel"]
 
@@ -108,7 +114,7 @@ class TCRIModel(BaseModelClass):
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
         use_enumeration: bool = False,
-        patience: int = 300,
+        patience_epochs: int = 300,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
@@ -241,7 +247,25 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
-        self.patience = patience
+        # B3: patience is counted in EPOCHS, guaranteed by check_val_every_n_epoch=1 in
+        # train(). `patience` is accepted as a deprecated alias -- it appears in init_params_,
+        # so dropping it outright breaks load_tcri_session() on every previously saved model.
+        if "patience" in kwargs:
+            legacy = int(kwargs.pop("patience"))
+            if patience_epochs != 300:
+                raise TypeError(
+                    "pass either `patience_epochs` or the deprecated `patience`, not both"
+                )
+            patience_epochs = legacy
+            warnings.warn(
+                "`patience` is deprecated; use `patience_epochs`. The unit is now epochs, "
+                "enforced by check_val_every_n_epoch=1. Previously it was counted in "
+                "VALIDATION CHECKS, so patience=300 under the old cv=5 meant 1500 epochs -- "
+                "more than the default max_epochs of 1000, which is why early stopping could "
+                "never fire.",
+                FutureWarning, stacklevel=2,
+            )
+        self.patience_epochs = int(patience_epochs)
         self.module.prepare_two_level_params(
             c_count=c_count,
             ct_count=ct_count,
@@ -341,15 +365,37 @@ class TCRIModel(BaseModelClass):
         )
 
         # Defaults the caller can override: setdefault (not hard-coded keywords) so
-        # passing e.g. early_stopping_patience=10 or accelerator="gpu" through
-        # train(**kwargs) works instead of raising "got multiple values for keyword".
-        kwargs.setdefault("early_stopping", True)
-        kwargs.setdefault("early_stopping_monitor", "elbo_validation")
-        kwargs.setdefault("early_stopping_mode", "min")
-        kwargs.setdefault("early_stopping_patience", self.patience)
-        kwargs.setdefault("check_val_every_n_epoch", 5)
+        # passing e.g. accelerator="gpu" through train(**kwargs) works instead of raising
+        # "got multiple values for keyword".
+        #
+        # B3: check_val_every_n_epoch=1 so that a check IS an epoch and `patience_epochs` means
+        # what it says. Deliberately not solved by dividing patience at the call site -- two
+        # units with a silent conversion between them is the same trap in a new place. Costs a
+        # measured +7.6% wall clock on the worst-case fixture (2 training batches per epoch).
+        #
+        # Historic note: the old defaults made early stopping unreachable. patience=300 with
+        # check_val_every_n_epoch=5 is 1500 epochs of non-improvement, against a max_epochs of
+        # 1000, so every default run trained to the budget. That is why DE-2 and DE-3 never
+        # produced a wrong number for anyone to notice.
+        kwargs.setdefault("check_val_every_n_epoch", 1)
         kwargs.setdefault("accelerator", "auto")
         kwargs.setdefault("devices", "auto")
+
+        # scvi's own early stopping is switched off and replaced. I3/B5 require the monitor to
+        # be ignored until the KL ramp completes, and I4 requires a snapshot spanning both the
+        # module state_dict AND the Pyro param store, which no stock callback carries.
+        kwargs["early_stopping"] = False
+        monitor = kwargs.pop("early_stopping_monitor", MONITOR)
+        mode = kwargs.pop("early_stopping_mode", "min")
+        patience = kwargs.pop("early_stopping_patience", self.patience_epochs)
+
+        snapshot = BestObjectiveSnapshot(monitor=monitor, mode=mode)
+        callbacks = list(kwargs.pop("callbacks", []) or [])
+        callbacks += [
+            RampGatedEarlyStopping(monitor=monitor, mode=mode, patience=patience),
+            snapshot,
+        ]
+        kwargs["callbacks"] = callbacks
 
         runner = TrainRunner(
             self,
@@ -360,6 +406,42 @@ class TCRIModel(BaseModelClass):
         )
 
         runner()
+
+        # B9: a fit records what actually happened. `steps_per_epoch` is read from the counter
+        # rather than computed from batch_size, so a partial final batch cannot skew it.
+        epochs_run = max(int(runner.trainer.current_epoch), 1)
+        steps_per_epoch = max(self.module._kl_warmup_step / epochs_run, 1e-9)
+        ramp_done = ramp_is_complete(plan)
+        self.training_record_ = {
+            "epochs_run": epochs_run,
+            "warmup_steps_taken": int(self.module._kl_warmup_step),
+            "n_steps_kl_warmup": int(n_steps_kl_warmup),
+            "steps_per_epoch": steps_per_epoch,
+            # The one number that says which regime a run was in. A ramp finishing early leaves
+            # most of the fit at a stationary objective; one that never finishes means the prior
+            # was substantially switched off throughout.
+            "ramp_completes_at_epoch": (int(n_steps_kl_warmup) / steps_per_epoch
+                                        if n_steps_kl_warmup > 0 else 0.0),
+            "ramp_completed": ramp_done,
+            "selection_criterion": (monitor if ramp_done
+                                    else "last epoch (ramp incomplete)"),
+            "selected_epoch": snapshot.best_epoch,
+            "selected_score": snapshot.best_score,
+            "seed": self._seed,
+        }
+        if not ramp_done:
+            warnings.warn(
+                f"the KL ramp did not complete: {self.module._kl_warmup_step} of "
+                f"{n_steps_kl_warmup} warmup steps taken in {epochs_run} epochs "
+                f"(~{steps_per_epoch:.1f} steps/epoch, so it needs "
+                f"~{self.training_record_['ramp_completes_at_epoch']:.0f} epochs). No checkpoint "
+                f"was selected and the final weights are kept, because no two checks in this run "
+                f"came from the same objective. The fitted prior is scaled by "
+                f"kl_weight={self.module.kl_weight:.3g}, not kl_weight_max="
+                f"{self.module.kl_weight_max:.3g}.",
+                UserWarning,
+                stacklevel=2,
+            )
         return
 
     @torch.no_grad()
