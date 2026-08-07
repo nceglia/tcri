@@ -267,9 +267,17 @@ class TCRIModel(BaseModelClass):
         initialisers and the Dirichlet draws. Both are needed -- neither alone is sufficient.
         """
         import lightning.pytorch as _pl
+        import scvi as _scvi
 
         _pl.seed_everything(seed, workers=True, verbose=False)
         pyro.set_rng_seed(seed)
+        # DE-19: scvi builds the train/val split from `np.random.RandomState(scvi.settings.seed)`
+        # (scvi/dataloaders/_data_splitting.py), and that setting defaults to None -- i.e. OS
+        # entropy. Seeding lightning and pyro is NOT sufficient: which cells land in the
+        # validation split stayed random, leaving a ~1.6e-3 spread between "identical" fits.
+        # The determinism test only passed because tests/test_model_classifier.py happens to set
+        # scvi.settings.seed process-globally earlier in the run.
+        _scvi.settings.seed = seed
 
     def train(
         self,

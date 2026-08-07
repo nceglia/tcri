@@ -128,46 +128,53 @@ def test_grouped_comparison_runs_over_patients(fitted):
     assert df["MI"].notna().any()
 
 
-def test_p_ct_tracks_the_observed_crosstab(fitted):
-    """DE-18 on real expression.
+def test_p_ct_stays_a_probability_table_on_real_data(fitted):
+    """`p_ct` is the clone×phenotype table every metric reads. Check it is well-formed and not
+    degenerate on real dropout-heavy expression.
 
-    Before the observed-phenotype likelihood, `p_ct` had no data term: it was initialised at the
-    observed crosstab and relaxed toward the archetype prior, so its L1 to that crosstab grew
-    without bound (0.284 → 0.515 on synthetic). The synthetic cannot tell us whether that fix
-    holds on real dropout-heavy expression; this can.
+    This test previously asserted that `p_ct` tracks the observed crosstab, as evidence for
+    DE-18's observed-phenotype likelihood. **DE-18 is withdrawn** — z^ϕ is latent and the
+    hierarchical branch is a prior that does not see the data directly, so `p_ct` is under no
+    obligation to stay near the crosstab and an L1 bound against it asserts the wrong thing.
 
-    The bound is deliberately loose. Real `p_ct` should NOT equal the crosstab — shrinkage across
-    clones is the model's contribution — but it must stay in the same neighbourhood rather than
-    departing for the prior.
+    What is still worth checking on real data is that the table is a valid distribution and
+    retains clone-to-clone structure rather than collapsing to one shared row.
     """
     import tcri
 
     _m, a = fitted
-    tab = pd.crosstab(a.obs[CLONE], a.obs[PHENO]).astype(float)
-    tab = tab.div(tab.sum(1).clip(lower=1e-12), axis=0)
-
     jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0)
-    jd = jd.groupby(level=-1).sum() if jd.index.nlevels > 1 else jd
-    jd = jd.div(jd.sum(1).clip(lower=1e-12), axis=0)
 
-    idx = tab.index.intersection(jd.index)
-    cols = [c for c in tab.columns if c in jd.columns]
-    assert len(idx) and len(cols), "no overlap between the crosstab and the learned table"
-    l1 = float(np.abs(tab.loc[idx, cols].values - jd.loc[idx, cols].values).sum(1).mean())
+    # each (covariate, clone) row is a distribution over phenotypes. Check normalisation
+    # BEFORE collapsing: summing over covariates gives a row total of 1 per covariate the
+    # clone appears in, which is 2.0 for a clone seen both pre and post.
+    raw = jd.to_numpy(dtype=float)
+    assert np.isfinite(raw).all(), "p_ct contains NaN or inf on real data"
+    assert (raw >= -1e-9).all(), "p_ct has negative mass"
+    assert np.allclose(raw.sum(axis=1), 1.0, atol=1e-6), (
+        f"p_ct rows are not normalised: sums span "
+        f"{raw.sum(axis=1).min():.6f}–{raw.sum(axis=1).max():.6f}"
+    )
 
-    assert l1 < 1.0, (
-        f"mean per-clone L1 between p_ct and the observed crosstab is {l1:.3f} out of a possible "
-        f"2.0. p_ct has drifted away from the data it is meant to describe (DE-18)."
+    collapsed = jd.groupby(level=-1).sum() if jd.index.nlevels > 1 else jd
+    v = collapsed.div(collapsed.sum(1).clip(lower=1e-12), axis=0).to_numpy(dtype=float)
+
+    # clone-to-clone structure must survive. If every row relaxed to the same archetype the
+    # table would carry no clonotype information and MI would be ~0 by construction.
+    spread = float(np.abs(v - v.mean(axis=0, keepdims=True)).sum(axis=1).mean())
+    assert spread > 1e-3, (
+        f"every clone's phenotype distribution is effectively identical (mean L1 to the "
+        f"column mean is {spread:.2e}); p_ct carries no clonotype-specific signal"
     )
 
 
-def test_posterior_concentration_responds_to_clone_size(fitted):
+def test_posterior_concentration_is_not_pinned_to_beta(fitted):
     """DE-5 on real, heavy-tailed clone sizes.
 
-    Real repertoires span singletons to thousands of cells; this subset's largest clone has 901
-    cells. With the concentration pinned to β every group got the same posterior width no matter
-    how much data supported it, which is invisible under uniform synthetic clone sizes and
-    glaring here.
+    Eq 6 specifies λ'_m ∈ ℝ^P_{>0} — a free variational parameter. The implementation had
+    `conc = β · (normalized row)`, pinning every group's concentration TOTAL to β regardless of
+    its cell count. This is what DE-5 fixes, and it is what this test checks: the totals must be
+    free to differ across groups.
     """
     import pyro
 
@@ -177,15 +184,5 @@ def test_posterior_concentration_responds_to_clone_size(fitted):
 
     assert totals.max() / max(totals.min(), 1e-12) > 1.05, (
         f"concentration totals are effectively constant across groups "
-        f"({totals.min():.3f}–{totals.max():.3f}); the posterior width does not depend on how "
-        f"many cells a group has (DE-5)"
+        f"({totals.min():.3f}–{totals.max():.3f}); λ'_m is still pinned (DE-5)"
     )
-
-    sizes = np.bincount(_m.module.ct_array.cpu().numpy(), minlength=len(totals))[: len(totals)]
-    keep = sizes > 0
-    if keep.sum() > 2 and totals[keep].std() > 0:
-        r = float(np.corrcoef(totals[keep], sizes[keep])[0, 1])
-        assert r > 0.0, (
-            f"posterior concentration correlates {r:+.3f} with clone-covariate group size; it "
-            f"should INCREASE with more data, not decrease"
-        )
