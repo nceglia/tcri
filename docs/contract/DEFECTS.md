@@ -1428,9 +1428,17 @@ worth chasing, since it is an order of magnitude below anything the stack is try
 >
 > Two behaviours of the detached hierarchy are expected, not defects, and are recorded here
 > **once** so they are not re-litigated from new symptoms:
-> 1. `q(ϕ_m)`'s concentration does not track clone size (measured r = −0.038 on Yost top-50).
->    With no direct data term the optimum over a free λ'_m is β·ω for every row. DE-5 frees the
->    parameter, as eq 6 requires; it does not make it data-informed.
+> 1. `q(ϕ_m)`'s concentration does not track clone size. This follows structurally: with no
+>    direct data term the only ϕ-bearing ELBO term is −KL(q(ϕ_m) ‖ Dir(β·ω)), whose optimum over
+>    a free λ'_m is β·ω for every row, independent of cell count. DE-5 frees the parameter, as
+>    eq 6 requires; it does not make it data-informed.
+>
+>    A measured r = −0.038 on Yost top-50 is consistent with this but is **not** evidence for
+>    it, and should not be cited as such: that subset is the 50 largest clones, spanning 42–901
+>    cells — 1.33 decades, with no singletons — against the 3–4 decades of a full repertoire.
+>    Correlating concentration against clone size over a narrow band at the top of a heavy tail
+>    is range-restricted by construction and would read ≈0 whether or not the dependence exists.
+>    The structural argument is the content; testing it needs the untruncated repertoire.
 > 2. `p_ct`'s L1 to the observed crosstab grows 0.242 → 0.321 over 600 epochs as the guide
 >    relaxes toward the archetype prior.
 >
