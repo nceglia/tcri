@@ -82,7 +82,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         self.n_steps_kl_warmup = n_steps_kl_warmup
         self.reconstruction_loss_scale = reconstruction_loss_scale
-        self._my_global_step = 0
 
     @property
     def loss(self):
@@ -94,8 +93,9 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
     def training_step(self, batch, batch_idx):
         # ── KL warmup ────────────────────────────────────────────
-        if self.n_steps_kl_warmup > 0 and self._my_global_step < self.n_steps_kl_warmup:
-            kl_weight = max(1e-6, self.module.kl_weight_max * (self._my_global_step / self.n_steps_kl_warmup))
+        step = self.module._kl_warmup_step
+        if self.n_steps_kl_warmup > 0 and step < self.n_steps_kl_warmup:
+            kl_weight = max(1e-6, self.module.kl_weight_max * (step / self.n_steps_kl_warmup))
         else:
             kl_weight = self.module.kl_weight_max
         self.module.kl_weight = kl_weight
@@ -132,38 +132,58 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.log("entropy_train", entropy, prog_bar=False, on_epoch=True)
         self.log("confidence_train", confidence, prog_bar=False, on_epoch=True)
 
-        self._my_global_step += 1
+        self.module._kl_warmup_step += 1
         return loss_dict
     
     def validation_step(self, batch, batch_idx):
-        with torch.no_grad():
-            self.module.eval()
-            val_dict = super().training_step(batch, batch_idx)
-            self.module.train()
+        """Evaluate the ELBO. Never step.
 
+        DE-1: this used to call ``super().training_step()``, which reaches
+        ``PyroTrainingPlan.training_step`` -> ``SVI.step()`` -> the Pyro optimizer. Every
+        validation batch therefore applied an Adam update to ``q_p_c_raw``/``q_p_ct_raw`` — the
+        exact guide parameters ``get_p_ct()`` and every metric read. Lightning zeroes ``.grad``
+        on the LightningModule's parameters before the validation loop, so torch Adam skipped
+        the networks; but those two tensors live only in Pyro's param store, are not reachable
+        from ``parameters()``, and kept the zeroed grad Pyro left there. Adam then stepped them
+        on ``weight_decay * theta`` in the UNCONSTRAINED log space of a positive-constrained
+        parameter — every entry pulled toward ``log theta = 0``, i.e. every clone row pulled
+        toward uniform. Measured 0.54 L1 per validation check.
+
+        ``SVI.evaluate_loss`` computes the identical estimator through the same wrapped
+        model/guide, with no ``param_capture``, no ``optim()`` and no ``zero_grads``.
+
+        ``kl_weight`` is deliberately NOT set here: inheriting whatever the last training step
+        left keeps ``elbo_validation`` on the same scale as ``elbo_train``. That makes the two
+        series comparable but means the monitored quantity is not a fixed objective while the
+        ramp is still climbing — invariant I3, which PR 4 (`stopping-policy`) resolves.
+        """
+        args, kwargs = self.module._get_fn_args_from_batch(batch)
         device = next(self.module.parameters()).device
-
-        if not isinstance(val_dict["loss"], torch.Tensor):
-            val_dict["loss"] = torch.tensor(val_dict["loss"], device=device)
-        else:
-            val_dict["loss"] = val_dict["loss"].to(device)
+        with torch.no_grad():
+            loss = self.svi.evaluate_loss(*args, **kwargs)
+        val_dict = {"loss": torch.as_tensor(loss, dtype=torch.float32, device=device)}
 
         # ── Diagnostic only ──────────────────────────────────────
-        z_batch = self.module.get_latent(batch).to(device)
-        idx = batch["indices"].long().view(-1).to(device)
-        cls_logits = self.module.classifier(z_batch)
-        ct_idx = self.module.ct_array[idx]
-        p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
-        prior_log = torch.log(p_ct_prior + 1e-8)
+        # Stays in eval mode (Lightning's evaluation loop already set it) and under no_grad.
+        # Previously the block above restored train mode before reaching here, so this ran with
+        # classifier dropout ACTIVE, and it was outside no_grad — building an autograd graph
+        # through get_latent, the classifier and get_p_ct() for values that are only logged.
+        with torch.no_grad():
+            z_batch = self.module.get_latent(batch).to(device)
+            idx = batch["indices"].long().view(-1).to(device)
+            cls_logits = self.module.classifier(z_batch)
+            ct_idx = self.module.ct_array[idx]
+            p_ct_prior = self.module.get_p_ct()[ct_idx].to(device)
+            prior_log = torch.log(p_ct_prior + 1e-8)
 
-        if self.module.use_gate:
-            local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
-        else:
-            local_logits = cls_logits + prior_log
+            if self.module.use_gate:
+                local_logits = self.module.gate_prob * cls_logits + (1.0 - self.module.gate_prob) * prior_log
+            else:
+                local_logits = cls_logits + prior_log
 
-        probs = F.softmax(local_logits, dim=-1)
-        kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+            probs = F.softmax(local_logits, dim=-1)
+            kl_divergence = F.kl_div(probs.log(), p_ct_prior, reduction='batchmean')
+
         self.log("kl_divergence_with_prior_val", kl_divergence, prog_bar=False, on_epoch=True)
-
         self.log("elbo_validation", val_dict["loss"], prog_bar=True, on_epoch=True)
         return val_dict
