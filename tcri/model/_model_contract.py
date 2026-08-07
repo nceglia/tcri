@@ -102,6 +102,19 @@ GENERATIVE_SITES = [
         ),
     ),
     SiteSpec(
+        "phenotype", "Categorical", "data", eq="4", observed=True,
+        note=(
+            "z^ϕ_i | ϕ_g(i), z_i ~ Cat(softmax(ℓ_i)), OBSERVED against the input phenotype "
+            "labels (DE-18). Before this, p_ct had no data term at all: it appeared in "
+            "model() only as `phi = p_ct[ct_idx].detach()`, so the clone×phenotype "
+            "distribution every metric reads was driven solely by its two prior KLs — "
+            "training relaxed it away from the crosstab it was initialised at, toward the "
+            "archetype prior. Structurally, x depends on z alone, so x ⊥ z^ϕ | z and a "
+            "LATENT z^ϕ marginalises out entirely (the optimal q(z^ϕ) = p(z^ϕ|z,ϕ) makes "
+            "the term exactly zero). Either z^ϕ is observed or ϕ_m is unidentifiable."
+        ),
+    ),
+    SiteSpec(
         "obs", "ZeroInflatedNegativeBinomial", "data", eq="5", observed=True, event_dim=1,
         note="x_i ~ ZINB(g'_i, r_i, μ_i) from the scVI decoder (+ library size).",
     ),
@@ -111,9 +124,16 @@ GENERATIVE_SITES = [
 # ── the variational family q(Ω, Φ, z | x)  (eq 6) ────────────────────────────
 GUIDE_SITES = [
     SiteSpec("p_c", "Dirichlet", "clonotypes", eq="6", event_dim=1,
-             note="q(ω_c) = Dir(λ_c); concentration = α · normalized q_p_c_raw."),
+             note=("q(ω_c) = Dir(λ_c), λ_c ∈ ℝ^P_{>0} FREE. Concentration is "
+                   "magnitude(q_p_c_raw) · sharpened direction — the magnitude is learned, not "
+                   "pinned to α. α is the eq-1 PRIOR scale (a scalar); using it as the "
+                   "variational total conflates two rows of the note's notation table.")),
     SiteSpec("p_ct", "Dirichlet", "ct_plate", eq="6", event_dim=1,
-             note="q(ϕ_m) = Dir(λ'_m); concentration = β · normalized q_p_ct_raw."),
+             note=("q(ϕ_m) = Dir(λ'_m), λ'_m ∈ ℝ^P_{>0} FREE (DE-5). Was β · normalized "
+                   "q_p_ct_raw, which pinned the TOTAL to β regardless of a group's cell "
+                   "count — a 3-cell and a 3000-cell clone got the same posterior width, so "
+                   "the posterior could not concentrate with data and every interval at "
+                   "n_samples>0 was prior-set. guide_temperature sharpens the DIRECTION only.")),
     SiteSpec("latent", "Normal", "data", eq="6", event_dim=1,
              note="q(z_i|x_i) = N(μ_i, diag(σ_i²)) from the encoder."),
 ]

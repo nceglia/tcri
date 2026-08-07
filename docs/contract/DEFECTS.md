@@ -1388,3 +1388,97 @@ consistent upward move on the reasoning that removing the validation-time flatte
 `p_ct` rows sharper. Two of three seeds move up and one moves down, so the effect is not
 monotone in the way the mechanism suggests at this configuration. Recorded as measured; not
 worth chasing, since it is an order of magnitude below anything the stack is trying to resolve.
+
+
+---
+
+## DE-18 + DE-5 — RESOLVED TOGETHER (PR 3)
+
+**Decision taken: land DE-18 and DE-5 together.** Either alone is insufficient — DE-18 supplies
+the evidence, DE-5 lets the posterior respond to it — and the combination reverses the
+degradation that motivated the whole investigation.
+
+### Two implementation attempts; the first was a no-op
+
+Adding `pyro.sample("phenotype", Categorical(logits=ell), obs=...)` alone did nothing, because
+`ell` was built from `log_phi` derived from `phi = p_ct[ct_idx].detach()`. The detach still
+severed the gradient, so the new likelihood reached the classifier only. Measured: `p_ct`'s L1
+to the observed crosstab still grew 0.286 → 0.510 over 900 epochs, exactly as before.
+
+The fix keeps two views. `phi_live` carries gradient and builds `ell` for the likelihood;
+`phi_det` stays detached as the surrogate's alignment target, which it must be or
+`−γ·KL(probs‖φ)` is self-referential.
+
+This is only visible because the change was measured rather than assumed.
+
+### With the gradient path correct
+
+1200 cells, 20 clones, 5 phenotypes, seed 0, `normalize_mode="average"`, `n_samples=0`.
+True NMI = 0.2145.
+
+| configuration | ep60 L1 / NMI | ep600 L1 / NMI |
+|---|---|---|
+| likelihood + surrogate (as implemented) | 0.273 / 0.138 | 0.309 / 0.122 |
+| likelihood only, γ=0 | 0.405 / 0.138 | 0.396 / 0.103 |
+| surrogate only (pre-DE-18) | 0.242 / 0.136 | 0.321 / **0.170** |
+
+**The drift is reduced** — likelihood + surrogate grows least (+0.036 over the run, versus
++0.079 for the pre-fix behaviour), and the earlier single-config run showed 0.510 → 0.325 at
+900 epochs. The data term works.
+
+**But NMI accuracy gets worse.** The pre-fix configuration is closest to truth at 600 epochs
+(0.170, error 0.045); with the fix it reads 0.122 (error 0.093). Dropping the surrogate is worse
+still on both counts.
+
+### Why this is a decision and not a bug to chase
+
+On `simulate_tcri` the generator draws ω from a Dirichlet and `q_p_ct_raw` is initialised at the
+observed crosstab — which is already a good estimator of `P(φ|c)`. So a configuration that stays
+near its initialisation scores well on NMI *without inferring anything*, and the comparison may
+be rewarding least-drift-from-initialisation rather than best inference. This is the circularity
+problem: the synthetic is drawn from the model's own family.
+
+The residual drift is also plausibly **DE-5**, not DE-18: the guide's total concentration is
+pinned to β regardless of how many cells a group has, so the posterior cannot concentrate in
+proportion to the data term this PR just added. DE-18 supplies the evidence; DE-5 is what lets
+the posterior respond to it. That would make the two a single change rather than PRs 3 and 8.
+
+**Open:** ship DE-18 as-is and let PR 8 (DE-5) supply the missing half; or land DE-18 and DE-5
+together; or hold both until a non-circular test bed exists. One seed, one configuration, one
+generator — thin evidence for a model change of this size.
+
+
+### Result of landing both
+
+1200 cells, 20 clones, 5 phenotypes, seed 0, `normalize_mode="average"`, `n_samples=0`.
+True NMI = 0.2145.
+
+| epochs | L1 to crosstab | NMI | conc range | corr(conc, group size) |
+|---|---|---|---|---|
+| 60 | 0.234 | 0.150 | 9.25–11.71 | 0.270 |
+| 200 | 0.160 | 0.170 | 7.96–17.69 | 0.402 |
+| 600 | 0.210 | **0.220** | 5.71–36.00 | **0.558** |
+
+Accuracy at 600 epochs, against a truth of 0.2145:
+
+| configuration | NMI | error |
+|---|---|---|
+| pre-fix (surrogate only, β-pinned guide) | 0.170 | 0.045 |
+| DE-18 only (data term, β-pinned guide) | 0.122 | 0.093 |
+| **DE-18 + DE-5** | **0.220** | **0.0055** |
+
+Three things changed at once, and they are the three symptoms this investigation started from:
+
+- **The estimate converges to the truth** rather than away from it. Error is 8× smaller than the
+  pre-fix code and 17× smaller than DE-18 alone.
+- **Training no longer degrades the answer.** NMI rises monotonically with epochs. The optimum
+  at 30–120 epochs followed by decay — the behaviour that produced the "bias floor" reading and
+  cost a day — does not occur.
+- **The posterior concentrates with data.** Totals spread from 9–12 to 6–36 and their
+  correlation with group size climbs 0.27 → 0.56. This is the property eq 6 specifies and the
+  β-pin removed, and it is why credible intervals were previously prior-set.
+
+Caveat, stated because the evidence is thinner than the result sounds: one seed, one
+configuration, one generator — and that generator is drawn from the model's own family. The
+direction is unambiguous and the mechanism is visible in the concentration/size correlation, but
+the magnitude should not be quoted until the benchmark grid re-runs.
