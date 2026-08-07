@@ -5,11 +5,12 @@ Seven PRs, submitted as one `gh stack` chain. Each is independently reviewable (
 ```
 gh stack init  seed-and-record
 gh stack add   training-mechanics
+gh stack add   phenotype-likelihood     # DE-18 — decided 2026-08-07
 gh stack add   stopping-policy
 gh stack add   metric-joint
 gh stack add   generator-fidelity
 gh stack add   benchmark-protocol
-gh stack add   guide-concentration      # conditional — see Q-A
+gh stack add   guide-concentration
 gh stack submit
 ```
 
@@ -17,17 +18,20 @@ Ordering principle: the two PRs that move no number at all land first, because P
 
 Three defects are opened by this plan and are not yet in the register above: **DE-18** (`p_ct` has no data term), **DE-19** (the fit is unseeded), **DE-20** (fuzziness mapping is `g(f)=f` where the note specifies `g(f)=√f`). They are written into the register by PR 1.
 
+**Amended 2026-08-07.** Q-A is answered: condition on the observed phenotype. DE-18 becomes **PR 3**, ahead of everything it blocks (DE-3, DE-5, DE-6, DE-10, DE-12), and the stack is eight PRs. PR 7 `guide-concentration` is no longer conditional — it becomes meaningful only once PR 3 gives φ a data term.
+
 ## Stack at a glance
 
 | # | Branch | Closes | Contract first? | Numbers move |
 |---|---|---|---|---|
 | 1 | `seed-and-record` | DE-19, DE-16 | no | none |
 | 2 | `training-mechanics` | DE-1, DE-4, DE-17 | **yes** — new training contract + 2 model-contract amendments | MI/NMI **+6e-4** |
-| 3 | `stopping-policy` | DE-2, DE-3 | no (flips xfails from PR 2) | MI/NMI **0 to +4e-3** |
-| 4 | `metric-joint` | DE-6, DE-7, DE-15 | **yes** — metrics manifest + API contract | MI/NMI **+0.05 to +0.21** |
-| 5 | `generator-fidelity` | DE-13, DE-14, DE-20 | no | benchmark difficulty axis only |
-| 6 | `benchmark-protocol` | DE-8, DE-9, DE-10, DE-11, DE-12 | no | every benchmark cell |
-| 7 | `guide-concentration` | DE-5 | **yes** — model manifest | posterior read only; **0** if Q-A keeps the detach |
+| 4 | `stopping-policy` | DE-2, DE-3 | no (flips xfails from PR 2) | MI/NMI **0 to +4e-3** |
+| 5 | `metric-joint` | DE-6, DE-7, DE-15 | **yes** — metrics manifest + API contract | MI/NMI **+0.05 to +0.21** |
+| 6 | `generator-fidelity` | DE-13, DE-14, DE-20 | no | benchmark difficulty axis only |
+| 7 | `benchmark-protocol` | DE-8, DE-9, DE-10, DE-11, DE-12 | no | every benchmark cell |
+| 3 | `phenotype-likelihood` | DE-18 | **yes** — model manifest (new observed site) | all of them; every prior baseline invalidated |
+| 8 | `guide-concentration` | DE-5 | **yes** — model manifest | posterior width; meaningful only after PR 3 |
 
 ---
 
@@ -149,7 +153,71 @@ Two further test corrections. The validation estimator's equivalence must not be
 
 ---
 
-## PR 3 — `stopping-policy`
+## PR 3 — `phenotype-likelihood`
+
+**Title:** Condition on the observed phenotype (eq 4 with `z^φ` observed)
+
+**Closes:** DE-18. Unblocks DE-3, DE-5, DE-6, DE-10, DE-12.
+
+**The change.** Inside the `data` plate in `TCRIModule.model`, after `ell` is formed:
+
+```python
+pyro.sample("phenotype", dist.Categorical(logits=ell),
+            obs=self._target_phenotypes[indices])
+```
+
+`ell = π·cls_logits + (1−π)·log φ`, so the observed label gives gradient to **both** the
+classifier and `p_ct`. This is eq 4 with `z^φ` observed rather than latent. `_target_phenotypes`
+is already populated from `_model.py:235` and read nowhere — this is its intended use.
+
+**Open sub-decision, to be settled by measurement during implementation:** with `z^φ` observed,
+the surrogate's enumeration justification disappears and `−γ·KL(probs ‖ φ)` becomes a second
+term acting on the same quantity the likelihood now constrains. Either drop it, or keep it as a
+γ-weighted regulariser with γ configurable and default measured. Do not decide this from
+first principles — fit both and compare recovery and `p_ct` drift.
+
+**Files**
+
+- `tcri/model/_module.py` — the observed site; `.detach()` on `phi` is retained or removed
+  depending on the surrogate decision (if the surrogate is dropped, the detach goes with it).
+- `tcri/model/_model_contract.py` — declare the new observed site. **This changes the joint
+  distribution**, which `CLAUDE.md` names explicitly as a model-mathematics change.
+- `docs/contract/MODEL_CONTRACT.md` — prose twin, same commit.
+- `docs/contract/METHODS_CONFORMANCE.md` — the eq-4 row moves from `◐ via surrogate` to an
+  observed site; the symbols table entry for `z^φ_i` changes from "not sampled" to observed.
+- `tests/test_model_contract_conformance.py` — the traced site set gains `phenotype`.
+
+**Contract change:** yes, and it is the substance of the PR. Contract commit first, per
+`CLAUDE.md`. CODEOWNER-gated.
+
+**Metric outputs that move: all of them, and this is the point.** `p_ct` becomes data-informed,
+so it should stop drifting away from the observed crosstab with training. Expected, to be
+confirmed rather than assumed: `p_ct` L1 to the crosstab stops growing; the 30–120 epoch optimum
+extends rather than decaying; MI/NMI stop degrading with epochs; `gate=1` stops reading ~0
+because `cls_logits` finally receives gradient from real labels.
+
+**Every baseline recorded before this PR is invalidated.** Runs across it are not comparable.
+
+**Verification tests**
+
+1. The traced model contains an observed site `phenotype` with `Categorical` family in the
+   `data` plate — contract conformance.
+2. **`p_ct`'s L1 to the observed crosstab does not grow monotonically with training.** This is
+   the direct behavioural assertion for DE-18 and it fails on the parent commit — measured
+   0.284 → 0.515 over 120 → 4000 epochs there. Show it red before it is green.
+3. Classifier recovery on separable synthetic stays at 1.000, and `gate_prob=1` on the fitted
+   benchmark fixture reads materially above 0 (it reads 0.0022 / 0.0000 today).
+4. Full suite green.
+
+**Test command**
+
+```
+MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q
+```
+
+---
+
+## PR 4 — `stopping-policy`
 
 **Title:** Patience in epochs, and restore the selected weights
 
@@ -188,7 +256,7 @@ MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q
 
 ---
 
-## PR 4 — `metric-joint`
+## PR 5 — `metric-joint`
 
 **Title:** Freeze the table the metrics read
 
@@ -234,7 +302,7 @@ State plainly in the PR body: with Q-A unresolved, `tl.*` after this change is t
 
 ---
 
-## PR 5 — `generator-fidelity`
+## PR 6 — `generator-fidelity`
 
 **Title:** Generator label space, temperature scaling, and the fuzziness mapping
 
@@ -261,7 +329,7 @@ Copy DE-14's test construction throughout: write the superseded power form **inl
 
 ---
 
-## PR 6 — `benchmark-protocol`
+## PR 7 — `benchmark-protocol`
 
 **Title:** Benchmark provenance, protocol, and per-cell noise floor
 
@@ -293,7 +361,7 @@ MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q
 
 ---
 
-## PR 7 — `guide-concentration` (conditional)
+## PR 8 — `guide-concentration`
 
 **Title:** Free the guide concentration magnitude
 
@@ -327,7 +395,9 @@ The grid is expensive and PR 6 changes it. Three runs total.
 
 **Run B — full `published`, after PR 6 merges.** This is the first run that reproduces the note's design: 2000-epoch budget, K-Means initialisation, real K axis, per-axis summary, per-cell noise floor, recorded epochs. It is the run that supersedes every existing benchmark figure. Budget it as the single expensive event in the plan (~35× the old per-cell cost from DE-10, +3% from DE-12's amortised null fits).
 
-**Run C — conditional, only if Q-A removes the detach.** That is a model change; DE-18 becomes its own PR ahead of PR 7 and both invalidate Run B. Do not pre-emptively run it.
+**Run C — required, after PR 3.** Q-A is answered and DE-18 is PR 3, so this is no longer
+conditional. PR 3 gives `p_ct` a data term and invalidates every baseline recorded before it;
+Run B is not comparable across it. Re-baseline immediately after PR 3 merges, before PR 4.
 
 Between runs, every number-moving PR (2, 3, 4) is checked with a **single fixed cell**, not a grid: `(seed=0, n_cells=1000, temperature=1.0, fuzziness=0.1)`, run pre and post on the same commit pair, recording `tcri_nmi`, actual epochs trained (`model.trainer.current_epoch`, not the requested `max_epochs`), and the best epoch. That is ~6 s per side and is the only comparison that can attribute a delta to one PR.
 
@@ -415,7 +485,7 @@ Each checkpoint names what is compared against what. A silent change is caught b
 
 Recorded in `docs/contract/DEFECTS.md` by PR 1. Q-A gates PR 7 and re-scopes PR 6's expectations; Q-B and Q-D are recorded in the training contract by PR 2; Q-C is recorded in the metrics manifest by PR 4. None of them is inferred from what makes the code come out right.
 
-**Q-A — DE-18: `p_ct` has no data term.** `tcri/model/_module.py:241` is `phi = p_ct[ct_idx].detach()`. `p_c` appears in `model()` only at `:208` and `:212`; `p_ct` only at `:214` and `:241`; `_target_phenotypes` is registered at `:132`/`:160` and read nowhere in `tcri/`. So the only forces on `q_p_ct_raw` are the two prior KLs, and the classifier's only training term targets a detached constant, minimised by any phenotype-constant logit vector. That single fact accounts, without further hypotheses, for the optimum at 30–120 epochs, the decay to 0.1353 by 4000, `p_ct`'s L1 to the crosstab growing to 0.515 while validation ELBO improves, and gate=1 reading 0.0000. Is the detach intended as a stop-gradient on the alignment target, and was `_target_phenotypes` meant to enter the objective?
+**Q-A — ANSWERED 2026-08-07: condition on the observed phenotype; DE-18 is PR 3.** Original statement of the question: `tcri/model/_module.py:241` is `phi = p_ct[ct_idx].detach()`. `p_c` appears in `model()` only at `:208` and `:212`; `p_ct` only at `:214` and `:241`; `_target_phenotypes` is registered at `:132`/`:160` and read nowhere in `tcri/`. So the only forces on `q_p_ct_raw` are the two prior KLs, and the classifier's only training term targets a detached constant, minimised by any phenotype-constant logit vector. That single fact accounts, without further hypotheses, for the optimum at 30–120 epochs, the decay to 0.1353 by 4000, `p_ct`'s L1 to the crosstab growing to 0.515 while validation ELBO improves, and gate=1 reading 0.0000. Is the detach intended as a stop-gradient on the alignment target, and was `_target_phenotypes` meant to enter the objective?
 
 **Q-B — "KL scaling for Dirichlet and discrete terms" (Note 1, §Inference Details).** The note's only sentence about optimization, and the code does not do it under either reading. `pyro.plate("data", batch_size)` at `_module.py:216` and `:337` carries no `size=`/`subsample=`, so the C+M global Dirichlet terms enter once per minibatch: measured `|global|/|local|` = 0.0255 at batch 1024 versus 0.0064 at batch 4500, a 4× change in the priors' relative weight from a batch-size choice. Under the annealing reading, the note anneals the Dirichlet and discrete terms while the code anneals z, which is the inverse of `SANCTIONED_DEVIATIONS['kl_warmup_z_only']`. Either reading is a model change; invariant I6 ships `xfail(strict=True)` until it is answered.
 
