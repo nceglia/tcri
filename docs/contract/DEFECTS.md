@@ -1388,3 +1388,60 @@ consistent upward move on the reasoning that removing the validation-time flatte
 `p_ct` rows sharper. Two of three seeds move up and one moves down, so the effect is not
 monotone in the way the mechanism suggests at this configuration. Recorded as measured; not
 worth chasing, since it is an order of magnitude below anything the stack is trying to resolve.
+
+
+---
+
+## DE-18 implementation status — STOPPED FOR A DECISION
+
+**The contract change and the code are in place on `phenotype-likelihood`, and they are not
+being merged until the result below is resolved.**
+
+### Two implementation attempts; the first was a no-op
+
+Adding `pyro.sample("phenotype", Categorical(logits=ell), obs=...)` alone did nothing, because
+`ell` was built from `log_phi` derived from `phi = p_ct[ct_idx].detach()`. The detach still
+severed the gradient, so the new likelihood reached the classifier only. Measured: `p_ct`'s L1
+to the observed crosstab still grew 0.286 → 0.510 over 900 epochs, exactly as before.
+
+The fix keeps two views. `phi_live` carries gradient and builds `ell` for the likelihood;
+`phi_det` stays detached as the surrogate's alignment target, which it must be or
+`−γ·KL(probs‖φ)` is self-referential.
+
+This is only visible because the change was measured rather than assumed.
+
+### With the gradient path correct
+
+1200 cells, 20 clones, 5 phenotypes, seed 0, `normalize_mode="average"`, `n_samples=0`.
+True NMI = 0.2145.
+
+| configuration | ep60 L1 / NMI | ep600 L1 / NMI |
+|---|---|---|
+| likelihood + surrogate (as implemented) | 0.273 / 0.138 | 0.309 / 0.122 |
+| likelihood only, γ=0 | 0.405 / 0.138 | 0.396 / 0.103 |
+| surrogate only (pre-DE-18) | 0.242 / 0.136 | 0.321 / **0.170** |
+
+**The drift is reduced** — likelihood + surrogate grows least (+0.036 over the run, versus
++0.079 for the pre-fix behaviour), and the earlier single-config run showed 0.510 → 0.325 at
+900 epochs. The data term works.
+
+**But NMI accuracy gets worse.** The pre-fix configuration is closest to truth at 600 epochs
+(0.170, error 0.045); with the fix it reads 0.122 (error 0.093). Dropping the surrogate is worse
+still on both counts.
+
+### Why this is a decision and not a bug to chase
+
+On `simulate_tcri` the generator draws ω from a Dirichlet and `q_p_ct_raw` is initialised at the
+observed crosstab — which is already a good estimator of `P(φ|c)`. So a configuration that stays
+near its initialisation scores well on NMI *without inferring anything*, and the comparison may
+be rewarding least-drift-from-initialisation rather than best inference. This is the circularity
+problem: the synthetic is drawn from the model's own family.
+
+The residual drift is also plausibly **DE-5**, not DE-18: the guide's total concentration is
+pinned to β regardless of how many cells a group has, so the posterior cannot concentrate in
+proportion to the data term this PR just added. DE-18 supplies the evidence; DE-5 is what lets
+the posterior respond to it. That would make the two a single change rather than PRs 3 and 8.
+
+**Open:** ship DE-18 as-is and let PR 8 (DE-5) supply the missing half; or land DE-18 and DE-5
+together; or hold both until a non-circular test bed exists. One seed, one configuration, one
+generator — thin evidence for a model change of this size.

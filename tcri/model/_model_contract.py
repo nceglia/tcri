@@ -102,6 +102,19 @@ GENERATIVE_SITES = [
         ),
     ),
     SiteSpec(
+        "phenotype", "Categorical", "data", eq="4", observed=True,
+        note=(
+            "z^ϕ_i | ϕ_g(i), z_i ~ Cat(softmax(ℓ_i)), OBSERVED against the input phenotype "
+            "labels (DE-18). Before this, p_ct had no data term at all: it appeared in "
+            "model() only as `phi = p_ct[ct_idx].detach()`, so the clone×phenotype "
+            "distribution every metric reads was driven solely by its two prior KLs — "
+            "training relaxed it away from the crosstab it was initialised at, toward the "
+            "archetype prior. Structurally, x depends on z alone, so x ⊥ z^ϕ | z and a "
+            "LATENT z^ϕ marginalises out entirely (the optimal q(z^ϕ) = p(z^ϕ|z,ϕ) makes "
+            "the term exactly zero). Either z^ϕ is observed or ϕ_m is unidentifiable."
+        ),
+    ),
+    SiteSpec(
         "obs", "ZeroInflatedNegativeBinomial", "data", eq="5", observed=True, event_dim=1,
         note="x_i ~ ZINB(g'_i, r_i, μ_i) from the scVI decoder (+ library size).",
     ),
