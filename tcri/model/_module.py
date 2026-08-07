@@ -89,6 +89,9 @@ class TCRIModule(PyroBaseModuleClass):
         # monotone ramp. A plain int, deliberately not a registered buffer: a buffer changes the
         # state_dict key set and breaks load_state_dict(strict=True) against saved models.
         self._kl_warmup_step = 0
+        # DE-18: condition on the observed phenotype (eq 4 with z^ϕ observed). Exposed so the
+        # surrogate-vs-likelihood question can be settled by measurement rather than assertion.
+        self.observe_phenotype = True
         self.reconstruction_loss_scale = 1e-2
 
         self.encoder = Encoder(
@@ -244,15 +247,38 @@ class TCRIModule(PyroBaseModuleClass):
             #   classifier f_cls (η_cls). φ (the covariate-level distribution) is the
             #   DETACHED alignment target. Without this factor cls_logits never enters
             #   the ELBO and f_cls receives no gradient.
-            phi = p_ct[ct_idx].detach()
+            # Two views of ϕ, deliberately:
+            #   phi_live  — gradient flows through to p_ct. Used to build ℓ_i for the OBSERVED
+            #               phenotype likelihood, which is what gives p_ct a data term (DE-18).
+            #   phi_det   — detached. The surrogate's alignment TARGET must stay a constant, or
+            #               −γ·KL(probs‖ϕ) is self-referential and is minimised by ϕ and probs
+            #               agreeing with each other regardless of the data.
+            # Building ℓ from the detached view was the first attempt at DE-18 and did nothing:
+            # the likelihood reached the classifier only, and p_ct's L1 to the observed crosstab
+            # still grew 0.286 → 0.510 over 900 epochs.
+            phi_live = p_ct[ct_idx]
+            log_phi_live = torch.log(phi_live + 1e-8)
+            phi = phi_live.detach()
             log_phi = torch.log(phi + 1e-8)
             if self.gate_prob is not None:
-                ell = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi
+                ell = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi_live
             else:
-                ell = cls_logits + log_phi
+                ell = cls_logits + log_phi_live
+            # eq 4 with z^ϕ OBSERVED (DE-18). ℓ_i = π·f_cls(z_i) + (1−π)·log ϕ_g(i), so the
+            # observed label gives gradient to BOTH the classifier and p_ct. Without this the
+            # only thing touching p_ct was its own prior KL, and `_target_phenotypes` — already
+            # populated from the input labels — was never read.
+            if self.observe_phenotype:
+                pyro.sample(
+                    "phenotype",
+                    dist.Categorical(logits=ell),
+                    obs=self._target_phenotypes[indices],
+                )
+
             probs = torch.softmax(ell, dim=-1)
             pheno_kl = (probs * (torch.log(probs + 1e-8) - log_phi)).sum(dim=-1)
-            pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
+            if self.phenotype_kl_weight != 0.0:
+                pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
 
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
