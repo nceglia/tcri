@@ -24,9 +24,9 @@ definitions at all; a metric citing it is citing the wrong source.
 document.** Enforced by `.github/CODEOWNERS`, which requires "Require review from Code
 Owners" on the `main` branch protection rule to actually block a merge.
 
-## The three contracts
+## The four contracts
 
-This repo is governed by three frozen contracts. All are machine-checked; a failing
+This repo is governed by four frozen contracts. All are machine-checked; a failing
 conformance test means **stop and decide**, not "adjust the contract until it passes."
 
 | | freezes | manifest | prose | test |
@@ -34,6 +34,7 @@ conformance test means **stop and decide**, not "adjust the contract until it pa
 | **API contract** | the public *interface* | `tcri/_contract.pyi` | `docs/contract/tcri_api_and_responsibilities.md` | `tests/test_contract_conformance.py` |
 | **Model contract** | the generative *mathematics* | `tcri/model/_model_contract.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
 | **Metrics contract** | what the *metrics compute* | `tcri/tools/_metrics_contract.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
+| **Training contract** | how the model is *fit* | `tcri/model/_training_contract.py` | `docs/contract/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |
 
 ### Model integrity (read before touching `tcri/model/`)
 
@@ -76,6 +77,22 @@ comparable across groups with different clone counts. Anything reproducing the n
 benchmark must pass `normalize_mode="average"` explicitly. Recorded in
 `SANCTIONED_EXTENSIONS['normalize_mode_default']` and pinned by a test that asserts the
 default does *not* equal eq 6, so the divergence cannot go silent.
+
+### Training integrity (read before touching `tcri/model/_training.py`)
+
+The model *structure* is specified by the note; the *training plan* is not. Note 1 says only
+"SVI in Pyro, mini-batching, KL scaling, Adam" — no epochs, patience, warmup schedule or
+stopping rule. So the training contract has two halves and they carry different authority:
+**`DERIVED_INVARIANTS`** follow from eq 7 and a violation is a defect;
+**`AUTHORED_BOUNDS`** are ours, changeable with a recorded reason.
+
+**A bound must be behavioural.** The knob test verified that `patience` *arrives* at
+`EarlyStopping.patience` and ticked it ✅ — while patience was counted in validation checks
+(300 × 5 = 1500 epochs), `validation_step` was taking optimizer steps, and the KL ramp
+restarted on every `train()` call. Asserting a value is connected is not asserting the
+behaviour is right, and that gap is why the same defects kept resurfacing from new symptoms.
+
+I3 and I4 are **open** and say so. Do not mark an invariant satisfied without a test.
 
 ## Working agreement
 

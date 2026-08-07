@@ -291,6 +291,11 @@ class TCRIModel(BaseModelClass):
             self._apply_seed(self._seed + self._n_train_calls)
         self._n_train_calls += 1
 
+        # DE-4: the KL ramp is carried on the module, so a second train() CONTINUES the
+        # schedule instead of restarting it. There is deliberately no reset knob -- adding one
+        # to train() would be an API-contract change to _contract.pyi, and restarting the ramp
+        # is the behaviour this defect removes. Construct a new model for a fresh schedule.
+
         # Create a train/val split
         self.module.reconstruction_loss_scale = reconstruction_loss_scale
 

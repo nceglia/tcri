@@ -83,6 +83,12 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
+        # DE-4: the warmup counter lives on the MODULE, not the training plan. train() builds
+        # a fresh UnifiedTrainingPlan per call, so a plan-local counter restarted the KL ramp on
+        # every staged or resumed train() -- the model saw a sawtooth kl_weight rather than a
+        # monotone ramp. A plain int, deliberately not a registered buffer: a buffer changes the
+        # state_dict key set and breaks load_state_dict(strict=True) against saved models.
+        self._kl_warmup_step = 0
         self.reconstruction_loss_scale = 1e-2
 
         self.encoder = Encoder(

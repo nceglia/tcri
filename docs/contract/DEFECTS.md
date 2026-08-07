@@ -1367,3 +1367,24 @@ MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q
 
 ---
 
+
+
+---
+
+## PR 2 measured effect (DE-1 + DE-4)
+
+Paired seeded fits, 1200 cells / 20 clones / 5 phenotypes, 60 epochs, `normalize_mode="average"`,
+`n_samples=0`. Same-seed fits are bit-identical after PR 1, so these deltas are the change itself
+rather than fit-to-fit noise.
+
+| seed | parent | with PR 2 | delta |
+|---|---|---|---|
+| 0 | 0.123834 | 0.124480 | +6.5e-4 |
+| 1 | 0.149407 | 0.149736 | +3.3e-4 |
+| 2 | 0.194495 | 0.193689 | −8.1e-4 |
+
+Magnitude matches the plan's ~6e-4 estimate. **The sign does not** — the plan predicted a
+consistent upward move on the reasoning that removing the validation-time flattening leaves
+`p_ct` rows sharper. Two of three seeds move up and one moves down, so the effect is not
+monotone in the way the mechanism suggests at this configuration. Recorded as measured; not
+worth chasing, since it is an order of magnitude below anything the stack is trying to resolve.
