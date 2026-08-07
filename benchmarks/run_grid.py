@@ -117,8 +117,11 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     # proposed source of the upward NMI bias. Note it moves BOTH sides at once: the guide's
     # posterior and, via uns, the metric's draw -- so a change here is not attributable to
     # one or the other without a follow-up that pins the metric side separately.
+    # DE-19: the cell's seed reached the simulator and the metric draw but never the model, so
+    # two runs of the same cell differed by ~1.8e-3 NMI -- larger than several of the effects
+    # this grid is meant to measure.
     mk = dict(n_latent=32, n_hidden=64, n_layers=2,
-              classifier_n_layers=1, classifier_hidden=64, K=k_infer)
+              classifier_n_layers=1, classifier_hidden=64, K=k_infer, seed=seed)
     if local_scale is not None:
         mk["local_scale"] = float(local_scale)
     model = TCRIModel(adata, **mk)
@@ -130,6 +133,16 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
     t_train = time.time() - t0
+
+    # DE-8: record what ACTUALLY happened, not what was requested. `max_epochs` is a ceiling --
+    # early stopping is on by default (`_model.py` sets early_stopping=True), so a run can stop
+    # well short of it. max_epochs=4000 trained 2964 epochs and max_epochs=8000 trained 2774;
+    # nothing recorded the difference, and the two near-identical results were read as an
+    # estimator bias floor for a full day. One column would have made it obvious.
+    hist = getattr(model, "history", {}) or {}
+    _tr = hist.get("elbo_train")
+    epochs_actual = int(len(_tr)) if _tr is not None else -1
+    stopped_early = bool(epochs_actual >= 0 and epochs_actual < epochs)
 
     t0 = time.time()
     est = tcri.tl.mutual_information(
@@ -163,6 +176,7 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     row = dict(
         fuzziness=fuzz, n_cells=n_cells, k_infer=k_infer, seed=seed, device=device,
         temperature=temperature, epochs=epochs,
+        epochs_actual=epochs_actual, stopped_early=stopped_early,
         local_scale=(local_scale if local_scale is not None else float("nan")),
         true_nmi=true_v, empirical_nmi=emp_v, tcri_nmi=est_mean,
         tcri_nmi_meanjoint=mean_joint_nmi,
@@ -235,7 +249,9 @@ def main():
         rows.append(r)
         print(f"[{i:>4}/{len(combos)}] f={f} N={n} K={k} T={T} s={s} | "
               f"tcri={r['tcri_nmi']:.4f} true={r['true_nmi']:.4f} "
-              f"AE={r['ae_vs_true']:.4f} | {r['t_total']:.1f}s", flush=True)
+              f"AE={r['ae_vs_true']:.4f} | "
+              f"ep={r['epochs_actual']}/{args.epochs}{'*' if r['stopped_early'] else ''} "
+              f"| {r['t_total']:.1f}s", flush=True)
 
     df = pd.DataFrame(rows)
     df.to_csv(args.out, index=False)

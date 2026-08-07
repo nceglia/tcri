@@ -15,16 +15,19 @@
 # --- machine-checked manifests ----------------------------------------------------
 /tcri/_contract.pyi                       @nceglia @salehis
 /tcri/model/_model_contract.py            @nceglia @salehis
+/tcri/model/_training_contract.py         @nceglia @salehis
 /tcri/tools/_metrics_contract.py          @nceglia @salehis
 
 # --- the conformance tests that give the manifests teeth --------------------------
 # Weakening a test is equivalent to weakening the contract, so these carry the same bar.
 /tests/test_contract_conformance.py           @nceglia @salehis
 /tests/test_model_contract_conformance.py     @nceglia @salehis
+/tests/test_training_contract_conformance.py  @nceglia @salehis
 /tests/test_metrics_contract_conformance.py   @nceglia @salehis
 
 # --- the prose twins --------------------------------------------------------------
 /docs/contract/MODEL_CONTRACT.md          @nceglia @salehis
+/docs/contract/TRAINING_CONTRACT.md       @nceglia @salehis
 /docs/contract/METRICS_CONTRACT.md        @nceglia @salehis
 /docs/contract/METHODS_CONFORMANCE.md     @nceglia @salehis
 /docs/contract/tcri_api_and_responsibilities.md  @nceglia @salehis
