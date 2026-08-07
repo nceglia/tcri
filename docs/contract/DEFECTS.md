@@ -1392,10 +1392,11 @@ worth chasing, since it is an order of magnitude below anything the stack is try
 
 ---
 
-## DE-18 implementation status — STOPPED FOR A DECISION
+## DE-18 + DE-5 — RESOLVED TOGETHER (PR 3)
 
-**The contract change and the code are in place on `phenotype-likelihood`, and they are not
-being merged until the result below is resolved.**
+**Decision taken: land DE-18 and DE-5 together.** Either alone is insufficient — DE-18 supplies
+the evidence, DE-5 lets the posterior respond to it — and the combination reverses the
+degradation that motivated the whole investigation.
 
 ### Two implementation attempts; the first was a no-op
 
@@ -1445,3 +1446,39 @@ the posterior respond to it. That would make the two a single change rather than
 **Open:** ship DE-18 as-is and let PR 8 (DE-5) supply the missing half; or land DE-18 and DE-5
 together; or hold both until a non-circular test bed exists. One seed, one configuration, one
 generator — thin evidence for a model change of this size.
+
+
+### Result of landing both
+
+1200 cells, 20 clones, 5 phenotypes, seed 0, `normalize_mode="average"`, `n_samples=0`.
+True NMI = 0.2145.
+
+| epochs | L1 to crosstab | NMI | conc range | corr(conc, group size) |
+|---|---|---|---|---|
+| 60 | 0.234 | 0.150 | 9.25–11.71 | 0.270 |
+| 200 | 0.160 | 0.170 | 7.96–17.69 | 0.402 |
+| 600 | 0.210 | **0.220** | 5.71–36.00 | **0.558** |
+
+Accuracy at 600 epochs, against a truth of 0.2145:
+
+| configuration | NMI | error |
+|---|---|---|
+| pre-fix (surrogate only, β-pinned guide) | 0.170 | 0.045 |
+| DE-18 only (data term, β-pinned guide) | 0.122 | 0.093 |
+| **DE-18 + DE-5** | **0.220** | **0.0055** |
+
+Three things changed at once, and they are the three symptoms this investigation started from:
+
+- **The estimate converges to the truth** rather than away from it. Error is 8× smaller than the
+  pre-fix code and 17× smaller than DE-18 alone.
+- **Training no longer degrades the answer.** NMI rises monotonically with epochs. The optimum
+  at 30–120 epochs followed by decay — the behaviour that produced the "bias floor" reading and
+  cost a day — does not occur.
+- **The posterior concentrates with data.** Totals spread from 9–12 to 6–36 and their
+  correlation with group size climbs 0.27 → 0.56. This is the property eq 6 specifies and the
+  β-pin removed, and it is why credible intervals were previously prior-set.
+
+Caveat, stated because the evidence is thinner than the result sounds: one seed, one
+configuration, one generator — and that generator is drawn from the model's own family. The
+direction is unambiguous and the mechanism is visible in the concentration/size correlation, but
+the magnitude should not be quoted until the benchmark grid re-runs.

@@ -124,9 +124,16 @@ GENERATIVE_SITES = [
 # ── the variational family q(Ω, Φ, z | x)  (eq 6) ────────────────────────────
 GUIDE_SITES = [
     SiteSpec("p_c", "Dirichlet", "clonotypes", eq="6", event_dim=1,
-             note="q(ω_c) = Dir(λ_c); concentration = α · normalized q_p_c_raw."),
+             note=("q(ω_c) = Dir(λ_c), λ_c ∈ ℝ^P_{>0} FREE. Concentration is "
+                   "magnitude(q_p_c_raw) · sharpened direction — the magnitude is learned, not "
+                   "pinned to α. α is the eq-1 PRIOR scale (a scalar); using it as the "
+                   "variational total conflates two rows of the note's notation table.")),
     SiteSpec("p_ct", "Dirichlet", "ct_plate", eq="6", event_dim=1,
-             note="q(ϕ_m) = Dir(λ'_m); concentration = β · normalized q_p_ct_raw."),
+             note=("q(ϕ_m) = Dir(λ'_m), λ'_m ∈ ℝ^P_{>0} FREE (DE-5). Was β · normalized "
+                   "q_p_ct_raw, which pinned the TOTAL to β regardless of a group's cell "
+                   "count — a 3-cell and a 3000-cell clone got the same posterior width, so "
+                   "the posterior could not concentrate with data and every interval at "
+                   "n_samples>0 was prior-set. guide_temperature sharpens the DIRECTION only.")),
     SiteSpec("latent", "Normal", "data", eq="6", event_dim=1,
              note="q(z_i|x_i) = N(μ_i, diag(σ_i²)) from the encoder."),
 ]
