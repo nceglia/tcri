@@ -1162,7 +1162,29 @@ D. **Remove the parallel dead schedule** — pass `n_epochs_kl_warmup=None` to `
 6. **Suite regression**: 177 passed / 3 skipped baseline preserved, plus the new tests; all three conformance tests green.
 
 ---
-## DE-18 — `p_ct` has no data term in the ELBO · S1 · BLOCKING · needs an author decision
+## DE-18 — `p_ct` has no data term in the ELBO · WITHDRAWN — NOT A DEFECT
+
+> **WITHDRAWN 2026-08-07 by @nceglia. The premise was wrong, and the fix has been reverted.**
+>
+> The hierarchical branch (ω_c → φ_m → z^φ) is a **prior** over phenotype composition, and it
+> is *supposed* to never see `x` directly — that separation is the reason the model is a VAE at
+> all. Data reaches the hierarchy only through `z`. So "`p_ct` has no data term" describes the
+> architecture; it is not a missing piece to be supplied.
+>
+> `z^φ` is **latent**. The step below from "x ⊥ z^φ | z, so φ_m is unidentifiable" to
+> "therefore z^φ must be observed" does not follow, and conditioning the site on the input
+> phenotype labels turns an unsupervised phenotype model into a supervised one — every metric
+> then becomes partly a readout of the labels it was handed.
+>
+> Reverted in `_module.py` (back to `phi = p_ct[ct_idx].detach()`), the `phenotype` SiteSpec
+> removed from `_model_contract.py`, and `FORBIDDEN_MODEL_SITES` added so the site cannot be
+> re-introduced without deliberately editing the contract.
+>
+> **DE-5 is unaffected and stays.** It was landed in the same commit but is an independent fix
+> to the guide's concentration (eq 6, λ'_m free), and its justification never depended on DE-18.
+>
+> Everything below is the original, superseded analysis, kept because five other defects were
+> argued from it and those arguments have to be re-derived rather than silently inherited.
 
 **Confirmed on `main` at `46490e6`, statically.** Inside `TCRIModule.model`, `p_c` is used at
 exactly one place — `base_p = p_c[self.ct_to_c] + self.eps`, forming `p_ct`'s prior
@@ -1392,11 +1414,40 @@ worth chasing, since it is an order of magnitude below anything the stack is try
 
 ---
 
-## DE-18 + DE-5 — RESOLVED TOGETHER (PR 3)
+## DE-18 + DE-5 — SUPERSEDED: DE-18 WITHDRAWN, DE-5 STANDS
 
-**Decision taken: land DE-18 and DE-5 together.** Either alone is insufficient — DE-18 supplies
-the evidence, DE-5 lets the posterior respond to it — and the combination reverses the
-degradation that motivated the whole investigation.
+> **2026-08-07.** DE-18 is withdrawn as not-a-defect (see its entry above) and the observed
+> phenotype likelihood has been reverted. DE-5 — the free guide concentration, eq 6 — is an
+> independent fix and remains landed.
+>
+> One measurement below now reads the other way round. The **pre-DE-18 configuration is the
+> most accurate**: surrogate-only reads NMI 0.170 against a true 0.2145 at 600 epochs (error
+> 0.045), while likelihood + surrogate reads 0.122 (error 0.093). This was written up at the
+> time as "the data term works, but NMI accuracy gets worse," and the accuracy loss was set
+> aside as possible synthetic circularity. It was the signal.
+>
+> Two behaviours of the detached hierarchy are expected, not defects, and are recorded here
+> **once** so they are not re-litigated from new symptoms:
+> 1. `q(ϕ_m)`'s concentration does not track clone size. This follows structurally: with no
+>    direct data term the only ϕ-bearing ELBO term is −KL(q(ϕ_m) ‖ Dir(β·ω)), whose optimum over
+>    a free λ'_m is β·ω for every row, independent of cell count. DE-5 frees the parameter, as
+>    eq 6 requires; it does not make it data-informed.
+>
+>    A measured r = −0.038 on Yost top-50 is consistent with this but is **not** evidence for
+>    it, and should not be cited as such: that subset is the 50 largest clones, spanning 42–901
+>    cells — 1.33 decades, with no singletons — against the 3–4 decades of a full repertoire.
+>    Correlating concentration against clone size over a narrow band at the top of a heavy tail
+>    is range-restricted by construction and would read ≈0 whether or not the dependence exists.
+>    The structural argument is the content; testing it needs the untruncated repertoire.
+> 2. `p_ct`'s L1 to the observed crosstab grows 0.242 → 0.321 over 600 epochs as the guide
+>    relaxes toward the archetype prior.
+>
+> Whether the hierarchy should concentrate with data, and through what coupling, is a model
+> question for the forthcoming supplemental note.
+
+**Superseded decision (kept for the record): land DE-18 and DE-5 together.** Either alone is
+insufficient — DE-18 supplies the evidence, DE-5 lets the posterior respond to it — and the
+combination reverses the degradation that motivated the whole investigation.
 
 ### Two implementation attempts; the first was a no-op
 

@@ -102,19 +102,6 @@ GENERATIVE_SITES = [
         ),
     ),
     SiteSpec(
-        "phenotype", "Categorical", "data", eq="4", observed=True,
-        note=(
-            "z^ϕ_i | ϕ_g(i), z_i ~ Cat(softmax(ℓ_i)), OBSERVED against the input phenotype "
-            "labels (DE-18). Before this, p_ct had no data term at all: it appeared in "
-            "model() only as `phi = p_ct[ct_idx].detach()`, so the clone×phenotype "
-            "distribution every metric reads was driven solely by its two prior KLs — "
-            "training relaxed it away from the crosstab it was initialised at, toward the "
-            "archetype prior. Structurally, x depends on z alone, so x ⊥ z^ϕ | z and a "
-            "LATENT z^ϕ marginalises out entirely (the optimal q(z^ϕ) = p(z^ϕ|z,ϕ) makes "
-            "the term exactly zero). Either z^ϕ is observed or ϕ_m is unidentifiable."
-        ),
-    ),
-    SiteSpec(
         "obs", "ZeroInflatedNegativeBinomial", "data", eq="5", observed=True, event_dim=1,
         note="x_i ~ ZINB(g'_i, r_i, μ_i) from the scVI decoder (+ library size).",
     ),
@@ -146,6 +133,20 @@ GUIDE_PARAMS = ["q_p_c_raw", "q_p_ct_raw"]
 # in the guide means someone re-introduced the enumerated path without updating the
 # contract — which changes the objective.
 FORBIDDEN_GUIDE_SITES = ["z_phi", "z_phenotype", "phenotype", "phenotype_alignment"]
+
+# z^ϕ is also NOT an observation. It is latent, and the hierarchical branch
+# (ω_c -> ϕ_m -> z^ϕ) is a PRIOR over phenotype composition that never sees x directly —
+# that separation is the reason the model is a VAE at all. Data reaches the hierarchy only
+# through z, via the encoder and the classifier inside the surrogate.
+#
+# DE-18 (WITHDRAWN) added `pyro.sample("phenotype", Categorical(ℓ), obs=<input labels>)`,
+# reasoning: x ⊥ z^ϕ | z, so a latent z^ϕ marginalises out and ϕ_m is unidentifiable;
+# therefore z^ϕ must be observed. The conditional independence is true and the conclusion
+# does not follow from it — "the hierarchy has no direct data term" is the architecture,
+# not a defect to be repaired by conditioning on the labels. Doing so turns an unsupervised
+# phenotype model into a supervised one and makes every metric partly a readout of the
+# labels it was given.
+FORBIDDEN_MODEL_SITES = ["phenotype", "z_phi", "z_phenotype"]
 
 
 # ── semantic invariants (behavior the structure alone can't pin) ─────────────

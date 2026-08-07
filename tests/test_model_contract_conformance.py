@@ -197,6 +197,28 @@ def test_discrete_phenotype_latent_is_not_sampled(traced):
         )
 
 
+def test_discrete_phenotype_latent_is_not_observed_either(traced):
+    """z^ϕ is LATENT. Not sampled in the guide, and not conditioned on in the model.
+
+    The hierarchical branch (ω_c -> ϕ_m -> z^ϕ) is a prior over phenotype composition that
+    never sees x directly; data reaches it only through z. DE-18 read that absence as a
+    missing data term and conditioned the site on the input phenotype labels, which makes
+    the model supervised and every metric partly a readout of its own input. Withdrawn.
+    """
+    _, m_trace, _, _, _ = traced
+    observed = {
+        name for name, site in m_trace.nodes.items()
+        if site["type"] == "sample" and site.get("is_observed")
+    }
+    for forbidden in MC.FORBIDDEN_MODEL_SITES:
+        assert forbidden not in observed, (
+            f"model() conditions on '{forbidden}'. z^ϕ is latent — the note replaces it "
+            f"with the phenotype_alignment surrogate rather than observing the input "
+            f"labels. See DE-18 (WITHDRAWN) in DEFECTS.md before re-adding this."
+        )
+    assert "obs" in observed, "the ZINB likelihood is the model's only observation (eq 5)"
+
+
 # ── semantics: invariants the structure alone cannot pin ─────────────────────
 
 def test_alpha_scales_the_clonotype_prior(traced):
