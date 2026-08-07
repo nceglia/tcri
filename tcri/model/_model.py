@@ -118,9 +118,21 @@ class TCRIModel(BaseModelClass):
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
+        seed: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(adata)
+
+        # DE-19: network init and minibatch order were unseeded, so two fits with the same
+        # nominal seed differed by ~1.8e-3 in reported NMI -- larger than the effect of several
+        # defects being fixed in this stack, which makes those effects unmeasurable from a
+        # paired fit. `seed` is on __init__ rather than train() deliberately: the networks are
+        # built here, so seeding in train() would be too late, and adding it to train() would
+        # be an API-contract change to _contract.pyi.
+        self._seed = int(seed) if seed is not None else None
+        self._n_train_calls = 0
+        if self._seed is not None:
+            self._apply_seed(self._seed)
 
         # Pyro's param store is PROCESS-GLOBAL: a second TCRIModel in the same session
         # silently inherits the first model's fitted q_p_c_raw/q_p_ct_raw and network
@@ -195,6 +207,11 @@ class TCRIModel(BaseModelClass):
         batch_series = self.adata.obs[batch_col].astype("category")
         n_batch = len(batch_series.cat.categories)
 
+        # re-seed immediately before the networks are constructed, so construction is
+        # deterministic regardless of any RNG consumed by the setup above
+        if self._seed is not None:
+            self._apply_seed(self._seed)
+
         self.module = TCRIModule(
             n_input=n_vars,
             n_latent=n_latent,
@@ -241,6 +258,19 @@ class TCRIModel(BaseModelClass):
             f"prior_temperature={prior_temperature}, guide_temperature={guide_temperature}."
         )
 
+    @staticmethod
+    def _apply_seed(seed: int) -> None:
+        """Seed every RNG that touches a fit: python, numpy, torch (incl. CUDA), and pyro.
+
+        `lightning.seed_everything(workers=True)` also seeds dataloader workers, which is what
+        makes minibatch order reproducible; `pyro.set_rng_seed` covers the param-store
+        initialisers and the Dirichlet draws. Both are needed -- neither alone is sufficient.
+        """
+        import lightning.pytorch as _pl
+
+        _pl.seed_everything(seed, workers=True, verbose=False)
+        pyro.set_rng_seed(seed)
+
     def train(
         self,
         max_epochs: int = 1000,
@@ -255,6 +285,12 @@ class TCRIModel(BaseModelClass):
         validation_step, and let scvi handle early stopping automatically
         by passing early_stopping parameters to TrainRunner.
         """
+        # Re-seed per call, offset by the call index: a second train() on the same model is
+        # reproducible without being a bit-for-bit replay of the first.
+        if self._seed is not None:
+            self._apply_seed(self._seed + self._n_train_calls)
+        self._n_train_calls += 1
+
         # Create a train/val split
         self.module.reconstruction_loss_scale = reconstruction_loss_scale
 
