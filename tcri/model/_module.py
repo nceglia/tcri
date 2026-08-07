@@ -89,6 +89,9 @@ class TCRIModule(PyroBaseModuleClass):
         # monotone ramp. A plain int, deliberately not a registered buffer: a buffer changes the
         # state_dict key set and breaks load_state_dict(strict=True) against saved models.
         self._kl_warmup_step = 0
+        # DE-18: condition on the observed phenotype (eq 4 with z^ϕ observed). Exposed so the
+        # surrogate-vs-likelihood question can be settled by measurement rather than assertion.
+        self.observe_phenotype = True
         self.reconstruction_loss_scale = 1e-2
 
         self.encoder = Encoder(
@@ -244,15 +247,38 @@ class TCRIModule(PyroBaseModuleClass):
             #   classifier f_cls (η_cls). φ (the covariate-level distribution) is the
             #   DETACHED alignment target. Without this factor cls_logits never enters
             #   the ELBO and f_cls receives no gradient.
-            phi = p_ct[ct_idx].detach()
+            # Two views of ϕ, deliberately:
+            #   phi_live  — gradient flows through to p_ct. Used to build ℓ_i for the OBSERVED
+            #               phenotype likelihood, which is what gives p_ct a data term (DE-18).
+            #   phi_det   — detached. The surrogate's alignment TARGET must stay a constant, or
+            #               −γ·KL(probs‖ϕ) is self-referential and is minimised by ϕ and probs
+            #               agreeing with each other regardless of the data.
+            # Building ℓ from the detached view was the first attempt at DE-18 and did nothing:
+            # the likelihood reached the classifier only, and p_ct's L1 to the observed crosstab
+            # still grew 0.286 → 0.510 over 900 epochs.
+            phi_live = p_ct[ct_idx]
+            log_phi_live = torch.log(phi_live + 1e-8)
+            phi = phi_live.detach()
             log_phi = torch.log(phi + 1e-8)
             if self.gate_prob is not None:
-                ell = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi
+                ell = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi_live
             else:
-                ell = cls_logits + log_phi
+                ell = cls_logits + log_phi_live
+            # eq 4 with z^ϕ OBSERVED (DE-18). ℓ_i = π·f_cls(z_i) + (1−π)·log ϕ_g(i), so the
+            # observed label gives gradient to BOTH the classifier and p_ct. Without this the
+            # only thing touching p_ct was its own prior KL, and `_target_phenotypes` — already
+            # populated from the input labels — was never read.
+            if self.observe_phenotype:
+                pyro.sample(
+                    "phenotype",
+                    dist.Categorical(logits=ell),
+                    obs=self._target_phenotypes[indices],
+                )
+
             probs = torch.softmax(ell, dim=-1)
             pheno_kl = (probs * (torch.log(probs + 1e-8) - log_phi)).sum(dim=-1)
-            pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
+            if self.phenotype_kl_weight != 0.0:
+                pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
 
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
@@ -306,10 +332,13 @@ class TCRIModule(PyroBaseModuleClass):
                 q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
 
             # Apply a sharpening transformation controlled by guide_temperature.
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
+            q_c_mag = q_p_c_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
+            q_p_c_sharp = (q_p_c_raw / q_c_mag) ** (1.0 / self.guide_temperature)
             q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
+            # DE-5, same defect on lambda_c: alpha is the eq-1 prior scale, not the variational
+            # total. Free the magnitude here too rather than fixing half the pair.
+            conc_c_guide = torch.clamp(q_c_mag * q_p_c_sharp, min=1e-3)
             
             # Sample p_c from a single learned Dirichlet per clonotype.
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
@@ -331,10 +360,22 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_ct.any():
                 q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
 
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
+            # DE-5 / eq 6: lambda'_m is a FREE variational parameter in R^P_{>0}. It was
+            # `local_scale * normalized(...)`, which pins the TOTAL concentration to beta
+            # regardless of how many cells the group has -- a 3-cell clone and a 3000-cell clone
+            # got the same posterior width, so the posterior could not concentrate with data and
+            # every interval at n_samples>0 was prior-set. beta is a scalar PRIOR
+            # hyperparameter (eq 2); using it as a variational parameter's total conflates two
+            # rows of the note's own notation table.
+            #
+            # Any positive vector factors as magnitude x simplex, so freeing the magnitude and
+            # keeping the learned direction yields exactly eq 6's family. guide_temperature
+            # applies to the DIRECTION only -- sharpening must not silently rescale the total.
+            q_ct_mag = q_p_ct_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
+            q_ct_dir = q_p_ct_raw / q_ct_mag
+            q_p_ct_sharp = torch.clamp(q_ct_dir ** (1.0 / self.guide_temperature), min=1e-8)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
+            conc_ct_guide = torch.clamp(q_ct_mag * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
