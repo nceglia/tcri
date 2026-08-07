@@ -26,11 +26,11 @@ Three defects are opened by this plan and are not yet in the register above: **D
 |---|---|---|---|---|
 | 1 | `seed-and-record` | DE-19, DE-16 | no | none |
 | 2 | `training-mechanics` | DE-1, DE-4, DE-17 | **yes** — new training contract + 2 model-contract amendments | MI/NMI **+6e-4** |
+| 3 | `phenotype-likelihood` | DE-18 | **yes** — model manifest (new observed site) | all of them; every prior baseline invalidated |
 | 4 | `stopping-policy` | DE-2, DE-3 | no (flips xfails from PR 2) | MI/NMI **0 to +4e-3** |
 | 5 | `metric-joint` | DE-6, DE-7, DE-15 | **yes** — metrics manifest + API contract | MI/NMI **+0.05 to +0.21** |
 | 6 | `generator-fidelity` | DE-13, DE-14, DE-20 | no | benchmark difficulty axis only |
 | 7 | `benchmark-protocol` | DE-8, DE-9, DE-10, DE-11, DE-12 | no | every benchmark cell |
-| 3 | `phenotype-likelihood` | DE-18 | **yes** — model manifest (new observed site) | all of them; every prior baseline invalidated |
 | 8 | `guide-concentration` | DE-5 | **yes** — model manifest | posterior width; meaningful only after PR 3 |
 
 ---
