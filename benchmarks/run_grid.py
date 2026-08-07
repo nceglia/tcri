@@ -117,8 +117,11 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     # proposed source of the upward NMI bias. Note it moves BOTH sides at once: the guide's
     # posterior and, via uns, the metric's draw -- so a change here is not attributable to
     # one or the other without a follow-up that pins the metric side separately.
+    # DE-19: the cell's seed reached the simulator and the metric draw but never the model, so
+    # two runs of the same cell differed by ~1.8e-3 NMI -- larger than several of the effects
+    # this grid is meant to measure.
     mk = dict(n_latent=32, n_hidden=64, n_layers=2,
-              classifier_n_layers=1, classifier_hidden=64, K=k_infer)
+              classifier_n_layers=1, classifier_hidden=64, K=k_infer, seed=seed)
     if local_scale is not None:
         mk["local_scale"] = float(local_scale)
     model = TCRIModel(adata, **mk)

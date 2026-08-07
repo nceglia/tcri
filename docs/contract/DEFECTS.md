@@ -1267,11 +1267,23 @@ first, citing the equation.
 
 ---
 
-## DE-19 — the fit is unseeded · S2 · open
+## DE-19 — the fit is unseeded · S2 · FIXED (PR 1 `seed-and-record`)
 
 Network init and minibatch order are not seeded; `seed` reaches the simulator and the metric
 draw only. Measured ~1.8e-3 fit-to-fit spread on the same nominal seed — larger than DE-1's
 effect and comparable to DE-3's, so neither is measurable from a single paired fit without this.
+
+**Fixed.** `seed` added to `TCRIModel.__init__` (not `train()` — the networks are built in
+`__init__`, so seeding in `train()` would be too late, and it would be an API-contract change).
+`_apply_seed` calls `lightning.seed_everything(workers=True)` — which is what makes minibatch
+order reproducible — and `pyro.set_rng_seed`, which covers the param-store initialisers and the
+Dirichlet draws. Neither alone is sufficient. Re-seeded per `train()` call offset by the call
+index, so a second fit is reproducible without replaying the first. `run_grid` now passes the
+cell's seed through.
+
+`tests/test_model_determinism.py` asserts bit-identical `p_ct` across seeded fits, **and** that
+unseeded fits differ — without that negative control the positive test would keep passing on a
+model that had become deterministic for an unrelated reason.
 
 ---
 
