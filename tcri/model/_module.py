@@ -332,10 +332,13 @@ class TCRIModule(PyroBaseModuleClass):
                 q_p_c_raw = torch.where(bad_c, init_mat_c.to(q_p_c_raw.device), q_p_c_raw)
 
             # Apply a sharpening transformation controlled by guide_temperature.
-            q_p_c_sharp = q_p_c_raw ** (1.0 / self.guide_temperature)
+            q_c_mag = q_p_c_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
+            q_p_c_sharp = (q_p_c_raw / q_c_mag) ** (1.0 / self.guide_temperature)
             q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            conc_c_guide = torch.clamp(self.global_scale * q_p_c_sharp, min=1e-3)
+            # DE-5, same defect on lambda_c: alpha is the eq-1 prior scale, not the variational
+            # total. Free the magnitude here too rather than fixing half the pair.
+            conc_c_guide = torch.clamp(q_c_mag * q_p_c_sharp, min=1e-3)
             
             # Sample p_c from a single learned Dirichlet per clonotype.
             pyro.sample("p_c", dist.Dirichlet(conc_c_guide))
@@ -357,10 +360,22 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_ct.any():
                 q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
 
-            q_p_ct_sharp = q_p_ct_raw ** (1.0 / self.guide_temperature)
-            q_p_ct_sharp = torch.clamp(q_p_ct_sharp, min=1e-8)
+            # DE-5 / eq 6: lambda'_m is a FREE variational parameter in R^P_{>0}. It was
+            # `local_scale * normalized(...)`, which pins the TOTAL concentration to beta
+            # regardless of how many cells the group has -- a 3-cell clone and a 3000-cell clone
+            # got the same posterior width, so the posterior could not concentrate with data and
+            # every interval at n_samples>0 was prior-set. beta is a scalar PRIOR
+            # hyperparameter (eq 2); using it as a variational parameter's total conflates two
+            # rows of the note's own notation table.
+            #
+            # Any positive vector factors as magnitude x simplex, so freeing the magnitude and
+            # keeping the learned direction yields exactly eq 6's family. guide_temperature
+            # applies to the DIRECTION only -- sharpening must not silently rescale the total.
+            q_ct_mag = q_p_ct_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
+            q_ct_dir = q_p_ct_raw / q_ct_mag
+            q_p_ct_sharp = torch.clamp(q_ct_dir ** (1.0 / self.guide_temperature), min=1e-8)
             q_p_ct_sharp = q_p_ct_sharp / q_p_ct_sharp.sum(dim=1, keepdim=True)
-            conc_ct_guide = torch.clamp(self.local_scale * q_p_ct_sharp, min=1e-3)
+            conc_ct_guide = torch.clamp(q_ct_mag * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
         z_loc, z_scale, _ = self.encoder(x, batch_idx)
