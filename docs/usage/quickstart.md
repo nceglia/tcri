@@ -95,18 +95,24 @@ group-comparable deviation from eq 6. See [the metrics concepts](../concepts/met
 Each `tcri.pl` function is a plotting twin of the `tcri.tl` metric of the same name:
 
 ```python
-tcri.pl.mutual_information(adata, splitby="timepoint", figsize=(8, 4))
+# MI per patient, boxed by cohort
+tcri.pl.mutual_information(adata, groupby="patient", splitby="response")
+
+# per-clone phenotype flux from the first to the last covariate
 tcri.pl.phenotypic_flux(adata, order=["pre", "post"])
 ```
 
 ## 7. Compare groups
 
 Contrast a metric across cohorts (e.g. responders vs non-responders) with direction
-probabilities:
+probabilities. Compute one value per unit (`groupby`) carrying the cohort label
+(`splitby`), then contrast — `value` is the metric column, `"MI"` for mutual information:
 
 ```python
-mi_df = tcri.tl.mutual_information(adata, groupby="patient", covariate="pre")
-result = tcri.tl.compare_groups(mi_df, value="mutual_information", splitby="response")
+mi_df = tcri.tl.mutual_information(
+    adata, covariate="pre", groupby="patient", splitby="response"
+)
+result = tcri.tl.compare_groups(mi_df, value="MI", splitby="response")
 ```
 
 ## Next steps
