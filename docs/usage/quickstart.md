@@ -1,117 +1,124 @@
 # Quickstart
 
-This guide will help you get started with TCRi by walking through a basic analysis workflow using sample data.
+This guide walks through a full TCRi analysis: register your data, fit the model, write
+the learned quantities back onto the `AnnData`, and read out the information-theoretic
+metrics. For the concepts behind each step, see [The data model](../concepts/data-model.md),
+[The model](../concepts/model.md), and [the metrics](../concepts/metrics.md).
 
-## Loading Data
+## 1. Prepare your AnnData
 
-TCRi works with AnnData objects that contain both gene expression and TCR information. Here's how to load and set up your data:
+TCRi works on an `AnnData` where every cell carries **both** a gene-expression profile and
+a TCR **clonotype** label, plus a **covariate** (e.g. timepoint) and a **batch** (e.g.
+patient). Raw counts should live in a layer.
 
 ```python
-import tcri
 import scanpy as sc
+import tcri
 
-# Load your data
 adata = sc.read_h5ad("your_data.h5ad")
-
-# Make sure your AnnData object has the right fields for TCR information
-# Typically, TCR information should be in obs under 'clone_id' or similar
+# expected: adata.layers["counts"] (raw counts)
+#           adata.obs["clone_id"], adata.obs["phenotype"],
+#           adata.obs["timepoint"], adata.obs["patient"]
 ```
 
-## Setting up the Model
+No paired data yet? Generate a synthetic dataset with a known ground-truth mutual
+information:
 
 ```python
-# Initialize the model
-model = tcri.TCRIModel(
-    adata,
-    n_latent=10,      # Dimension of latent space
-    n_hidden=128,     # Size of hidden layers
-    global_scale=10.0,
-    local_scale=5.0
-)
-
-# Train the model
-model.train(
-    max_epochs=50,
-    batch_size=128,
-    lr=1e-3,
-    reconstruction_loss_scale=1e-2
-)
-
-# Get latent representations
-latent_z = model.get_latent_representation(adata)
+adata = tcri.datasets.simulate_tcri(seed=0)
 ```
 
-## Preprocessing
+## 2. Register the columns
+
+`setup_anndata` records which columns hold the clonotype, phenotype, covariate, and batch,
+and which layer holds counts.
 
 ```python
-# Register model outputs back to the AnnData object
-tcri.pp.register_model(
+tcri.ml.TCRIModel.setup_anndata(
     adata,
-    model,
-    phenotype_prob_slot="X_tcri_phenotypes",
-    phenotype_assignment_obs="tcri_phenotype",
-    latent_slot="X_tcri"
-)
-
-# Compute joint distributions
-joint_dist = tcri.pp.joint_distribution(
-    adata,
-    covariate_label="timepoint"  # Replace with your covariate of interest
+    layer="counts",
+    clonotype_key="clone_id",
+    phenotype_key="phenotype",
+    covariate_key="timepoint",
+    batch_key="patient",
 )
 ```
 
-## Computing Metrics
+## 3. Fit the model
 
 ```python
-# Calculate mutual information
-mi = tcri.tl.mutual_information(
-    adata,
-    "timepoint",  # Replace with your covariate of interest
-    temperature=1.0
-)
-
-# Calculate clonotypic entropy
-entropy = tcri.tl.clonotypic_entropy(
-    adata,
-    "timepoint",   # Covariate
-    "phenotype"    # Phenotype field
-)
-
-# Calculate clonality
-clonality = tcri.tl.clonality(adata)
+model = tcri.ml.TCRIModel(adata, n_latent=128, seed=0)
+model.train(max_epochs=200, batch_size=512)
 ```
 
-## Visualization
+```{tip}
+`max_epochs` interacts with the KL warmup (`n_steps_kl_warmup`, default 2000 **optimizer
+steps**). On small datasets a step is only a few cells, so the ramp can need many epochs to
+complete — `model.train` warns if it did not. See [the training contract](../contracts/index.md).
+```
+
+## 4. Write results onto the AnnData
+
+`to_anndata` materializes the learned latent, per-cell phenotype posterior, and clone
+phenotype distributions under the canonical `tcri_*` keys.
 
 ```python
-# Mutual information plot
-tcri.pl.mutual_information(
-    adata,
-    splitby="timepoint",  # Replace with your covariate
-    temperature=1.0,
-    figsize=(8,4)
-)
-
-# Polar plot of phenotype distributions
-tcri.pl.polar_plot(
-    adata,
-    statistic="distribution",
-    method="joint_distribution"
-)
-
-# Phenotype probability ternary plot
-tcri.pl.probability_ternary(
-    adata,
-    ["Phenotype1", "Phenotype2", "Phenotype3"],  # Replace with your phenotype names
-    splitby="condition"  # Optional: split by a condition
-)
+model.to_anndata(adata)
 ```
 
-## Next Steps
+## 5. Compute metrics
 
-Explore the API documentation for more detailed information on each function and additional functionality:
+All entropies and mutual information are in **bits**.
 
-- [Model API](../api/model.md)
-- [Preprocessing API](../api/preprocessing.md)
-- [Metrics API](../api/metrics.md)
-- [Plotting API](../api/plotting.md)
+```python
+# mutual information between clonotype and phenotype at one covariate
+mi = tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
+
+# how phenotypically diverse each phenotype's clones are
+ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
+
+# per-clone plasticity
+pe = tcri.tl.phenotypic_entropy(adata, covariate="pre")
+
+# how a clone's phenotype mix shifts between two covariates
+flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
+```
+
+```{important}
+To reproduce the manuscript's normalized MI benchmark, pass
+`normalize_mode="average"` explicitly — the default (`"min"`) is a deliberate,
+group-comparable deviation from eq 6. See [the metrics concepts](../concepts/metrics.md).
+```
+
+## 6. Visualize
+
+Each `tcri.pl` function is a plotting twin of the `tcri.tl` metric of the same name:
+
+```python
+# MI per patient, boxed by cohort
+tcri.pl.mutual_information(adata, groupby="patient", splitby="response")
+
+# per-clone phenotype flux from the first to the last covariate
+tcri.pl.phenotypic_flux(adata, order=["pre", "post"])
+```
+
+## 7. Compare groups
+
+Contrast a metric across cohorts (e.g. responders vs non-responders) with direction
+probabilities. Compute one value per unit (`groupby`) carrying the cohort label
+(`splitby`), then contrast — `value` is the metric column, `"MI"` for mutual information:
+
+```python
+mi_df = tcri.tl.mutual_information(
+    adata, covariate="pre", groupby="patient", splitby="response"
+)
+result = tcri.tl.compare_groups(mi_df, value="MI", splitby="response")
+```
+
+## Next steps
+
+- [Tutorials](../tutorials/index.md) — runnable, end-to-end examples for preprocessing,
+  training, metrics, and diagnostics.
+- [The data model](../concepts/data-model.md) — what lives on your `AnnData` after
+  `to_anndata`.
+- [API reference](../api/model.md) — exact call signatures.
