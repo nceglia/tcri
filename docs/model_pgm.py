@@ -1,8 +1,25 @@
-"""Model plate-diagram (PGM) generators — moved OUT of the tcri package (PR9, §9).
-Requires `daft` (a docs-only extra, NOT a tcri runtime dependency)."""
+"""Model plate-diagram (PGM) generator — moved OUT of the tcri package (PR9, §9).
+
+Requires the ``daft-pgm`` package (``import daft``), a docs-only extra and NOT a tcri
+runtime dependency. It is intentionally kept out of ``docs/requirements.txt`` because
+``daft-pgm`` shadows the unrelated ``daft`` dataframe library; the diagram it produces is
+committed as ``docs/_static/tcri_pgm.png`` so the docs build never needs it.
+
+Regenerate the PNG after editing this file::
+
+    python -m venv /tmp/pgm && /tmp/pgm/bin/pip install daft-pgm matplotlib
+    /tmp/pgm/bin/python docs/model_pgm.py
+"""
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+
 import daft
 import matplotlib.pyplot as plt
 import numpy as np
+
+_STATIC_PNG = os.path.join(os.path.dirname(__file__), "_static", "tcri_pgm.png")
 
 
 def build_nested_tcri_pgm():
@@ -169,8 +186,15 @@ def build_nested_tcri_pgm():
     return pgm
 
 
-def draw_tcri_pgm_nested():
+def draw_tcri_pgm_nested(path=_STATIC_PNG, dpi=200):
+    """Render the nested TCRi PGM and save it as a PNG (default: the docs static asset)."""
     pgm = build_nested_tcri_pgm()
     pgm.render()
-    pgm.figure.savefig("tcri_model_fully_explicit.pdf", dpi=300)
-    plt.show()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pgm.figure.savefig(path, dpi=dpi, bbox_inches="tight", facecolor="white")
+    return path
+
+
+if __name__ == "__main__":
+    out = draw_tcri_pgm_nested()
+    print(f"wrote {out}")
