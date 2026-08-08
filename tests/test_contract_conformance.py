@@ -1,10 +1,22 @@
 """Contract conformance — the interface guardrail for the refactor.
 
-``tcri/_contract.pyi`` freezes the target public surface. Each *implemented*
-function's live signature is checked against its ``.pyi`` declaration (parameter
-names, kinds, and which carry defaults). Declared-but-absent functions are the
-worklist. Onboard a newly implemented function by adding it to ``IMPLEMENTED``
-as its PR lands.
+``tcri/_contract.pyi`` freezes the public surface. Two things are checked:
+
+1. **Set equality** — the set of public callables the package actually exposes equals
+   the set the contract declares. Neither direction may drift.
+2. **Signature equality** — for every name in that set, the live signature matches the
+   ``.pyi`` declaration (parameter names, kinds, and which carry defaults).
+
+Check 1 replaced a hand-maintained ``IMPLEMENTED`` allowlist. An allowlist can only
+police what somebody remembered to add to it, so anything never listed was invisible:
+not its signature, not even its existence. The same hole appeared in grafiti and in
+tcri. When set equality went in it immediately found two things the allowlist had
+never seen — ``TCRIModel.boost_phenotype_prior`` (a public method that multiplied the
+eq-1 archetype concentration by a constant in place, undeclared and uncalled) and the
+whole ``tcri.datasets`` namespace.
+
+Adding a public function is now a contract change by construction: the test fails
+until it is declared. That is the intent.
 
 AST logic ported from grafiti's ``test_contract_conformance.py``.
 """
@@ -19,34 +31,55 @@ import tcri
 
 PYI = Path(tcri.__file__).parent / "_contract.pyi"
 
-# contract key ("Namespace.func" / "TCRIModel.method") -> (module, dotted attr).
-# Each PR onboards its landed functions here; the signature test then enforces
-# live == contract. PR4 landed the model→AnnData surface.
-IMPLEMENTED: dict[str, tuple[str, str]] = {
-    "tl.joint_distribution": ("tcri.tools._joint", "joint_distribution"),
-    "tl.clonotypic_entropy": ("tcri.tools._entropy", "clonotypic_entropy"),
-    "tl.phenotypic_entropy": ("tcri.tools._entropy", "phenotypic_entropy"),
-    "tl.mutual_information": ("tcri.tools._mutual_information", "mutual_information"),
-    "tl.phenotypic_flux": ("tcri.tools._flux", "phenotypic_flux"),
-    "tl.compare_groups": ("tcri.tools._compare", "compare_groups"),
-    "diag.joint_distribution_ppc": ("tcri.diagnostics._ppc", "joint_distribution_ppc"),
-    "diag.phenotype_calibration": ("tcri.diagnostics._ppc", "phenotype_calibration"),
-    "diag.reconstruction_ppc": ("tcri.diagnostics._ppc", "reconstruction_ppc"),
-    "diag.permutation_null": ("tcri.diagnostics._ppc", "permutation_null"),
-    "diag.loss": ("tcri.diagnostics._training", "loss"),
-    "diag.archetypes": ("tcri.diagnostics._training", "archetypes"),
-    "pl.clonotypic_entropy": ("tcri.plotting._entropy", "clonotypic_entropy"),
-    "pl.phenotypic_entropy": ("tcri.plotting._entropy", "phenotypic_entropy"),
-    "pl.mutual_information": ("tcri.plotting._mutual_information", "mutual_information"),
-    "pl.phenotypic_flux": ("tcri.plotting._flux", "phenotypic_flux"),
-    "pl.resolve_palette": ("tcri.plotting._colors", "resolve_palette"),
-    "TCRIModel.setup_anndata": ("tcri.model._model", "TCRIModel.setup_anndata"),
-    "TCRIModel.train": ("tcri.model._model", "TCRIModel.train"),
-    "TCRIModel.get_latent_representation": ("tcri.model._model", "TCRIModel.get_latent_representation"),
-    "TCRIModel.predict": ("tcri.model._model", "TCRIModel.predict"),
-    "TCRIModel.get_p_ct": ("tcri.model._model", "TCRIModel.get_p_ct"),
-    "TCRIModel.to_anndata": ("tcri.model._model", "TCRIModel.to_anndata"),
+#: Contract namespace -> the live object whose public callables it declares.
+#: ``TCRIModel`` is the class itself; the rest are the ``tcri.*`` accessor modules.
+NAMESPACES: dict[str, str] = {
+    "TCRIModel": "tcri.ml:TCRIModel",
+    "pp": "tcri:pp",
+    "tl": "tcri:tl",
+    "pl": "tcri:pl",
+    "diag": "tcri:diag",
+    "ut": "tcri:ut",
+    "datasets": "tcri:datasets",
 }
+
+
+def _resolve(spec: str):
+    module, _, attr = spec.partition(":")
+    obj = importlib.import_module(module)
+    for part in attr.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def _public_callables(obj) -> set[str]:
+    """Public callables that tcri itself defines on ``obj``.
+
+    Excludes underscore names, anything inherited from a base class outside tcri (scvi's
+    BaseModelClass contributes ~40 methods that are not ours to freeze), and re-exported
+    third-party callables, which are identified by ``__module__``.
+    """
+    names = set()
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        attr = getattr(obj, name, None)
+        if not callable(attr):
+            continue
+        if not getattr(attr, "__module__", "").startswith("tcri"):
+            continue
+        if inspect.isclass(attr):
+            continue
+        names.add(name)
+    return names
+
+
+def _live_surface() -> set[str]:
+    surface = set()
+    for ns, spec in NAMESPACES.items():
+        for name in _public_callables(_resolve(spec)):
+            surface.add(f"{ns}.{name}")
+    return surface
 
 
 def _params_from_ast(a: ast.arguments):
@@ -109,28 +142,45 @@ def test_contract_pyi_parses():
     assert all("." in k for k in CONTRACT), "unexpected un-namespaced contract entry"
 
 
-@pytest.mark.parametrize("key", sorted(IMPLEMENTED))
+def test_public_surface_equals_the_contract():
+    """The package exposes exactly what the contract declares — no more, no less.
+
+    This is the check that a hand-maintained allowlist structurally cannot make. A
+    function absent from the allowlist was not merely unchecked; it was invisible, so
+    "the contract passes" said nothing about it.
+    """
+    live, declared = _live_surface(), set(CONTRACT)
+
+    undeclared = sorted(live - declared)
+    assert not undeclared, (
+        f"public but NOT in the contract: {undeclared}\n"
+        f"Every public callable is part of the frozen surface. Declare it in "
+        f"tcri/_contract.pyi (a contract change, so CODEOWNERS applies), make it private "
+        f"with a leading underscore, or delete it."
+    )
+    missing = sorted(declared - live)
+    assert not missing, (
+        f"declared in the contract but NOT public: {missing}\n"
+        f"The contract promises these. Either implement/re-export them, or remove the "
+        f"declaration — a contract that names things the package does not have is a "
+        f"promise nothing keeps."
+    )
+
+
+@pytest.mark.parametrize("key", sorted(CONTRACT))
 def test_signature_matches_contract(key):
-    """Each implemented function's live signature matches the frozen contract."""
-    module, attr = IMPLEMENTED[key]
-    obj = importlib.import_module(module)
-    for part in attr.split("."):
-        obj = getattr(obj, part)
+    """Every declared function's live signature matches the frozen contract."""
+    ns, _, name = key.partition(".")
+    obj = getattr(_resolve(NAMESPACES[ns]), name)
     live = _strip_receiver(_live_params(obj))
     assert live == CONTRACT[key], (
         f"signature drift for {key}:\n  contract={CONTRACT[key]}\n  live    ={live}"
     )
 
 
-def test_report_unimplemented(capsys):
-    """Informational worklist: declared-but-not-yet-implemented (never fails)."""
-    todo = sorted(set(CONTRACT) - set(IMPLEMENTED))
-    with capsys.disabled():
-        print(f"\n[contract] implemented {len(IMPLEMENTED)}/{len(CONTRACT)}; "
-              f"remaining worklist ({len(todo)}):")
-        for k in todo:
-            print(f"    ☐ {k}")
-    assert True
+def test_contract_is_not_trivially_small():
+    """Guards against a truncated or half-parsed .pyi silently making the set check pass."""
+    assert len(CONTRACT) >= 25, f"contract looks truncated: {len(CONTRACT)} entries"
 
 
 def test_import_smoke():

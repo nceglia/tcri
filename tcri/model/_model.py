@@ -10,6 +10,7 @@ modules; this file holds only the high-level `BaseModelClass` API
 - :mod:`._classifier` -- :class:`PhenotypeClassifier`
 - :mod:`._training`   -- :class:`UnifiedTrainingPlan`, :func:`build_archetypes`
 """
+import contextlib
 import logging
 import os
 import warnings
@@ -47,11 +48,32 @@ warnings.filterwarnings(
     "ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*"
 )
 
-os.environ.pop("SLURM_NTASKS", None)
-os.environ.pop("SLURM_NTASKS_PER_NODE", None)
-
-logging.basicConfig(level=logging.INFO)
+# NEW-5: neither of these belongs at import time.
+#
+# Deleting SLURM_NTASKS/SLURM_NTASKS_PER_NODE from os.environ stops Lightning's SLURM
+# auto-detection from hijacking the trainer -- but doing it on `import tcri` mutates the
+# environment for the WHOLE process, so anything else that sizes work from those variables
+# (a joblib/dask pool, a subprocess srun, another Trainer) silently sees them missing. It is
+# now scoped to train() and restored afterwards; see _slurm_autodetect_disabled.
+#
+# logging.basicConfig() configures the ROOT logger, which is the application's decision, not
+# a library's. Importing tcri would switch on INFO logging for everything in the process. A
+# library attaches a NullHandler and leaves configuration to the caller.
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
+@contextlib.contextmanager
+def _slurm_autodetect_disabled():
+    """Hide SLURM_NTASKS* from Lightning for the duration of a fit, then put them back."""
+    keys = ("SLURM_NTASKS", "SLURM_NTASKS_PER_NODE")
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 class TCRIModel(BaseModelClass):
@@ -405,7 +427,8 @@ class TCRIModel(BaseModelClass):
             **kwargs,
         )
 
-        runner()
+        with _slurm_autodetect_disabled():
+            runner()
 
         # B9: a fit records what actually happened. `steps_per_epoch` is read from the counter
         # rather than computed from batch_size, so a partial final batch cannot skew it.
@@ -588,48 +611,4 @@ class TCRIModel(BaseModelClass):
             adata.obsm[K.X_UMAP] = umap.UMAP(random_state=42).fit_transform(adata.obsm[K.X_TCRI])
 
         return adata
-
-    def boost_phenotype_prior(
-        self,
-        phenotype_name       : str,
-        boost_factor         : float = 5.0,
-        *,
-        affect_mixture       : bool  = True,
-    ):
-        GRN, YLW, MAG, RST = "\x1b[32m", "\x1b[33m", "\x1b[35m", "\x1b[0m"
-        def _ok(m):   print(f"{GRN}✅ {m}{RST}")
-        cats = self.adata.obs[ self.adata_manager.registry["phenotype_col"] ]\
-                    .astype("category").cat.categories
-        if phenotype_name not in cats:
-            raise ValueError(f"phenotype '{phenotype_name}' not found. Choices: {list(cats)}")
-        p_idx = list(cats).index(phenotype_name)
-
-        # 2) clone-level prior  (numpy array stored in model.clone_phenotype_prior)
-        mat = self.clone_phenotype_prior.copy()
-        mat[:, p_idx] *= boost_factor
-        mat /= mat.sum(axis=1, keepdims=True)
-        self.clone_phenotype_prior = mat                                    # keep external copy
-
-        with torch.no_grad():
-            new_clone_prior = torch.tensor(mat, dtype=torch.float32,
-                                        device=self.module.clone_phen_prior.device)
-            self.module.clone_phen_prior.data = new_clone_prior
-
-        _ok(f"Clone-level prior boosted ×{boost_factor:g} for '{phenotype_name}'")
-
-        if affect_mixture:
-            centres = self.centers.copy()
-            centres[:, p_idx] *= boost_factor
-            centres /= centres.sum(axis=1, keepdims=True)
-            self.centers = centres
-
-            with torch.no_grad():
-                new_mix = torch.tensor(centres, dtype=torch.float32,
-                                    device=self.module.mixture_concentration.device)
-                self.module.mixture_concentration.data = new_mix
-
-            _ok(f"Mixture prior boosted ×{boost_factor:g} for '{phenotype_name}'")
-
-        _ok("Read to train.")
-
 

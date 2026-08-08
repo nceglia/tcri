@@ -1,5 +1,8 @@
 """Unit tests for the shared helper modules introduced in PR1
 (`_keys`, `_console`, `_stats`, `_distance`). These are pure and fast — no model."""
+import json
+import os
+
 import numpy as np
 import pytest
 
@@ -152,3 +155,44 @@ def test_distance_dispatch():
     assert D.phenotype_distance(f) is f
     with pytest.raises(ValueError):
         D.phenotype_distance("nope")
+
+
+def test_importing_tcri_does_not_mutate_global_state():
+    """NEW-5: a library configures nothing on the caller's behalf.
+
+    ``import tcri`` used to delete SLURM_NTASKS/SLURM_NTASKS_PER_NODE from os.environ and call
+    logging.basicConfig(level=INFO) at module scope. The first breaks anything else in the
+    process that sizes work from those variables -- a joblib pool, a subprocess srun, a second
+    Trainer -- and the second switches on INFO logging for the entire application.
+
+    Runs in a subprocess: this process has already imported tcri, so the mutation would be
+    invisible here.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    probe = textwrap.dedent("""
+        import json, logging, os
+        os.environ["SLURM_NTASKS"] = "7"
+        os.environ["SLURM_NTASKS_PER_NODE"] = "3"
+        before = logging.getLogger().level
+        import tcri
+        print(json.dumps({
+            "ntasks": os.environ.get("SLURM_NTASKS"),
+            "per_node": os.environ.get("SLURM_NTASKS_PER_NODE"),
+            "root_level_changed": logging.getLogger().level != before,
+            "root_handlers": len(logging.getLogger().handlers),
+        }))
+    """)
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                         env={**os.environ, "MPLBACKEND": "Agg"})
+    assert out.returncode == 0, out.stderr[-2000:]
+    state = json.loads(out.stdout.strip().splitlines()[-1])
+
+    assert state["ntasks"] == "7", "import tcri deleted SLURM_NTASKS from os.environ"
+    assert state["per_node"] == "3", "import tcri deleted SLURM_NTASKS_PER_NODE from os.environ"
+    assert not state["root_level_changed"], (
+        "import tcri reconfigured the ROOT logger; that is the application's call, not a "
+        "library's. Attach a NullHandler instead."
+    )

@@ -11,7 +11,8 @@ from .. import _keys as K
 __all__ = ["group_singletons", "clone_size"]
 
 
-def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
+def group_singletons(adata, *, clonotype_key="trb", groupby="patient",
+                     target_col="trb_unique", min_clone_size=10):
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
     clone_counts = adata.obs["trb_candidate"].value_counts()
     def collapse_singleton(row):
@@ -36,7 +37,7 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
 
 
 
-def clone_size(adata, key_added=K.CLONE_SIZE, return_counts=False):
+def clone_size(adata, *, key_added=K.CLONE_SIZE, return_counts=False):
     # Canonical source is uns[METADATA]['clone_col'] (written by to_anndata). This
     # used to read the legacy uns['tcri_clone_key'] shadow key — the last reader of
     # it, which is why the shim outlived Phase 4.
