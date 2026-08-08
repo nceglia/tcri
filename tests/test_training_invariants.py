@@ -19,7 +19,10 @@ import torch
 
 warnings.filterwarnings("ignore")
 
-pytestmark = pytest.mark.slow
+# NOT slow-marked, deliberately. This whole file runs in ~3s, but it carried a module-level
+# `slow` marker, and CI runs bare `pytest tests/` -- so the tests the training contract names as
+# the enforcement for I2, I3, I4, I5, B1 and B5 never ran on a pull request. An invariant whose
+# proof CI skips is an invariant nothing checks.
 
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
@@ -141,4 +144,205 @@ def test_kl_ramp_is_monotone_across_resumed_training(adata):
     assert weight_second >= weight_first, (
         f"kl_weight went backwards across train() calls: {weight_first:.6g} -> "
         f"{weight_second:.6g}. The annealing schedule must be monotone."
+    )
+
+
+# ── the stopping policy: I3 and I4 ───────────────────────────────────────────
+
+def _plan_and_batch(adata, n_steps_kl_warmup=8):
+    """A fitted-enough model plus one validation batch, ready to evaluate."""
+    from tcri.model._training import UnifiedTrainingPlan
+
+    m = _fresh(adata)
+    m.train(max_epochs=2, batch_size=128, n_steps_kl_warmup=n_steps_kl_warmup,
+            accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    plan = UnifiedTrainingPlan(module=m.module, n_steps_kl_warmup=n_steps_kl_warmup)
+    loader = m._make_data_loader(adata=m.adata, batch_size=128, shuffle=False)
+    return m, plan, next(iter(loader))
+
+
+def test_monitor_is_invariant_to_ramp_position(adata):
+    """I3: the monitored quantity is a fixed function of the parameters.
+
+    Evaluate the criterion at two different ramp positions with the parameters held EXACTLY
+    fixed. A criterion that is a function of (Lambda, Theta) must return the same number; one
+    that inherits the annealed kl_weight, or redraws its Monte-Carlo sample, will not.
+
+    This fails on the parent commit, and it also fails a partial fix — pinning kl_weight without
+    fixing the evaluation seed still leaves the estimator redrawing every check, so the two
+    numbers differ in the low-order digits. Both clauses are required, so the assertion is
+    exact rather than approximate.
+    """
+    m, plan, batch = _plan_and_batch(adata)
+    plan.module.eval()
+
+    before = {k: v.detach().clone() for k, v in plan.module.state_dict().items()}
+    store_before = {n: p.detach().clone() for n, p in pyro.get_param_store().named_parameters()}
+
+    plan.module._kl_warmup_step = 1          # early in the ramp
+    plan.module.kl_weight = 1e-6
+    first = float(plan.validation_step(batch, 0)["loss"])
+
+    # identical parameters, a different point on the schedule
+    plan.module.load_state_dict(before, strict=False)
+    with torch.no_grad():
+        for name, p in pyro.get_param_store().named_parameters():
+            p.data.copy_(store_before[name])
+    plan.module._kl_warmup_step = 10_000     # ramp long finished
+    plan.module.kl_weight = plan.module.kl_weight_max
+    second = float(plan.validation_step(batch, 0)["loss"])
+
+    assert first == second, (
+        f"the monitored quantity moved with ramp position while the parameters were held "
+        f"fixed: {first!r} vs {second!r}. It is therefore not a function of (Lambda, Theta), "
+        f"and an argmin over it is not an argmin (contract I3)."
+    )
+
+
+def test_validation_pin_restores_the_training_schedule(adata):
+    """B1: the pin is scoped to the check.
+
+    validation_step raises kl_weight to kl_weight_max to make the criterion well-posed. If it
+    left it there, the next training step would read a kl_weight it never scheduled, and the
+    ramp would jump to its endpoint the first time anything validated.
+    """
+    m, plan, batch = _plan_and_batch(adata)
+    plan.module._kl_warmup_step = 3
+    plan.module.kl_weight = 0.125
+
+    plan.validation_step(batch, 0)
+
+    assert plan.module.kl_weight == 0.125, (
+        f"validation left kl_weight at {plan.module.kl_weight}; the pin must be undone so the "
+        f"training schedule is the only thing that advances it (contract B1)."
+    )
+
+
+def test_selection_is_gated_until_the_ramp_completes(adata):
+    """B5: no check is recorded before the ramp finishes.
+
+    Every entry in the monitored series must come from the same objective. A run whose ramp
+    never completes has no comparable pair, so it must select nothing, keep its final weights,
+    and say so in the record rather than silently reporting an epoch.
+    """
+    m = _fresh(adata)
+    with pytest.warns(UserWarning, match="KL ramp did not complete"):
+        m.train(max_epochs=3, batch_size=128, n_steps_kl_warmup=10**6,
+                accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+
+    rec = m.training_record_
+    assert rec["ramp_completed"] is False
+    assert rec["selected_epoch"] is None, (
+        "a checkpoint was selected from checks taken at different kl_weights; with the ramp "
+        "incomplete no two checks share an objective (contract B5)."
+    )
+    assert rec["selection_criterion"] == "last epoch (ramp incomplete)"
+
+
+def test_restored_model_is_the_selected_one(adata):
+    """I4: what train() leaves behind is what the criterion chose.
+
+    Records every gated check, then asserts that the parameters surviving the fit are the ones
+    from the best-scoring check -- across all three places state lives:
+
+      * the Pyro param store (``q_p_ct_raw``) -- not in state_dict() at all,
+      * a network weight -- in both state_dict() and named_parameters(),
+      * an encoder BatchNorm running statistic -- in state_dict() ONLY.
+
+    That third one is the reason the snapshot uses state_dict(). A named_parameters() snapshot
+    silently leaves the running stats at their final-epoch values, and predict() reads them in
+    eval mode, so the restored model is one no check ever evaluated.
+    """
+    import lightning.pytorch as pl
+
+    from tcri.model._callbacks import ramp_is_complete
+
+    BN = "encoder.encoder.fc_layers.Layer 0.1.running_mean"
+    NET = "classifier.mlp.0.weight"
+
+    seen = []
+
+    class _Spy(pl.Callback):
+        def on_validation_end(self, trainer, pl_module):
+            if trainer.sanity_checking or not ramp_is_complete(pl_module):
+                return
+            score = trainer.callback_metrics.get("objective_validation_percell")
+            if score is None:
+                return
+            sd = pl_module.module.state_dict()
+            seen.append((
+                float(score),
+                pyro.get_param_store()["q_p_ct_raw"].detach().clone(),
+                sd[NET].detach().clone(),
+                sd[BN].detach().clone(),
+            ))
+
+    # lr=1e-2 over 60 epochs on this fixture puts the argmin at check ~47 of 58 with a clear
+    # margin. At the default lr the criterion still descends at the last epoch, so "keep the
+    # final weights" would pass by accident -- the assertion below guards against exactly that
+    # if the fixture ever drifts back to monotone.
+    m = _fresh(adata)
+    m.train(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+            callbacks=[_Spy()], enable_progress_bar=False, enable_model_summary=False)
+
+    assert len(seen) > 2, f"only {len(seen)} gated checks ran; the test asserted nothing"
+    best_score, best_ct, best_net, best_bn = min(seen, key=lambda r: r[0])
+    assert best_score < seen[-1][0], (
+        "the best check WAS the last one, so keeping final weights would pass by accident. "
+        "This fixture no longer discriminates."
+    )
+
+    sd = m.module.state_dict()
+    assert torch.equal(pyro.get_param_store()["q_p_ct_raw"].detach(), best_ct), (
+        "q_p_ct_raw is not the selected checkpoint's. Every metric reads this tensor, and it "
+        "lives only in the Pyro param store -- note that writing it through store.items() is a "
+        "silent no-op, because the positive constraint makes that a non-leaf view (I4)."
+    )
+    assert torch.equal(sd[NET], best_net), "a network weight is not the selected checkpoint's"
+    assert torch.equal(sd[BN], best_bn), (
+        "the encoder's BatchNorm running_mean is not the selected checkpoint's. It is a buffer: "
+        "in state_dict() but NOT in named_parameters(), and read by predict() in eval mode. "
+        "Snapshotting named_parameters() restores a model no check evaluated (I4)."
+    )
+
+
+def test_monitor_excludes_the_global_block(adata):
+    """I3 scope: the monitor is the per-cell block, not the ELBO.
+
+    This is the deliberate departure the contract records, and it needs its own test: including
+    the global sites does NOT break ramp-invariance (the pin fixes kl_weight either way), so
+    ``test_monitor_is_invariant_to_ramp_position`` cannot see the difference. Without this,
+    re-adding ``p_c``/``p_ct`` to the monitored number would be a silent change.
+
+    Both global plates are declared at full size with no subsampling, so their KL is the same
+    number whichever cells are held out — a training-set quantity a validation criterion must
+    not contain.
+    """
+    m, plan, batch = _plan_and_batch(adata)
+    plan.module.eval()
+
+    out = plan.validation_step(batch, 0)
+    n_cells = int(batch["indices"].shape[0])
+
+    args, kwargs = plan.module._get_fn_args_from_batch(batch)
+    prev = plan.module.kl_weight
+    try:
+        plan.module.kl_weight = plan.module.kl_weight_max
+        with torch.random.fork_rng(devices=[]), torch.no_grad():
+            torch.manual_seed(plan._validation_seed)
+            per_cell, global_block = plan._objective_blocks(*args, **kwargs)
+    finally:
+        plan.module.kl_weight = prev
+
+    assert abs(global_block) > 0.0, "the fixture has no global-block mass; nothing is asserted"
+    assert float(out["loss"]) == pytest.approx(-per_cell / n_cells, rel=1e-6), (
+        "the monitor is not the per-cell block alone (contract I3 'scope')"
+    )
+    full = -(per_cell + global_block) / n_cells
+    assert float(out["loss"]) != pytest.approx(full, rel=1e-9), (
+        f"the monitored value equals the FULL elbo ({full:.6f}); the global block is being "
+        f"included, so selection is partly on prior-matching over the training data"
+    )
+    assert float(out["global_block"]) == pytest.approx(global_block, rel=1e-6), (
+        "the excluded block must still be logged, so the exclusion stays inspectable"
     )
