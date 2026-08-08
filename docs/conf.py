@@ -142,6 +142,8 @@ autodoc_mock_imports = [
     "torch",
     "pyro",
     "scvi",
+    "lightning",
+    "pytorch_lightning",
     "sklearn",
     "scanpy",
     "anndata",
