@@ -24,7 +24,7 @@ def loss(model, *, log_scale=False, ax=None, save=None):
 
     hist = getattr(model, "history_", {}) or {}
     elbo_train = _series(hist, "elbo_train")
-    elbo_val = _series(hist, "elbo_validation")
+    elbo_val = _series(hist, "objective_validation_percell")
     kl_train = _series(hist, "kl_divergence_with_prior_train_epoch")
     kl_val = _series(hist, "kl_divergence_with_prior_val")
 
