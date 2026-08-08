@@ -155,3 +155,22 @@ class ut:
     def load_tcri_session(
         run_dir: str, *, adata_path: Optional[str] = ..., map_location: Any = ..., layer: Optional[str] = ...,
     ) -> Any: ...
+
+
+# ── synthetic data (datasets) ────────────────────────────────────────────────
+# Declared in the contract because it is already a shipped public namespace. It was
+# outside the contract entirely until the conformance test moved from a hand-maintained
+# allowlist to set equality against the live surface, which is what surfaced it.
+class datasets:
+    def simulate_tcri(
+        *, n_clones: int = ..., n_phenotypes: int = ..., n_genes: int = ...,
+        n_cells: int = ..., n_covariates: int = ..., n_factors: int = ...,
+        omega_concentration: float = ..., pi_concentration: float = ...,
+        fuzziness: float = ..., label_error_rate: float = ..., seed: int = ...,
+    ) -> AnnData: ...
+    def simulate_from_fit_params(
+        params: Any, *, n_cells: int = ..., temperature: float = ...,
+        fuzziness: float = ..., label_error_rate: float = ..., seed: int = ...,
+    ) -> AnnData: ...
+    def temperature_scale(P: Any, T: Any, eps: float = ...) -> Any: ...
+    def mi_from_joint_oracle(joint: Any) -> dict: ...
