@@ -77,10 +77,25 @@ def phenotype_calibration(adata, *, n_bins=10):
 
 def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
     """ZINB reconstruction PPC: simulate counts from the fitted decoder and compare library
-    size / dropout / mean / variance vs observed. ``model`` REQUIRED (live decoder)."""
+    size / dropout / mean / variance vs observed. ``model`` REQUIRED (live decoder).
+
+    ``n_sims`` posterior-predictive replicates are drawn per cell and each statistic is
+    averaged over them, which is what makes this a posterior-predictive check rather than a
+    single-draw comparison. It previously did nothing: the body drew exactly one replicate,
+    so ``n_sims=1`` and ``n_sims=1000`` returned bit-identical frames in identical wall-clock
+    while the knob was declared in the frozen contract.
+
+    The encoder/decoder run once per batch and only the sampling is repeated, so cost is
+    roughly linear in ``n_sims`` on the cheap part. Statistics accumulate per draw rather than
+    materialising every replicate, so memory does not scale with ``n_sims * n_cells * n_genes``.
+    """
     import torch
     import pyro.distributions as dist
     from scvi import REGISTRY_KEYS
+
+    n_sims = int(n_sims)
+    if n_sims < 1:
+        raise ValueError(f"n_sims must be >= 1, got {n_sims}")
 
     module = model.module
     module.eval()
@@ -89,7 +104,13 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
     torch.manual_seed(int(random_state))
     loader = model._make_data_loader(adata=adata, batch_size=256)
 
-    obs_lib, sim_lib, obs_all, sim_all = [], [], [], []
+    obs_lib, obs_all = [], []
+    sim_lib = [[] for _ in range(n_sims)]          # per draw: library size per cell
+    sim_zero = np.zeros(n_sims)                    # per draw: count of zero entries
+    sim_sum = np.zeros(n_sims)                     # per draw: sum of counts
+    sim_sq = np.zeros(n_sims)                      # per draw: sum of squared counts
+    n_entries = 0
+
     with torch.no_grad():
         for tensors in loader:
             x = tensors[REGISTRY_KEYS.X_KEY].to(device)
@@ -105,18 +126,35 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
             total = module.px_r.exp().clamp(max=1e4)
             xd = dist.ZeroInflatedNegativeBinomial(gate=gate, total_count=total,
                                                    logits=nb_logits, validate_args=False)
-            sim = xd.sample()
-            obs_lib.append(x.sum(1).cpu().numpy()); sim_lib.append(sim.sum(1).cpu().numpy())
-            obs_all.append(x.cpu().numpy()); sim_all.append(sim.cpu().numpy())
 
-    ol, sl = np.concatenate(obs_lib), np.concatenate(sim_lib)
-    oa, sa = np.concatenate(obs_all), np.concatenate(sim_all)
+            obs_lib.append(x.sum(1).cpu().numpy())
+            obs_all.append(x.cpu().numpy())
+            n_entries += x.numel()
+
+            for s in range(n_sims):
+                sim = xd.sample()
+                sim_lib[s].append(sim.sum(1).cpu().numpy())
+                sim_zero[s] += float((sim == 0).sum())
+                sim_sum[s] += float(sim.sum())
+                sim_sq[s] += float((sim ** 2).sum())
+
+    ol = np.concatenate(obs_lib)
+    oa = np.concatenate(obs_all)
+    lib_per_draw = [np.concatenate(d) for d in sim_lib]
+
+    sim_mean = sim_sum / n_entries
+    # E[x^2] - (E[x])^2, per draw, then averaged -- not the variance of the pooled draws,
+    # which would fold between-draw spread into a within-draw statistic.
+    sim_var = sim_sq / n_entries - sim_mean ** 2
+
     stats = {
-        "mean_library_size": (float(ol.mean()), float(sl.mean())),
-        "median_library_size": (float(np.median(ol)), float(np.median(sl))),
-        "dropout_fraction": (float((oa == 0).mean()), float((sa == 0).mean())),
-        "mean_expression": (float(oa.mean()), float(sa.mean())),
-        "var_expression": (float(oa.var()), float(sa.var())),
+        "mean_library_size": (float(ol.mean()),
+                              float(np.mean([d.mean() for d in lib_per_draw]))),
+        "median_library_size": (float(np.median(ol)),
+                                float(np.mean([np.median(d) for d in lib_per_draw]))),
+        "dropout_fraction": (float((oa == 0).mean()), float((sim_zero / n_entries).mean())),
+        "mean_expression": (float(oa.mean()), float(sim_mean.mean())),
+        "var_expression": (float(oa.var()), float(sim_var.mean())),
     }
     return pd.DataFrame([
         {"statistic": k, "observed": o, "simulated": s, "discrepancy": abs(o - s)}
