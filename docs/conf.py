@@ -45,10 +45,18 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx.ext.autosummary',
     'myst_parser',
+    'sphinxcontrib.mermaid',
 ]
 
-# MyST: enable dollar-delimited math ($...$ and $$...$$).
+# MyST: enable dollar-delimited math ($...$ and $$...$$) and let fenced
+# ```mermaid blocks render as diagrams (via sphinxcontrib-mermaid).
 myst_enable_extensions = ["dollarmath"]
+myst_fence_as_directive = ["mermaid"]
+
+# Render mermaid client-side (raw HTML + mermaid.js from CDN); no local mmdc /
+# node toolchain needed, which keeps the Read the Docs build light.
+mermaid_output_format = "raw"
+mermaid_version = "10.9.1"
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
