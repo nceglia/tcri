@@ -10,11 +10,11 @@ Severity: `S1` changes reported numbers · `S2` wrong behaviour, numbers unaffec
 All 17 registered defects were confirmed on `main` at `46490e6`. The audit opened three more
 (DE-18, DE-19, DE-20) and four open questions (Q-A…Q-D).
 
-**DE-18 blocks DE-3, DE-5, DE-6, DE-10 and DE-12.** Read it first.
+~~DE-18 blocks DE-3, DE-5, DE-6, DE-10 and DE-12.~~ **DE-18 is WITHDRAWN** (not a defect). DE-6 is closed as not-a-defect. DE-3 and DE-5 shipped on their own merits; DE-10 and DE-12 were re-derived without it and stand.
 
 ---
 
-## DE-1 · S2 · effort S · open
+## DE-1 · S2 · FIXED (PR `read-only-validation`)
 
 **Confirmed:** REAL, reproduced on main (46490e6).
 
@@ -88,7 +88,7 @@ Prototyped and verified (/tmp/de-training/de1_fix_and_cost.py): with the fix, dr
 
 ---
 
-## DE-2 · S2 · effort XS for the change; S including tests · open
+## DE-2 · S2 · effort XS for the change; S including tests · FIXED (PR #55 `stopping-policy`)
 
 **Confirmed:** REAL, reproduced on main.
 
@@ -148,7 +148,7 @@ File `tcri/model/_model.py`:
 
 ---
 
-## DE-3 · S1 · effort M · open
+## DE-3 · S1 · FIXED (PR #55 `stopping-policy`)
 
 **Confirmed:** The DEFECT is real. Its STATED REASON is wrong, and the entry should be corrected rather than closed.
 
@@ -235,7 +235,7 @@ Both the Pyro-store parameter and the nn side were restored exactly.
 
 ---
 
-## DE-4 · S2 · effort XS · open
+## DE-4 · S2 · effort XS · FIXED (PR `read-only-validation`)
 
 **Confirmed:** REAL, reproduced on main.
 
@@ -288,7 +288,7 @@ This matches the package's already-stated stance that a second fit CONTINUES the
 
 ---
 
-## DE-5 · S1 · effort M · open
+## DE-5 · S1 · FIXED (guide half; metric half tracked as DE-5b)
 
 **Confirmed:** REAL, and worse than the register states.
 
@@ -374,7 +374,15 @@ ORDER (asked explicitly): DE-6 FIRST, DE-5 SECOND.
 
 ---
 
-## DE-6 · S1 · effort S · open
+## DE-6 · S1 · CLOSED — NOT A DEFECT
+
+> **Closed 2026-08-07.** The premise was that `use_logits=True` folds an already-folded
+> quantity through eq 4 twice. It does not. `obsm[X_LOGITS]` holds RAW classifier logits
+> (`_model.py`); the folded quantity goes to `X_LOGPOSTERIOR`. So `_compute/_joint.py`'s
+> `g*ell + (1-g)*log_b` applies eq 4 exactly once, reproducing `predict()`. Flipping the
+> default would move the metrics away from the estimand, not toward it.
+>
+> Part of the argument was also inherited from DE-18, which is withdrawn.
 
 **Confirmed:** REAL, and larger than the register states.
 
@@ -515,7 +523,7 @@ Cross-defect: DE-7 shares its manifest section with DE-6 and is independent of D
 
 ---
 
-## DE-8 · S3 · effort XS · open
+## DE-8 · S3 · effort XS · FIXED (PR `consolidate-and-record`)
 
 **Confirmed:** REAL, on main. `benchmarks/run_grid.py:165` writes `epochs=epochs` into the result row, where `epochs` is the CLI value threaded unchanged from `run_grid.py:189` (`--epochs`, default 60) via `run_grid.py:232`. It is the REQUESTED value; `run_grid.py:129` passes it as `max_epochs=` and nothing reads back what the trainer did. The row records `t_train` (line 172) but no epoch count.
 
@@ -1063,7 +1071,7 @@ If a deprecation window is wanted, keep `permutation_null` as a three-line shim 
 
 ---
 
-## DE-16 · S3 · effort XS · open
+## DE-16 · S3 · effort XS · FIXED
 
 **Confirmed:** REAL, and the file also contradicts itself.
 
@@ -1104,7 +1112,7 @@ C. **Delete deviation-status bullets from the diary entirely** and have the agen
 
 ---
 
-## DE-17 · S3 · effort S · open
+## DE-17 · S3 · FIXED
 
 **Confirmed:** **THE ANSWER: `n_steps_kl_warmup` counts optimizer STEPS (minibatches), not epochs. Unambiguously.**
 

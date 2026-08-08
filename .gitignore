@@ -148,3 +148,7 @@ example/*.pdf
 # local-only dev harnesses (real-data tests; NOT CI)
 dev/
 docs/contract/ss-small-team-handbook.md
+
+# scvi/lightning write these into the repo root on every fit
+scvi_log/
+lightning_logs/
