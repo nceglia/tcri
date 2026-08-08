@@ -4,17 +4,21 @@ TCRi can be installed from source. We recommend using a virtual environment to a
 
 ## Prerequisites
 
-- Python 3.7 or higher
+- Python **3.10 or higher**
 - pip (Python package installer)
 
+A CUDA-capable GPU is optional but speeds up model fitting; TCRi runs on CPU otherwise.
+
 ## Install from Source
+
+TCRi is not yet on PyPI, so install from the repository:
 
 ```bash
 # Clone the repository
 git clone https://github.com/nceglia/tcri.git
 cd tcri
 
-# Create a virtual environment
+# (Recommended) create a virtual environment
 python3 -m venv tvenv
 source tvenv/bin/activate  # On Windows, use: tvenv\Scripts\activate
 
@@ -22,18 +26,23 @@ source tvenv/bin/activate  # On Windows, use: tvenv\Scripts\activate
 pip install .
 ```
 
+For a development install with the test dependencies:
+
+```bash
+pip install -e ".[test]"
+```
+
 ## Dependencies
 
-TCRi requires the following packages, which will be installed automatically when you install TCRi:
+TCRi pulls in the following automatically. The heavy scientific stack (PyTorch, Pyro,
+scvi-tools) is what enables model fitting:
 
-- scipy
-- numpy
-- scanpy
-- pandas
-- matplotlib
-- seaborn
+- numpy, pandas, scipy, scikit-learn
+- anndata, scanpy (single-cell data structures)
+- torch, pyro-ppl, scvi-tools (probabilistic modelling backbone)
+- umap-learn
+- matplotlib, seaborn (plotting)
 - tqdm
-- scikit-learn
 
 ## Verifying the Installation
 
