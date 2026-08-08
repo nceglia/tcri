@@ -6,8 +6,9 @@ definitions are frozen by the [metrics contract](../contracts/index.md); this pa
 conceptual reference.
 
 ```{note}
-Equation numbers here refer to the **metrics document** (its "Entropy" section, eqs 2–6),
-which numbers independently from Supplementary Note 1.
+Equation numbers here refer to the **metrics document** (eqs 2–7: joint entropy, the two
+conditional entropies, MI, NMI, and the KL used by flux), which numbers independently from
+Supplementary Note 1.
 ```
 
 ## From the joint to the metrics
