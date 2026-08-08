@@ -507,12 +507,26 @@ class TCRIModel(BaseModelClass):
         ct_array = self.module.ct_array.to(device)
 
         all_probs = []
-        current_idx = 0
         for tensors in scdl:
             x = tensors[REGISTRY_KEYS.X_KEY].to(device)
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-            n = x.shape[0]
-            clone_cov_posterior = p_ct[ct_array[current_idx : current_idx + n]]
+            # NEW-1: bind each cell to ITS OWN clonotype x covariate group, via the global
+            # cell id the loader carries -- never by position in this loader.
+            #
+            # This used to be `ct_array[current_idx : current_idx + n]` with a running offset.
+            # `ct_array` is indexed by TRAINING cell id, so the offset is only the right index
+            # when the passed adata is a contiguous prefix of the training data in its original
+            # order. For any other subset, a reordered view, or a per-patient slice -- all legal
+            # under the frozen contract -- cell i silently received the prior of the i-th
+            # TRAINING cell. Measured on a reversed view of a 200-cell fixture: max |delta p|
+            # = 0.3696 against the same cells predicted from the full object. It read 0.0000 on
+            # a prefix, which is why it survived.
+            #
+            # model() already does exactly this (`ct_idx = self.ct_array[indices]`), and
+            # test_alignment_target_uses_global_indices pins it there; predict() and
+            # to_anndata() were the two places that did not.
+            idx = tensors["indices"].long().view(-1).to(device)
+            clone_cov_posterior = p_ct[ct_array[idx]]
             z_loc, _, _ = self.module.encoder(x, b)
             cls_logits = self.module.classifier(z_loc)
             prior_log = torch.log(clone_cov_posterior + eps)
@@ -521,7 +535,6 @@ class TCRIModel(BaseModelClass):
             else:
                 local_logits = cls_logits + prior_log
             all_probs.append(F.softmax(local_logits, dim=-1).cpu())
-            current_idx += n
 
         probs = torch.cat(all_probs, dim=0).numpy()
         phenotype_col = self.adata_manager.registry["phenotype_col"]
@@ -585,15 +598,14 @@ class TCRIModel(BaseModelClass):
         p_ct_t = self.module.get_p_ct().to(device)
         ct_arr_t = self.module.ct_array.to(device)
         logits_buf, prior_buf = [], []
-        start = 0
         for tensors in loader:
             x = tensors[REGISTRY_KEYS.X_KEY].to(device)
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-            n = x.shape[0]
             z_loc, _, _ = self.module.encoder(x, b)
             logits_buf.append(self.module.classifier(z_loc).cpu())
-            prior_buf.append(torch.log(p_ct_t[ct_arr_t[start : start + n]] + 1e-8).cpu())
-            start += n
+            # NEW-1, as in predict(): index by the cell's own global id, not by position.
+            idx = tensors["indices"].long().view(-1).to(device)
+            prior_buf.append(torch.log(p_ct_t[ct_arr_t[idx]] + 1e-8).cpu())
         cls_logits = torch.cat(logits_buf).numpy().astype("float32")
         prior_log = torch.cat(prior_buf).numpy().astype("float32")
         adata.obsm[K.X_LOGITS] = cls_logits
