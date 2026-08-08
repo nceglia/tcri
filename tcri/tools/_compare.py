@@ -21,8 +21,33 @@ __all__ = ["compare_groups"]
 
 def compare_groups(df, *, value, splitby, reference=None, paired=False, pair_on=None,
                    hdi_prob=0.94, alternative="two-sided"):
-    """Contrast ``value`` across ``df[splitby]`` groups. Returns a tidy DataFrame, one row
-    per contrast (``reference`` vs each other level, or all pairs when ``reference`` is None)."""
+    """Contrast a metric across cohorts, with direction probabilities.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A grouped metric table (e.g. from ``mutual_information(..., groupby=...)``) with a
+        ``value`` column and a ``splitby`` cohort column.
+    value : str
+        The metric column to contrast (e.g. ``"MI"`` for mutual information).
+    splitby : str
+        The cohort column whose levels are contrasted (e.g. response).
+    reference : str | None
+        Contrast this level against every other; ``None`` contrasts all pairs.
+    paired : bool
+        Align draws per unit (``pair_on``) and contrast the paired differences.
+    pair_on : str | None
+        The per-unit id used to align draws when ``paired=True``.
+    hdi_prob : float
+        Mass of the reported highest-density interval on the contrast.
+    alternative : {"two-sided", "greater", "less"}
+        Direction the reported probability is evaluated against.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per contrast, with the mean delta, direction probability, and HDI.
+    """
     levels = [g for g in df[splitby].dropna().unique().tolist()]
     if reference is not None:
         if reference not in levels:

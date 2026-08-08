@@ -12,6 +12,26 @@ __all__ = ["group_singletons", "clone_size"]
 
 
 def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="trb_unique", min_clone_size=10):
+    """Collapse small clones into a per-group "singleton" bucket.
+
+    Builds a group-scoped clonotype id (``clonotype_key`` + ``groupby``) and relabels any
+    clone with fewer than ``min_clone_size`` cells to ``"Singleton_<group>"``, writing the
+    result to ``adata.obs[target_col]``. Register ``target_col`` as the clonotype column to
+    stabilize per-clone estimates on singleton-dominated repertoires.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Cells with a raw clonotype column and a grouping column.
+    clonotype_key : str
+        Raw clonotype column to collapse (default ``"trb"``).
+    groupby : str
+        Column defining the group singletons are pooled within (default ``"patient"``).
+    target_col : str
+        ``obs`` column to write the grouped clonotype id into.
+    min_clone_size : int
+        Clones with fewer cells than this (within the group-scoped id) become singletons.
+    """
     adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
     clone_counts = adata.obs["trb_candidate"].value_counts()
     def collapse_singleton(row):
@@ -23,20 +43,26 @@ def group_singletons(adata,clonotype_key="trb",groupby="patient", target_col="tr
     adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
 
 
-
-# ------------ helper to extract logits -------- #
-
-# ------------ main routine -------------------- #
-
-
-
-
-
-
-
-
-
 def clone_size(adata, key_added=K.CLONE_SIZE, return_counts=False):
+    """Count the cells per clonotype and write them to ``adata.obs[key_added]``.
+
+    The clonotype column is read from the registered metadata (written to ``adata.uns`` by
+    ``TCRIModel.to_anndata``), so run the model — or load a session — first.
+
+    Parameters
+    ----------
+    adata : AnnData
+        A fitted/registered AnnData.
+    key_added : str
+        ``obs`` column to write the per-cell clone size into.
+    return_counts : bool
+        If ``True``, also return the ``{clonotype: size}`` mapping.
+
+    Returns
+    -------
+    dict | None
+        The ``{clonotype: size}`` mapping when ``return_counts=True``, else ``None``.
+    """
     # Canonical source is uns[METADATA]['clone_col'] (written by to_anndata). This
     # used to read the legacy uns['tcri_clone_key'] shadow key — the last reader of
     # it, which is why the shim outlived Phase 4.

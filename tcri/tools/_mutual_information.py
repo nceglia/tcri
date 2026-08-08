@@ -39,8 +39,39 @@ def mutual_information(
     temperature=1.0, clones=None, weighted=False, normalized=True,
     normalize_mode="min", random_state=None, device=None,
 ):
-    """I(c;φ|covariate) in bits. ``groupby`` → tidy DataFrame (one row per group);
-    otherwise a scalar (``n_samples=0``) or a mean/sd/hdi summary (``n_samples>0``)."""
+    """Normalized mutual information ``I(c;φ)`` between clonotype and phenotype (bits).
+
+    Parameters
+    ----------
+    adata_or_jd : AnnData | pandas.DataFrame
+        A fitted AnnData (``to_anndata`` applied) or a precomputed joint from
+        :func:`joint_distribution` (fast path; ``n_samples=0`` and no ``groupby``).
+    covariate : str | None
+        Covariate value to compute at; ``None`` uses the covariate-marginal joint.
+    groupby : str | None
+        Compute one value per group (e.g. ``"patient"``); returns a tidy DataFrame with
+        an ``"MI"`` column instead of a scalar.
+    splitby : str | None
+        A per-group label (e.g. response) carried onto the grouped DataFrame for a
+        downstream :func:`compare_groups`.
+    n_samples : int
+        ``0`` → point estimate; ``>0`` → posterior draws summarised as mean/sd/HDI.
+    weighted : bool
+        Weight each clone by its cell count rather than treating clones as equal units.
+    normalized : bool
+        Divide by the max-entropy denominator (see ``normalize_mode``) so the result is in
+        ``[0, 1]``; ``False`` returns the raw MI in bits.
+    normalize_mode : {"min", "average"}
+        Denominator: ``"min"`` = ``min(H(c), H(φ))`` (default, comparable across groups
+        with different clone counts); ``"average"`` = ``½(H(c)+H(φ))`` — the note's eq 6
+        NMI. Pass ``"average"`` to reproduce the manuscript benchmark.
+
+    Returns
+    -------
+    float | dict | pandas.DataFrame
+        A scalar (``n_samples=0``, no ``groupby``), a mean/sd/HDI summary
+        (``n_samples>0``), or a tidy DataFrame (``groupby``).
+    """
     if groupby is not None:
         if is_precomputed_joint(adata_or_jd):
             raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")

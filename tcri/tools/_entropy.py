@@ -105,8 +105,33 @@ def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples
 def clonotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
                        n_clones_ref=None, random_state=None, device=None):
-    """H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the normalizer for cross-group
-    comparability (else per-group #supported clones). See module docstring."""
+    """Clonotypic entropy ``H[P(c|φ)]`` — one value per phenotype (bits).
+
+    How clonally diverse each phenotype is. Support-only: clones with zero mass in a
+    phenotype column are dropped before normalizing, and an empty column returns ``NaN``
+    (never a spurious ``1.0``).
+
+    Parameters
+    ----------
+    adata_or_jd : AnnData | pandas.DataFrame
+        Fitted AnnData or a precomputed joint from :func:`joint_distribution`.
+    covariate : str | None
+        Covariate value to compute at.
+    normalized : bool
+        Divide by ``log2`` of the number of supported clones so values land in ``[0, 1]``.
+    n_clones_ref : int | None
+        Fix the normalizer across groups for comparability (else the per-group count of
+        supported clones is used).
+    n_samples : int
+        ``0`` → point estimate; ``>0`` → posterior mean/sd/HDI.
+    groupby, splitby : str | None
+        Compute per group and carry a split label, as in :func:`mutual_information`.
+
+    Returns
+    -------
+    pandas.Series | pandas.DataFrame
+        One entry per phenotype (or per group×phenotype with ``groupby``).
+    """
     return _entropy_metric(adata_or_jd, kind="clonotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,
@@ -117,7 +142,30 @@ def clonotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=Non
 def phenotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
                        random_state=None, device=None):
-    """H[P(φ|c)] per clone (bits). See module docstring."""
+    """Phenotypic entropy ``H[P(φ|c)]`` — one value per clone (bits).
+
+    How phenotypically plastic (vs committed) each clone is. All ``P`` phenotypes enter the
+    sum with ``0·log0 := 0`` and the normalizer is ``log2(P)``; a clone with zero mass
+    returns ``NaN``.
+
+    Parameters
+    ----------
+    adata_or_jd : AnnData | pandas.DataFrame
+        Fitted AnnData or a precomputed joint from :func:`joint_distribution`.
+    covariate : str | None
+        Covariate value to compute at.
+    normalized : bool
+        Divide by ``log2(P)`` so values land in ``[0, 1]``.
+    n_samples : int
+        ``0`` → point estimate; ``>0`` → posterior mean/sd/HDI.
+    groupby, splitby : str | None
+        Compute per group and carry a split label, as in :func:`mutual_information`.
+
+    Returns
+    -------
+    pandas.Series | pandas.DataFrame
+        One entry per clonotype (or per group×clonotype with ``groupby``).
+    """
     return _entropy_metric(adata_or_jd, kind="phenotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,

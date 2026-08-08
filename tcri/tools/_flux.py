@@ -50,10 +50,29 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, weighted=False, distance_metric="kl",
                     random_state=None, device=None):
-    """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl/jsd). ``distance_metric`` defaults to ``"kl"`` — METRICS eq 7 defines flux as the KL
-    divergence; ``"l1"`` and ``"jsd"`` remain available. ``groupby`` → tidy DataFrame (one
-    row per group×clone)."""
+    """Phenotypic flux — per-clone shift in ``P(φ|c)`` from ``cov_from`` to ``cov_to``.
+
+    Parameters
+    ----------
+    cov_from, cov_to : str
+        The two covariate values to compare (e.g. ``"pre"`` → ``"post"``).
+    distance_metric : {"kl", "jsd", "l1"}
+        How the two per-clone distributions are compared. Default ``"kl"`` (bits) matches
+        METRICS eq 7, which defines flux as the KL divergence; ``"jsd"`` (bits) and
+        ``"l1"`` are also available.
+    n_samples : int
+        ``0`` → point estimate; ``>0`` → posterior mean/sd/HDI per clone.
+    weighted : bool
+        Weight clones by cell count rather than treating them as equal units.
+    groupby, splitby : str | None
+        Compute per group and carry a split label, as in :func:`mutual_information`.
+
+    Returns
+    -------
+    pandas.Series | pandas.DataFrame
+        Flux per clonotype (or a tidy DataFrame, one row per group×clonotype, with
+        ``groupby``).
+    """
     if groupby is not None:
         def _compute(cl):
             return _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,

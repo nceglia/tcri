@@ -312,10 +312,44 @@ class TCRIModel(BaseModelClass):
         n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):
-        """
-        We split the data into train/val, define a UnifiedTrainingPlan with
-        validation_step, and let scvi handle early stopping automatically
-        by passing early_stopping parameters to TrainRunner.
+        """Fit the model with stochastic variational inference.
+
+        Parameters
+        ----------
+        max_epochs : int
+            Maximum number of passes over the data. This is an *epoch* budget: with
+            ``batch_size`` small relative to ``n_obs`` an epoch is several optimizer
+            steps, so the KL warmup (counted in steps) may span many epochs.
+        batch_size : int
+            Minibatch size. A warning is raised if ``batch_size >= n_obs`` — each epoch is
+            then a single optimizer step and per-epoch overhead dominates; prefer
+            256–1024.
+        lr : float
+            Adam learning rate.
+        reconstruction_loss_scale : float
+            Weight on the ZINB reconstruction term — a β-VAE-style reweighting and a
+            sanctioned deviation from the note (which weights it at 1). The default
+            ``1e-2`` is calibrated so the posterior-predictive library ratio ≈ 1 on real
+            data.
+        n_steps_kl_warmup : int
+            Number of **optimizer steps** over which the latent (``z``) KL is annealed
+            0→1. A run whose ramp does not finish warns and keeps its final weights (no
+            checkpoint is selected), because no two validation checks then share the same
+            objective.
+        **kwargs
+            Forwarded to scvi-tools' ``TrainRunner`` / the Lightning trainer. Recognised
+            extras include ``accelerator``, ``devices``, ``enable_progress_bar``,
+            ``enable_model_summary``, ``callbacks``, ``check_val_every_n_epoch``
+            (default 1), and the early-stopping overrides ``early_stopping_monitor`` /
+            ``early_stopping_mode`` / ``early_stopping_patience`` (patience defaults to
+            ``self.patience_epochs``).
+
+        Notes
+        -----
+        The KL warmup schedule is carried on the module, so a second ``train()`` call
+        *continues* the ramp rather than restarting it; construct a new model for a fresh
+        schedule. After fitting, ``self.training_record_`` records the epochs run, the
+        warmup progress, whether the ramp completed, and the selected checkpoint.
         """
         # Re-seed per call, offset by the call index: a second train() on the same model is
         # reproducible without being a bit-for-bit replay of the first.
