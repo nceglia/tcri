@@ -587,6 +587,11 @@ class TCRIModel(BaseModelClass):
             K.CLONE_COL: reg["clonotype_col"],
             K.PHENOTYPE_COL: reg["phenotype_col"],
             K.BATCH_COL: reg["batch_col"],
+            # The effective values a metric resolves against when the caller leaves an
+            # argument implicit. `replicate` is the default groupby; recording it here (not
+            # just in the registry) is what lets tl.* resolve it from a saved AnnData.
+            K.Config.REPLICATE: reg.get(K.Config.REPLICATE),
+            K.Config.LAYER: reg.get(K.Config.LAYER),
         }
         adata.uns[K.METADATA] = meta
         for col_key, cat_key in (
