@@ -30,7 +30,8 @@ class TCRIModel:
     def setup_anndata(
         cls, adata: AnnData, *, layer: Optional[str] = ...,
         clonotype_key: str = ..., phenotype_key: str = ...,
-        covariate_key: str = ..., batch_key: str = ..., **kwargs: Any,
+        covariate_key: str = ..., batch_key: str = ...,
+        replicate: Optional[str] = ..., **kwargs: Any,
     ) -> None: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
