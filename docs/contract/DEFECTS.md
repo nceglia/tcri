@@ -920,7 +920,7 @@ No existing test changes its expected value.
 
 ---
 
-## DE-13 · S3 · effort XS · open
+## DE-13 · S3 · effort XS · FIXED (PR #61)
 
 **Confirmed:** REAL. `tcri/datasets/_simulate.py:341` (`simulate_from_fit_params`) and `:190-192` (`simulate_tcri`) build `pd.Categorical(...)` with no `categories=`, so every label axis is data-derived.
 
@@ -967,7 +967,7 @@ C. Leave `obs` alone and instead restrict the recorded oracle to the realized su
 
 ---
 
-## DE-14 · S3 · effort S · open
+## DE-14 · S3 · FIXED (PR #61)
 
 **Confirmed:** REAL, and one step worse than the register states.
 
@@ -1317,7 +1317,7 @@ model that had become deterministic for an unrelated reason.
 
 ---
 
-## DE-20 — fuzziness mapping is `g(f) = f`, the note specifies `g(f) = √f` · S3 · open
+## DE-20 — fuzziness mapping is `g(f) = f`, the note specifies `g(f) = √f` · FIXED (PR #61)
 
 The note: *"We also apply a concave mapping g(f) … in the reported experiments, we use
 g(f) = √f."* The generator applies the identity, so the benchmark's difficulty axis is not the

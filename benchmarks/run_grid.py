@@ -152,24 +152,6 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     t_metric = time.time() - t0
     est_mean = float(est["mean"]) if isinstance(est, dict) else float(est)
 
-    # The shipped metric reports E_s[NMI(J_s)] (_mutual_information.py:66-68). NMI is a
-    # nonlinear functional of the joint, so that is not NMI of the posterior — read the
-    # SAME draws the other way round, NMI(E_s[J_s]), and carry both. The gap between them
-    # is the Jensen term, measurable with no ground truth.
-    mean_joint_nmi = float("nan")
-    if n_samples and int(n_samples) > 0:
-        from tcri.tools._common import joint_draws
-        from tcri.tools._mutual_information import _mi_from_joint
-        draws, _cols = joint_draws(
-            adata, "cov_0", n_samples=n_samples, weighted=True,
-            temperature=1.0,          # METRIC temperature, matching the call above --
-            clones=None,              # NOT the generator temperature
-            random_state=seed, device=device,
-        )
-        mean_joint_nmi = float(_mi_from_joint(
-            np.mean([J for _ids, J in draws], axis=0),
-            normalized=True, mode=normalize_mode))
-
     key = "nmi_average" if normalize_mode == "average" else "nmi_min"
     true_v, emp_v = truth[f"true_{key}"], truth[f"empirical_{key}"]
 
@@ -179,9 +161,6 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
         epochs_actual=epochs_actual, stopped_early=stopped_early,
         local_scale=(local_scale if local_scale is not None else float("nan")),
         true_nmi=true_v, empirical_nmi=emp_v, tcri_nmi=est_mean,
-        tcri_nmi_meanjoint=mean_joint_nmi,
-        jensen_gap=est_mean - mean_joint_nmi,
-        ae_meanjoint_vs_true=abs(mean_joint_nmi - true_v),
         ae_vs_true=abs(est_mean - true_v), ae_vs_empirical=abs(est_mean - emp_v),
         t_train=t_train, t_metric=t_metric, t_total=time.time() - t_all,
     )
