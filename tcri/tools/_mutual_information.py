@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._common import grouped_scalar, is_precomputed_joint, joint_draws, summarize
+from ._common import reject_stacked_covariate_joint, grouped_scalar, is_precomputed_joint, joint_draws, summarize
 
 __all__ = ["mutual_information"]
 
@@ -52,9 +52,10 @@ def mutual_information(
             )
             vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
             return (float(np.nanmean(vals)), vals if (n_samples and int(n_samples) > 0) else None)
-        return grouped_scalar(adata_or_jd, groupby=groupby, splitby=splitby, value="MI", compute=_compute)
+        return grouped_scalar(adata_or_jd, groupby=groupby, splitby=splitby, value="MI", compute=_compute, restrict_to=clones)
 
     if is_precomputed_joint(adata_or_jd):
+        reject_stacked_covariate_joint(adata_or_jd)
         if n_samples and int(n_samples) > 0:
             raise ValueError("precomputed-joint fast path is valid only at n_samples=0 (§7.9).")
         return _mi_from_joint(adata_or_jd.values, normalized=normalized, mode=normalize_mode)

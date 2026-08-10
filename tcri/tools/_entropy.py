@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ._common import grouped_series, is_precomputed_joint, joint_draws, summarize
+from ._common import reject_stacked_covariate_joint, grouped_series, is_precomputed_joint, joint_draws, summarize
 
 __all__ = ["clonotypic_entropy", "phenotypic_entropy"]
 
@@ -85,9 +85,10 @@ def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples
             drawsd = {k: [p[k] for p in per] for k in keys} if (n_samples and int(n_samples) > 0) else None
             return point, drawsd
         return grouped_series(adata_or_jd, groupby=groupby, splitby=splitby,
-                              item_name=item_name, value=value, compute=_compute)
+                              item_name=item_name, value=value, compute=_compute, restrict_to=clones)
 
     if is_precomputed_joint(adata_or_jd):
+        reject_stacked_covariate_joint(adata_or_jd)
         if n_samples and int(n_samples) > 0:
             raise ValueError("precomputed-joint fast path is valid only at n_samples=0 (§7.9).")
         one = _one(list(adata_or_jd.index), adata_or_jd.values, list(adata_or_jd.columns))
