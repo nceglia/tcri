@@ -382,6 +382,31 @@ class TCRIModule(PyroBaseModuleClass):
         return z_loc.cpu()
 
     @torch.no_grad()
+    def get_conc_ct(self):
+        """The guide's Dirichlet concentration lambda'_m for q(phi_m), shape [n_ct, P].
+
+        DE-5 freed this magnitude (eq 6: lambda'_m in R^P_{>0}), but only inside guide().
+        Every credible interval the metrics report is drawn in `_compute/_joint.py`, which
+        rebuilt its own Dirichlet as `local_scale * p_ct` -- so the posterior width the user
+        sees came from a fixed pseudo-count, not from the fitted posterior, and DE-5 changed
+        no reported interval at all (DE-5b).
+
+        This mirrors the guide line for line. If the two ever drift apart, the metrics are
+        sampling from a distribution the model never fit.
+        """
+        from pyro import get_param_store
+
+        q_p_ct_raw = get_param_store()["q_p_ct_raw"]
+        bad = ~torch.isfinite(q_p_ct_raw)
+        if bad.any():
+            q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / q_p_ct_raw.shape[1],
+                                     q_p_ct_raw)
+        mag = q_p_ct_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        direction = q_p_ct_raw / mag
+        sharp = torch.clamp(direction ** (1.0 / self.guide_temperature), min=1e-8)
+        sharp = sharp / sharp.sum(dim=1, keepdim=True)
+        return torch.clamp(mag * sharp, min=1e-3)
+
     def get_p_ct(self):
         from pyro import get_param_store
 
