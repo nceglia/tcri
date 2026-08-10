@@ -8,6 +8,8 @@ relies on clones being disjoint across groups (a TCR clone never spans two patie
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -18,6 +20,30 @@ from ._joint import joint_distribution
 def is_precomputed_joint(x) -> bool:
     """A precomputed joint (fast path, §7.9) is a plain DataFrame, not an AnnData."""
     return isinstance(x, pd.DataFrame)
+
+
+def reject_stacked_covariate_joint(jd) -> None:
+    """The precomputed-joint fast path must refuse a table that still carries covariate blocks.
+
+    ``joint_distribution(covariate=None)`` returns a (covariate, clonotype)-indexed frame. Feeding
+    that straight to a scalar metric reaches the precomputed-joint fast path, which never calls
+    :func:`joint_draws` -- so the covariate guard is bypassed and the old stacked value comes
+    back, with each (covariate, clone) pair counted as a distinct clone. Measured: 0.1240077
+    stacked against 0.1452629 for the same table marginalised.
+
+    The caller almost certainly wants either one covariate level or an explicit reduction, and
+    both are one line. Guessing which is the ambiguity this whole change exists to refuse.
+    """
+    idx = getattr(jd, "index", None)
+    if idx is not None and getattr(idx, "nlevels", 1) > 1 and "covariate" in (idx.names or []):
+        raise ValueError(
+            "this joint still carries a 'covariate' index level, so each (covariate, clone) "
+            "pair would be scored as a distinct clone -- inflating H(c).\n"
+            "\n"
+            "Pass a single-covariate joint, e.g. tl.joint_distribution(adata, "
+            "covariate='<level>'), or reduce the covariate level yourself first, e.g. "
+            "jd.groupby(level='clonotype').sum()."
+        )
 
 
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
@@ -41,12 +67,13 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     # (covariate, clone) pair rather than the clone. H(c) was then the entropy over pseudo-
     # clones. Measured on a 10-clone / 2-covariate fixture:
     #
-    #     NMI min      stacked 0.265389   marginalised 0.265385   (invisible)
-    #     NMI average  stacked 0.141953   marginalised 0.164115   (0.0222 apart)
+    #     C=20 P=4  (many clones)   min  +0.0%   average +13.8%
+    #     C=6  P=8  (few clones)    min +12.4%   average +15.4%
     #
-    # `min` selects H(phi) as the denominator, which row-splitting does not touch -- so the
-    # defect was invisible at the package default and material in exactly the mode the note's
-    # benchmark requires. The same shape as DE-2/DE-3: latent at defaults, wrong when it counts.
+    # `min` divides by min(H(c), H(phi)). When clones OUTNUMBER phenotypes it selects H(phi),
+    # which row-splitting does not touch, so the default looks unaffected; when they do not, it
+    # selects H(c) and moves by ~12%. So this is not "invisible at the default" -- that was a
+    # property of one fixture. `average` always moves, since it averages both entropies.
     #
     # The three metrics that reduce to a scalar also disagreed on what covariate=None means
     # (one collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one
@@ -62,8 +89,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
             "\n"
             "covariate=None previously stacked every covariate level into one table, treating "
             "each (covariate, clone) pair as a distinct clone. That inflates H(c) and changes "
-            "NMI under normalize_mode='average' (measured 0.1420 vs 0.1641 on a 2-covariate "
-            "fixture) while looking unchanged under the default 'min'.\n"
+            "NMI by 12-15% on measured fixtures, under both normalize_mode settings.\n"
             "\n"
             "Pass an explicit covariate level, or use tl.joint_distribution(covariate=None) to "
             "get every level as a labelled (covariate, clonotype) table and reduce it the way "
@@ -122,7 +148,10 @@ def summarize(values, *, hdi_prob=0.94) -> dict:
     if v.size == 0:
         return {"mean": np.nan, "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     if v.size == 1:
-        return {"mean": float(v[0]), "sd": 0.0, "hdi_low": float(v[0]), "hdi_high": float(v[0])}
+        # A single draw has no spread to report. Returning sd=0 and a zero-width HDI states
+        # certainty that was never measured -- at n_samples=1 the interval read
+        # [0.289341, 0.289341]. mean is still the draw; the rest is undefined, and NaN says so.
+        return {"mean": float(v[0]), "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     lo, hi = hdi(v, prob=hdi_prob)
     return {"mean": float(v.mean()), "sd": float(v.std(ddof=1)), "hdi_low": lo, "hdi_high": hi}
 
@@ -150,7 +179,8 @@ def _validate_group_clones(obs, groupby, cc):
             seen[c] = g
 
 
-def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94):
+def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94,
+                   restrict_to=None):
     """Loop over ``adata.obs[groupby]`` values, restrict to each group's clones, compute a
     scalar-valued metric per group, and tidy into a DataFrame with the ``splitby`` label.
 
@@ -160,10 +190,32 @@ def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94):
     cc = clone_col(adata)
     obs = adata.obs
     _validate_group_clones(obs, groupby, cc)
+
+    # D9: cells with no group label are dropped by `.dropna()`. Silently excluding part of the
+    # data from every reported number is not a default anyone opted into -- measured 20% of
+    # cells dropped with no warning on a fixture with a partially-populated column.
+    n_missing = int(obs[groupby].isna().sum())
+    if n_missing:
+        warnings.warn(
+            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
+            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
+            f"from every row of this result.",
+            UserWarning, stacklevel=3,
+        )
+
     rows = []
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
         clones_g = obs.loc[gmask, cc].dropna().unique().tolist()
+        # D3: the caller's `clones=` was shadowed by the group's clone list, so
+        # `groupby=... , clones=[...]` returned a frame identical to the unrestricted call --
+        # the restriction was accepted and discarded. Intersect instead, preserving the
+        # caller's order so the engine's stable reorder is unchanged.
+        if restrict_to is not None:
+            allowed = set(clones_g)
+            clones_g = [c for c in restrict_to if c in allowed]
+            if not clones_g:
+                continue
         point, draws = compute(clones_g)
         row = {groupby: g, value: point}
         if splitby is not None and splitby in obs.columns:
@@ -174,7 +226,8 @@ def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94):
     return pd.DataFrame(rows)
 
 
-def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_prob=0.94):
+def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_prob=0.94,
+                   restrict_to=None):
     """Like :func:`grouped_scalar` but the metric is a per-item (phenotype/clone) map.
 
     ``compute(clones) -> (point, draws_or_None)``: ``point`` is ``{item: value}``;
@@ -184,10 +237,32 @@ def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_pr
     cc = clone_col(adata)
     obs = adata.obs
     _validate_group_clones(obs, groupby, cc)
+
+    # D9: cells with no group label are dropped by `.dropna()`. Silently excluding part of the
+    # data from every reported number is not a default anyone opted into -- measured 20% of
+    # cells dropped with no warning on a fixture with a partially-populated column.
+    n_missing = int(obs[groupby].isna().sum())
+    if n_missing:
+        warnings.warn(
+            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
+            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
+            f"from every row of this result.",
+            UserWarning, stacklevel=3,
+        )
+
     rows = []
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
         clones_g = obs.loc[gmask, cc].dropna().unique().tolist()
+        # D3: the caller's `clones=` was shadowed by the group's clone list, so
+        # `groupby=... , clones=[...]` returned a frame identical to the unrestricted call --
+        # the restriction was accepted and discarded. Intersect instead, preserving the
+        # caller's order so the engine's stable reorder is unchanged.
+        if restrict_to is not None:
+            allowed = set(clones_g)
+            clones_g = [c for c in restrict_to if c in allowed]
+            if not clones_g:
+                continue
         point, draws = compute(clones_g)
         split_val = obs.loc[gmask, splitby].iloc[0] if (splitby and splitby in obs.columns) else None
         for item, val in point.items():

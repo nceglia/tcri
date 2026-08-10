@@ -272,12 +272,14 @@ def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
 
     That inflates H(c). Measured on a 10-clone / 2-covariate fixture:
 
-        NMI min      stacked 0.265389   marginalised 0.265385   (invisible)
-        NMI average  stacked 0.141953   marginalised 0.164115   (0.0222 apart)
+        C=20 P=4  (many clones)   min  +0.0%   average +13.8%
+        C=6  P=8  (few clones)    min +12.4%   average +15.4%
 
-    ``min`` selects H(phi) as its denominator, which row-splitting does not touch — so the
-    defect was invisible at the package default and material in exactly the mode the note's
-    benchmark requires.
+    ``min`` divides by min(H(c), H(phi)). When clones outnumber phenotypes it selects H(phi),
+    which row-splitting does not touch, so the default looks unaffected; when they do not it
+    selects H(c) and moves by ~12%. The default is therefore NOT reliably unaffected — an
+    earlier version of this docstring said "invisible at the default", which was a property of
+    this fixture (20 clones, 4 phenotypes) rather than of the metric.
 
     The three reducing metrics also disagreed about what ``covariate=None`` meant: one
     collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one stacked.
@@ -325,3 +327,84 @@ def test_precomputed_joint_path_is_unaffected(blocks):
     jd = tcri.tl.joint_distribution(adata, covariate="cov_0")
     value = tcri.tl.mutual_information(jd)
     assert np.isfinite(float(value))
+
+
+# ── defects the audit surfaced, each with the number that proves it ──────────
+
+def test_precomputed_joint_path_cannot_bypass_the_covariate_guard(blocks):
+    """D1: the guard lives in ``joint_draws``; the precomputed-joint fast path never calls it.
+
+    ``mutual_information(joint_distribution(adata, covariate=None))`` therefore reached the old
+    stacked computation one call away from the guard — measured 0.1240077 stacked against
+    0.1452629 for the same table marginalised. A guard that can be walked around by composing
+    two public functions is not a guard.
+    """
+    _model, adata, _truth = blocks
+    stacked = tcri.tl.joint_distribution(adata, covariate=None)
+
+    for metric in (tcri.tl.mutual_information, tcri.tl.clonotypic_entropy,
+                   tcri.tl.phenotypic_entropy):
+        with pytest.raises(ValueError, match="covariate.*index level"):
+            metric(stacked)
+
+    # the documented escape hatches must both work
+    assert np.isfinite(float(tcri.tl.mutual_information(
+        stacked.groupby(level="clonotype").sum())))
+    assert np.isfinite(float(tcri.tl.mutual_information(
+        tcri.tl.joint_distribution(adata, covariate="cov_0"))))
+
+
+def test_groupby_honours_the_callers_clone_restriction(blocks):
+    """D3: ``clones=`` was accepted and discarded whenever ``groupby`` was set.
+
+    The per-group closure rebound the name to that group's clone list, shadowing the caller's,
+    so ``groupby='patient', clones=[two clones]`` returned a frame ``.equals()`` the
+    unrestricted call. The restriction is now intersected with each group's clones.
+    """
+    _model, adata, _truth = blocks
+    subset = _clones_of(adata, "P0")[:2]
+
+    unrestricted = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient")
+    restricted = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
+                                            clones=subset)
+
+    assert not unrestricted.equals(restricted), "clones= is still discarded under groupby"
+    assert set(restricted["patient"]) == {"P0"}, (
+        "restricting to P0's clones should leave only P0; groups with no surviving clone are "
+        "dropped rather than reported as NaN"
+    )
+    direct = float(tcri.tl.mutual_information(adata, covariate="cov_0", clones=subset))
+    assert float(restricted["MI"].iloc[0]) == pytest.approx(direct, rel=1e-12)
+
+
+def test_groupby_warns_when_cells_have_no_group_label(blocks):
+    """D9: ``.dropna()`` on the groupby column silently excluded unlabelled cells.
+
+    Measured 20% of cells dropped with no warning. Excluding a fifth of the data from every
+    reported number is not a default anyone opted into.
+    """
+    _model, adata, _truth = blocks
+    site = pd.Series(adata.obs["patient"].astype(str).values, index=adata.obs_names)
+    site[::5] = None
+    adata = adata.copy()
+    adata.obs["site"] = site.astype("category")
+
+    with pytest.warns(UserWarning, match="no group label"):
+        tcri.tl.mutual_information(adata, covariate="cov_0", groupby="site")
+
+
+def test_a_single_draw_reports_no_spread(blocks):
+    """D11: ``n_samples=1`` returned ``sd=0.0`` and a zero-width HDI.
+
+    One draw carries no information about spread. Reporting ``[0.289341, 0.289341]`` states a
+    certainty that was never measured; NaN says what is actually known.
+    """
+    _model, adata, _truth = blocks
+    one = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=1, random_state=0)
+    assert np.isfinite(one["mean"])
+    assert np.isnan(one["sd"]) and np.isnan(one["hdi_low"]) and np.isnan(one["hdi_high"])
+
+    many = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=20, random_state=0)
+    assert many["sd"] > 0 and many["hdi_high"] > many["hdi_low"], (
+        "the n=1 special case must not have disabled real summaries"
+    )

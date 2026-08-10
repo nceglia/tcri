@@ -61,7 +61,7 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
                               distance_metric=distance_metric, random_state=random_state,
                               device=device)
         return grouped_series(adata, groupby=groupby, splitby=splitby, item_name="clonotype",
-                              value="phenotypic_flux", compute=_compute)
+                              value="phenotypic_flux", compute=_compute, restrict_to=clones)
 
     point, drawsd = _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
                                weighted=weighted, temperature=temperature, clones=clones,
