@@ -6,7 +6,9 @@ phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l
 KL & JSD in **bits**). **KL is the default**: the metrics document's eq 7 defines
 phenotypic flux AS the KL divergence, and l1/jsd are tcri extensions for when a bounded or
 symmetric measure is wanted. ``n_samples=0`` is the plug-in (a clone with no real shift reads
-exactly 0); ``n_samples>0`` redraws both sides coherently (same seed) and summarizes.
+exactly 0); ``n_samples>0`` redraws both sides from one shared draw (common random numbers) and
+summarizes; a seed is generated when ``random_state`` is None, so the coupling holds at the
+default too.
 """
 from __future__ import annotations
 
@@ -22,6 +24,20 @@ __all__ = ["phenotypic_flux"]
 def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clones,
                distance_metric, random_state, device=None):
     dist_fn = phenotype_distance(distance_metric)
+    # Both sides MUST come from one shared draw. The engine samples over every ct row and then
+    # selects a covariate's block, so two calls carrying the SAME seed realise the same
+    # underlying sample and the two blocks are coherent. At random_state=None they were two
+    # independent samples, and the flux of a covariate against ITSELF -- which is the KL of a
+    # distribution from itself, exactly 0 -- came back as 0.209180 at n_samples=16. The number
+    # being reported was the sampling noise floor, and it grew with the noise.
+    #
+    # This is common random numbers, and the coupling is deliberate rather than incidental: the
+    # estimand is a DIFFERENCE between two covariate levels of the same clone, so the draws are
+    # coupled and the reported HDI is for the coupled quantity. Independent draws would report
+    # the sum of two posteriors' spread plus a positive bias that never goes to zero.
+    if random_state is None:
+        random_state = int(np.random.SeedSequence().generate_state(1)[0])
+
     draws_from, _ = joint_draws(adata, cov_from, n_samples=n_samples, weighted=weighted, device=device,
                                 temperature=temperature, clones=clones, random_state=random_state)
     draws_to, _ = joint_draws(adata, cov_to, n_samples=n_samples, weighted=weighted, device=device,

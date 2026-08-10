@@ -275,11 +275,11 @@ def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
         C=20 P=4  (many clones)   min  +0.0%   average +13.8%
         C=6  P=8  (few clones)    min +12.4%   average +15.4%
 
-    ``min`` divides by min(H(c), H(phi)). When clones outnumber phenotypes it selects H(phi),
-    which row-splitting does not touch, so the default looks unaffected; when they do not it
-    selects H(c) and moves by ~12%. The default is therefore NOT reliably unaffected — an
-    earlier version of this docstring said "invisible at the default", which was a property of
-    this fixture (20 clones, 4 phenotypes) rather than of the metric.
+    ``min`` divides by min(H(c), H(phi)). In the realistic regime for a repertoire — clones
+    vastly outnumbering phenotypes — it selects H(phi), which row-splitting does not touch, so
+    the default really is unaffected. The C=6/P=8 row is kept only to show that this exemption
+    is a property of the ratio rather than of the metric; an earlier version of this docstring
+    stated it as universal. ``average`` moves in every regime, including the realistic one.
 
     The three reducing metrics also disagreed about what ``covariate=None`` meant: one
     collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one stacked.
@@ -408,3 +408,41 @@ def test_a_single_draw_reports_no_spread(blocks):
     assert many["sd"] > 0 and many["hdi_high"] > many["hdi_low"], (
         "the n=1 special case must not have disabled real summaries"
     )
+
+
+# ── flux: the two sides must come from one shared draw (issue #65) ───────────
+
+@pytest.mark.parametrize("random_state", [None, 0, 7])
+@pytest.mark.parametrize("distance_metric", ["kl", "l1", "jsd"])
+def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
+    """The flux of a covariate against ITSELF is the distance of a distribution from itself,
+    which is exactly 0 for every metric here.
+
+    It was not. The two sides came from two independent ``joint_draws`` calls, and at the
+    DEFAULT ``random_state=None`` those were independent samples — so self-flux read 0.209180
+    at n_samples=16. The number being reported was the sampling noise floor, and it grew with
+    the noise. The docstring already claimed the sides were drawn "coherently (same seed)";
+    that was true only when a seed was passed.
+
+    ``random_state=None`` is parametrised deliberately — it is the default, and it is the case
+    that was broken. A test that only checked a seeded call would have passed throughout.
+    """
+    _model, adata, _truth = blocks
+    out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_0", n_samples=16,
+                                  distance_metric=distance_metric, random_state=random_state)
+    values = out["mean"].to_numpy(float) if hasattr(out, "columns") else np.asarray(out, float)
+    worst = float(np.nanmax(values))
+    assert worst == pytest.approx(0.0, abs=1e-12), (
+        f"flux of cov_0 against itself is {worst:.6f} under {distance_metric} at "
+        f"random_state={random_state}; the two sides are not sharing a draw"
+    )
+
+
+def test_real_flux_keeps_posterior_spread(blocks):
+    """Coupling the draws must not flatten the posterior. Two different covariate levels are
+    different latent variables, so their flux retains genuine spread — this guards against
+    'fixing' self-flux by collapsing the draw path altogether."""
+    _model, adata, _truth = blocks
+    out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_1", n_samples=16,
+                                  random_state=0)
+    assert (out["sd"].to_numpy(float) > 0).any(), "no spread across draws; the draw path is dead"
