@@ -260,3 +260,68 @@ def test_model_ranks_the_blocks_as_the_oracle_does(blocks):
     assert model_order == oracle_order, (
         f"model ranks blocks {model_order} but the oracle ranks them {oracle_order}"
     )
+
+
+# ── covariate is required wherever the result is reduced ─────────────────────
+
+@pytest.mark.parametrize("metric", ["mutual_information", "clonotypic_entropy",
+                                    "phenotypic_entropy"])
+def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
+    """``covariate=None`` used to stack every covariate level into one table, treating each
+    (covariate, clone) pair as a distinct clone.
+
+    That inflates H(c). Measured on a 10-clone / 2-covariate fixture:
+
+        NMI min      stacked 0.265389   marginalised 0.265385   (invisible)
+        NMI average  stacked 0.141953   marginalised 0.164115   (0.0222 apart)
+
+    ``min`` selects H(phi) as its denominator, which row-splitting does not touch — so the
+    defect was invisible at the package default and material in exactly the mode the note's
+    benchmark requires.
+
+    The three reducing metrics also disagreed about what ``covariate=None`` meant: one
+    collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one stacked.
+    Choosing a unification is a question about the estimand, not the code, so covariate is now
+    required wherever a reduction happens rather than being silently resolved one of three ways.
+    """
+    _model, adata, _truth = blocks
+    with pytest.raises(ValueError, match="covariate is required"):
+        getattr(tcri.tl, metric)(adata)
+
+    with pytest.raises(ValueError, match="covariate is required"):
+        getattr(tcri.tl, metric)(adata, covariate=None, groupby="patient")
+
+
+def test_joint_distribution_still_returns_every_covariate(blocks):
+    """``joint_distribution`` is deliberately exempt: it LABELS the blocks with a covariate
+    index level instead of collapsing them, so no ambiguity arises, and it stays the way to
+    get every covariate level in one object."""
+    _model, adata, _truth = blocks
+
+    jd = tcri.tl.joint_distribution(adata, covariate=None)
+    assert jd.index.nlevels == 2 and jd.index.names[0] == "covariate"
+    assert set(jd.index.get_level_values("covariate")) == set(
+        adata.uns["tcri_covariate_categories"]
+    )
+
+    one = tcri.tl.joint_distribution(adata, covariate="cov_0")
+    assert one.index.nlevels == 1
+    assert len(one) < len(jd), "restricting to one covariate did not reduce the table"
+
+
+def test_the_guard_reaches_the_plotting_layer(blocks):
+    """``pl.*`` forwards ``covariate`` straight through, so the same ambiguity would otherwise
+    reappear one layer up with no guard at all."""
+    _model, adata, _truth = blocks
+    with pytest.raises(ValueError, match="covariate is required"):
+        tcri.pl.mutual_information(adata, return_df=True)
+
+
+def test_precomputed_joint_path_is_unaffected(blocks):
+    """A precomputed joint has already resolved the covariate question — the table exists.
+    The guard must not fire there, or ``mutual_information(jd)`` breaks for every caller that
+    builds its own joint."""
+    _model, adata, _truth = blocks
+    jd = tcri.tl.joint_distribution(adata, covariate="cov_0")
+    value = tcri.tl.mutual_information(jd)
+    assert np.isfinite(float(value))
