@@ -589,7 +589,8 @@ class TCRIModel(BaseModelClass):
             K.BATCH_COL: reg["batch_col"],
             # The effective values a metric resolves against when the caller leaves an
             # argument implicit. `replicate` is the default groupby; recording it here (not
-            # just in the registry) is what lets tl.* resolve it from a saved AnnData.
+            # just in the registry) is what lets a metric resolve it from a SAVED AnnData,
+            # after the model object is gone.
             K.Config.REPLICATE: reg.get(K.Config.REPLICATE),
             K.Config.LAYER: reg.get(K.Config.LAYER),
         }

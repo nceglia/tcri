@@ -42,9 +42,9 @@ class JointDistribution(TypedDict):
 class MutualInformation(TypedDict):
     """I(c; phi) — the one metric with no item axis, so ``table`` has ``item=None``."""
 
-    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], item, draw, value
-    result: pd.DataFrame    # one row per group; value + sd/hdi_*
-    stats: object           # between-split contrast, or None. n counts GROUPS.
+    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value
+    result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
+                            # (across groups) + p/stat/stars when splitby is set
 
 
 class ClonotypicEntropy(TypedDict):
