@@ -136,12 +136,31 @@ def test_permutation_null_honours_normalize_mode(trained_model):
         tcri.diag.permutation_null(adata, n_perm=10, normalize_mode="nonsense")
 
 
-def test_permutation_null_has_no_dead_groupby(trained_model):
+def test_permutation_null_groupby_matches_the_metric_surface(trained_model):
     """DE-15: ``groupby`` was accepted and never read — passing it returned a bit-identical
-    frame. Removed rather than implemented; strata here are covariate levels."""
+    frame. It is now implemented rather than removed.
+
+    Every ``tl.*`` metric takes ``groupby``, and this is the null FOR those metrics, so without
+    it a per-patient MI had no per-patient null. Cells are restricted to the group and
+    phenotypes permuted within each (covariate, group) stratum, so the null conditions on what
+    the reported statistic conditions on.
+    """
     import inspect
 
-    assert "groupby" not in inspect.signature(tcri.diag.permutation_null).parameters
     model, adata = trained_model
-    with pytest.raises(TypeError):
-        tcri.diag.permutation_null(adata, groupby="batch", n_perm=10)
+    assert "groupby" in inspect.signature(tcri.diag.permutation_null).parameters
+
+    flat = tcri.diag.permutation_null(adata, n_perm=30, random_state=0)
+    grouped = tcri.diag.permutation_null(adata, groupby="patient", n_perm=30, random_state=0)
+
+    assert "patient" in grouped.columns, "the group label is not carried into the result"
+    n_groups = adata.obs["patient"].nunique()
+    assert len(grouped) == len(flat) * n_groups, (
+        f"expected one row per (covariate, group): {len(flat)} x {n_groups}, got {len(grouped)}"
+    )
+    assert not np.allclose(
+        grouped["observed"].to_numpy()[: len(flat)], flat["observed"].to_numpy()
+    ) or n_groups == 1, "grouping did not change the statistic, so groupby is still inert"
+
+    with pytest.raises(ValueError, match="not a column"):
+        tcri.diag.permutation_null(adata, groupby="no_such_column", n_perm=5)
