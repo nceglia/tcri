@@ -1,29 +1,19 @@
-"""I(c; phi) — mutual information between clonotype and phenotype.
+"""``tl.mutual_information`` — clone↔phenotype coupling I(c;φ|m) in **bits** (§7.4).
 
-METRICS eq 5 (MI) and eq 6 (NMI). See ``tcri/tools/_metrics_contract.py`` for the frozen
-definitions; this module computes them and stores the result.
+Engine-backed rewrite of the old ``metrics.mutual_information``. Default
+``normalize_mode="min"`` (coefficient of constraint I/min(H_c,H_p)) — the ``"average"``
+denominator throttles normalized MI by ~1/log2(C) and is non-comparable across groups with
+different clone counts (the blocking fix). ``n_samples=0`` is the deterministic plug-in.
 """
 from __future__ import annotations
 
 import numpy as np
-import pandas as pd
 
-from .._state import keys as K
-from .._state import schemas
-from .._state.storage import tl_result, with_resolved_params
-from ._common import (
-    build_result,
-    build_stats,
-    is_precomputed_joint,
-    joint_draws,
-    reject_stacked_covariate_joint,
-    resolve_groupby,
-    validate_splitby,
-)
+from ._common import reject_stacked_covariate_joint, grouped_scalar, is_precomputed_joint, joint_draws, summarize
 
 __all__ = ["mutual_information"]
 
-_EPS = 1e-12
+_EPS = 1e-15
 
 
 def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min") -> float:
@@ -33,81 +23,48 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min")
     if total <= 0:
         return np.nan
     pxy = J / total
-    px = pxy.sum(1, keepdims=True)
-    py = pxy.sum(0, keepdims=True)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        terms = pxy * np.log2(pxy / (px * py + _EPS) + _EPS)
-    mi = float(np.nansum(np.where(pxy > 0, terms, 0.0)))
+    px = pxy.sum(1, keepdims=True)   # P(clone)
+    py = pxy.sum(0, keepdims=True)   # P(phenotype)
+    mi = float(np.sum(pxy * np.log2((pxy + _EPS) / (px @ py + _EPS))))
     if not normalized:
         return mi
-    hx = float(-np.nansum(np.where(px > 0, px * np.log2(px + _EPS), 0.0)))
-    hy = float(-np.nansum(np.where(py > 0, py * np.log2(py + _EPS), 0.0)))
-    denom = min(hx, hy) if mode == "min" else 0.5 * (hx + hy)
-    return 0.0 if denom <= 0 else mi / denom
+    h_c = float(-np.sum(px * np.log2(px + _EPS)))
+    h_p = float(-np.sum(py * np.log2(py + _EPS)))
+    denom = min(h_c, h_p) if mode == "min" else 0.5 * (h_c + h_p)
+    return mi / denom if denom > 0 else 0.0
 
 
-@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation)
 def mutual_information(
-    adata, *, covariate, groupby=None, splitby=None, n_samples=0, temperature=1.0,
-    clones=None, weighted=False, normalized=True, normalize_mode="min",
-    random_state=None, device=None, key_added=None, inplace=True,
+    adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    normalize_mode="min", random_state=None, device=None,
 ):
-    """I(c;phi | covariate) in bits, computed once and cached.
+    """I(c;φ|covariate) in bits. ``groupby`` → tidy DataFrame (one row per group);
+    otherwise a scalar (``n_samples=0``) or a mean/sd/hdi summary (``n_samples>0``)."""
+    if groupby is not None:
+        if is_precomputed_joint(adata_or_jd):
+            raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")
 
-    Returns ``{"table", "result", "stats"}`` and stores the same object under
-    ``uns[key_added or 'tcri_mutual_information']``. ``pl.mutual_information`` renders from that
-    cache rather than recomputing, so the plot cannot disagree with the frame in your hand.
+        def _compute(cl):
+            draws, cols = joint_draws(
+                adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
+                temperature=temperature, clones=cl, random_state=random_state,
+            )
+            vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
+            return (float(np.nanmean(vals)), vals if (n_samples and int(n_samples) > 0) else None)
+        return grouped_scalar(adata_or_jd, groupby=groupby, splitby=splitby, value="MI", compute=_compute, restrict_to=clones)
 
-    ``groupby`` is the replicate. Left implicit it resolves to the column registered as
-    ``replicate`` at ``setup_anndata``, and the effective value is recorded in provenance.
-    ``splitby`` requires ``groupby`` and must be constant within group.
-    """
-    if is_precomputed_joint(adata):
-        reject_stacked_covariate_joint(adata)
+    if is_precomputed_joint(adata_or_jd):
+        reject_stacked_covariate_joint(adata_or_jd)
         if n_samples and int(n_samples) > 0:
             raise ValueError("precomputed-joint fast path is valid only at n_samples=0 (§7.9).")
-        value = _mi_from_joint(adata.values, normalized=normalized, mode=normalize_mode)
-        frame = pd.DataFrame([{"covariate": None, "item": None, "draw": 0, "value": value}])
-        return {"table": frame, "result": frame.drop(columns=["draw"]), "stats": None}
+        return _mi_from_joint(adata_or_jd.values, normalized=normalized, mode=normalize_mode)
 
-    gkey, resolved = resolve_groupby(adata, groupby)
-    validate_splitby(adata.obs, gkey, splitby)
-
-    obs = adata.obs
-    cc = obs[adata.uns[K.METADATA][K.Config.CLONE_COL]]
-
-    def _one(clone_subset):
-        draws, _cols = joint_draws(
-            adata, covariate, n_samples=n_samples, weighted=weighted, device=device,
-            temperature=temperature, clones=clone_subset, random_state=random_state,
-        )
-        return [_mi_from_joint(J, normalized=normalized, mode=normalize_mode)
-                for _ids, J in draws]
-
-    rows = []
-    if gkey is None:
-        for d, v in enumerate(_one(clones)):
-            rows.append({"covariate": covariate, "item": None, "draw": d, "value": v})
-    else:
-        from ._common import _validate_group_clones
-        _validate_group_clones(obs, gkey, cc.name)
-        for g in obs[gkey].dropna().unique().tolist():
-            gmask = obs[gkey] == g
-            group_clones = cc[gmask].dropna().unique().tolist()
-            if clones is not None:
-                allowed = set(group_clones)
-                group_clones = [c for c in clones if c in allowed]
-                if not group_clones:
-                    continue
-            row_base = {"covariate": covariate, gkey: g, "item": None}
-            if splitby is not None:
-                row_base[splitby] = obs.loc[gmask, splitby].iloc[0]
-            for d, v in enumerate(_one(group_clones)):
-                rows.append({**row_base, "draw": d, "value": v})
-
-    table = pd.DataFrame(rows)
-    result = build_result(table, groupby=gkey, splitby=splitby, item_col=None)
-    stats = build_stats(result, groupby=gkey, splitby=splitby)
-
-    payload = {"table": table, "result": result, "stats": stats}
-    return with_resolved_params(payload, groupby=gkey) if resolved else payload
+    draws, cols = joint_draws(
+        adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
+        temperature=temperature, clones=clones, random_state=random_state,
+    )
+    vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
+    if n_samples and int(n_samples) > 0:
+        return summarize(vals)
+    return vals[0]
