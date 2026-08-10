@@ -90,8 +90,19 @@ def _phenotype_programs(rng, n_phenotypes, n_factors, fuzziness):
     alpha = rng.uniform(1.5, 6.0, size=(n_phenotypes, n_factors))
     beta = rng.uniform(1.0, 3.0, size=(n_phenotypes, n_factors))
 
+    # DE-20. Supplementary Note 1 interpolates with a CONCAVE mapping g(f), not with f:
+    #
+    #     theta'_k = (1 - g(f)) theta_k + g(f) theta_bar,
+    #     "in the reported experiments, we use g(f) = sqrt(f)"
+    #
+    # The code used g(f) = f, which under-mixes at every f in (0, 1) -- at f=0.1 the note
+    # blends 0.316 toward the mean where this blended 0.100. The endpoints f=0 and f=1 agree,
+    # so only the interior of the sweep was affected. The note permits any concave g on
+    # [0, 1]; sqrt is what the reported experiments use and is therefore the default here.
+    g = float(np.sqrt(fuzziness))
+
     theta = np.concatenate([alpha - 1.0, -beta], axis=1)
-    theta = (1.0 - fuzziness) * theta + fuzziness * theta.mean(0, keepdims=True)
+    theta = (1.0 - g) * theta + g * theta.mean(0, keepdims=True)
 
     alpha_f = theta[:, :n_factors] + 1.0
     beta_f = -theta[:, n_factors:]
@@ -185,15 +196,25 @@ def simulate_tcri(
     np.add.at(counts, (z, phi), 1.0)
     empirical = mi_from_joint_oracle(counts) if counts.sum() > 0 else dict.fromkeys(truth, np.nan)
 
+    _PHEN_LEVELS = [f"phen_{p}" for p in range(n_phenotypes)]
     obs = pd.DataFrame(
         {
-            "clone_id": pd.Categorical([f"clone_{i}" for i in z]),
-            "phenotype": pd.Categorical([f"phen_{p}" for p in phi]),
-            "true_phenotype": pd.Categorical([f"phen_{p}" for p in phi_true]),
+            # DE-13: declare the label space. Without `categories=`, pandas infers it from
+            # the values it happens to see and sorts LEXICOGRAPHICALLY, so at K>=10
+            # 'phen_2' gets code 4 and 'phen_11' code 3 -- codes stop matching the integer
+            # phenotype index they were built from. A phenotype with zero sampled cells
+            # also vanishes from the level set, silently shrinking P.
+            "clone_id": pd.Categorical([f"clone_{i}" for i in z],
+                                       categories=[f"clone_{i}" for i in range(n_clones)]),
+            "phenotype": pd.Categorical([f"phen_{p}" for p in phi],
+                                        categories=_PHEN_LEVELS),
+            "true_phenotype": pd.Categorical([f"phen_{p}" for p in phi_true],
+                                             categories=_PHEN_LEVELS),
             "covariate": pd.Categorical(
-                [f"cov_{i}" for i in rng.integers(0, n_covariates, size=n_cells)]
+                [f"cov_{i}" for i in rng.integers(0, n_covariates, size=n_cells)],
+                categories=[f"cov_{i}" for i in range(n_covariates)],
             ),
-            "batch": pd.Categorical(["batch_0"] * n_cells),
+            "batch": pd.Categorical(["batch_0"] * n_cells, categories=["batch_0"]),
         },
         index=[f"cell_{i}" for i in range(n_cells)],
     )
@@ -242,9 +263,37 @@ def temperature_scale(P, T, eps=1e-12):
     sharpens (raising I(c;phi)), ``T>1`` flattens. This is the axis the published
     benchmark sweeps, and it changes the GROUND TRUTH, not just the difficulty.
     """
+    T = float(T)
+    # Supplementary Note 1, "Temperature Scaling of Conditional Distributions", specifies
+    # T > 0. Outside that the function used to fail three different silent ways:
+    #   T = 0      -> ZeroDivisionError
+    #   T = nan    -> an all-NaN matrix, no error
+    #   T = -1.0   -> finite, plausible-looking numbers that INVERT the distribution
+    # The last is the dangerous one: a negative T produced a valid-looking row-stochastic
+    # matrix and would have propagated into a benchmark as though it meant something.
+    if not np.isfinite(T) or T <= 0.0:
+        raise ValueError(
+            f"temperature must be finite and > 0 (Supplementary Note 1, 'Temperature "
+            f"Scaling of Conditional Distributions'); got T={T!r}"
+        )
+
     P = np.clip(np.asarray(P, dtype=float), eps, None)
     Pp = P ** (1.0 / T)
-    return Pp / Pp.sum(axis=1, keepdims=True)
+
+    # float64 underflow: once (1/T)*log10(p) < -308 every entry of a row becomes exactly
+    # 0.0 and the renormalisation below is 0/0. Measured on a [0.7, 0.2, 0.1] row: fine at
+    # T=1e-3, all-NaN at T=1e-4. Raising beats returning NaN, which the caller would have
+    # to notice.
+    row_sums = Pp.sum(axis=1, keepdims=True)
+    dead = ~np.isfinite(row_sums) | (row_sums <= 0.0)
+    if dead.any():
+        raise ValueError(
+            f"temperature T={T!r} underflows float64: {int(dead.sum())} of {len(row_sums)} "
+            f"row(s) collapsed to all-zero under P**(1/T), so the result would be NaN. "
+            f"The smallest usable T depends on the smallest entry of P -- underflow starts "
+            f"once (1/T)*log10(min(P)) < -308."
+        )
+    return Pp / row_sums
 
 
 def simulate_from_fit_params(
@@ -335,12 +384,17 @@ def simulate_from_fit_params(
     clone_names = ([str(clone_levels[i]) for i in z] if clone_levels is not None
                    else [f"clone_{i}" for i in z])
 
+    # DE-13, as above: declare the label space rather than letting pandas infer it.
+    phen_levels = [f"phen_{p}" for p in range(n_phenotypes)]
+    clone_levels_all = ([str(c) for c in clone_levels] if clone_levels is not None
+                        else [f"clone_{i}" for i in range(n_clones)])
     obs = pd.DataFrame({
-        "clone_id": pd.Categorical(clone_names),
-        "phenotype": pd.Categorical([f"phen_{p}" for p in phi]),
-        "true_phenotype": pd.Categorical([f"phen_{p}" for p in phi_true]),
-        "covariate": pd.Categorical(["cov_0"] * n_cells),
-        "batch": pd.Categorical(["batch_0"] * n_cells),
+        "clone_id": pd.Categorical(clone_names, categories=clone_levels_all),
+        "phenotype": pd.Categorical([f"phen_{p}" for p in phi], categories=phen_levels),
+        "true_phenotype": pd.Categorical([f"phen_{p}" for p in phi_true],
+                                         categories=phen_levels),
+        "covariate": pd.Categorical(["cov_0"] * n_cells, categories=["cov_0"]),
+        "batch": pd.Categorical(["batch_0"] * n_cells, categories=["batch_0"]),
     }, index=[f"cell_{i}" for i in range(n_cells)])
 
     adata = AnnData(X=X, obs=obs,
