@@ -31,8 +31,44 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     and unpack it straight back to arrays — measured at ~2x the engine core itself.
     Ordering matches the DataFrame path exactly (blocks in covariate order, clones in
     block order, then the ``clones=`` filter applied as a stable reorder).
+
+    ``covariate`` is REQUIRED here. See the guard below.
     """
     from ._joint import _engine_blocks
+
+    # covariate=None used to stack the per-covariate blocks row-wise, so a clone present in k
+    # covariate levels contributed k ROWS and the row axis of the joint became the
+    # (covariate, clone) pair rather than the clone. H(c) was then the entropy over pseudo-
+    # clones. Measured on a 10-clone / 2-covariate fixture:
+    #
+    #     NMI min      stacked 0.265389   marginalised 0.265385   (invisible)
+    #     NMI average  stacked 0.141953   marginalised 0.164115   (0.0222 apart)
+    #
+    # `min` selects H(phi) as the denominator, which row-splitting does not touch -- so the
+    # defect was invisible at the package default and material in exactly the mode the note's
+    # benchmark requires. The same shape as DE-2/DE-3: latent at defaults, wrong when it counts.
+    #
+    # The three metrics that reduce to a scalar also disagreed on what covariate=None means
+    # (one collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one
+    # stacked). Rather than pick a unification -- which is a question about the estimand, not
+    # about the code -- covariate is now required wherever the result must be REDUCED.
+    #
+    # joint_distribution(covariate=None) is deliberately still allowed: it LABELS the blocks
+    # with a covariate index level instead of collapsing them, so no ambiguity arises there,
+    # and it remains the way to get every covariate in one object.
+    if covariate is None:
+        raise ValueError(
+            "covariate is required for scalar metrics.\n"
+            "\n"
+            "covariate=None previously stacked every covariate level into one table, treating "
+            "each (covariate, clone) pair as a distinct clone. That inflates H(c) and changes "
+            "NMI under normalize_mode='average' (measured 0.1420 vs 0.1641 on a 2-covariate "
+            "fixture) while looking unchanged under the default 'min'.\n"
+            "\n"
+            "Pass an explicit covariate level, or use tl.joint_distribution(covariate=None) to "
+            "get every level as a labelled (covariate, clonotype) table and reduce it the way "
+            "your analysis intends."
+        )
 
     blocks, _n_draws, clonotype_cats, _cov_cats, cols = _engine_blocks(
         adata,
