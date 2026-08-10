@@ -14,7 +14,8 @@ The legacy shadow keys (``tcri_clone_key`` / ``tcri_phenotype_key``) and the old
 # ── uns: metadata + learned priors ───────────────────────────────────────────
 METADATA = "tcri_metadata"                 # {covariate_col, clone_col, phenotype_col, batch_col}
 P_CT = "tcri_p_ct"                         # learned posterior-mean p_ct, shape (n_ct, P)
-LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale
+LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale (legacy draw)
+CONC_CT = "tcri_conc_ct"                   # guide concentration lambda'_m, shape (n_ct, P)
 GATE_PROB = "tcri_gate_prob"               # NEW (Phase 4): classifier/prior gate, scalar or None
 CLASSIFIER_TEMPERATURE = "tcri_classifier_temperature"  # NEW (Phase 4): classifier temperature
 

@@ -59,6 +59,7 @@ def _joint_draws(
     cov_array,
     *,
     local_scale,
+    conc_ct=None,
     n_samples=0,
     temperature=1.0,
     use_logits=True,
@@ -99,7 +100,30 @@ def _joint_draws(
 
     # draw over ALL ct rows once (shared-draw invariant), seeded
     if n_samples and int(n_samples) > 0:
-        conc = torch.clamp(float(local_scale) * base, min=1e-3)
+        if conc_ct is not None:
+            # DE-5b: draw from the GUIDE's posterior, not a reconstruction of it.
+            #
+            # This was `local_scale * base`, i.e. Dir(beta * mean) -- a fixed pseudo-count
+            # identical for every group regardless of how many cells supported it. DE-5 freed
+            # the guide's magnitude per eq 6, but only inside guide(); every interval the
+            # metrics reported still came from the old reconstruction, so the fix changed no
+            # published interval at all.
+            #
+            # Only the MAGNITUDE is taken from the guide. The direction stays `base`, which is
+            # the analysis-time tempered mean -- at temperature == 1 `base` is the guide's own
+            # normalised direction, so this reproduces Dir(lambda'_m) exactly; at T != 1 the
+            # deliberate analysis-time temper still applies to the mean while the posterior
+            # WIDTH continues to come from the fit.
+            conc_ct_t = torch.as_tensor(np.asarray(conc_ct), dtype=torch.float64, device=dev)
+            if conc_ct_t.shape != p_ct_t.shape:
+                raise ValueError(
+                    f"conc_ct has shape {tuple(conc_ct_t.shape)} but p_ct has "
+                    f"{tuple(p_ct_t.shape)}; they index the same ct rows and must match"
+                )
+            mag = conc_ct_t.sum(dim=-1, keepdim=True).clamp(min=1e-6)
+            conc = torch.clamp(mag * base, min=1e-3)
+        else:
+            conc = torch.clamp(float(local_scale) * base, min=1e-3)
         with _torch_seed(random_state):
             bases = torch.distributions.Dirichlet(conc).sample((int(n_samples),))  # [N, n_ct, P]
         n_draws = int(n_samples)

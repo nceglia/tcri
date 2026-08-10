@@ -288,7 +288,7 @@ This matches the package's already-stated stance that a second fit CONTINUES the
 
 ---
 
-## DE-5 · S1 · FIXED (guide half; metric half tracked as DE-5b)
+## DE-5 · S1 · FIXED (guide half PR #51; metric half DE-5b, PR #60)
 
 **Confirmed:** REAL, and worse than the register states.
 

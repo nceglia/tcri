@@ -83,3 +83,55 @@ def test_concentration_total_is_not_pinned_to_the_prior_scale(fitted, site, scal
         f"every q({site}) total equals {scale_attr}={pinned}. {scale_attr} is a scalar PRIOR "
         f"hyperparameter; using it as the variational total is the DE-5 defect."
     )
+
+
+# ── DE-5b: the freed concentration must reach the metric draw ────────────────
+
+def test_guide_concentration_reaches_the_metric_draw(fitted):
+    """DE-5b: credible intervals must come from the fitted posterior, not a reconstruction.
+
+    DE-5 freed lambda'_m per eq 6 — but only inside ``guide()``. Every interval the metrics
+    report is drawn in ``_compute/_joint.py``, which rebuilt its own Dirichlet as
+    ``local_scale * p_ct``: a fixed pseudo-count, identical for every group no matter how much
+    data supported it. So DE-5 changed no reported interval at all, and its own test passed
+    while the user-visible number was untouched.
+
+    Two assertions, because either alone is passable by accident: the concentration must be
+    EXPORTED (it reaches ``uns``), and it must be USED (dropping it changes the draw).
+    """
+    import numpy as np
+    import tcri
+    from tcri import _keys as K
+
+    model = fitted
+    adata = model.adata
+    model.to_anndata(adata)
+
+    assert K.CONC_CT in adata.uns, (
+        "to_anndata does not export the guide concentration, so the metric engine has nothing "
+        "to draw from and silently falls back to local_scale * p_ct (DE-5b)"
+    )
+    conc = np.asarray(adata.uns[K.CONC_CT], dtype=float)
+    assert conc.shape == np.asarray(adata.uns[K.P_CT]).shape
+    assert np.isfinite(conc).all() and (conc > 0).all()
+
+    # it must be the GUIDE's, not local_scale rebuilt
+    totals = conc.sum(1)
+    local_scale = float(adata.uns[K.LOCAL_SCALE])
+    assert not np.allclose(totals, local_scale, rtol=1e-3), (
+        f"concentration totals all equal local_scale ({local_scale}); this is the "
+        f"reconstruction DE-5b removes, not the fitted posterior"
+    )
+
+    def _mean_width(use_guide):
+        b = adata.copy()
+        if not use_guide:
+            del b.uns[K.CONC_CT]
+        jd = tcri.tl.joint_distribution(b, covariate=None, n_samples=120, random_state=0)
+        v = jd.to_numpy(dtype=float).reshape(120, -1)
+        return float(np.mean(np.percentile(v, 97, 0) - np.percentile(v, 3, 0)))
+
+    assert not np.isclose(_mean_width(True), _mean_width(False), rtol=1e-3), (
+        "dropping the guide concentration does not change the interval width, so the draw is "
+        "still using local_scale and DE-5b is inert"
+    )

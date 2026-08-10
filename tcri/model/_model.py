@@ -584,6 +584,9 @@ class TCRIModel(BaseModelClass):
         adata.uns[K.CT_ARRAY] = ct_arr
         adata.uns[K.COV_ARRAY] = self.module.ct_to_cov.cpu().numpy()[ct_arr]
         adata.uns[K.LOCAL_SCALE] = float(self.module.local_scale)
+        # DE-5b: the guide's actual concentration, so credible intervals come from the
+        # fitted posterior rather than from a reconstructed local_scale * mean.
+        adata.uns[K.CONC_CT] = self.module.get_conc_ct().detach().cpu().numpy()
         gp = self.module.gate_prob
         adata.uns[K.GATE_PROB] = float(gp) if gp is not None else float("nan")
         adata.uns[K.CLASSIFIER_TEMPERATURE] = float(self.module.classifier_temperature)

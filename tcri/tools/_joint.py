@@ -87,6 +87,9 @@ def _engine_blocks(
             f"is missing; run model.to_anndata(...)."
         )
     local_scale = float(local_scale) if local_scale is not None else 1.0
+    # DE-5b: present on anything written by a current to_anndata; absent on older objects,
+    # which fall back to the local_scale reconstruction rather than failing.
+    conc_ct = adata.uns.get(K.CONC_CT, None)
 
     blocks, n_draws = _joint_draws(
         adata.uns[K.P_CT],
@@ -95,6 +98,7 @@ def _engine_blocks(
         adata.uns[K.CT_ARRAY],
         adata.uns[K.COV_ARRAY],
         local_scale=local_scale,
+        conc_ct=conc_ct,
         n_samples=n_samples,
         temperature=temperature,
         use_logits=use_logits,
