@@ -162,11 +162,25 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
     ])
 
 
-def permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None,
-                     n_perm=1000, random_state=None):
+def permutation_null(adata, *, metric="mutual_information", covariate=None,
+                     normalize_mode="min", n_perm=1000, random_state=None):
     """Permutation null for a clone↔phenotype metric: permute phenotype labels within each
     covariate, recompute the metric on the **empirical** clone×phenotype joint to form a null;
-    report observed, null mean/sd, z, p. adata-only, model-free."""
+    report observed, null mean/sd, z, p. adata-only, model-free.
+
+    ``normalize_mode`` must match the mode used for the statistic this is a null FOR. It was
+    hardcoded to ``"min"``, so a caller working in ``"average"`` compared their number against
+    a null on a different scale -- measured on a 12-clone fixture, the same data gives 0.378
+    under ``"min"`` and a materially different value under ``"average"``. A null on the wrong
+    scale is not a weaker null; it is not a null for that statistic at all.
+
+    ``groupby`` was accepted and never read -- passing it returned a bit-identical frame.
+    Removed rather than implemented: strata here are covariate levels, which is what the
+    permutation is conditioned on.
+
+    Note this is deliberately model-free: it uses the EMPIRICAL clone x phenotype crosstab,
+    not the model's ``p_ct``, so it shares no Dirichlet draw stack with ``tl.*``.
+    """
     from ..tools._mutual_information import _mi_from_joint
 
     if metric != "mutual_information":
@@ -180,6 +194,11 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
 
     n_phenos = len(phenos)
 
+    if normalize_mode not in ("min", "average"):
+        raise ValueError(
+            f"normalize_mode must be 'min' or 'average', got {normalize_mode!r}"
+        )
+
     def _empirical_mi(clones_codes, pheno_codes, n_clones):
         # bincount on the flattened (clone, phenotype) key rather than np.add.at —
         # identical counts, ~3.7x faster (np.add.at is the unbuffered ufunc path).
@@ -187,7 +206,7 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
             clones_codes * n_phenos + pheno_codes, minlength=n_clones * n_phenos
         )
         J = flat.astype(float).reshape(n_clones, n_phenos)
-        return _mi_from_joint(J, normalized=True, mode="min")
+        return _mi_from_joint(J, normalized=True, mode=normalize_mode)
 
     rows = []
     for m in covs:
@@ -202,7 +221,12 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
         null = np.array([_empirical_mi(cc, rng.permutation(pc), len(uc)) for _ in range(int(n_perm))])
         mu, sd = float(null.mean()), float(null.std(ddof=1) if null.size > 1 else 0.0)
         z = (obs_mi - mu) / sd if sd > 0 else np.nan
-        p = float(np.mean(null >= obs_mi))
+        # (1 + #{null >= obs}) / (1 + n_perm), not the raw fraction. A permutation p-value
+        # estimated from a finite number of shuffles can never be 0: the observed statistic is
+        # itself one realisation under the null. The unfloored version returned exactly 0.0
+        # whenever no shuffle beat the observation, which claims infinite evidence from a
+        # finite sample. Phipson & Smyth (2010), "Permutation p-values should never be zero".
+        p = float((1.0 + np.count_nonzero(null >= obs_mi)) / (1.0 + int(n_perm)))
         rows.append({"covariate": m, "observed": obs_mi, "null_mean": mu, "null_sd": sd,
                      "z": z, "p": p})
     return pd.DataFrame(rows)
