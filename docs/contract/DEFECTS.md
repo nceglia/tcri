@@ -467,7 +467,7 @@ Tests:
 
 ---
 
-## DE-7 · S2 · effort S · open
+## DE-7 · S2 · FIXED (PR #63)
 
 **Confirmed:** REAL as stated. `grep -c "use_logits\|weighted\|gate" tcri/tools/_metrics_contract.py` returns 0. `METRIC_SPECS` freezes formula / per / support / normalizer / empty for each metric but never says how the table's clone marginal P(c) arises -- and the same silence covers DE-6's `use_logits`.
 
@@ -1019,7 +1019,7 @@ C. **Raise the eps floor.** Rejected: 1e-300 still underflows at 1/T=500; 1e-6 d
 
 ---
 
-## DE-15 · S3 · effort M · open
+## DE-15 · S3 · FIXED (PR #63)
 
 **Confirmed:** REAL, with three further specifics — and the decisive one is that the function CANNOT be strengthened in place.
 

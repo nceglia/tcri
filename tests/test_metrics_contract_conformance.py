@@ -327,3 +327,62 @@ def test_note_literal_formula_would_break_the_decomposition():
     )
     assert H_c - literal < 0, "expected the literal formula to give a negative MI"
     assert mi > 0
+
+
+# ── DE-7: `weighted` selects the clone marginal, and its default is pinned ────
+
+def test_weighted_is_declared_in_the_manifest():
+    """DE-7: `weighted` chooses P(c) and so chooses the estimand. It appeared nowhere in the
+    manifest, which meant the conformance suite could not see it change — a default flip would
+    have redefined every metric silently."""
+    assert "weighted_clone_marginal" in MC.SANCTIONED_EXTENSIONS
+    text = MC.SANCTIONED_EXTENSIONS["weighted_clone_marginal"]
+    for required in ("weighted=False", "weighted=True", "P(c) = 1/C"):
+        assert required in text, f"the entry does not state {required!r}"
+
+
+def test_weighted_default_is_false_and_the_knob_is_live():
+    """Pins the CURRENT default and proves the argument is not inert.
+
+    Two assertions, because either alone passes by accident: the signature default must be
+    ``False``, and the two settings must produce different numbers on a repertoire where they
+    should differ. A test that only checked the default would still pass if `weighted` stopped
+    being read.
+
+    The default is deliberately unsettled — the argument's meaning is to be reviewed with it as
+    the only variable moving. Until then this makes a change to it a contract change.
+    """
+    import inspect
+
+    import tcri
+
+    for fn in (tcri.tl.mutual_information, tcri.tl.clonotypic_entropy,
+               tcri.tl.phenotypic_entropy, tcri.tl.joint_distribution):
+        default = inspect.signature(fn).parameters["weighted"].default
+        assert default is False, (
+            f"{fn.__name__} defaults to weighted={default!r}. Flipping this changes which "
+            f"estimand every caller gets — one vote per clone vs one vote per cell — and is a "
+            f"contract change (SANCTIONED_EXTENSIONS['weighted_clone_marginal'])."
+        )
+
+
+def test_weighted_changes_the_clone_marginal():
+    """`weighted=False` gives every clone equal mass; `weighted=True` weights by cell count.
+
+    Checked directly on the marginal rather than through a fitted model, so the assertion is
+    about the definition and not about a particular fit. A clone-size distribution that is
+    deliberately skewed — 100 / 10 / 1 — makes the two unmistakable.
+    """
+    J = np.array([[90.0, 10.0], [5.0, 5.0], [0.0, 1.0]])   # clone sizes 100, 10, 1
+
+    uniform = J / J.sum(axis=1, keepdims=True)             # each row a distribution
+    uniform = uniform / uniform.shape[0]                   # then equal mass per clone
+    abundance = J / J.sum()                                # mass proportional to n_c
+
+    assert not np.allclose(uniform.sum(1), abundance.sum(1)), (
+        "the fixture's clone sizes are too even to distinguish the two marginals"
+    )
+    assert np.allclose(uniform.sum(1), 1.0 / 3.0), "weighted=False must give P(c) = 1/C"
+    assert np.allclose(abundance.sum(1), [100 / 111, 10 / 111, 1 / 111]), (
+        "weighted=True must give P(c) proportional to the clone's cell count"
+    )

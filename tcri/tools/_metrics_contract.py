@@ -221,6 +221,28 @@ SANCTIONED_EXTENSIONS = {
         "[0,1] and compare across groups of different size. The note defines only the "
         "raw entropies for eqs 3-4."
     ),
+    "weighted_clone_marginal": (
+        "DE-7. `weighted` selects the joint's clone marginal P(c) and is a genuine degree of "
+        "freedom the metrics documents do not name, so it belongs here rather than being left "
+        "undeclared.\n"
+        "\n"
+        "  weighted=False (tcri's DEFAULT) -- every clone contributes equally: P(c) = 1/C. "
+        "The metric then describes the clone REPERTOIRE, one vote per clone.\n"
+        "  weighted=True  -- P(c) is proportional to the clone's cell count n_c. The metric "
+        "then describes the CELL population, one vote per cell.\n"
+        "\n"
+        "These are different estimands, not different estimators of one estimand, and on a "
+        "repertoire with a heavy-tailed clone-size distribution they can differ a lot. Note 1's "
+        "benchmark protocol and the repo's own simulator oracle "
+        "(tcri/datasets/_simulate.py) are abundance-weighted, so anything reproducing the "
+        "note MUST pass weighted=True explicitly, exactly as with normalize_mode.\n"
+        "\n"
+        "The DEFAULT IS NOT SETTLED and is deliberately left at False pending a dedicated "
+        "review -- see the working agreement: the meaning of this argument is to be examined "
+        "with it as the only variable moving. This entry pins the current default so a change "
+        "to it is a contract change and cannot happen silently, which was DE-7: `weighted` "
+        "appeared nowhere in this manifest, so the conformance test could not see it move."
+    ),
     "normalize_mode_default": (
         "DEVIATION FROM eq 6. The note's eq 6 defines "
         "NMI = I / ((1/2)(H(c) + H(phi))) -- the MEAN denominator, exposed here as "
