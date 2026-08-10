@@ -11,7 +11,8 @@ from . import plotting as pl
 from . import utils as ut
 from . import model as ml
 from . import diagnostics as diag  # PR8
-from . import datasets             # synthetic data with a known-MI oracle
+from . import datasets
+from . import get             # synthetic data with a known-MI oracle
 
 # The unified engine, re-exported top-level for prominence.
 from .tools import joint_distribution

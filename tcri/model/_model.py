@@ -32,6 +32,7 @@ from scvi.model.base import BaseModelClass
 from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
+from .._state import keys as K
 from ._module import TCRIModule
 from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
@@ -87,6 +88,7 @@ class TCRIModel(BaseModelClass):
         phenotype_key: str = "phenotype_col",
         covariate_key: str = "timepoint",
         batch_key: str = "patient",
+        replicate: Optional[str] = None,
         **kwargs,
     ) -> None:
         """Register clonotype/phenotype/covariate/batch/count fields with scvi.
@@ -100,6 +102,23 @@ class TCRIModel(BaseModelClass):
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
                 raise ValueError(f"{col} not in adata.obs!")
+        # `replicate` names the independent unit for statistics -- the column a metric uses
+        # when `groupby` is left implicit. Registering it once here means it is not retyped at
+        # every call, and it is recorded as the EFFECTIVE value of groupby in each result's
+        # provenance.
+        #
+        # Deliberately separate from batch_key. scvi's batch_key conditions the encoder and
+        # decoder (one-hot into every hidden layer), which is a modelling decision about what
+        # to correct for; `replicate` is a claim about what counts as an independent
+        # observation. They coincide when batches are patients and diverge the moment they are
+        # sequencing runs -- at which point deriving one from the other silently gives the
+        # wrong n.
+        if replicate is not None and replicate not in adata.obs:
+            raise ValueError(
+                f"replicate={replicate!r} is not a column of adata.obs. It names the "
+                f"independent unit for statistics (usually the patient), and is used as the "
+                f"default `groupby` for every metric."
+            )
         adata.obs["indices"] = list(range(len(adata.obs.index)))
         anndata_fields = [
             LayerField(REGISTRY_KEYS.X_KEY, layer, is_count_data=True),
@@ -118,6 +137,8 @@ class TCRIModel(BaseModelClass):
         adata_manager.registry["phenotype_col"] = phenotype_key
         adata_manager.registry["covariate_col"] = covariate_key
         adata_manager.registry["batch_col"] = batch_key
+        adata_manager.registry[K.Config.REPLICATE] = replicate
+        adata_manager.registry[K.Config.LAYER] = layer
         cls.register_manager(adata_manager)
         if layer is None:
             adata.uns.pop("tcri_layer", None)
@@ -554,7 +575,6 @@ class TCRIModel(BaseModelClass):
         ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from :meth:`predict`); ``obs``:
         ``PHENOTYPE`` argmax hard label.
         """
-        from .. import _keys as K
 
         adata = self._validate_anndata(adata)
         self.module.eval()
