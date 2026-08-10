@@ -139,3 +139,70 @@ def test_trainer_knobs_are_overridable(tiny_adata):
             enable_progress_bar=False, enable_model_summary=False,
         )
     assert model.trainer.current_epoch <= 6
+
+
+def _fitted_for_binding():
+    from tcri.datasets import simulate_tcri
+
+    adata = simulate_tcri(n_clones=6, n_phenotypes=4, n_genes=30, n_cells=200,
+                          omega_concentration=0.4, fuzziness=0.1, seed=0)
+    pyro.clear_param_store()
+    TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                            phenotype_key="phenotype", covariate_key="covariate",
+                            batch_key="batch")
+    model = TCRIModel(adata, n_latent=6, n_hidden=12, n_layers=1, classifier_n_layers=1,
+                      classifier_hidden=12, K=4, seed=0)
+    model.train(max_epochs=3, batch_size=64, accelerator="cpu",
+                enable_progress_bar=False, enable_model_summary=False)
+    return model, adata
+
+
+@pytest.mark.parametrize("view", ["reversed", "tail", "shuffled"])
+def test_predict_binds_p_ct_by_cell_not_by_loader_position(view):
+    """NEW-1: a cell's prediction must not depend on what else was passed alongside it.
+
+    ``predict`` indexed the clone x covariate prior with a running loader offset:
+    ``ct_array[current_idx : current_idx + n]``. ``ct_array`` is keyed by TRAINING cell id, so
+    the offset is the correct index only when the passed object is a contiguous prefix of the
+    training data in its original order. Any other subset, a reordered view, or a per-patient
+    slice — all legal under the frozen contract — gave cell *i* the prior of the *i*-th
+    TRAINING cell.
+
+    Measured before the fix on a reversed view: max |Δp| = 0.3696. On a prefix it read 0.0000,
+    which is why it went unnoticed — so ``tail`` and ``shuffled`` are here deliberately, and a
+    prefix would not discriminate.
+    """
+    model, adata = _fitted_for_binding()
+    full = model.predict(adata)
+
+    if view == "reversed":
+        sub = adata[::-1].copy()
+    elif view == "tail":
+        sub = adata[100:].copy()
+    else:
+        sub = adata[np.random.default_rng(1).permutation(adata.n_obs)].copy()
+
+    got = model.predict(sub)
+    ref = full.loc[got.index]
+    delta = float(np.abs(ref.to_numpy() - got.to_numpy()).max())
+    assert delta < 1e-6, (
+        f"predicting the {view} view changed the same cells' probabilities by {delta:.4f}. "
+        f"p_ct is being bound by position in the loader rather than by each cell's own "
+        f"clonotype x covariate group (NEW-1)."
+    )
+
+
+def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
+    """NEW-1 in the other place it appeared: to_anndata's logit/prior loop."""
+    from tcri._keys import X_LOGPOSTERIOR
+
+    model, adata = _fitted_for_binding()
+    full = model.to_anndata(adata.copy())
+    rev = model.to_anndata(adata[::-1].copy())
+
+    order = [list(rev.obs_names).index(n) for n in full.obs_names]
+    delta = float(np.abs(full.obsm[X_LOGPOSTERIOR] - rev.obsm[X_LOGPOSTERIOR][order]).max())
+    assert delta < 1e-5, (
+        f"to_anndata on a reversed view moved the log-posterior by {delta:.4f} for the same "
+        f"cells; the prior is bound by loader position rather than by cell (NEW-1)."
+    )
