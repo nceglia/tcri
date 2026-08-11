@@ -206,6 +206,47 @@ _(the deferred "classifier-training fix, its own PR" above — plus a full audit
 - **Tests:** new `tests/test_model_classifier.py` (perfect-recovery guard at gate 1.0 + 0.5, asserts f_cls weights actually move — with a module-local param-store isolation fixture); round-trip now guards `phenotype_kl_weight`/`gate_prob`/`classifier_dropout`. Full suite **89 passed**.
 - **[G] fixed (author-approved):** α (`global_scale`) now applied to the eq-1 clonotype prior (`expanded_conc = global_scale * centroids`), removing the prior/guide scale mismatch; classifier recovery unchanged (1.000), suite green.
 - **Deferred:** **[E]** `reconstruction_loss_scale=1e-3` vs eq-7 full weight (over-generation symptom) — author deferred; may be an intentional β-VAE reweighting, and raising it needs a retrain + R/NR revalidation. Tracked as a follow-up investigation. **[F]** in-silico perturbation (eqs 8–12) not implemented (additive). **[SUPERSEDED 2026-08-07 — [D], [E] and [G] are resolved; see METHODS_CONFORMANCE.md and SANCTIONED_DEVIATIONS for live status.]**
+## Metrics store-once, pass 1 — the `tl` layer  ·  ✅ done (branch `feat/metrics-migration`)
+_(pass 2 — `pl` reading `tcri.get`, `compare_groups` internal, colours, `eti`/AUC — is the next branch.)_
+- **All five `tl` store once.** Each returns `{table, result, stats}` and writes the same object
+  to `uns[key_added or "tcri_<metric>"]` with a `params` provenance block, via the `@tl_result`
+  decorator that landed in #73. `joint_distribution` is one of the five: it is probabilistic
+  (`n_samples`, `temperature`, `weighted`, `random_state`) and was the only `tl` that recorded
+  nothing about how it was derived.
+- **The precomputed-joint path is deleted** — `adata_or_jd`, `is_precomputed_joint`,
+  `reject_stacked_covariate_joint`, and the §7.9 API-doc section. It was declared in the first
+  contract freeze (`7599959`), implemented because it was declared, and had exactly one caller
+  in the repo. Its root cause was `joint_distribution` returning a naked DataFrame; once every
+  `tl` stores its result there is nothing to hand back in.
+- **Shared machinery in `tools/_common.py`** — `resolve_groupby`, `validate_splitby`,
+  `metric_table`, `build_result`, `build_stats`, `across_groups`. The group loop lives in one
+  place so the four metrics cannot diverge on what `groupby` means (the divergence #64 keeps
+  producing).
+- **`stats` is its own slot, not inline columns.** The plan said follow grafiti and put
+  statistics in columns of the tidy frame. Implementing it showed the pattern does not
+  transfer: grafiti's tests are per-motif, so "one row per thing tested" and "one row per
+  result row" coincide. tcri's contrast is BETWEEN SPLITS — a different cardinality from
+  `result` — so columns would either broadcast one contrast across every group row or pick a
+  row to hang it on. Recorded at `tools/_common.py`.
+- **Tests:** 289 with `--runslow` (baseline on `main`: 256), 276 fast. `test_recovery`'s four
+  oracle/invariance tests now call `_mi_from_joint` directly — they score a count table built
+  from `obs`, so routing them through a public tool added a store step to a test with no
+  AnnData and hid which function the oracle was compared against.
+- **Bugs the migration surfaced and fixed:** `build_result` grouped by a named list of label
+  columns, which silently averaged away `cov_from`/`cov_to` and lost the flux's endpoints — it
+  now groups by every non-`{draw,value}` column; `metric_table` carried an all-NaN `covariate`
+  column on flux.
+- **Standing Audit:** removed everything slated ✅ (precomputed path + `df.attrs["params"]` +
+  `joint_distribution(groupby=)`); deliverables present ✅; new unit tests for the axes, the
+  cache, and the no-clobber guard ✅ (each mutation-checked); duplication removed ✅ (four
+  copies of the group loop → one); usability ✅ (one return shape instead of
+  float/Series/DataFrame/dict by axis); contract conformance green ✅ (59 passed);
+  `METRICS_CONTRACT.md` + `_metrics_contract.py` updated in the same PR ✅.
+- **Deferred to pass 2 (not a regression, but load-bearing):** `pl` and `diagnostics` still
+  recompute their metric. They now pass `inplace=False` so a plot cannot overwrite the user's
+  cached result under the plot's own arguments — including the `groupby`
+  `pl.mutual_information` manufactures from `batch_col`. Guarded by a test.
+
 ## PR 10 — Public API + scverse CI  ·  ☐ todo
 - **Logged test (from grafiti parity):** once `pl.__all__` exists, add a conformance assertion `set(pl.__all__) == {pl entries in _contract.pyi}` — catches *extra/missing* plot functions (whole-surface), not just signature drift on onboarded ones. (tcri's namespaced `.pyi` checks drift incrementally via `IMPLEMENTED`; this closes the whole-surface gap grafiti gets from its markdown+`__all__` channel.)
 
