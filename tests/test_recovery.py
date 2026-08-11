@@ -237,8 +237,8 @@ def test_model_mi_tracks_the_true_mi_across_difficulty():
             model.to_anndata(adata)
         est = tcri.tl.mutual_information(
             adata, covariate="cov_0", weighted=True, normalize_mode="average",
-        )
-        got.append((_truth(adata)["true_nmi_average"], float(est)))
+        )["result"]
+        got.append((_truth(adata)["true_nmi_average"], float(est["value"].iloc[0])))
 
     truths = [g[0] for g in got]
     ests = [g[1] for g in got]
@@ -298,10 +298,10 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
         summary = tcri.tl.mutual_information(
             adata, covariate="cov_0", n_samples=100, weighted=True,
             normalize_mode="average", random_state=seed,
-        )
-        lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["mean"]
+        )["result"].iloc[0]
+        lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["value"]
 
-        assert np.isfinite([lo, hi, mean]).all(), f"non-finite summary: {summary}"
+        assert np.isfinite([lo, hi, mean]).all(), f"non-finite summary: {dict(summary)}"
         assert hi > lo, f"degenerate or inverted HDI: [{lo}, {hi}]"
         assert hi - lo < 0.5, f"HDI too wide to be informative: [{lo}, {hi}]"
         assert lo <= mean <= hi, (
