@@ -1,15 +1,26 @@
 """``tl.mutual_information`` — clone↔phenotype coupling I(c;φ|m) in **bits** (§7.4).
 
-Engine-backed rewrite of the old ``metrics.mutual_information``. Default
-``normalize_mode="min"`` (coefficient of constraint I/min(H_c,H_p)) — the ``"average"``
-denominator throttles normalized MI by ~1/log2(C) and is non-comparable across groups with
-different clone counts (the blocking fix). ``n_samples=0`` is the deterministic plug-in.
+METRICS eq 5 (MI) and eq 6 (NMI). Default ``normalize_mode="min"`` (coefficient of constraint
+I/min(H_c,H_p)) — the ``"average"`` denominator scales with log2(C) and is not comparable
+across groups with different clone counts, which is why it is not the default. See
+``tcri/tools/_metrics_contract.py`` for the frozen definitions.
 """
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
-from ._common import reject_stacked_covariate_joint, grouped_scalar, is_precomputed_joint, joint_draws, summarize
+from .._state import keys as K
+from .._state import schemas
+from .._state.storage import tl_result, with_resolved_params
+from ._common import (
+    build_result,
+    build_stats,
+    joint_draws,
+    metric_table,
+    resolve_groupby,
+    validate_splitby,
+)
 
 __all__ = ["mutual_information"]
 
@@ -34,37 +45,39 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min")
     return mi / denom if denom > 0 else 0.0
 
 
+@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation)
 def mutual_information(
-    adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+    adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
     temperature=1.0, clones=None, weighted=False, normalized=True,
     normalize_mode="min", random_state=None, device=None,
+    key_added=None, inplace=True,
 ):
-    """I(c;φ|covariate) in bits. ``groupby`` → tidy DataFrame (one row per group);
-    otherwise a scalar (``n_samples=0``) or a mean/sd/hdi summary (``n_samples>0``)."""
-    if groupby is not None:
-        if is_precomputed_joint(adata_or_jd):
-            raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")
+    """I(c;φ|covariate) in bits — computed once, cached, and returned.
 
-        def _compute(cl):
-            draws, cols = joint_draws(
-                adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
-                temperature=temperature, clones=cl, random_state=random_state,
-            )
-            vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
-            return (float(np.nanmean(vals)), vals if (n_samples and int(n_samples) > 0) else None)
-        return grouped_scalar(adata_or_jd, groupby=groupby, splitby=splitby, value="MI", compute=_compute, restrict_to=clones)
+    Returns ``{"table", "result", "stats"}`` and stores the same object under
+    ``uns[key_added or 'tcri_mutual_information']``. ``pl.mutual_information`` renders from that
+    cache rather than recomputing, so the plot cannot disagree with the frame in your hand.
 
-    if is_precomputed_joint(adata_or_jd):
-        reject_stacked_covariate_joint(adata_or_jd)
-        if n_samples and int(n_samples) > 0:
-            raise ValueError("precomputed-joint fast path is valid only at n_samples=0 (§7.9).")
-        return _mi_from_joint(adata_or_jd.values, normalized=normalized, mode=normalize_mode)
+    ``groupby`` is the replicate; left implicit it resolves to the column registered as
+    ``replicate`` at ``setup_anndata``, and the effective value is recorded in provenance.
+    ``splitby`` requires ``groupby`` and must be constant within group; when set, the
+    between-split contrast lands in ``stats`` with ``n`` counting GROUPS.
+    """
+    gkey, resolved = resolve_groupby(adata, groupby)
+    validate_splitby(adata.obs, gkey, splitby)
 
-    draws, cols = joint_draws(
-        adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
-        temperature=temperature, clones=clones, random_state=random_state,
-    )
-    vals = [_mi_from_joint(J, normalized=normalized, mode=normalize_mode) for _, J in draws]
-    if n_samples and int(n_samples) > 0:
-        return summarize(vals)
-    return vals[0]
+    def _compute(clone_subset):
+        draws, _cols = joint_draws(
+            adata, covariate, n_samples=n_samples, weighted=weighted, device=device,
+            temperature=temperature, clones=clone_subset, random_state=random_state,
+        )
+        return [_mi_from_joint(J, normalized=normalized, mode=normalize_mode)
+                for _ids, J in draws]
+
+    table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
+                         clones=clones, item_col=None, compute=_compute)
+    result = build_result(table, groupby=gkey, splitby=splitby, item_col=None)
+    stats = build_stats(result, groupby=gkey, splitby=splitby)
+
+    payload = {"table": table, "result": result, "stats": stats}
+    return with_resolved_params(payload, groupby=gkey) if resolved else payload

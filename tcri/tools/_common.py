@@ -18,33 +18,12 @@ from .._stats import hdi
 from ._joint import joint_distribution
 
 
-def is_precomputed_joint(x) -> bool:
-    """A precomputed joint (fast path, §7.9) is a plain DataFrame, not an AnnData."""
-    return isinstance(x, pd.DataFrame)
-
-
-def reject_stacked_covariate_joint(jd) -> None:
-    """The precomputed-joint fast path must refuse a table that still carries covariate blocks.
-
-    ``joint_distribution(covariate=None)`` returns a (covariate, clonotype)-indexed frame. Feeding
-    that straight to a scalar metric reaches the precomputed-joint fast path, which never calls
-    :func:`joint_draws` -- so the covariate guard is bypassed and the old stacked value comes
-    back, with each (covariate, clone) pair counted as a distinct clone. Measured: 0.1240077
-    stacked against 0.1452629 for the same table marginalised.
-
-    The caller almost certainly wants either one covariate level or an explicit reduction, and
-    both are one line. Guessing which is the ambiguity this whole change exists to refuse.
-    """
-    idx = getattr(jd, "index", None)
-    if idx is not None and getattr(idx, "nlevels", 1) > 1 and "covariate" in (idx.names or []):
-        raise ValueError(
-            "this joint still carries a 'covariate' index level, so each (covariate, clone) "
-            "pair would be scored as a distinct clone -- inflating H(c).\n"
-            "\n"
-            "Pass a single-covariate joint, e.g. tl.joint_distribution(adata, "
-            "covariate='<level>'), or reduce the covariate level yourself first, e.g. "
-            "jd.groupby(level='clonotype').sum()."
-        )
+# `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
+# accepting a bare DataFrame instead of an AnnData (the §7.9 "precomputed joint" path). Both are
+# gone: the path was declared in the first contract freeze (7599959), implemented because it was
+# declared, and had exactly one caller in the repo -- a test scoring one table four ways. With
+# every tl taking an AnnData, a stacked joint cannot arrive at a metric, so there is nothing left
+# to guard against.
 
 
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
@@ -100,7 +79,6 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     blocks, _n_draws, clonotype_cats, _cov_cats, cols = _engine_blocks(
         adata,
         covariate=covariate,
-        groupby=None,
         n_samples=n_samples,
         use_logits=use_logits,
         weighted=weighted,
@@ -413,3 +391,59 @@ def build_stats(result, *, groupby, splitby, value="value", item_col=None):
                 row.update(stat=np.nan, p=np.nan, stars="")
             rows.append(row)
     return pd.DataFrame(rows) if rows else None
+
+
+def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, compute,
+                 extra_labels=None):
+    """Build the long ``table`` every metric shares: one row per (covariate, group, item, draw).
+
+    ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
+    ``{item: value}`` mapping; without one (mutual_information) it is a scalar.
+
+    The group loop lives here rather than in each metric so the four of them cannot diverge on
+    what ``groupby`` means — the divergence issue #64 keeps producing. Clone restriction is
+    intersected with the group's clones, never shadowed: ``groupby=... , clones=[...]`` used to
+    return a frame identical to the unrestricted call.
+    """
+    obs = adata.obs
+    clone_col_name = adata.uns[K.METADATA][K.Config.CLONE_COL]
+    base = {"covariate": covariate}
+    if extra_labels:
+        base.update(extra_labels)
+
+    def _emit(rows, label_row, per_draw):
+        for draw, payload in enumerate(per_draw):
+            if item_col is None:
+                rows.append({**label_row, "draw": draw, "value": payload})
+            else:
+                for item, value in payload.items():
+                    rows.append({**label_row, item_col: item, "draw": draw, "value": value})
+
+    rows = []
+    if groupby is None:
+        _emit(rows, dict(base), compute(clones))
+        return pd.DataFrame(rows)
+
+    _validate_group_clones(obs, groupby, clone_col_name)
+    n_missing = int(obs[groupby].isna().sum())
+    if n_missing:
+        warnings.warn(
+            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
+            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
+            f"from every row of this result.",
+            UserWarning, stacklevel=3,
+        )
+
+    for g in obs[groupby].dropna().unique().tolist():
+        gmask = obs[groupby] == g
+        group_clones = obs.loc[gmask, clone_col_name].dropna().unique().tolist()
+        if clones is not None:
+            allowed = set(group_clones)
+            group_clones = [c for c in clones if c in allowed]
+            if not group_clones:
+                continue
+        label_row = {**base, groupby: g}
+        if splitby is not None:
+            label_row[splitby] = obs.loc[gmask, splitby].iloc[0]
+        _emit(rows, label_row, compute(group_clones))
+    return pd.DataFrame(rows)
