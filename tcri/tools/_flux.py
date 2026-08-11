@@ -16,7 +16,11 @@ import numpy as np
 import pandas as pd
 
 from .._distance import phenotype_distance
-from ._common import grouped_series, joint_draws, summarize
+from .._state import keys as K
+from .._state import schemas
+from .._state.storage import tl_result, with_resolved_params
+from ._common import (build_result, build_stats, joint_draws, metric_table,
+                      resolve_groupby, validate_splitby)
 
 __all__ = ["phenotypic_flux"]
 
@@ -63,26 +67,39 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
     return point, drawsd
 
 
+@tl_result(key=K.PHENOTYPIC_FLUX, version=1, schema=schemas.PhenotypicFlux)
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, weighted=False, distance_metric="kl",
-                    random_state=None, device=None):
+                    random_state=None, device=None, key_added=None, inplace=True):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl/jsd). ``distance_metric`` defaults to ``"kl"`` — METRICS eq 7 defines flux as the KL
-    divergence; ``"l1"`` and ``"jsd"`` remain available. ``groupby`` → tidy DataFrame (one
-    row per group×clone)."""
-    if groupby is not None:
-        def _compute(cl):
-            return _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
-                              weighted=weighted, temperature=temperature, clones=cl,
-                              distance_metric=distance_metric, random_state=random_state,
-                              device=device)
-        return grouped_series(adata, groupby=groupby, splitby=splitby, item_name="clonotype",
-                              value="phenotypic_flux", compute=_compute, restrict_to=clones)
+    kl/jsd) — computed once, cached, returned.
 
-    point, drawsd = _flux_once(adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples,
-                               weighted=weighted, temperature=temperature, clones=clones,
-                               distance_metric=distance_metric, random_state=random_state,
-                              device=device)
-    if n_samples and int(n_samples) > 0:
-        return pd.DataFrame({c: summarize(drawsd[c]) for c in point}).T
-    return pd.Series(point, name="phenotypic_flux")
+    METRICS eq 7 defines flux as the KL divergence, which is why ``distance_metric`` defaults
+    to ``"kl"``; ``"l1"`` and ``"jsd"`` remain available for when a bounded or symmetric
+    measure is wanted.
+
+    A clone present at ``cov_from`` but absent at ``cov_to`` is DROPPED, not NaN-filled — a
+    flux needs both endpoints to exist.
+    """
+    gkey, resolved = resolve_groupby(adata, groupby)
+    validate_splitby(adata.obs, gkey, splitby)
+
+    def _compute(clone_subset):
+        point, drawsd = _flux_once(
+            adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples, weighted=weighted,
+            temperature=temperature, clones=clone_subset, distance_metric=distance_metric,
+            random_state=random_state, device=device,
+        )
+        if drawsd is None:
+            return [point]
+        n_draws = len(next(iter(drawsd.values()))) if drawsd else 1
+        return [{c: vals[d] for c, vals in drawsd.items()} for d in range(n_draws)]
+
+    table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
+                         item_col="clonotype", compute=_compute,
+                         extra_labels={"cov_from": cov_from, "cov_to": cov_to})
+    result = build_result(table)
+    stats = build_stats(result, groupby=gkey, splitby=splitby)
+
+    payload = {"table": table, "result": result, "stats": stats}
+    return with_resolved_params(payload, groupby=gkey) if resolved else payload

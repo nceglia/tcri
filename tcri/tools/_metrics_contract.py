@@ -299,8 +299,28 @@ SANCTIONED_EXTENSIONS = {
         "not comparable between groups."
     ),
     "posterior_summaries": (
-        "`n_samples>0` returns mean/sd/HDI of the metric over posterior draws instead of "
-        "a single plug-in value. The plug-in entropy is >= the posterior mean (Jensen), "
-        "so the two are reported as distinct quantities."
+        "`n_samples>0` reports the metric over posterior draws rather than a single plug-in "
+        "value. The plug-in entropy is >= the posterior mean (Jensen), so the two are "
+        "distinct quantities. The RETURN SHAPE does not change with n_samples: `result` "
+        "always carries `sd`/`hdi_low`/`hdi_high` columns, which are NaN at n_samples<=1 "
+        "because a single draw has no spread to report -- writing sd=0 there would state a "
+        "certainty that was never measured."
+    ),
+    "store_once_payload": (
+        "Every tl returns `{table, result, stats}` and stores that same object under "
+        "uns[key_added or 'tcri_<metric>'] with a `params` provenance block. `table` is the "
+        "substrate -- one row per (covariate, group, item, draw), never reduced. `result` is "
+        "built FROM `table` by reducing over `draw` only, so the two cannot drift. `stats` is "
+        "the between-split contrast, None without `splitby`.\n"
+        "\n"
+        "The replicate unit in `stats` is the GROUP, not the item: when a metric has an item "
+        "axis, item rows are averaged to one value per group BEFORE the contrast. 15 clones "
+        "from 2 patients therefore contribute n=2, which is what makes pseudoreplication "
+        "structurally impossible rather than a thing a caller has to remember (issue #66).\n"
+        "\n"
+        "Two uncertainty families coexist and are deliberately named apart: `hdi_*` is the "
+        "WITHIN-group posterior interval over draws; `ci_*` with `n_groups` is the "
+        "BETWEEN-replicate interval across groups. They answer different questions and "
+        "collapsing them into one name would make a plot unreadable."
     ),
 }

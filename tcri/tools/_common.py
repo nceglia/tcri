@@ -13,37 +13,17 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .._state import keys as K
 from .._stats import hdi
 from ._joint import joint_distribution
 
 
-def is_precomputed_joint(x) -> bool:
-    """A precomputed joint (fast path, §7.9) is a plain DataFrame, not an AnnData."""
-    return isinstance(x, pd.DataFrame)
-
-
-def reject_stacked_covariate_joint(jd) -> None:
-    """The precomputed-joint fast path must refuse a table that still carries covariate blocks.
-
-    ``joint_distribution(covariate=None)`` returns a (covariate, clonotype)-indexed frame. Feeding
-    that straight to a scalar metric reaches the precomputed-joint fast path, which never calls
-    :func:`joint_draws` -- so the covariate guard is bypassed and the old stacked value comes
-    back, with each (covariate, clone) pair counted as a distinct clone. Measured: 0.1240077
-    stacked against 0.1452629 for the same table marginalised.
-
-    The caller almost certainly wants either one covariate level or an explicit reduction, and
-    both are one line. Guessing which is the ambiguity this whole change exists to refuse.
-    """
-    idx = getattr(jd, "index", None)
-    if idx is not None and getattr(idx, "nlevels", 1) > 1 and "covariate" in (idx.names or []):
-        raise ValueError(
-            "this joint still carries a 'covariate' index level, so each (covariate, clone) "
-            "pair would be scored as a distinct clone -- inflating H(c).\n"
-            "\n"
-            "Pass a single-covariate joint, e.g. tl.joint_distribution(adata, "
-            "covariate='<level>'), or reduce the covariate level yourself first, e.g. "
-            "jd.groupby(level='clonotype').sum()."
-        )
+# `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
+# accepting a bare DataFrame instead of an AnnData (the §7.9 "precomputed joint" path). Both are
+# gone: the path was declared in the first contract freeze (7599959), implemented because it was
+# declared, and had exactly one caller in the repo -- a test scoring one table four ways. With
+# every tl taking an AnnData, a stacked joint cannot arrive at a metric, so there is nothing left
+# to guard against.
 
 
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
@@ -99,7 +79,6 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     blocks, _n_draws, clonotype_cats, _cov_cats, cols = _engine_blocks(
         adata,
         covariate=covariate,
-        groupby=None,
         n_samples=n_samples,
         use_logits=use_logits,
         weighted=weighted,
@@ -272,4 +251,206 @@ def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_pr
             if draws is not None and item in draws:
                 row.update(summarize(draws[item], hdi_prob=hdi_prob))
             rows.append(row)
+    return pd.DataFrame(rows)
+
+
+# ── the store-once reduction machinery ───────────────────────────────────────
+#
+# NOTE on slot design. Grafiti puts statistics inline as COLUMNS of its tidy table, and the
+# plan for this refactor followed that. Implementing it showed the pattern does not transfer:
+# grafiti's tests are per-motif, so "one row per thing tested" and "one row per result row"
+# coincide. tcri's contrast is BETWEEN SPLITS -- one row per (split_a, split_b) pair -- which is
+# a different cardinality from `result`. Forcing it into columns would either broadcast one
+# contrast across every group row or silently pick a row to hang it on. So `stats` is its own
+# slot, as originally sketched.
+
+def resolve_groupby(adata, groupby):
+    """``groupby`` if given, else the column registered as ``replicate`` at setup.
+
+    Returns ``(effective, was_resolved)`` so the caller can record the effective value in
+    provenance via ``with_resolved_params`` -- otherwise the cached params say ``None`` and
+    every reader of them sees a placeholder instead of the column actually used.
+    """
+    if groupby is not None:
+        return groupby, False
+    meta = adata.uns.get(K.METADATA) or {}
+    replicate = meta.get(K.Config.REPLICATE)
+    return replicate, replicate is not None
+
+
+def validate_splitby(obs, groupby, splitby):
+    """``splitby`` labels groups for a contrast, so it needs groups, and the label must be a
+    property OF the group.
+
+    Both failures were silent before: ``splitby`` without ``groupby`` was ignored entirely, and
+    a group spanning two split levels took ``obs.loc[gmask, splitby].iloc[0]`` -- whichever
+    label the first cell happened to carry. Reproduced: a patient genuinely spanning R and NR
+    was reported as NR with no warning.
+    """
+    if splitby is None:
+        return
+    if groupby is None:
+        raise ValueError(
+            "splitby requires groupby. splitby labels groups so they can be compared; with no "
+            "groups there are no replicates and nothing to contrast. Pass groupby=<the "
+            "independent unit>, or register it once via setup_anndata(replicate=...)."
+        )
+    if splitby not in obs.columns:
+        raise ValueError(f"splitby={splitby!r} is not a column of adata.obs")
+    spans = obs.groupby(groupby, observed=True)[splitby].nunique(dropna=True)
+    bad = spans[spans > 1]
+    if len(bad):
+        raise ValueError(
+            f"splitby={splitby!r} is not constant within groupby={groupby!r}: "
+            f"{list(bad.index[:5])} span multiple {splitby!r} values. A split label must be a "
+            f"property of the group, or the contrast is between overlapping sets."
+        )
+
+
+def across_groups(values):
+    """Between-replicate summary: mean, sd and a percentile CI over GROUPS.
+
+    Distinct from the per-group posterior HDI, and deliberately named differently. They answer
+    different questions -- ``hdi_*`` is how sure the model is about one group given the
+    Dirichlet draws; ``ci_*`` is how much the quantity varies between patients. Reporting them
+    under the same column names would make them indistinguishable on sight.
+    """
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    n = int(v.size)
+    if n == 0:
+        return {"value": np.nan, "sd": np.nan, "ci_low": np.nan, "ci_high": np.nan,
+                "n_groups": 0}
+    if n == 1:
+        # one replicate carries no between-group spread; NaN says so rather than 0.0
+        return {"value": float(v[0]), "sd": np.nan, "ci_low": np.nan, "ci_high": np.nan,
+                "n_groups": 1}
+    lo, hi = np.percentile(v, [2.5, 97.5])
+    return {"value": float(v.mean()), "sd": float(v.std(ddof=1)),
+            "ci_low": float(lo), "ci_high": float(hi), "n_groups": n}
+
+
+def build_result(table, *, value="value"):
+    """Reduce ``table`` (per draw) to ``result`` (per group[, item]).
+
+    ``result`` is built FROM ``table`` rather than computed alongside it, so the two cannot
+    drift -- which is the same reason ``pl`` now reads the cache instead of recomputing.
+
+    Reduces over ``draw`` ONLY, and the grouping keys are therefore *every other column*.
+    Naming them explicitly (covariate, groupby, splitby, item_col) is what silently dropped
+    ``cov_from``/``cov_to`` from the flux result: a metric with a label the list did not
+    anticipate had it averaged away. Anything a metric puts in ``table`` identifies a row here.
+
+    Items are KEPT: a swarm plot needs one point per clone, and collapsing them here would make
+    the per-item view unreachable from the cached result.
+    """
+    keys = [c for c in table.columns if c not in ("draw", value)]
+    if not keys:
+        agg = summarize(table[value].to_numpy())
+        return pd.DataFrame([{value: agg["mean"], **{k: v for k, v in agg.items()
+                                                     if k != "mean"}}])
+    rows = []
+    for label, chunk in table.groupby(keys, observed=True, dropna=False):
+        label = label if isinstance(label, tuple) else (label,)
+        row = dict(zip(keys, label))
+        agg = summarize(chunk[value].to_numpy())
+        row[value] = agg.pop("mean")
+        row.update(agg)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_stats(result, *, groupby, splitby, value="value"):
+    """The between-split contrast, or ``None`` when ``splitby`` is not set.
+
+    The replicate unit is the GROUP. When the metric has an item axis, ``result`` holds one row
+    per (group, item) -- so the item rows are averaged to one value per group FIRST, and the
+    contrast is over groups. That is what makes pseudoreplication structurally impossible here:
+    15 clones from 2 patients contribute n=2, not n=15, because there are only 2 group rows to
+    compare. The old path handed all 15 rows to a Mann-Whitney and returned p=0.040 with a star.
+    """
+    if splitby is None or groupby is None or result is None or not len(result):
+        return None
+    from .._stats import mann_whitney, stars
+
+    per_group = (result.groupby([groupby, splitby], observed=True, dropna=False)[value]
+                 .mean().reset_index())
+
+    rows = []
+    levels = [lv for lv in per_group[splitby].dropna().unique().tolist()]
+    for i, a in enumerate(levels):
+        for b in levels[i + 1:]:
+            va = per_group.loc[per_group[splitby] == a, value].to_numpy(dtype=float)
+            vb = per_group.loc[per_group[splitby] == b, value].to_numpy(dtype=float)
+            va, vb = va[np.isfinite(va)], vb[np.isfinite(vb)]
+            row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
+                   "n_a": int(va.size), "n_b": int(vb.size),
+                   "replicate_unit": groupby,
+                   "mean_a": float(va.mean()) if va.size else np.nan,
+                   "mean_b": float(vb.mean()) if vb.size else np.nan}
+            row["delta"] = row["mean_b"] - row["mean_a"]
+            if va.size and vb.size:
+                stat, p = mann_whitney(va, vb)
+                row.update(stat=float(stat), p=float(p), stars=stars(p))
+            else:
+                row.update(stat=np.nan, p=np.nan, stars="")
+            rows.append(row)
+    return pd.DataFrame(rows) if rows else None
+
+
+def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, compute,
+                 extra_labels=None):
+    """Build the long ``table`` every metric shares: one row per (covariate, group, item, draw).
+
+    ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
+    ``{item: value}`` mapping; without one (mutual_information) it is a scalar.
+
+    The group loop lives here rather than in each metric so the four of them cannot diverge on
+    what ``groupby`` means — the divergence issue #64 keeps producing. Clone restriction is
+    intersected with the group's clones, never shadowed: ``groupby=... , clones=[...]`` used to
+    return a frame identical to the unrestricted call.
+    """
+    obs = adata.obs
+    clone_col_name = adata.uns[K.METADATA][K.Config.CLONE_COL]
+    # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
+    # `covariate=None` through added an all-NaN column to every row of its result
+    base = {"covariate": covariate} if covariate is not None else {}
+    if extra_labels:
+        base.update({k: v for k, v in extra_labels.items() if v is not None})
+
+    def _emit(rows, label_row, per_draw):
+        for draw, payload in enumerate(per_draw):
+            if item_col is None:
+                rows.append({**label_row, "draw": draw, "value": payload})
+            else:
+                for item, value in payload.items():
+                    rows.append({**label_row, item_col: item, "draw": draw, "value": value})
+
+    rows = []
+    if groupby is None:
+        _emit(rows, dict(base), compute(clones))
+        return pd.DataFrame(rows)
+
+    _validate_group_clones(obs, groupby, clone_col_name)
+    n_missing = int(obs[groupby].isna().sum())
+    if n_missing:
+        warnings.warn(
+            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
+            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
+            f"from every row of this result.",
+            UserWarning, stacklevel=3,
+        )
+
+    for g in obs[groupby].dropna().unique().tolist():
+        gmask = obs[groupby] == g
+        group_clones = obs.loc[gmask, clone_col_name].dropna().unique().tolist()
+        if clones is not None:
+            allowed = set(group_clones)
+            group_clones = [c for c in clones if c in allowed]
+            if not group_clones:
+                continue
+        label_row = {**base, groupby: g}
+        if splitby is not None:
+            label_row[splitby] = obs.loc[gmask, splitby].iloc[0]
+        _emit(rows, label_row, compute(group_clones))
     return pd.DataFrame(rows)

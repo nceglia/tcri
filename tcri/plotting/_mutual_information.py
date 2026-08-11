@@ -18,14 +18,18 @@ def mutual_information(adata, *, covariate=None, groupby=None, splitby=None, n_s
     # a boxplot needs per-unit MI; default the aggregation unit to the batch (patient) column
     gb = groupby if groupby is not None else adata.uns[K.METADATA]["batch_col"]
 
+    # inplace=False: this still recomputes (pass 2 rewires `pl` to read `tcri.get`), but with
+    # store-once a recomputing plot would OVERWRITE the user's cached result with the plot's own
+    # arguments -- a manufactured groupby, a different n_samples -- which is worse than the
+    # duplicate work it does today.
     res = tl.mutual_information(
         adata, covariate=covariate, groupby=gb, splitby=splitby, n_samples=n_samples,
         temperature=temperature, clones=clones, weighted=weighted, normalized=normalized,
-        normalize_mode=normalize_mode,
-    )
+        normalize_mode=normalize_mode, inplace=False,
+    )["result"]
     if return_df:
         return res
     x = splitby if (splitby is not None and splitby in res.columns) else gb
-    fig, ax = _metric_boxplot(res, x=x, y="MI", hue=None, order=order, palette=palette,
+    fig, ax = _metric_boxplot(res, x=x, y="value", hue=None, order=order, palette=palette,
                               ax=ax, figsize=figsize, ylabel="mutual information (bits)")
     return _finish(fig, ax, save=save, show=show)
