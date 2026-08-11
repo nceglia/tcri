@@ -1,11 +1,20 @@
-"""``tl.compare_groups`` (§7.6) — the public group-comparison orchestrator that replaces
-the deleted ``mi_compare`` / ``delta_entropy_table`` / ``flux_table``.
+"""``compare_groups`` — INTERNAL. The one contrast implementation in the package.
 
-Turns a tidy ``groupby`` result (per-unit point estimates, e.g. per patient) into group
-contrasts. Unpaired: Mann–Whitney U + two-sided p + Δ of means. Paired (``paired=True``):
-per-unit posterior-draw vectors aligned by ``pair_on`` → signed Δ draws, HDI, and the
-direction probability ``p_gt`` via ``prob_direction`` (the only place a direction prob is
-emitted).
+Turns a per-unit frame (one row per replicate, e.g. per patient) into group contrasts.
+Unpaired: Mann-Whitney U + two-sided p + delta of means. Paired (``paired=True``): per-unit
+posterior-draw vectors aligned by ``pair_on`` -> signed delta draws, HDI, and the direction
+probability ``p_gt``.
+
+**Not public.** It was ``tl.compare_groups`` -- a separate step the user had to remember,
+against the scanpy grain, and one that put the burden of picking the replicate unit on the
+caller. ``build_stats`` now calls it with the per-group frame it has already collapsed, so
+the pseudoreplication question is answered before the contrast sees the data.
+
+The PAIRED branch currently has no producer: it wants a frame whose cells are draw VECTORS,
+and no ``tl`` emits that shape. It is kept rather than deleted because ``table`` (one row per
+group/item/draw) makes a paired posterior contrast genuinely reachable now, and which
+estimand that should be is a question for the authors, not a code cleanup. Tracked as an
+issue; do not treat it as reachable until it is wired.
 """
 from __future__ import annotations
 

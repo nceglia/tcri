@@ -95,43 +95,41 @@ class tl:
         device: Any = ...,
             key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
-    def compare_groups(
-        df: pd.DataFrame, *, value: str, splitby: str, reference: Optional[str] = ...,
-        paired: bool = ..., pair_on: Optional[str] = ..., hdi_prob: float = ...,
-        alternative: str = ...,
-    ) -> pd.DataFrame: ...
+    # compare_groups was here. It is now internal (tools/_compare.py): `splitby` produces the
+    # contrast as part of the metric, in the `stats` slot, with the replicate unit already
+    # resolved. A separate public step meant the caller picked the replicate unit themselves.
 
 
 # ── plotting (pl) — twins mirror tl by name ──────────────────────────────────
+#
+# Every pl signature is now (adata, key=, display args). The metric arguments are GONE: a
+# twin reads the result tl stored, so the covariate, groupby, splitby, n_samples and distance
+# it renders are the ones tl actually used. `key=` selects a non-default `key_added`.
 class pl:
     def clonotypic_entropy(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
-        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        order: Any = ..., hue_order: Any = ..., palette: Any = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
+        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
+        show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_entropy(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
-        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        order: Any = ..., hue_order: Any = ..., palette: Any = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
+        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
+        show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def mutual_information(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
-        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., normalize_mode: str = ...,
-        order: Any = ..., hue_order: Any = ..., palette: Any = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
+        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
+        show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_flux(
-        adata: AnnData, *, order: Any, groupby: Optional[str] = ..., splitby: Optional[str] = ...,
-        n_samples: int = ..., temperature: float = ..., clones: Any = ..., weighted: bool = ...,
-        distance_metric: str = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
-        save: Any = ..., show: Any = ..., return_axes: bool = ...,
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
+        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
+        show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
-    def resolve_palette(adata: AnnData, columns: Any, *, palette: Any = ...) -> Any: ...
+    def resolve_colors(
+        adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,
+        persist: bool = ...,
+    ) -> dict: ...
 
 
 # ── diagnostics (diag) — returns DataFrames ──────────────────────────────────
@@ -161,6 +159,17 @@ class ut:
     def load_tcri_session(
         run_dir: str, *, adata_path: Optional[str] = ..., map_location: Any = ..., layer: Optional[str] = ...,
     ) -> Any: ...
+    # The AUROC pair. Implemented and tested since PR1 but reachable only by importing the
+    # private `tcri._stats`, so nothing in the package or the notebooks ever called them.
+    # They are complementary and should be used together: a permutation p-value against
+    # shuffled labels, and a bootstrap CI on the AUC itself.
+    def auc_and_label_permutation(
+        scores: Any, labels: Any, pos_label: Any = ..., n_perm: int = ..., seed: int = ...,
+        max_exact: int = ...,
+    ) -> tuple: ...
+    def bootstrap_auc(
+        scores: Any, labels: Any, pos_label: Any = ..., n_boot: int = ..., seed: int = ...,
+    ) -> tuple: ...
 
 
 # ── synthetic data (datasets) ────────────────────────────────────────────────

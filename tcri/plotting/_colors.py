@@ -1,28 +1,79 @@
-"""``pl`` colors — the shared categorical palette and `resolve_palette` (§8.6)."""
+"""Canonical categorical colours for ``tcri.pl`` — one home for the palette.
+
+Every categorical plot routes through :func:`resolve_colors`, so a label keeps the same
+colour across views and a user-set ``uns["<key>_colors"]`` propagates everywhere. Colours
+persist under scanpy's ``uns["<obs_key>_colors"]`` convention (via ``K.colors``), which is
+also what ``sc.pl.umap`` reads — so setting a response palette here colours the UMAP too.
+
+Continuous colormaps stay per-plot ``cmap=`` arguments; this module is categorical only.
+"""
 from __future__ import annotations
 
-__all__ = ["tcri_colors", "resolve_palette"]
+import matplotlib.pyplot as plt
+from matplotlib.colors import to_hex
 
+from .._state import keys as K
+
+__all__ = ["tcri_colors", "NA_COLOR", "resolve_colors"]
+
+#: The categorical cycle. There were two of these -- this list and a 30-entry one in
+#: ``utils/_utils.py`` that led with ``#272822`` (the Monokai *background*, so the first
+#: category rendered as a near-black block). They disagreed on both contents and order, and
+#: nothing imported the utils copy. Merged here: this order, plus the colours only the utils
+#: list had.
 tcri_colors = [
     "#AE81FF", "#FD971F", "#66D9EF", "#A6E22E", "#F92672", "#E6DB74", "#75715E",
     "#D65F0E", "#004d47", "#D291BC", "#3A506B", "#5D8A5E", "#A6A1E2", "#E97451",
     "#6C8D67", "#832232", "#1E1E1E", "#F92659", "#272822", "#8B4513",
+    "#669999", "#C08497", "#587B7F", "#9A8C98", "#F28E7F", "#F3B61F", "#6A6E75",
+    "#FFD8B1", "#88AB75", "#C38D94", "#6D6A75",
 ]
 
+#: Absent / non-significant categories.
+NA_COLOR = "lightgray"
 
-def resolve_palette(adata, columns, *, palette=None):
-    """Assign `tcri_colors` to each `obs` column's categories, store in
-    ``uns["<col>_colors"]``, and return ``{col: {category: color}}``.
 
-    Mutates ``adata`` **in place** (fixes the old ``set_color_palette`` bug of writing
-    onto a throwaway copy). ``palette`` overrides the default color cycle.
+def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=True):
+    """Resolve a ``{category: hex}`` map for a categorical, cached under
+    ``uns[K.colors(cat_key)]``.
+
+    Priority: an explicit ``palette`` (a ``dict`` ``{cat: colour}``, a ``list`` cycled, or a
+    matplotlib colormap name) -> an existing ``uns["<cat_key>_colors"]`` **whose length
+    matches** -> :data:`tcri_colors`, cycled. A partial ``dict`` fills its gaps from the
+    canonical cycle rather than erroring, so ``palette={"R": "red"}`` is a legal way to pin
+    one level and leave the rest alone.
+
+    ``categories`` defaults to the categories of ``adata.obs[cat_key]``. Pass it explicitly
+    when colouring something that is not an obs column -- a phenotype axis read off a metric
+    result, say.
+
+    This replaces ``resolve_palette``, which took a LIST of columns, always overwrote
+    ``uns``, and had no way to read an existing assignment back. That last part is the point:
+    a plot that cannot see the colours already stored assigns its own, so the same patient
+    changed colour between two figures in the same notebook.
     """
-    cols = [columns] if isinstance(columns, str) else list(columns)
-    cycle = list(palette) if palette is not None else tcri_colors
-    out = {}
-    for col in cols:
-        cats = adata.obs[col].astype("category").cat.categories.tolist()
-        mapping = {c: cycle[i % len(cycle)] for i, c in enumerate(cats)}
-        adata.uns[f"{col}_colors"] = [mapping[c] for c in cats]
-        out[col] = mapping
-    return out
+    if categories is None:
+        categories = adata.obs[cat_key].astype("category").cat.categories
+    cats = list(categories)
+    n = len(cats)
+
+    if isinstance(palette, dict):
+        raw = [palette.get(c, tcri_colors[i % len(tcri_colors)]) for i, c in enumerate(cats)]
+    elif isinstance(palette, (list, tuple)):
+        raw = [palette[i % len(palette)] for i in range(n)]
+    elif isinstance(palette, str):
+        cmap = plt.get_cmap(palette)
+        raw = [cmap(i % cmap.N) for i in range(n)]
+    else:
+        existing = adata.uns.get(K.colors(cat_key))
+        # a length mismatch means the categories changed under the stored list; reassigning
+        # is right, silently zipping a short list against long categories is not
+        if existing is not None and len(existing) == n:
+            raw = list(existing)
+        else:
+            raw = [tcri_colors[i % len(tcri_colors)] for i in range(n)]
+
+    hexes = [to_hex(c) for c in raw]
+    if persist:
+        adata.uns[K.colors(cat_key)] = hexes
+    return dict(zip(cats, hexes))

@@ -237,39 +237,6 @@ def load_tcri_session(
 
 
 
-tcri_colors = [
-    "#272822",  # Background
-    "#AE81FF",  # Purple
-    "#FD971F",  # Orange
-    "#E6DB74",  # Yellow
-    "#A6E22E",  # Green
-    "#66D9EF",  # Blue
-    "#75715E",  # Brown
-    "#F92659",  # Pink
-    "#D65F0E",  # Abricos
-    "#F92672",  # Red
-    "#1E1E1E",   # Black
-    "#004d47",  # Darker Teal
-    "#D291BC",  # Soft Pink
-    "#3A506B",  # Dark Slate Blue
-    "#5D8A5E",  # Sage Green
-    "#A6A1E2",  # Dull Lavender
-    "#E97451",  # Burnt Sienna
-    "#6C8D67",  # Muted Lime Green
-    "#832232",  # Dim Maroon
-    "#669999",  # Desaturated Cyan
-    "#C08497",  # Dusty Rose
-    "#587B7F",  # Ocean Blue
-    "#9A8C98",  # Muted Purple
-    "#F28E7F",  # Salmon
-    "#F3B61F",  # Goldenrod
-    "#6A6E75",  # Iron Gray
-    "#FFD8B1",  # Light Peach
-    "#88AB75",  # Moss Green
-    "#C38D94",  # Muted Rose
-    "#6D6A75",  # Purple Gray
-]
-
 import matplotlib.pyplot as plt
 
 

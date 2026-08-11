@@ -1,35 +1,19 @@
-"""``pl.mutual_information`` (§8.2) — cache renderer: per-unit MI boxed by ``splitby``."""
+"""``pl.mutual_information`` (§8.2) — cache renderer for I(c;phi)."""
 from __future__ import annotations
 
-from ._base import _finish, _metric_boxplot
+from ._base import render_metric
 
 __all__ = ["mutual_information"]
 
 
-def mutual_information(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-                      temperature=1.0, clones=None, weighted=False, normalized=True,
-                      normalize_mode="min", order=None, hue_order=None, palette=None, ax=None,
-                      figsize=(8, 4), save=None, show=None, return_df=False):
-    """Clone↔phenotype MI (bits, normalized). With ``groupby`` (units, e.g. patient) and
-    ``splitby`` (cohort, e.g. response): one MI per unit, boxed by cohort."""
-    from .. import tools as tl
-    from .. import _keys as K
+def mutual_information(adata, *, key=None, order=None, hue_order=None, palette=None,
+                       ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
+    """Clone<->phenotype MI (bits, normalized) from the cached ``tl.mutual_information``.
 
-    # a boxplot needs per-unit MI; default the aggregation unit to the batch (patient) column
-    gb = groupby if groupby is not None else adata.uns[K.METADATA]["batch_col"]
-
-    # inplace=False: this still recomputes (pass 2 rewires `pl` to read `tcri.get`), but with
-    # store-once a recomputing plot would OVERWRITE the user's cached result with the plot's own
-    # arguments -- a manufactured groupby, a different n_samples -- which is worse than the
-    # duplicate work it does today.
-    res = tl.mutual_information(
-        adata, covariate=covariate, groupby=gb, splitby=splitby, n_samples=n_samples,
-        temperature=temperature, clones=clones, weighted=weighted, normalized=normalized,
-        normalize_mode=normalize_mode, inplace=False,
-    )["result"]
-    if return_df:
-        return res
-    x = splitby if (splitby is not None and splitby in res.columns) else gb
-    fig, ax = _metric_boxplot(res, x=x, y="value", hue=None, order=order, palette=palette,
-                              ax=ax, figsize=figsize, ylabel="mutual information (bits)")
-    return _finish(fig, ax, save=save, show=show)
+    Run ``tl.mutual_information`` first; the axes here are whatever that call used. With
+    ``groupby`` it boxes one MI per group, with ``splitby`` it boxes by split and brackets
+    the contrast from ``stats``.
+    """
+    return render_metric(adata, "mutual_information", ylabel="mutual information (bits)",
+                         key=key, order=order, hue_order=hue_order, palette=palette, ax=ax,
+                         figsize=figsize, save=save, show=show, return_df=return_df)
