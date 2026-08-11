@@ -124,5 +124,23 @@ silent.
 - **`normalized=True`** — divide by the maximum-entropy value so results land in [0,1].
 - **`n_clones_ref`** — fix the clonotypic normalizer across groups; without it each
   group normalizes by its own supported-clone count and the values are not comparable.
-- **`n_samples>0`** — return mean/sd/HDI over posterior draws. The plug-in entropy is
-  ≥ the posterior mean (Jensen), so the two are reported as distinct quantities.
+- **`n_samples>0`** — report the metric over posterior draws. The plug-in entropy is
+  ≥ the posterior mean (Jensen), so the two are distinct quantities. The return *shape*
+  does not change: `result` always carries `sd` / `hdi_low` / `hdi_high`, NaN at
+  `n_samples<=1` because one draw has no measured spread.
+- **the store-once payload** — every `tl` returns `{table, result, stats}` and stores the
+  same object under `uns[key_added or "tcri_<metric>"]` with a `params` provenance block.
+
+  | slot | one row per | reduced over |
+  |---|---|---|
+  | `table` | (covariate, group, item, draw) | nothing — this is the substrate |
+  | `result` | (covariate, group, item) | `draw` only |
+  | `stats` | (split_a, split_b) pair | items → groups, then contrast |
+
+  `result` is built *from* `table`, so they cannot drift. `stats` is `None` without
+  `splitby`, and its replicate unit is the **group**: item rows are averaged to one value
+  per group *before* the contrast, so 15 clones from 2 patients give n=2 (issue #66).
+
+  Two uncertainty families coexist and are named apart on purpose — `hdi_*` is the
+  within-group posterior interval over draws; `ci_*` (with `n_groups`) is the
+  between-replicate interval across groups.
