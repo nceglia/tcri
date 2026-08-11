@@ -58,13 +58,31 @@ def _resolve_key(name: str, key):
     )
 
 
+def _require(adata, name, key):
+    """Resolve the uns key, or raise naming the exact call that would fill it.
+
+    With ``pl`` reading the cache instead of recomputing, "I plotted before I computed" is
+    now the most common way to get this wrong — so the message has to be the fix, not a
+    description of the problem. ``run the matching tcri.tl tool first`` was neither.
+    """
+    resolved = _resolve_key(name, key)
+    if resolved not in adata.uns:
+        call = f"tcri.tl.{name}(adata, ...)" if name in _RESULTS else f"the tool writing {resolved!r}"
+        suffix = f", key_added={key!r}" if key is not None else ""
+        raise KeyError(
+            f"adata.uns[{resolved!r}] not found. Run {call}{suffix} first — "
+            f"tcri.pl.* renders the stored result and never recomputes it."
+        )
+    return resolved
+
+
 def result(adata, name: str, *, key=None):
     """The cached result, exactly as the ``tl`` function returned it.
 
     Strips ``params``/``version``, which ``load_result`` carries through for dict payloads but
     not for DataFrame ones — normalising that asymmetry is most of this function's job.
     """
-    payload = load_result(adata, _resolve_key(name, key))
+    payload = load_result(adata, _require(adata, name, key))
     if isinstance(payload, dict):
         return {k: v for k, v in payload.items() if k not in _PROVENANCE}
     return payload
@@ -72,7 +90,7 @@ def result(adata, name: str, *, key=None):
 
 def params(adata, name: str, *, key=None) -> dict:
     """The provenance block: every argument the tool ran with, including untouched defaults."""
-    return load_result_params(adata, _resolve_key(name, key))
+    return load_result_params(adata, _require(adata, name, key))
 
 
 def table(adata, name: str, *, key=None, which: str = "result"):
@@ -81,7 +99,7 @@ def table(adata, name: str, *, key=None, which: str = "result"):
     ``which="result"`` (default) is the reduced, per-group frame the plots consume;
     ``which="table"`` is the unreduced substrate, one row per (covariate, group, item[, draw]).
     """
-    payload = load_result(adata, _resolve_key(name, key))
+    payload = load_result(adata, _require(adata, name, key))
     subkey = _RESULTS[name][1] if name in _RESULTS else which
     if subkey is _SELF:
         return payload
