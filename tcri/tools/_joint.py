@@ -11,7 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .. import _keys as K
+from .._state import keys as K
+from .._state import schemas
+from .._state.storage import tl_result
 from .._compute._joint import _joint_draws
 
 __all__ = ["joint_distribution"]
@@ -21,7 +23,6 @@ def _engine_blocks(
     adata,
     *,
     covariate,
-    groupby,
     n_samples,
     use_logits,
     weighted,
@@ -39,13 +40,6 @@ def _engine_blocks(
     where ``blocks`` is a list of ``(covariate_index, clone_idx, J)`` and ``J`` has
     shape ``[S, n_rows, P]``.
     """
-    if groupby is not None:
-        raise NotImplementedError(
-            "joint_distribution(groupby=...) is not implemented in the engine yet; it "
-            "lands with the metric migration (Phase 6) so it can share the draw across "
-            "groups and enforce the clone-determined guard. Restrict with `clones=` for now."
-        )
-
     phenotype_cats = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     clonotype_cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
     covariate_cats = list(adata.uns[K.COVARIATE_CATEGORIES])
@@ -112,11 +106,11 @@ def _engine_blocks(
     return blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats
 
 
+@tl_result(key=K.JOINT_DISTRIBUTION, version=1, schema=schemas.JointDistribution)
 def joint_distribution(
     adata,
     *,
     covariate=None,
-    groupby=None,
     n_samples=0,
     use_logits=True,
     weighted=False,
@@ -124,7 +118,9 @@ def joint_distribution(
     temperature=1.0,
     random_state=None,
     device=None,
-) -> pd.DataFrame:
+    key_added=None,
+    inplace=True,
+) -> dict:
     """Clone×phenotype distribution from the learned posterior of ``p_ct``.
 
     Parameters
@@ -132,9 +128,6 @@ def joint_distribution(
     covariate : str | None
         A covariate value; ``None`` computes all covariate values in one shared-draw
         pass (adds a leading ``covariate`` index level).
-    groupby : str | None
-        Not yet implemented in the engine (lands with the metric migration, Phase 6);
-        restrict with ``clones=`` for now.
     n_samples : int
         ``0`` → deterministic posterior-mean table; ``N`` → ``N`` clamped-Dirichlet
         draws (adds a ``sample_id`` index level). Only place ``local_scale`` enters.
@@ -164,7 +157,6 @@ def joint_distribution(
     blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
         adata,
         covariate=covariate,
-        groupby=groupby,
         n_samples=n_samples,
         use_logits=use_logits,
         weighted=weighted,
@@ -211,14 +203,20 @@ def joint_distribution(
         else:
             df = df.reindex([c for c in clones if c in df.index])
 
-    df.attrs["params"] = {
-        "covariate": covariate,
-        "groupby": groupby,
-        "n_samples": int(n_samples),
-        "use_logits": bool(use_logits),
-        "weighted": bool(weighted),
-        "temperature": float(temperature),
-        "n_draws": int(n_draws),
-        "clones": None if clones is None else [str(c) for c in clones],
-    }
-    return df
+    # WIDE on purpose, unlike the four scalar metrics. A joint is a matrix -- clone x
+    # phenotype, rows summing to 1 -- and forcing it into their long (item, draw, value) form
+    # would make the common case worse to read. The long convention applies where each item
+    # reduces to ONE number; this does not.
+    #
+    # `result` is the posterior mean over draws (identical to `table` at n_samples=0), so the
+    # caller always has one table to reason about regardless of whether they sampled.
+    if sampling:
+        result = df.groupby(level=[n for n in df.index.names if n != "sample_id"],
+                            observed=True, sort=False).mean()
+    else:
+        result = df
+
+    # `params` is captured by the decorator from the call signature, so the old
+    # df.attrs["params"] hand-roll is gone -- attrs does not survive most pandas operations
+    # and did not survive a write_h5ad at all.
+    return {"table": df, "result": result}

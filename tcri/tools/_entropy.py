@@ -15,7 +15,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ._common import reject_stacked_covariate_joint, grouped_series, is_precomputed_joint, joint_draws, summarize
+from .._state import keys as K
+from .._state import schemas
+from .._state.storage import tl_result, with_resolved_params
+from ._common import (build_result, build_stats, joint_draws,
+                      metric_table, resolve_groupby,
+                      validate_splitby)
 
 __all__ = ["clonotypic_entropy", "phenotypic_entropy"]
 
@@ -62,64 +67,60 @@ def _phenotypic_one(clone_ids, J, cols, *, normalized):
     return out
 
 
-def _entropy_metric(adata_or_jd, *, kind, covariate, groupby, splitby, n_samples, temperature,
+def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temperature,
                     clones, weighted, normalized, random_state, n_clones_ref=None, device=None):
-    item_name = "phenotype" if kind == "clonotypic" else "clonotype"
-    value = f"{kind}_entropy"
+    """Shared body for both entropies.
+
+    The two differ only in their ITEM AXIS: clonotypic entropy H(c|phi) is one value per
+    PHENOTYPE, phenotypic entropy H(phi|c) is one value per CLONE. Everything else -- the group
+    loop, the draw handling, the reduction -- is identical, which is why it lives here.
+    """
+    item_col = "phenotype" if kind == "clonotypic" else "clonotype"
 
     def _one(clone_ids, J, cols):
         if kind == "clonotypic":
             return _clonotypic_one(J, cols, normalized=normalized, n_clones_ref=n_clones_ref)
         return _phenotypic_one(clone_ids, J, cols, normalized=normalized)
 
-    if groupby is not None:
-        if is_precomputed_joint(adata_or_jd):
-            raise ValueError("groupby requires an AnnData, not a precomputed joint (§7.9).")
+    gkey, resolved = resolve_groupby(adata, groupby)
+    validate_splitby(adata.obs, gkey, splitby)
 
-        def _compute(cl):
-            draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
-                                      temperature=temperature, clones=cl, random_state=random_state)
-            per = [_one(ids, J, cols) for ids, J in draws]
-            keys = list(per[0].keys())
-            point = {k: float(np.nanmean([p[k] for p in per])) for k in keys}
-            drawsd = {k: [p[k] for p in per] for k in keys} if (n_samples and int(n_samples) > 0) else None
-            return point, drawsd
-        return grouped_series(adata_or_jd, groupby=groupby, splitby=splitby,
-                              item_name=item_name, value=value, compute=_compute, restrict_to=clones)
+    def _compute(clone_subset):
+        draws, cols = joint_draws(
+            adata, covariate, n_samples=n_samples, weighted=weighted, device=device,
+            temperature=temperature, clones=clone_subset, random_state=random_state,
+        )
+        return [_one(ids, J, cols) for ids, J in draws]
 
-    if is_precomputed_joint(adata_or_jd):
-        reject_stacked_covariate_joint(adata_or_jd)
-        if n_samples and int(n_samples) > 0:
-            raise ValueError("precomputed-joint fast path is valid only at n_samples=0 (§7.9).")
-        one = _one(list(adata_or_jd.index), adata_or_jd.values, list(adata_or_jd.columns))
-        return pd.Series(one, name=value)
+    table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
+                         clones=clones, item_col=item_col, compute=_compute)
+    result = build_result(table, groupby=gkey, splitby=splitby, item_col=item_col)
+    stats = build_stats(result, groupby=gkey, splitby=splitby, item_col=item_col)
 
-    draws, cols = joint_draws(adata_or_jd, covariate, n_samples=n_samples, weighted=weighted, device=device,
-                              temperature=temperature, clones=clones, random_state=random_state)
-    per = [_one(ids, J, cols) for ids, J in draws]
-    keys = list(per[0].keys())
-    if n_samples and int(n_samples) > 0:
-        return pd.DataFrame({k: summarize([p[k] for p in per]) for k in keys}).T
-    return pd.Series(per[0], name=value)
+    payload = {"table": table, "result": result, "stats": stats}
+    return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
-def clonotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+@tl_result(key=K.CLONOTYPIC_ENTROPY, version=1, schema=schemas.ClonotypicEntropy)
+def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
-                       n_clones_ref=None, random_state=None, device=None):
+                       n_clones_ref=None, random_state=None, device=None,
+                       key_added=None, inplace=True):
     """H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the normalizer for cross-group
     comparability (else per-group #supported clones). See module docstring."""
-    return _entropy_metric(adata_or_jd, kind="clonotypic", covariate=covariate, groupby=groupby,
+    return _entropy_metric(adata, kind="clonotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,
                            random_state=random_state, n_clones_ref=n_clones_ref,
                            device=device)
 
 
-def phenotypic_entropy(adata_or_jd, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+@tl_result(key=K.PHENOTYPIC_ENTROPY, version=1, schema=schemas.PhenotypicEntropy)
+def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
-                       random_state=None, device=None):
-    """H[P(φ|c)] per clone (bits). See module docstring."""
-    return _entropy_metric(adata_or_jd, kind="phenotypic", covariate=covariate, groupby=groupby,
+                       random_state=None, device=None, key_added=None, inplace=True):
+    """H[P(φ|c)] per clone (bits) — computed once, cached, returned. See module docstring."""
+    return _entropy_metric(adata, kind="phenotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, weighted=weighted, normalized=normalized,
                            random_state=random_state, device=device)

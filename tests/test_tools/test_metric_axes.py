@@ -92,6 +92,16 @@ def blocks():
     return model, adata, truth
 
 
+def _value(res):
+    """The comparable value column out of the new ``{table, result, stats}`` return.
+
+    Every metric now returns the same three slots and caches them; the pre-migration returns
+    (float / dict / Series / DataFrame, depending on metric and axes) are gone. This helper
+    keeps the axis assertions about the AXES rather than about unpacking.
+    """
+    return res["result"]["value"]
+
+
 def _clones_of(adata, patient):
     return adata.obs.loc[adata.obs["patient"] == patient, "clone_id"].unique().tolist()
 
@@ -124,8 +134,8 @@ def test_covariate_axis_is_live(blocks, metric):
     """Different covariate levels must give different results."""
     _model, adata, _truth = blocks
     fn = getattr(tcri.tl, metric)
-    a = np.asarray(fn(adata, covariate="cov_0"), dtype=float).ravel()
-    b = np.asarray(fn(adata, covariate="cov_1"), dtype=float).ravel()
+    a = _value(fn(adata, covariate="cov_0")).to_numpy(dtype=float)
+    b = _value(fn(adata, covariate="cov_1")).to_numpy(dtype=float)
     assert not np.allclose(a, b, equal_nan=True), (
         f"{metric} returns the same values for cov_0 and cov_1; the covariate axis is inert"
     )
@@ -141,17 +151,17 @@ def test_groupby_is_live_and_routes_exactly(blocks):
     _model, adata, _truth = blocks
 
     grouped = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                         normalize_mode="average")
+                                         normalize_mode="average")["result"]
     assert len(grouped) == adata.obs["patient"].nunique()
-    assert grouped["MI"].nunique() > 1, "every group scored the same; groupby may be inert"
+    assert grouped["value"].nunique() > 1, "every group scored the same; groupby may be inert"
 
     for _, row in grouped.iterrows():
-        direct = float(tcri.tl.mutual_information(
+        direct = float(_value(tcri.tl.mutual_information(
             adata, covariate="cov_0", clones=_clones_of(adata, row["patient"]),
             normalize_mode="average",
-        ))
-        assert float(row["MI"]) == pytest.approx(direct, rel=1e-12), (
-            f"groupby value for {row['patient']} ({row['MI']}) differs from the same metric "
+        )).iloc[0])
+        assert float(row["value"]) == pytest.approx(direct, rel=1e-12), (
+            f"groupby value for {row['patient']} ({row['value']}) differs from the same metric "
             f"restricted to that patient's clones ({direct}); groupby is not routing by clone"
         )
 
@@ -160,12 +170,12 @@ def test_splitby_labels_the_groups(blocks):
     """``splitby`` attaches a group-level label. It must not change the values."""
     _model, adata, _truth = blocks
 
-    plain = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient")
+    plain = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient")["result"]
     split = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                       splitby="response")
+                                       splitby="response")["result"]
 
     assert "response" in split.columns
-    assert np.allclose(plain["MI"].to_numpy(), split["MI"].to_numpy()), (
+    assert np.allclose(plain["value"].to_numpy(), split["value"].to_numpy()), (
         "splitby changed the values; it is a labelling axis, not a computation axis"
     )
     expected = {p: r for p, r, _o in BLOCKS}
@@ -178,9 +188,9 @@ def test_clones_restriction_is_live(blocks):
     _model, adata, _truth = blocks
     p0, p1 = _clones_of(adata, "P0"), _clones_of(adata, "P1")
 
-    a = float(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0))
-    b = float(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p1))
-    both = float(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0 + p1))
+    a = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0)).iloc[0])
+    b = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p1)).iloc[0])
+    both = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0 + p1)).iloc[0])
     assert a != b, "clones= does not change the result"
     assert both not in (a, b), "restricting to both blocks equals one of them alone"
 
@@ -191,8 +201,8 @@ def test_clones_restriction_is_live(blocks):
 def test_weighted_is_live(blocks):
     """``weighted`` selects the clone marginal, so it must change the number."""
     _model, adata, _truth = blocks
-    unweighted = float(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=False))
-    weighted = float(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=True))
+    unweighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=False)).iloc[0])
+    weighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=True)).iloc[0])
     assert unweighted != weighted, (
         "weighted=True and weighted=False agree; the clone marginal is not being applied"
     )
@@ -201,8 +211,8 @@ def test_weighted_is_live(blocks):
 def test_normalize_mode_is_live(blocks):
     """``min`` and ``average`` are different normalizers (metrics doc eq 6 vs the default)."""
     _model, adata, _truth = blocks
-    lo = float(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="min"))
-    av = float(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="average"))
+    lo = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="min")).iloc[0])
+    av = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="average")).iloc[0])
     assert lo != av
     assert lo >= av - 1e-12, "min(H) <= mean(H), so NMI_min must be >= NMI_average"
 
@@ -210,15 +220,15 @@ def test_normalize_mode_is_live(blocks):
 def test_temperature_is_live(blocks):
     """Analysis-time temperature tempers the mean table, so it must move the metric."""
     _model, adata, _truth = blocks
-    base = float(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=1.0))
-    hot = float(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=3.0))
+    base = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=1.0)).iloc[0])
+    hot = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=3.0)).iloc[0])
     assert base != hot, "temperature does not reach the computation"
 
 
 def test_n_samples_returns_a_posterior_summary(blocks):
     """``n_samples>0`` switches from a scalar to a mean/sd/HDI summary that brackets itself."""
     _model, adata, _truth = blocks
-    point = float(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=0))
+    point = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=0)).iloc[0])
     summary = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50, random_state=0)
 
     assert isinstance(summary, dict)
@@ -350,8 +360,8 @@ def test_precomputed_joint_path_cannot_bypass_the_covariate_guard(blocks):
     # the documented escape hatches must both work
     assert np.isfinite(float(tcri.tl.mutual_information(
         stacked.groupby(level="clonotype").sum())))
-    assert np.isfinite(float(tcri.tl.mutual_information(
-        tcri.tl.joint_distribution(adata, covariate="cov_0"))))
+    assert np.isfinite(float(_value(tcri.tl.mutual_information(
+        tcri.tl.joint_distribution(adata, covariate="cov_0")).iloc[0])))
 
 
 def test_groupby_honours_the_callers_clone_restriction(blocks):
@@ -373,7 +383,7 @@ def test_groupby_honours_the_callers_clone_restriction(blocks):
         "restricting to P0's clones should leave only P0; groups with no surviving clone are "
         "dropped rather than reported as NaN"
     )
-    direct = float(tcri.tl.mutual_information(adata, covariate="cov_0", clones=subset))
+    direct = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=subset)).iloc[0])
     assert float(restricted["MI"].iloc[0]) == pytest.approx(direct, rel=1e-12)
 
 
