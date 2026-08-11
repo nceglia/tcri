@@ -101,14 +101,14 @@ def test_metrics_run_and_are_in_range(fitted):
     import tcri
 
     _m, a = fitted
-    mi = tcri.tl.mutual_information(a, covariate=COV, n_samples=0, weighted=True,
-                                    normalize_mode="average")
-    assert np.isfinite(mi) and 0.0 <= float(mi) <= 1.0, f"NMI out of range: {mi}"
+    mi = float(tcri.tl.mutual_information(a, covariate=COV, n_samples=0, weighted=True,
+                                          normalize_mode="average")["result"]["value"].iloc[0])
+    assert np.isfinite(mi) and 0.0 <= mi <= 1.0, f"NMI out of range: {mi}"
 
-    ce = tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0)
-    pe = tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0)
+    ce = tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0)["result"]
+    pe = tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0)["result"]
     for name, s in (("clonotypic", ce), ("phenotypic", pe)):
-        v = np.asarray(s, dtype=float)
+        v = s["value"].to_numpy(dtype=float)
         v = v[np.isfinite(v)]
         assert v.size, f"{name} entropy is all NaN"
         assert (v >= -1e-9).all() and (v <= 1.0 + 1e-9).all(), f"{name} entropy out of [0,1]"
@@ -120,12 +120,24 @@ def test_grouped_comparison_runs_over_patients(fitted):
     import tcri
 
     _m, a = fitted
-    df = tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT,
-                                    n_samples=0, weighted=True, normalize_mode="average")
+    res = tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT,
+                                     n_samples=0, weighted=True, normalize_mode="average")
+    df = res["result"]
     assert isinstance(df, pd.DataFrame) and len(df) == a.obs[GROUP].nunique()
     assert set(df[SPLIT].unique()) <= {"R", "NR"}
-    assert "MI" in df.columns, f"expected an 'MI' column, got {list(df.columns)}"
-    assert df["MI"].notna().any()
+    assert "value" in df.columns, f"expected a 'value' column, got {list(df.columns)}"
+    assert df["value"].notna().any()
+
+    # splitby is set, so the contrast exists -- and its n counts PATIENTS, not clones
+    stats = res["stats"]
+    assert stats is not None and len(stats) == 1
+    row = stats.iloc[0]
+    assert {row["level_a"], row["level_b"]} == {"R", "NR"}
+    assert row["replicate_unit"] == GROUP
+    counts = a.obs.groupby(SPLIT, observed=True)[GROUP].nunique()
+    assert row["n_a"] == counts[row["level_a"]] and row["n_b"] == counts[row["level_b"]], (
+        "the contrast is not over patients"
+    )
 
 
 def test_p_ct_stays_a_probability_table_on_real_data(fitted):
@@ -143,7 +155,7 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
     import tcri
 
     _m, a = fitted
-    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0)
+    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0)["result"]
 
     # each (covariate, clone) row is a distribution over phenotypes. Check normalisation
     # BEFORE collapsing: summing over covariates gives a row total of 1 per covariate the

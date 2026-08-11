@@ -1,5 +1,12 @@
 """The four engine-backed metric twins + compare_groups (PR6). Shapes, bits/normalization,
-and the group-comparison math."""
+and the group-comparison math.
+
+Every ``tl`` now returns the same three payload keys — ``table`` (one row per draw, never
+reduced), ``result`` (reduced over draws), ``stats`` (the between-split contrast, ``None``
+without ``splitby``) — and stores that object under its ``uns`` key. These tests read the
+payload rather than a bare float/Series, which is the whole point of the migration: there is
+one shape to learn instead of four return types that depended on which axes you passed.
+"""
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,52 +19,106 @@ def _cov(adata):
     return list(adata.uns[K.COVARIATE_CATEGORIES])[0]
 
 
+def _one(res):
+    """The single value of a metric computed with no group and no item axis."""
+    return float(res["result"]["value"].iloc[0])
+
+
 def test_clonotypic_entropy_shapes_and_range(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    s = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=0)
-    assert isinstance(s, pd.Series)
-    assert list(s.index) == list(adata.uns[K.PHENOTYPE_CATEGORIES])
-    finite = s.dropna().to_numpy()
+    res = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=0)
+    assert set(res) == {"table", "result", "stats"}
+    assert res["stats"] is None, "no splitby -> no contrast"
+
+    out = res["result"]
+    assert set(out["phenotype"]) == set(adata.uns[K.PHENOTYPE_CATEGORIES]), (
+        "H(c|phi) is one value per PHENOTYPE"
+    )
+    finite = out["value"].dropna().to_numpy()
     assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()  # normalized bits in [0,1]
-    df = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0)
-    assert set(["mean", "sd", "hdi_low", "hdi_high"]).issubset(df.columns)
+
+    sampled = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0)
+    assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(sampled["result"].columns)
+    assert len(sampled["table"]) == 8 * len(sampled["result"]), (
+        "`table` keeps every draw; `result` is what reduces it"
+    )
 
 
 def test_phenotypic_entropy_shapes_and_range(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    s = tcri.tl.phenotypic_entropy(adata, covariate=cov, n_samples=0)
-    assert isinstance(s, pd.Series)
-    finite = s.dropna().to_numpy()
+    out = tcri.tl.phenotypic_entropy(adata, covariate=cov, n_samples=0)["result"]
+    assert "clonotype" in out.columns, "H(phi|c) is one value per CLONE"
+    finite = out["value"].dropna().to_numpy()
     assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()
 
 
-def test_mutual_information_scalar_and_fastpath(trained_model):
+def test_mutual_information_scalar_and_draws(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    mi = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0)
-    assert isinstance(mi, float) and -1e-9 <= mi <= 1 + 1e-9  # normalized (min) in [0,1]
-    jd = tcri.joint_distribution(adata, covariate=cov, n_samples=0)
-    assert np.isclose(tcri.tl.mutual_information(jd, n_samples=0), mi)  # fast path
+    point = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0)
+    assert len(point["result"]) == 1, "no group and no item axis -> a single row"
+    assert -1e-9 <= _one(point) <= 1 + 1e-9  # normalized (min) in [0,1]
+
     summ = tcri.tl.mutual_information(adata, covariate=cov, n_samples=8, random_state=0)
-    assert set(["mean", "sd", "hdi_low", "hdi_high"]) == set(summ)
+    assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(summ["result"].columns)
+    assert len(summ["table"]) == 8
 
 
 def test_mutual_information_unnormalized_is_bits(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    mi_bits = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0, normalized=False)
+    mi_bits = _one(tcri.tl.mutual_information(adata, covariate=cov, n_samples=0,
+                                              normalized=False))
     assert mi_bits >= -1e-9  # raw MI in bits, non-negative
 
 
 def test_metric_groupby_tidy(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    df = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", n_samples=0)
-    assert "patient" in df.columns and "MI" in df.columns
-    ce = tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient", n_samples=0)
-    assert set(["patient", "phenotype", "clonotypic_entropy"]).issubset(ce.columns)
+    mi = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                    n_samples=0)["result"]
+    assert {"patient", "value"}.issubset(mi.columns)
+    assert len(mi) == adata.obs["patient"].nunique()
+
+    ce = tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient",
+                                    n_samples=0)["result"]
+    assert {"patient", "phenotype", "value"}.issubset(ce.columns)
+
+
+def test_every_metric_returns_what_it_cached(trained_model):
+    """The store-once invariant, on all five tools: what you get back IS what is in ``uns``.
+
+    Before this, each ``pl.*`` recomputed the metric from ``adata``, so the plot and the frame
+    in the caller's hand could disagree — different ``n_samples``, a different draw, a
+    ``distance_metric`` default that differed between ``tl`` and ``pl``.
+    """
+    _, adata = trained_model
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+
+    calls = {
+        "joint_distribution": dict(covariate=cov),
+        "mutual_information": dict(covariate=cov),
+        "clonotypic_entropy": dict(covariate=cov),
+        "phenotypic_entropy": dict(covariate=cov),
+    }
+    if rest:
+        calls["phenotypic_flux"] = dict(cov_from=cov, cov_to=rest[0])
+
+    for name, kwargs in calls.items():
+        returned = getattr(tcri.tl, name)(adata, **kwargs)
+        cached = tcri.get.result(adata, name)
+        assert set(cached) == set(returned), name
+        for slot, frame in returned.items():
+            if frame is None:
+                assert cached[slot] is None, f"{name}.{slot}"
+            else:
+                pd.testing.assert_frame_equal(cached[slot], frame, check_dtype=False,
+                                              obj=f"{name}.{slot}")
+        params = tcri.get.params(adata, name)
+        for key, value in kwargs.items():
+            assert params[key] == value, f"{name}: params lost {key}"
 
 
 def test_phenotypic_flux_over_common_clones(trained_model):
@@ -65,9 +126,11 @@ def test_phenotypic_flux_over_common_clones(trained_model):
     covs = list(adata.uns[K.COVARIATE_CATEGORIES])
     if len(covs) < 2:
         pytest.skip("needs >=2 covariates")
-    fx = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1], n_samples=0, distance_metric="l1")
-    assert isinstance(fx, pd.Series)
-    v = fx.dropna().to_numpy()
+    res = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1], n_samples=0,
+                                  distance_metric="l1")
+    out = res["result"]
+    assert {"cov_from", "cov_to", "clonotype", "value"}.issubset(out.columns)
+    v = out["value"].dropna().to_numpy()
     assert (v >= -1e-9).all() and (v <= 2 + 1e-9).all()  # l1 on the simplex is bounded [0,2]
 
 

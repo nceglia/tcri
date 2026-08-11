@@ -54,8 +54,9 @@ __all__ = [
     "with_resolved_params",
 ]
 
-#: Never recorded as provenance — ``adata`` is the data, the other two are storage controls.
-_RESERVED = {"adata", "key_added", "inplace"}
+#: Never recorded as provenance. The data argument is excluded by POSITION (see ``tl_result``)
+#: rather than by name, so a tool is free to call its first parameter whatever fits.
+_RESERVED = {"key_added", "inplace"}
 
 _DF = "__tcri_df__"
 _SERIES = "__tcri_series__"
@@ -210,13 +211,15 @@ def tl_result(*, key: str, version: int = 1, schema=None):
     """
     def deco(fn):
         sig = inspect.signature(fn)
+        # the data argument, whatever it is called
+        data_param = next(iter(sig.parameters))
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = bound.arguments
-            adata = arguments["adata"]
+            adata = arguments[data_param]
 
             result = fn(*args, **kwargs)
 
@@ -231,7 +234,8 @@ def tl_result(*, key: str, version: int = 1, schema=None):
                 blob = _encode(result)
                 if not isinstance(blob, dict):
                     blob = {"value": blob}
-                params = {k: v for k, v in arguments.items() if k not in _RESERVED}
+                params = {k: v for k, v in arguments.items()
+                          if k not in _RESERVED and k != data_param}
                 if resolved:
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version)}

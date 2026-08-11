@@ -34,6 +34,7 @@ import pyro
 import pytest
 
 import tcri
+from tcri.tools._mutual_information import _mi_from_joint
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 
 
@@ -109,24 +110,30 @@ def test_label_error_degrades_the_realized_coupling_only():
 
 # ══════════════ TIER B — does tcri's metric equal an independent oracle? ════
 def test_tcri_mi_matches_an_independent_implementation():
-    """``tl.mutual_information`` on a realized joint == the oracle, both normalizations.
+    """tcri's MI kernel on a realized joint == the oracle, both normalizations.
 
     The strongest fast test available: the oracle in ``tcri.datasets`` is a separate,
     deliberately independent implementation, so agreement is real evidence rather
     than a tautology. Catches sign errors, wrong log base, and denominator swaps.
+
+    This tier scores a COUNT table built from ``obs`` -- there is no model and no posterior --
+    so it calls ``_mi_from_joint`` directly. It used to reach it through
+    ``tl.mutual_information(jd)``, the precomputed-joint path, and was that path's only caller
+    in the repo. Going through the public tool added a store-to-``uns`` step to a test with no
+    AnnData to store into, and hid which function the oracle was actually being compared to.
     """
     for seed in range(3):
         adata = simulate_tcri(n_cells=1500, n_clones=15, n_phenotypes=4, seed=seed)
         jd = _empirical_joint(adata)
         oracle = mi_from_joint_oracle(jd.values)
 
-        raw = tcri.tl.mutual_information(jd, normalized=False)
+        raw = _mi_from_joint(jd.values, normalized=False)
         assert raw == pytest.approx(oracle["mi"], rel=1e-9, abs=1e-12)
 
-        nmi_min = tcri.tl.mutual_information(jd, normalized=True, normalize_mode="min")
+        nmi_min = _mi_from_joint(jd.values, normalized=True, mode="min")
         assert nmi_min == pytest.approx(oracle["nmi_min"], rel=1e-9, abs=1e-12)
 
-        nmi_avg = tcri.tl.mutual_information(jd, normalized=True, normalize_mode="average")
+        nmi_avg = _mi_from_joint(jd.values, normalized=True, mode="average")
         assert nmi_avg == pytest.approx(oracle["nmi_average"], rel=1e-9, abs=1e-12)
 
 
@@ -139,8 +146,8 @@ def test_the_two_normalizations_are_not_interchangeable():
     """
     adata = simulate_tcri(n_cells=1200, n_clones=25, n_phenotypes=4, seed=1)
     jd = _empirical_joint(adata)
-    nmi_min = tcri.tl.mutual_information(jd, normalize_mode="min")
-    nmi_avg = tcri.tl.mutual_information(jd, normalize_mode="average")
+    nmi_min = _mi_from_joint(jd.values, mode="min")
+    nmi_avg = _mi_from_joint(jd.values, mode="average")
     assert nmi_min > nmi_avg
     t = _truth(adata)
     assert t["empirical_nmi_min"] > t["empirical_nmi_average"]
@@ -164,19 +171,19 @@ def test_mi_is_invariant_to_relabeling():
     """Renaming clones or phenotypes cannot change an information quantity."""
     adata = simulate_tcri(n_cells=900, n_clones=12, n_phenotypes=4, seed=2)
     jd = _empirical_joint(adata)
-    base = tcri.tl.mutual_information(jd, normalized=False)
+    base = _mi_from_joint(jd.values, normalized=False)
 
     rng = np.random.default_rng(0)
     shuffled = jd.iloc[rng.permutation(jd.shape[0]), rng.permutation(jd.shape[1])]
-    assert tcri.tl.mutual_information(shuffled, normalized=False) == pytest.approx(base, rel=1e-9)
+    assert _mi_from_joint(shuffled.values, normalized=False) == pytest.approx(base, rel=1e-9)
 
 
 def test_mi_is_invariant_to_uniform_replication():
     """Doubling every count is the same distribution — MI must not move."""
     adata = simulate_tcri(n_cells=800, n_clones=10, n_phenotypes=3, seed=5)
     jd = _empirical_joint(adata)
-    base = tcri.tl.mutual_information(jd, normalized=False)
-    assert tcri.tl.mutual_information(jd * 7, normalized=False) == pytest.approx(base, rel=1e-9)
+    base = _mi_from_joint(jd.values, normalized=False)
+    assert _mi_from_joint(jd.values * 7, normalized=False) == pytest.approx(base, rel=1e-9)
 
 
 # ══════════════════════ TIER C/E — slow, model-based ════════════════════════
@@ -230,8 +237,8 @@ def test_model_mi_tracks_the_true_mi_across_difficulty():
             model.to_anndata(adata)
         est = tcri.tl.mutual_information(
             adata, covariate="cov_0", weighted=True, normalize_mode="average",
-        )
-        got.append((_truth(adata)["true_nmi_average"], float(est)))
+        )["result"]
+        got.append((_truth(adata)["true_nmi_average"], float(est["value"].iloc[0])))
 
     truths = [g[0] for g in got]
     ests = [g[1] for g in got]
@@ -291,10 +298,10 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
         summary = tcri.tl.mutual_information(
             adata, covariate="cov_0", n_samples=100, weighted=True,
             normalize_mode="average", random_state=seed,
-        )
-        lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["mean"]
+        )["result"].iloc[0]
+        lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["value"]
 
-        assert np.isfinite([lo, hi, mean]).all(), f"non-finite summary: {summary}"
+        assert np.isfinite([lo, hi, mean]).all(), f"non-finite summary: {dict(summary)}"
         assert hi > lo, f"degenerate or inverted HDI: [{lo}, {hi}]"
         assert hi - lo < 0.5, f"HDI too wide to be informative: [{lo}, {hi}]"
         assert lo <= mean <= hi, (
