@@ -62,35 +62,39 @@ class pp:
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
 class tl:
     def joint_distribution(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ...,
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
         clones: Any = ..., temperature: float = ..., random_state: Any = ...,
-        device: Any = ...,
-    ) -> pd.DataFrame: ...
+        device: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     def clonotypic_entropy(
-        adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
         n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
-    ) -> Any: ...
+            key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     def phenotypic_entropy(
-        adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
         device: Any = ...,
-    ) -> Any: ...
+            key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     def mutual_information(
-        adata_or_jd: Any, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
         normalize_mode: str = ..., random_state: Any = ..., device: Any = ...,
-    ) -> Any: ...
+            key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     def phenotypic_flux(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., weighted: bool = ..., distance_metric: str = ..., random_state: Any = ...,
         device: Any = ...,
-    ) -> Any: ...
+            key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     def compare_groups(
         df: pd.DataFrame, *, value: str, splitby: str, reference: Optional[str] = ...,
         paired: bool = ..., pair_on: Optional[str] = ..., hdi_prob: float = ...,

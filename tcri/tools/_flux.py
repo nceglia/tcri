@@ -98,8 +98,8 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
                          item_col="clonotype", compute=_compute,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
-    result = build_result(table, groupby=gkey, splitby=splitby, item_col="clonotype")
-    stats = build_stats(result, groupby=gkey, splitby=splitby, item_col="clonotype")
+    result = build_result(table)
+    stats = build_stats(result, groupby=gkey, splitby=splitby)
 
     payload = {"table": table, "result": result, "stats": stats}
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
