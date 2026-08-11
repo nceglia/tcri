@@ -196,6 +196,42 @@ def test_stats_carries_the_between_replicate_spread(cohort):
     )
 
 
+@pytest.mark.parametrize("metric,item_col", [
+    ("phenotypic_entropy", "clonotype"),
+    ("clonotypic_entropy", "phenotype"),
+    ("mutual_information", None),
+])
+def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_col, cohort):
+    """n is the number of PATIENTS, on every metric — including the ones with an item axis.
+
+    This is #66, and the item-bearing metrics are where it actually bites: `result` holds one
+    row per (patient, clone), so handing it straight to a rank test compares hundreds of
+    clones and reports a star off n=6 patients. Checked here on all three because the same
+    assertion on `mutual_information` alone proves nothing — MI has no item axis, so its
+    `result` is already one row per patient and the collapse is a no-op.
+    """
+    _, adata = cohort
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    kwargs = dict(groupby="patient", splitby="response")
+    if metric == "phenotypic_flux":
+        kwargs.update(cov_from=cov, cov_to=cov)
+    else:
+        kwargs["covariate"] = cov
+    res = getattr(tcri.tl, metric)(adata, **kwargs)
+
+    row = res["stats"].iloc[0]
+    assert row["n_a"] == 3 and row["n_b"] == 3, (
+        f"{metric}: n={row['n_a']}/{row['n_b']} is not the 3 patients per arm"
+    )
+    if item_col is not None:
+        n_rows = len(res["result"])
+        assert n_rows > 6, "fixture is too small for this test to discriminate"
+        assert row["n_a"] + row["n_b"] < n_rows, (
+            f"{metric}: the contrast saw {row['n_a'] + row['n_b']} of {n_rows} item rows -- "
+            f"items were not collapsed to groups"
+        )
+
+
 def test_compare_groups_unpaired():
     """Mann–Whitney contrast on a tidy per-unit frame (R vs NR)."""
     from tcri.tools._compare import compare_groups

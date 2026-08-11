@@ -119,6 +119,14 @@ def test_pl_renders_the_axes_the_tl_call_used(trained_model):
         adata.obs["patient"].astype(str).unique()
     )
 
+    # ...and it comes from `params`, not from the registry. `batch_col` happens to BE
+    # "patient" in every fixture here, so a renderer that read the registry instead would
+    # look identical -- break the registry and the plot must not notice.
+    adata.uns[K.METADATA]["batch_col"] = "not_a_column"
+    assert tcri.pl.mutual_information(adata).get_xlabel() == "patient"
+    tcri.tl.mutual_information(adata, covariate=cov, key_added="mi_flat")
+    assert len(tcri.pl.mutual_information(adata, key="mi_flat").patches) == 1
+
 
 def test_pl_key_selects_a_non_default_result(trained_model):
     """Two results in one object: ``key_added`` on the tool, ``key`` on the plot."""
@@ -155,6 +163,15 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     tcri.tl.mutual_information(adata, covariate=cov, groupby="patient")
     plain_ax = tcri.pl.mutual_information(adata)
     assert not plain_ax.texts, "a contrast was annotated on an axis with no contrast"
+
+    # the case the guard actually exists for: `stats` IS present, but x is the phenotype
+    # axis, so an R-vs-NR bracket over phenotype A vs phenotype B would be a claim the
+    # numbers never made
+    tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient", splitby="response")
+    pheno_ax = tcri.pl.clonotypic_entropy(adata)
+    assert pheno_ax.get_xlabel() == "phenotype"
+    assert tcri.get.result(adata, "clonotypic_entropy")["stats"] is not None
+    assert not pheno_ax.texts, "the response contrast was bracketed over the phenotype axis"
 
 
 # ── shapes each twin chooses ─────────────────────────────────────────────────
