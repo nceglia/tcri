@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Refuse to commit a red tree.
+#
+# Added after a commit landed with 29 failing tests: a targeted probe passed, and the full
+# suite was never run. That is not a judgement call anyone should have to remember at the
+# moment of committing -- especially when a change alters a RETURN SHAPE, where the damage is
+# always broad and always downstream.
+#
+# Runs the fast suite only (~40s). The slow suite (~105s) is the CI gate and stays there.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass deliberately:     git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+PY="$ROOT/.venv/bin/python"
+
+if [ ! -x "$PY" ]; then
+    echo "pre-commit: $PY not found — skipping the test gate." >&2
+    exit 0
+fi
+
+echo "pre-commit: running the fast suite…"
+if ! MPLBACKEND=Agg "$PY" -m pytest "$ROOT/tests/" -q -x --no-header 2>&1 | tail -15; then
+    cat >&2 <<'MSG'
+
+pre-commit: tests are failing — commit refused.
+
+Fix them, or if the breakage is intentional and staged for a follow-up commit:
+    git commit --no-verify
+MSG
+    exit 1
+fi
