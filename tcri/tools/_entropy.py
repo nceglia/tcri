@@ -94,8 +94,8 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
 
     table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
                          clones=clones, item_col=item_col, compute=_compute)
-    result = build_result(table, groupby=gkey, splitby=splitby, item_col=item_col)
-    stats = build_stats(result, groupby=gkey, splitby=splitby, item_col=item_col)
+    result = build_result(table)
+    stats = build_stats(result, groupby=gkey, splitby=splitby)
 
     payload = {"table": table, "result": result, "stats": stats}
     return with_resolved_params(payload, groupby=gkey) if resolved else payload

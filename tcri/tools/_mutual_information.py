@@ -76,7 +76,7 @@ def mutual_information(
 
     table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
                          clones=clones, item_col=None, compute=_compute)
-    result = build_result(table, groupby=gkey, splitby=splitby, item_col=None)
+    result = build_result(table)
     stats = build_stats(result, groupby=gkey, splitby=splitby)
 
     payload = {"table": table, "result": result, "stats": stats}

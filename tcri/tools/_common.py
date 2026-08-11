@@ -330,16 +330,21 @@ def across_groups(values):
             "ci_low": float(lo), "ci_high": float(hi), "n_groups": n}
 
 
-def build_result(table, *, groupby, splitby, item_col, value="value"):
+def build_result(table, *, value="value"):
     """Reduce ``table`` (per draw) to ``result`` (per group[, item]).
 
     ``result`` is built FROM ``table`` rather than computed alongside it, so the two cannot
     drift -- which is the same reason ``pl`` now reads the cache instead of recomputing.
 
-    Reduces over ``draw`` only. Items are KEPT: a swarm plot needs one point per clone, and
-    collapsing them here would make the per-item view unreachable from the cached result.
+    Reduces over ``draw`` ONLY, and the grouping keys are therefore *every other column*.
+    Naming them explicitly (covariate, groupby, splitby, item_col) is what silently dropped
+    ``cov_from``/``cov_to`` from the flux result: a metric with a label the list did not
+    anticipate had it averaged away. Anything a metric puts in ``table`` identifies a row here.
+
+    Items are KEPT: a swarm plot needs one point per clone, and collapsing them here would make
+    the per-item view unreachable from the cached result.
     """
-    keys = [c for c in ("covariate", groupby, splitby, item_col) if c and c in table.columns]
+    keys = [c for c in table.columns if c not in ("draw", value)]
     if not keys:
         agg = summarize(table[value].to_numpy())
         return pd.DataFrame([{value: agg["mean"], **{k: v for k, v in agg.items()
@@ -355,7 +360,7 @@ def build_result(table, *, groupby, splitby, item_col, value="value"):
     return pd.DataFrame(rows)
 
 
-def build_stats(result, *, groupby, splitby, value="value", item_col=None):
+def build_stats(result, *, groupby, splitby, value="value"):
     """The between-split contrast, or ``None`` when ``splitby`` is not set.
 
     The replicate unit is the GROUP. When the metric has an item axis, ``result`` holds one row
@@ -407,9 +412,11 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     """
     obs = adata.obs
     clone_col_name = adata.uns[K.METADATA][K.Config.CLONE_COL]
-    base = {"covariate": covariate}
+    # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
+    # `covariate=None` through added an all-NaN column to every row of its result
+    base = {"covariate": covariate} if covariate is not None else {}
     if extra_labels:
-        base.update(extra_labels)
+        base.update({k: v for k, v in extra_labels.items() if v is not None})
 
     def _emit(rows, label_row, per_draw):
         for draw, payload in enumerate(per_draw):

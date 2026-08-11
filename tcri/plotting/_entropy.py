@@ -15,16 +15,23 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     ``splitby`` (x = phenotype)."""
     from .. import tools as tl
 
+    # inplace=False: this still recomputes (pass 2 rewires `pl` to read `tcri.get`), but with
+    # store-once a recomputing plot would OVERWRITE the user's cached result with the plot's own
+    # arguments -- a manufactured groupby, a different n_samples -- which is worse than the
+    # duplicate work it does today.
     res = tl.clonotypic_entropy(
         adata, covariate=covariate, groupby=groupby, splitby=splitby, n_samples=n_samples,
         temperature=temperature, clones=clones, weighted=weighted, normalized=normalized,
-    )
+        inplace=False,
+    )["result"]
     if return_df:
         return res
     if groupby is None:
-        fig, ax = _barplot(res, ylabel="clonotypic entropy (bits)", palette=palette, ax=ax, figsize=figsize)
+        fig, ax = _barplot(res.set_index("phenotype")["value"],
+                           ylabel="clonotypic entropy (bits)", palette=palette, ax=ax,
+                           figsize=figsize)
     else:
-        fig, ax = _metric_boxplot(res, x="phenotype", y="clonotypic_entropy", hue=splitby,
+        fig, ax = _metric_boxplot(res, x="phenotype", y="value", hue=splitby,
                                   order=order, hue_order=hue_order, palette=palette, ax=ax,
                                   figsize=figsize, ylabel="clonotypic entropy (bits)")
     return _finish(fig, ax, save=save, show=show)
@@ -38,17 +45,24 @@ def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     ``groupby``) with each clone a dot."""
     from .. import tools as tl
 
+    # inplace=False: this still recomputes (pass 2 rewires `pl` to read `tcri.get`), but with
+    # store-once a recomputing plot would OVERWRITE the user's cached result with the plot's own
+    # arguments -- a manufactured groupby, a different n_samples -- which is worse than the
+    # duplicate work it does today.
     res = tl.phenotypic_entropy(
         adata, covariate=covariate, groupby=groupby, splitby=splitby, n_samples=n_samples,
         temperature=temperature, clones=clones, weighted=weighted, normalized=normalized,
-    )
+        inplace=False,
+    )["result"]
     if return_df:
         return res
     if groupby is None:
-        fig, ax = _barplot(res, ylabel="phenotypic entropy (bits)", palette=palette, ax=ax, figsize=figsize)
+        fig, ax = _barplot(res.set_index("clonotype")["value"],
+                           ylabel="phenotypic entropy (bits)", palette=palette, ax=ax,
+                           figsize=figsize)
     else:
         x = splitby if (splitby is not None and splitby in res.columns) else groupby
-        fig, ax = _metric_boxplot(res, x=x, y="phenotypic_entropy", hue=None, order=order,
+        fig, ax = _metric_boxplot(res, x=x, y="value", hue=None, order=order,
                                   palette=palette, ax=ax, figsize=figsize,
                                   ylabel="phenotypic entropy (bits)")
     return _finish(fig, ax, save=save, show=show)

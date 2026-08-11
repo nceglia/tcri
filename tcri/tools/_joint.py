@@ -13,7 +13,7 @@ import pandas as pd
 
 from .._state import keys as K
 from .._state import schemas
-from .._state.storage import tl_result
+from .._state.storage import tl_result, with_resolved_params
 from .._compute._joint import _joint_draws
 
 __all__ = ["joint_distribution"]
@@ -219,4 +219,7 @@ def joint_distribution(
     # `params` is captured by the decorator from the call signature, so the old
     # df.attrs["params"] hand-roll is gone -- attrs does not survive most pandas operations
     # and did not survive a write_h5ad at all.
-    return {"table": df, "result": result}
+    # n_draws is what ACTUALLY happened, which the call arguments cannot say on their own --
+    # the same distinction as epochs_actual vs max_epochs in the training record. Recorded as an
+    # effective value so the provenance answers "how many draws is this table built from".
+    return with_resolved_params({"table": df, "result": result}, n_draws=int(n_draws))
