@@ -69,7 +69,7 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 **Phase 7 (non-core plots — DROP, not to examples):**
 - [x] `pl.probability_ternary` · [x] `pl.top_clone_umap` · [x] `pl.clone_size_umap` · [x] `pl.plot_phenotype_probabilities`
 - [x] `pl.compare_phenotypes` · [x] `pl.ridge_delta_entropy` · [x] `pl.flux` boxplot · [x] `pl.clonality` plot
-- [x] `pl.tcri_boxplot` (→ `_metric_boxplot`) · [x] `pl.set_color_palette` (→ `resolve_palette`)
+- [x] `pl.tcri_boxplot` (→ `_metric_boxplot` → `_boxstrip`) · [x] `pl.set_color_palette` (→ `resolve_palette` → `resolve_colors`)
 - [x] `pl.plot_pheno_sankey` (→ `_sankey`) · [x] leaked aliases `centropy`/`pentropy`/`*_tl`
 
 **Phase 9 (out of the package):**
@@ -77,6 +77,18 @@ Tick only when the symbol is gone from source AND `__all__`/imports AND `import 
 
 **Phase 3/9 (model/utils cleanup):**
 - [x] `_ascii_hist` (dead: zero callers) · [x] `ml.plot_loss` (→ `diag.loss`) · [x] `ml.plot_archetypes` (→ `diag.archetypes`)
+
+**Metrics store-once (passes 1–2):**
+- [x] the precomputed-joint path — `adata_or_jd` on three metrics, `is_precomputed_joint`,
+  `reject_stacked_covariate_joint`, API doc §7.9 · [x] `joint_distribution(groupby=)`
+  (declared at the first freeze, never implemented) · [x] `df.attrs["params"]` on the joint
+- [x] `tl.compare_groups` off the public surface (code kept as an internal helper with one
+  caller; it is not dead, it is no longer a step the user performs)
+- [x] `pl.resolve_palette` (→ `resolve_colors`) · [x] the duplicate 30-entry `tcri_colors` in
+  `utils/_utils.py` · [x] `_stats.eti` (no caller outside its own test)
+- [x] every metric argument on every `pl` signature — `covariate`, `groupby`, `splitby`,
+  `n_samples`, `weighted`, `normalize_mode`, `distance_metric`, `clones`, `temperature`
+- [x] the four per-metric copies of the `groupby` loop (→ `_common.metric_table`)
 
 ---
 
@@ -246,6 +258,53 @@ _(pass 2 — `pl` reading `tcri.get`, `compare_groups` internal, colours, `eti`/
   recompute their metric. They now pass `inplace=False` so a plot cannot overwrite the user's
   cached result under the plot's own arguments — including the `groupby`
   `pl.mutual_information` manufactures from `batch_col`. Guarded by a test.
+
+## Metrics store-once, pass 2 — `pl`, colours, surface  ·  ✅ done (branch `feat/metrics-pass2`)
+- **`pl` no longer computes.** Every twin is `(adata, key=, display args)`. It reads the result
+  `tl` stored, so the covariate, groupby, splitby, n_samples and distance it renders are the
+  ones `tl` actually used. Three defects die structurally rather than being fixed: the
+  `tl`/`pl` `distance_metric` disagreement (`"kl"` vs `"l1"`, so the flux axis label and the
+  numbers under it could describe different quantities); the `groupby` manufactured from
+  `batch_col` whenever the caller passed none, which grouped the figure by a column nobody
+  named and made an ungrouped MI unreachable; and a plot disagreeing with the frame in hand.
+- **`stats` reaches the figure.** The contrast is bracketed with its stars, and only where
+  `stats` has a row for that exact pair of x levels — so an R-vs-NR contrast cannot appear
+  over the phenotype axis.
+- **One contrast implementation.** `build_stats` collapses items to groups (the
+  pseudoreplication step) then delegates to `compare_groups`, which leaves the public surface.
+  A test pins the delegation so the two cannot drift. `across_groups` is now wired: `stats`
+  carries `ci_*`/`sd_*`/`n_*` per arm beside `result`'s within-group `hdi_*`.
+- **One palette.** `resolve_colors` replaces `resolve_palette`, which had no way to READ an
+  existing assignment and so reassigned on every call — the same patient changed colour
+  between two figures in one notebook. Persists under scanpy's `uns["<key>_colors"]`, so a
+  palette set here also colours `sc.pl.umap`.
+- **`_stats`:** `eti` deleted; `auc_and_label_permutation` + `bootstrap_auc` exported as
+  `tcri.ut.*`. The surface conformance test failed the moment they went public — the contract
+  working as intended, not an obstacle.
+- **Tests:** 304 fast / **317 with `--runslow`** (289 after pass 1; 256 on `main` before).
+  New `cohort` fixture — 6 patients, 3 per arm — because a contrast needs replicates: with one
+  patient per arm a Mann-Whitney returns p=1.0 whatever the data says, so nothing downstream
+  of `splitby` was testable at all.
+- **Mutation testing found two real gaps**, which is the point of running it:
+  1. the pseudoreplication collapse was only tested on `mutual_information` — the one metric
+     with *no* item axis, where the collapse is a no-op. `per_group = result` passed. It is
+     now parametrized over the item-bearing metrics, where the defect actually bites.
+  2. `pl` reading `batch_col` instead of the cached `params` was invisible because `batch_col`
+     IS `"patient"` in every fixture. The test now breaks the registry and asserts the plot
+     does not notice.
+  A third (`x == splitby` before annotating) is redundant with the level match inside
+  `_annotate_contrasts` — mutating either alone leaves the figure correct. Recorded in the
+  docstring rather than left implying it is independently verified.
+- **Standing Audit:** removals ticked ✅ (ledger updated); deliverables present ✅; new tests
+  for the renderer contract, the palette, the delegation and the across-group tier ✅;
+  duplication removed ✅ (two contrast implementations → one, two palettes → one);
+  usability ✅ (`pl` signatures went from ~16 arguments to 9, none of them computable);
+  contract conformance green ✅ (60 passed); API doc §7.9 + §7.10 and the nine stale code
+  blocks regenerated from live signatures ✅.
+- **Deferred, with issues:** `compare_groups`'s paired branch has no producer — it wants a
+  frame whose cells are draw vectors. Kept, not deleted, because `table` makes a paired
+  posterior contrast genuinely reachable now and which estimand it should use is a question
+  for the authors. Sankey rebuild; `tcri.ut` star-import with no `__all__`.
 
 ## PR 10 — Public API + scverse CI  ·  ☐ todo
 - **Logged test (from grafiti parity):** once `pl.__all__` exists, add a conformance assertion `set(pl.__all__) == {pl entries in _contract.pyi}` — catches *extra/missing* plot functions (whole-surface), not just signature drift on onboarded ones. (tcri's namespaced `.pyi` checks drift incrementally via `IMPLEMENTED`; this closes the whole-surface gap grafiti gets from its markdown+`__all__` channel.)
