@@ -159,7 +159,7 @@ tcri/
     _compare.py             #   compare_groups (public group-comparison orchestrator)
   plotting/                 # pl
     _base.py                #   _metric_boxplot, _finish
-    _colors.py              #   tcri_colors, resolve_palette
+    _colors.py              #   tcri_colors, NA_COLOR, resolve_colors
     _entropy.py             #   clonotypic_entropy, phenotypic_entropy
     _mutual_information.py   #   mutual_information
     _flux.py                #   phenotypic_flux (sankey)
@@ -206,7 +206,7 @@ __all__ = ["tl", "pp", "pl", "ml", "diag", "ut", "joint_distribution", "__versio
 |---|---|
 | `tools/__init__.py` (`tl`) | `joint_distribution`, `clonotypic_entropy`, `phenotypic_entropy`, `mutual_information`, `phenotypic_flux`, `compare_groups` |
 | `preprocessing/__init__.py` (`pp`) | `group_singletons`, `clone_size` |
-| `plotting/__init__.py` (`pl`) | `clonotypic_entropy`, `phenotypic_entropy`, `mutual_information`, `phenotypic_flux`, `tcri_colors`, `resolve_palette` |
+| `plotting/__init__.py` (`pl`) | `clonotypic_entropy`, `phenotypic_entropy`, `mutual_information`, `phenotypic_flux`, `resolve_colors`, `tcri_colors`, `NA_COLOR` |
 | `model/__init__.py` (`ml`) | `TCRIModel` |
 | `diagnostics/__init__.py` (`diag`) | `joint_distribution_ppc`, `phenotype_calibration`, `reconstruction_ppc`, `permutation_null`, `loss`, `archetypes` |
 | `utils/__init__.py` (`ut`) | `save_tcri_session`, `load_tcri_session` |
@@ -390,17 +390,10 @@ Called only by `TCRIModel.to_anndata`; folds in the old `register_phenotype_key`
 
 ```python
 joint_distribution(
-    adata, *,
-    covariate=None,          # None → ALL covariate values in one pass (shared draw)
-    groupby=None,            # NOTE: deferred to Phase 6 in code (raises NotImplementedError until then)
-    n_samples=0,
-    use_logits=True,         # was posterior=; alias cell_informed=; classifier-mixing switch
-    weighted=False,          # per-clonotype (False) vs cell-weighted (True); ct-keyed
-    clones=None,
-    temperature=1.0,
-    random_state=None,
-    device=None,
-) -> pandas.DataFrame
+    adata, *, covariate=None, n_samples=0, use_logits=True, weighted=False,
+    clones=None, temperature=1.0, random_state=None, device=None,
+    key_added=None, inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
 ```
 Re-exported top-level as `tcri.joint_distribution`. Unifies today's `joint_distribution` + `joint_distribution_posterior`.
 
@@ -456,12 +449,11 @@ then $J[c,\phi]=\sum_{i\in c}P(\phi\mid i)$, row-normalize. At $T=1$, `n_samples
 
 ```python
 clonotypic_entropy(
-    adata_or_jd, *,
-    covariate=None, groupby=None,
-    n_samples=0, temperature=1.0,
-    clones=None, normalized=True, n_clones_ref=None,
-    random_state=None, device=None,
-) -> float | pandas.Series | pandas.DataFrame
+    adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    n_clones_ref=None, random_state=None, device=None, key_added=None,
+    inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
 ```
 
 **(a) Responsibility.** For each phenotype $\phi$ (at covariate $m$), the normalized Shannon entropy of the distribution over clonotypes carrying that phenotype, $H[P(c\mid\phi,m)]$ — spread of a phenotype across clones. **Repertoire-level (uniform-clonotype prior; §0.8).**
@@ -477,7 +469,7 @@ If `normalized`: divide by $\log_2 C_{\text{den}}$ where $C_{\text{den}}$ = numb
 
 | Argument | Effect |
 |---|---|
-| `adata_or_jd` | AnnData → compute $J$ internally via §7.1 (`use_logits=True`; `covariate` required); precomputed joint DataFrame → skip to entropy (fast path — valid only at `n_samples=0`, `groupby=None`; `clones` just re-filters; else `ValueError`, §7.9). |
+| `adata` | Compute $J$ internally via §7.1 (`use_logits=True`; `covariate` required). AnnData only — the `adata_or_jd` union and its precomputed-joint fast path are deleted (§7.9). |
 | `covariate` / `groupby` | Condition $m$; per-group entropy → tidy rows (group × phenotype). |
 | `n_samples` | `0` → plug-in per phenotype; `N` → per-draw + summary. |
 | `temperature` | Tempers $J$ before the column is read. |
@@ -493,12 +485,10 @@ If `normalized`: divide by $\log_2 C_{\text{den}}$ where $C_{\text{den}}$ = numb
 
 ```python
 phenotypic_entropy(
-    adata_or_jd, *,
-    covariate=None, groupby=None,
-    n_samples=0, temperature=1.0,
-    clones=None, normalized=True,
-    random_state=None, device=None,
-) -> float | pandas.Series | pandas.DataFrame
+    adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    random_state=None, device=None, key_added=None, inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
 ```
 
 **(a) Responsibility.** For each clonotype $c$, the normalized Shannon entropy of its phenotype distribution $H[P(\phi\mid c,m)]$ — plasticity vs commitment.
@@ -515,13 +505,11 @@ Estimator convention as §0.6 (plug-in at `n_samples=0`). **Critical bug fix:** 
 
 ```python
 mutual_information(
-    adata_or_jd, *,
-    covariate=None, groupby=None,
-    n_samples=0, temperature=1.0,
-    clones=None, normalized=True,
-    normalize_mode="min",     # CHANGED default (was "average")
-    random_state=None, device=None,
-) -> float | numpy.ndarray | pandas.DataFrame
+    adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    normalize_mode='min', random_state=None, device=None, key_added=None,
+    inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
 ```
 
 **(a) Responsibility.** $I(c;\phi\mid m)$ in bits — strength of clone–phenotype coupling. Optionally normalized to $[0,1]$.
@@ -538,7 +526,9 @@ returning 0 if $D\le0$.
 
 **(c) Arguments → math.** As the shared table; additionally `normalize_mode` selects $D$. `clones` restricts rows; `normalized` toggles $I$ vs $I/D$.
 
-**(d) Return shape.** `n_samples=0`, no `groupby` → scalar `float`; `n_samples>0`, no `groupby` → `(N,)` array + `mean, sd, hdi_low, hdi_high`; `groupby` → tidy DataFrame, one row per group, column `MI` [+ summary]. Fast path (precomputed jd) valid only at `n_samples=0`, `groupby=None`.
+**(d) Return shape.** The same for every metric and every combination of axes — see §7.10.
+The old shape (scalar `float` / array+dict / tidy DataFrame, depending on `n_samples` and
+`groupby`) meant the caller had to branch on their own arguments to read their own result.
 
 `__all__ = ["mutual_information"]`
 
@@ -546,14 +536,10 @@ returning 0 if $D\le0$.
 
 ```python
 phenotypic_flux(
-    adata, *,
-    cov_from, cov_to,
-    groupby=None,
-    n_samples=0, temperature=1.0,
-    clones=None,
-    distance_metric="l1",
-    random_state=None, device=None,
-) -> pandas.Series | numpy.ndarray | pandas.DataFrame
+    adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, distance_metric='kl',
+    random_state=None, device=None, key_added=None, inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
 ```
 
 **(a) Responsibility.** Per-clonotype distance between a clone's phenotype distribution at `cov_from` vs `cov_to`, over the clone intersection.
@@ -612,9 +598,39 @@ Every `tl` return frame is constrained **now** to survive an h5ad round-trip so 
 
 For `n_samples>0`, the engine draws the `p_ct` table **once per sample** and **reuses that draw across all covariates, groups, and clones**; groups are formed by cell/clone masking, not re-drawing. `covariate=None`, the flux sankey's pairwise series, and per-patient analyses all consume one shared draw stack. `diag.permutation_null` does **not** — it is model-free, scoring the empirical clone×phenotype crosstab, and draws no Dirichlet samples at all. A test/counter asserts the number of Dirichlet draws equals `n_samples`, independent of `#groups` and `#covariates`.
 
-### 7.9 Precomputed-joint fast path constraints
+### 7.9 The precomputed-joint fast path — REMOVED
 
-A bare precomputed joint carries no `p_ct`/`local_scale`/logits/cells, so it is valid **only for `n_samples=0` and `groupby=None`** (`clones=` merely re-filters rows). `n_samples>0` or `groupby` on a bare joint raises a clear `ValueError`; a jd that already contains a `sample_id` axis is accepted, with `n_samples` treated as validation, not resampling. The adata-path == precomputed-jd equivalence test is scoped to `n_samples=0`. (`phenotypic_flux` takes adata only — it needs two joints — so it is unaffected.) Metrics propagate the input jd's `_provenance` into their output.
+Three metrics used to accept a bare joint DataFrame in place of an AnnData. It was declared
+in the first contract freeze, implemented because it was declared, and had exactly one caller
+in the repo. Its root cause was `joint_distribution` returning a naked table; now that every
+tool stores its result, there is nothing to hand back in. Gone with it: the `adata_or_jd`
+union type, the `is_precomputed_joint` branch in three metrics, and the
+`reject_stacked_covariate_joint` guard that existed only to police that branch.
+
+`tl.*` takes an AnnData. That is the whole rule.
+
+### 7.10 Return shape — one shape, stored once
+
+Every `tl` returns `{table, result, stats}` **and** writes the same object to
+`uns[key_added or "tcri_<metric>"]` with a `params` provenance block recording every argument
+it ran with, including untouched defaults.
+
+| slot | one row per | reduced over |
+|---|---|---|
+| `table` | (covariate, group, item, draw) | nothing — the substrate |
+| `result` | (covariate, group, item) | `draw` only |
+| `stats` | (split_a, split_b) pair | items → groups, then contrast |
+
+`result` is built *from* `table`, so the two cannot drift. `stats` is `None` without
+`splitby`; its replicate unit is the **group**, so item rows are averaged to one value per
+group before the contrast and 15 clones from 2 patients give n=2.
+
+Two uncertainty families, named apart on purpose: `hdi_*` on `result` is the within-group
+posterior interval over draws; `ci_*`/`sd_*`/`n_*` on `stats` is the between-replicate spread
+of each arm.
+
+Read a cached result back with `tcri.get.result(adata, "<metric>")` and its provenance with
+`tcri.get.params(adata, "<metric>")`.
 
 ---
 
@@ -626,25 +642,17 @@ Twins mirror `tl` by filename and function name. Each renderer accepts its `tl` 
 
 ```python
 clonotypic_entropy(
-    adata, *,
-    covariate=None, groupby=None, splitby=None,
-    n_samples=0, temperature=1.0, clones=None, normalized=True, n_clones_ref=None,
-    palette=None, hue_order=None, ax=None, figsize=(6, 3),
-    rotation=90, legend_fontsize=6, bbox_to_anchor=(1.15, 1.0),
-    random_state=None, save=None, return_df=False,
-)
+    adata, *, key=None, order=None, hue_order=None, palette=None, ax=None,
+    figsize=(8, 4), save=None, show=None, return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
 ```
 **(renamed from `clonotypic_entropy_by_phenotype`)** Box-and-dot plot of clonotypic entropy per phenotype across covariate values, per-group dots, significance brackets. Cross-group plots default to a common `n_clones_ref` for comparability (§7.2).
 
 ```python
 phenotypic_entropy(
-    adata, *,
-    covariate=None, groupby=None, splitby=None,
-    n_samples=0, temperature=1.0, clones=None, normalized=True,
-    palette=None, ax=None, figsize=(8, 4),
-    rotation=90, legend_fontsize=6, bbox_to_anchor=(1.15, 1.0),
-    random_state=None, save=None, return_df=False,
-)
+    adata, *, key=None, order=None, hue_order=None, palette=None, ax=None,
+    figsize=(8, 4), save=None, show=None, return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
 ```
 **[FIXED]** Box/strip plot of phenotypic entropy per covariate/group.
 
@@ -654,16 +662,15 @@ phenotypic_entropy(
 
 ```python
 mutual_information(
-    adata, *,
-    covariate=None, groupby=None, splitby=None,
-    n_samples=0, temperature=1.0, clones=None,
-    normalized=True, normalize_mode="min",
-    palette=None, ax=None, figsize=(8, 4), rotation=90,
-    legend_fontsize=6, bbox_to_anchor=(1.15, 1.0),
-    random_state=None, save=None, return_df=False,
-)
+    adata, *, key=None, order=None, hue_order=None, palette=None, ax=None,
+    figsize=(8, 4), save=None, show=None, return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
 ```
-**[FIXED; subsumes `mi_compare`]** Box/strip plot of clone×phenotype MI per covariate; `groupby` (e.g. `"patient"`) supplies per-group points and drives AUROC/MWU/label-permutation stats. `weighted` retained (default `False`; §0.8); default `normalize_mode="min"` (§7.4).
+Renders the cached `tl.mutual_information`. The axes come from that call's `params`, not from
+arguments here: with `groupby` it boxes one MI per group, with `splitby` it boxes by split and
+brackets the contrast from `stats`. `weighted`, `normalize_mode`, `n_samples` and the rest are
+`tl` arguments and appear nowhere on this signature — a plot that could compute is a plot that
+can disagree with the frame in your hand.
 
 `__all__ = ["mutual_information"]`
 
@@ -671,17 +678,18 @@ mutual_information(
 
 ```python
 phenotypic_flux(
-    adata, *,
-    order,
-    groupby=None, clones=None,
-    normalize=True, temperature=1.0,
-    distance_metric="l1",
-    phenotype_colors=None, ax=None, figsize=(6, 3),
-    show_legend=True, title=None, random_state=None,
-    save=None, return_axes=False,
-)
+    adata, *, key=None, order=None, hue_order=None, palette=None, ax=None,
+    figsize=(8, 4), save=None, show=None, return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
 ```
-The Sankey. Draws phenotype-distribution flow across the ordered `order` sequence of covariate values, calling `tl.phenotypic_flux` pairwise between consecutive values under one shared draw stack (§7.8). `order` replaces pairwise `cov_from`/`cov_to` because a Sankey spans the full ordered series.
+Renders the cached `tl.phenotypic_flux` — per-clone flux from `cov_from` to `cov_to`, boxed.
+The endpoints AND the distance metric come from the cached `params`, which is what makes the
+axis label agree with the data: `tl` defaulted `distance_metric="kl"` and `pl` to `"l1"`, so
+the two could describe different quantities.
+
+`order` here is the plotting order of the x categories, not a covariate sequence. The
+phenotype-flow Sankey over an ordered covariate series is a deferred enhancement with its own
+issue; `_sankey.py` (§8.4) is its unused drawing primitives.
 
 `__all__ = ["phenotypic_flux"]`
 
@@ -693,17 +701,19 @@ The Sankey. Draws phenotype-distribution flow across the ordered `order` sequenc
 
 | Signature | Responsibility |
 |---|---|
-| `_metric_boxplot(adata, function, *, groupby=None, splitby=None, ylabel="", order=None, palette=None, s=20, ax=None, figsize=(8, 4)) -> (fig, ax)` | **(renamed from `tcri_boxplot`)** Generic per-phenotype metric box/strip engine across `groupby`/`splitby` strata. **Rewritten to compute each stratum by full-space restriction (`clones=`/masks), never `function(adata[mask])`** — so engine-backed metrics never trip the alignment guard (§7.1). |
-| `_finish(fig, ax, *, save=None, show=None, return_axes=False)` | scanpy-style show/save/return finalizer. |
+| `render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None, ...)` | The shared cache renderer every twin delegates to. Reads `tcri.get.result`/`params`, picks the x axis from the cached `groupby`/`splitby`, routes colours through `resolve_colors`, and brackets `stats` when x IS the split. Takes **no** metric arguments and never calls `tl`. |
+| `_boxstrip(...)` / `_bars(...)` | Box+strip over groups; bars with the posterior HDI as an error bar when there are no groups to box. |
+| `_annotate_contrasts(ax, stats, levels)` | Bracket + stars per contrast, drawn only where `stats` has a row for that exact pair of x levels. |
+| `_finish(fig, ax, *, save=None, show=None)` | scanpy-style show/save/return finalizer. |
 
 ### 8.6 `plotting/_colors.py`
 
 | Symbol | Responsibility |
 |---|---|
 | `tcri_colors` (`list[str]`) | Canonical categorical hex palette. |
-| `resolve_palette(adata, columns, *, palette=None) -> dict` | **(renamed from `set_color_palette`)** Assign `tcri_colors` to each `obs` column's categories, store in `uns["<col>_colors"]`, return the map. **Fixes the "writes on `adata.copy()`" bug (mutates in place).** |
+| `resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=True) -> dict` | Resolve `{category: hex}`, cached under `uns["<cat_key>_colors"]` (scanpy's convention, so `sc.pl.umap` matches). Priority: explicit `palette` (dict / list / cmap name) → an existing stored assignment of matching length → `tcri_colors`, cycled. A partial dict fills its gaps from the cycle. |
 
-`__all__ = ["tcri_colors", "resolve_palette"]`
+`__all__ = ["tcri_colors", "NA_COLOR", "resolve_colors"]`
 
 ---
 
@@ -757,7 +767,7 @@ Read-only checks on the finalized model. PPCs return `DataFrame`s; the two reloc
 **Disposition rule.** Every function is kept or dropped by ONE test — *is it core?* (the model, the joint engine, the four metrics + their plots, session I/O, PPC diagnostics, shared helpers). Non-core = **dropped (deleted)**; nothing is relocated to `examples/`, and the disposable notebooks are never consulted for disposition. Deletion PRs grep import-sites as well as call-sites so a top-level import (e.g. `utils.probabilities` at `_plotting.py:18`) is removed in the same PR as its symbol.
 
 - **Deleted (not core — dropped, never moved to examples):** `clonality` (tl + pl), `probability_ternary`, `gene_entropy`, `top_clone_umap`, `clone_size_umap`, `plot_phenotype_probabilities`, `polar_plot`, `compare_phenotypes`, `clonotypic_entropy_base`, `delta_clonotypic_entropy`, `delta_entropy_table`, `mi_compare` (tl + pl), `flux_table`, `bayesian_mutual_information`, `probability_distribution`, `classify_phenotypes`, `get_latent_embedding`, `group_small_clones`, `register_probability_columns`, `remove_meaningless_genes`, `clone_fraction`, `_ent`, `ridge_delta_entropy`, `dkl` (→ `_distance.kl_divergence`), `probabilities` (**and its `_plotting.py` import**), `SankeyNode.hex_to_rgb`, `_ascii_hist` (+ all `graph=`/ASCII paths), `write_adata_safely`, `_pop_nonserializables`, and the retired `uns` keys `tcri_manager`, `tcri_clone_key`, `tcri_phenotype_key`, the `X_tcri_phenotypes` obsm slot.
-- **Renamed:** `flux`→`tl.phenotypic_flux`; `get_cell_phenotype_probs`→`TCRIModel.predict`; `register_model`→`TCRIModel.to_anndata`; `clonotypic_entropy_by_phenotype`→`pl.clonotypic_entropy`; `tcri_boxplot`→`_base._metric_boxplot`; `set_color_palette`→`resolve_palette`; params `from_this`/`to_that`→`cov_from`/`cov_to`; engine `posterior=`→`use_logits=` (alias `cell_informed=`); `point_estimate=`→removed (use `n_samples`). `weighted=` is **retained** (default `False`; §0.8), not removed.
+- **Renamed:** `flux`→`tl.phenotypic_flux`; `get_cell_phenotype_probs`→`TCRIModel.predict`; `register_model`→`TCRIModel.to_anndata`; `clonotypic_entropy_by_phenotype`→`pl.clonotypic_entropy`; `tcri_boxplot`→`_base._metric_boxplot`; `set_color_palette`→`resolve_palette`→`resolve_colors`; params `from_this`/`to_that`→`cov_from`/`cov_to`; engine `posterior=`→`use_logits=` (alias `cell_informed=`); `point_estimate=`→removed (use `n_samples`). `weighted=` is **retained** (default `False`; §0.8), not removed.
 - **Made private (folded in):** `register_clonotype_key` / `register_phenotype_key` / `_compute_logits_and_prior` → `preprocessing/_register` internals, folded into `TCRIModel.to_anndata`.
 - **Relocated (kept, NOT to examples):** `compare_joint_distribution`→`diag.joint_distribution_ppc`, `plot_loss`→`diag.loss`, `plot_archetypes`→`diag.archetypes`; `build_nested_tcri_pgm` / `draw_tcri_pgm_nested` → **`docs/`** (out of the package, a figure script only).
 - **Subsumed by `groupby` + `compare_groups` (removed, with migration recipe):** the plural batch wrappers `clonotypic_entropies` / `phenotypic_entropies`, `pl.phenotypic_entropy_delta`, and every `*_compare` / `*_delta` / `*_table` variant.

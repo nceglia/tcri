@@ -141,6 +141,11 @@ silent.
   `splitby`, and its replicate unit is the **group**: item rows are averaged to one value
   per group *before* the contrast, so 15 clones from 2 patients give n=2 (issue #66).
 
-  Two uncertainty families coexist and are named apart on purpose — `hdi_*` is the
-  within-group posterior interval over draws; `ci_*` (with `n_groups`) is the
-  between-replicate interval across groups.
+  Two uncertainty families coexist and are named apart on purpose — `hdi_*` on `result` is
+  the within-group posterior interval over draws; `ci_*` / `sd_*` / `n_*` on `stats` is the
+  between-replicate spread of each arm, across groups.
+- **the contrast** — `stats` is a two-sided Mann–Whitney U on the per-group values, with
+  stars at 0.05 / 0.01 / 0.001 / 0.0001. Neither document specifies a test; the metrics
+  document defines quantities, not comparisons, so this one is ours. Rank-based because the
+  metrics are bounded and n is the patient count. **Uncorrected** across contrasts —
+  multiplicity is the analyst's to handle.

@@ -67,8 +67,13 @@ def _stat_label(stats, a, b):
 def _annotate_contrasts(ax, stats, levels):
     """Bracket + stars over each significant pair, drawn above the data.
 
-    Only drawn when the x axis IS the split — annotating a contrast over an axis it was not
-    computed on is how a figure comes to claim something the numbers never said.
+    A bracket is drawn only where ``stats`` has a row for that exact pair of x levels. That
+    level match — not the ``x == splitby`` check at the call site — is what stops a response
+    contrast being bracketed over the phenotype axis: phenotype names never match split
+    names, so no row is found and nothing is drawn. The call-site check is a second layer,
+    and it matters if this is ever handed the HUE levels rather than the x order, which for
+    ``item_as_x`` metrics ARE the split levels. Mutating either alone leaves the figure
+    correct; mutating both draws a bracket the numbers never supported.
     """
     if stats is None or not len(stats) or len(levels) < 2:
         return
