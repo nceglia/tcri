@@ -44,6 +44,29 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 9 | PGM→docs; utils finalize | ✅ | low | 1,8 | import green sans daft |
 | 10 | Public API + scverse CI | ☐ | low-med | all | ecosystem checklist |
 
+## Repo cleanup  ·  ☐ todo (its own pass — do NOT fold into a feature PR)
+
+Deliberately deferred; collected here so it stops accreting.
+
+- **Rename `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`.** It is the only one of the
+  four contracts not named for what it is — its siblings are `MODEL_CONTRACT.md`,
+  `METRICS_CONTRACT.md`, `TRAINING_CONTRACT.md`. In-tree referrers to update: `CLAUDE.md`,
+  `README.md`, `tcri/_contract.pyi`, `tcri/tools/_joint.py`.
+- **Issues do not live in the contract.** The contract docs have accreted "deferred", "tracked
+  as a follow-up", "open question" prose that belongs in GitHub issues. A contract states what
+  is frozen; a tracker states what is pending. Mixing them means a reader cannot tell which
+  sentences bind. Sweep them out, open issues, leave pointers only where a *decision* is
+  genuinely pending (e.g. `OPEN_QUESTIONS` in `_metrics_contract.py`, which is machine-checked
+  and therefore load-bearing — that one stays).
+- **Stale and duplicate artifacts in `docs/contract/`.** Observed while working:
+  `tcri_dependency_map.md` announces itself as "the post-refactor API" but its call graph still
+  contains `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table`, `pl.ridge_delta_entropy` and
+  `pp.joint_distribution` — all deleted in PR6/PR7. It reads as current and is not. Alongside it:
+  three overlapping API documents (`tcri_api_and_responsibilities.md`, `tcri_api_contract.md`,
+  `tcri_api_contract.html`), the dependency map in three formats (`.md`/`.dot`/`.html`), and a
+  `_quarantine/` directory. Decide which are generated (regenerate or delete), which are
+  historical (move to `REFACTOR_HISTORY.md`), and which are live.
+
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
 
