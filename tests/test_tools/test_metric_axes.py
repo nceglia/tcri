@@ -38,6 +38,7 @@ import pytest
 warnings.filterwarnings("ignore")
 
 import tcri
+from tcri import _keys as K
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 from tcri.model._model import TCRIModel
 
@@ -324,12 +325,24 @@ def test_joint_distribution_still_returns_every_covariate(blocks):
     assert len(one) < len(jd), "restricting to one covariate did not reduce the table"
 
 
-def test_the_guard_reaches_the_plotting_layer(blocks):
-    """``pl.*`` forwards ``covariate`` straight through, so the same ambiguity would otherwise
-    reappear one layer up with no guard at all."""
+def test_pl_cannot_reach_the_metric_at_all(blocks):
+    """``pl`` no longer forwards ``covariate`` -- it has no metric arguments to forward.
+
+    This used to check that the covariate guard fired one layer up, because ``pl`` passed
+    ``covariate`` straight into a recompute. Now ``pl`` reads the cache, so the guard is
+    unreachable from here by construction, and the failure mode that IS reachable -- plotting
+    before computing -- has to name the tool to run.
+    """
     _model, adata, _truth = blocks
-    with pytest.raises(ValueError, match="covariate is required"):
-        tcri.pl.mutual_information(adata, return_df=True)
+    import inspect
+
+    sig = inspect.signature(tcri.pl.mutual_information)
+    assert not ({"covariate", "n_samples", "groupby", "splitby", "weighted", "normalize_mode"}
+                & set(sig.parameters)), "a metric argument survived on the plotting layer"
+
+    adata.uns.pop(K.MUTUAL_INFORMATION, None)
+    with pytest.raises(KeyError, match="tcri.tl.mutual_information"):
+        tcri.pl.mutual_information(adata)
 
 
 # ── defects the audit surfaced, each with the number that proves it ──────────

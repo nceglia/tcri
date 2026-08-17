@@ -1,9 +1,15 @@
 """Shared statistics helpers.
 
-Consolidates the significance / AUROC helpers that lived in ``utils`` (used by
-plotting) and adds the posterior-summary primitives the metric layer needs
-(true HDI, equal-tailed interval, signed-direction probability). The metric and
-plotting layers import from here; ``utils`` will drop its copies during adoption.
+The significance / AUROC helpers plus the posterior-summary primitives the metric layer
+needs (true HDI, signed-direction probability).
+
+``auc_and_label_permutation`` and ``bootstrap_auc`` are re-exported as ``tcri.ut.*``. They
+are complementary -- a permutation p-value against shuffled labels, and a bootstrap CI on
+the AUC itself -- and were reachable only through this private module, which is why nothing
+called them.
+
+``eti`` (equal-tailed interval) is gone: it had no caller outside its own unit test, and the
+package reports HDIs. ``hdi`` is the primitive everything actually uses.
 """
 from __future__ import annotations
 
@@ -104,13 +110,6 @@ def bootstrap_auc(scores, labels, pos_label=None, n_boot=5000, seed=42):
 
 
 # ── posterior-summary primitives (metric layer) ──────────────────────────────
-def eti(samples, *, prob: float = 0.94):
-    """Equal-tailed credible interval (percentile). Stable, transform-invariant."""
-    s = np.asarray(samples, float)
-    lo = (1.0 - prob) / 2.0
-    return tuple(np.percentile(s, [100 * lo, 100 * (1 - lo)]))
-
-
 def hdi(samples, *, prob: float = 0.94):
     """True highest-density interval: the *narrowest* window holding ``prob`` mass.
 

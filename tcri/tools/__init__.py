@@ -1,13 +1,18 @@
-"""``tcri.tools`` (``tl``) — the joint-distribution engine + the four metric twins +
-``compare_groups``, all engine-backed (PR6). ``tl`` points here (repointed from the old
-``tcri.metrics`` in PR6); the metrics default to **bits (log2)** and read the unified
-``joint_distribution``.
+"""``tcri.tools`` (``tl``) — the joint-distribution engine + the four metric twins.
+
+Every tool computes once, stores its result under a namespaced ``uns`` key with a ``params``
+provenance block, and returns the same object. ``pl`` reads that cache; it never recomputes.
+
+``compare_groups`` is no longer here. It was a separate user-facing step only because there
+was nowhere to put statistics -- so a contrast meant remembering to call a second function on
+the right frame, and getting the replicate unit right yourself. Now ``splitby`` produces the
+contrast as part of the metric (``stats``), and the contrast math lives in ``_compare`` as an
+internal helper with one caller.
 """
 from ._joint import joint_distribution
 from ._entropy import clonotypic_entropy, phenotypic_entropy
 from ._mutual_information import mutual_information
 from ._flux import phenotypic_flux
-from ._compare import compare_groups
 
 __all__ = [
     "joint_distribution",
@@ -15,5 +20,4 @@ __all__ = [
     "phenotypic_entropy",
     "mutual_information",
     "phenotypic_flux",
-    "compare_groups",
 ]

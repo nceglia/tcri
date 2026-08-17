@@ -134,14 +134,114 @@ def test_phenotypic_flux_over_common_clones(trained_model):
     assert (v >= -1e-9).all() and (v <= 2 + 1e-9).all()  # l1 on the simplex is bounded [0,2]
 
 
+# ── the contrast: internal, and reached through `splitby` ────────────────────
+
+def test_compare_groups_is_not_public():
+    """It was ``tl.compare_groups``: a second function you had to remember to call, on the
+    right frame, having picked the replicate unit yourself. ``splitby`` now produces the
+    contrast as part of the metric, so the separate step has nothing left to do."""
+    assert "compare_groups" not in tcri.tl.__all__
+    assert not hasattr(tcri.tl, "compare_groups")
+    from tcri.tools._compare import compare_groups   # still there, just not a public step
+
+    assert callable(compare_groups)
+
+
+def test_build_stats_delegates_to_the_one_contrast(cohort):
+    """``stats`` is not a second Mann-Whitney implementation — it IS ``compare_groups``.
+
+    Two copies of "rank-test two levels and star the p" is exactly how the ``tl``/``pl``
+    ``distance_metric`` disagreement happened. This asserts they cannot drift: the delta and
+    p in ``stats`` equal what ``compare_groups`` returns on the per-group frame.
+    """
+    from tcri.tools._compare import compare_groups
+
+    _, adata = cohort
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                     splitby="response")
+    stats, result = res["stats"], res["result"]
+
+    per_group = (result.groupby(["patient", "response"], observed=True)["value"]
+                 .mean().reset_index())
+    direct = compare_groups(per_group, value="value", splitby="response").iloc[0]
+    row = stats.iloc[0]
+    assert row["p"] == pytest.approx(float(direct["p"]))
+    assert row["delta"] == pytest.approx(float(direct["delta"]))
+    assert row["stat"] == pytest.approx(float(direct["U"]))
+
+
+def test_stats_carries_the_between_replicate_spread(cohort):
+    """``ci_*`` (across patients) sits beside ``hdi_*`` (across draws, within a patient).
+
+    They are different quantities and are named apart on purpose. Reporting them under one
+    name would make them indistinguishable on sight — and a between-patient interval read as
+    a posterior would badly overstate what the model claims to know.
+    """
+    _, adata = cohort
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                     splitby="response", n_samples=8, random_state=0)
+    row = res["stats"].iloc[0]
+
+    assert row["replicate_unit"] == "patient"
+    assert row["n_a"] == 3 and row["n_b"] == 3
+    for suffix in ("a", "b"):
+        assert row[f"ci_low_{suffix}"] <= row[f"mean_{suffix}"] <= row[f"ci_high_{suffix}"]
+        assert row[f"sd_{suffix}"] > 0
+
+    assert {"hdi_low", "hdi_high"} <= set(res["result"].columns)
+    assert not {"hdi_low", "hdi_high"} & set(res["stats"].columns), (
+        "a within-group posterior interval leaked into the between-replicate slot"
+    )
+
+
+@pytest.mark.parametrize("metric,item_col", [
+    ("phenotypic_entropy", "clonotype"),
+    ("clonotypic_entropy", "phenotype"),
+    ("mutual_information", None),
+])
+def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_col, cohort):
+    """n is the number of PATIENTS, on every metric — including the ones with an item axis.
+
+    This is #66, and the item-bearing metrics are where it actually bites: `result` holds one
+    row per (patient, clone), so handing it straight to a rank test compares hundreds of
+    clones and reports a star off n=6 patients. Checked here on all three because the same
+    assertion on `mutual_information` alone proves nothing — MI has no item axis, so its
+    `result` is already one row per patient and the collapse is a no-op.
+    """
+    _, adata = cohort
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    kwargs = dict(groupby="patient", splitby="response")
+    if metric == "phenotypic_flux":
+        kwargs.update(cov_from=cov, cov_to=cov)
+    else:
+        kwargs["covariate"] = cov
+    res = getattr(tcri.tl, metric)(adata, **kwargs)
+
+    row = res["stats"].iloc[0]
+    assert row["n_a"] == 3 and row["n_b"] == 3, (
+        f"{metric}: n={row['n_a']}/{row['n_b']} is not the 3 patients per arm"
+    )
+    if item_col is not None:
+        n_rows = len(res["result"])
+        assert n_rows > 6, "fixture is too small for this test to discriminate"
+        assert row["n_a"] + row["n_b"] < n_rows, (
+            f"{metric}: the contrast saw {row['n_a'] + row['n_b']} of {n_rows} item rows -- "
+            f"items were not collapsed to groups"
+        )
+
+
 def test_compare_groups_unpaired():
     """Mann–Whitney contrast on a tidy per-unit frame (R vs NR)."""
+    from tcri.tools._compare import compare_groups
+
     df = pd.DataFrame({
         "patient": [f"p{i}" for i in range(8)],
         "response": ["R"] * 4 + ["NR"] * 4,
         "MI": [0.8, 0.75, 0.82, 0.79, 0.4, 0.35, 0.45, 0.5],
     })
-    out = tcri.tl.compare_groups(df, value="MI", splitby="response", reference="NR")
+    out = compare_groups(df, value="MI", splitby="response", reference="NR")
     assert len(out) == 1
     row = out.iloc[0]
     assert {row["group_a"], row["group_b"]} == {"R", "NR"}
@@ -150,14 +250,23 @@ def test_compare_groups_unpaired():
 
 
 def test_compare_groups_paired_direction():
-    """Paired posterior-draw contrast emits p_gt + HDI via prob_direction."""
+    """Paired posterior-draw contrast emits p_gt + HDI via prob_direction.
+
+    NOTE: this branch has no producer — it wants a frame whose cells are draw VECTORS, and
+    no ``tl`` emits that shape. It is kept rather than deleted because ``table`` (one row per
+    group/item/draw) makes a paired posterior contrast genuinely reachable now, and which
+    estimand that should be is a question for the authors. Tracked as an issue.
+    """
+    from tcri.tools._compare import compare_groups
+
     rng = np.random.default_rng(0)
     rows = []
     for u in range(5):
         rows.append({"unit": u, "arm": "A", "v": rng.normal(0.0, 0.1, size=200)})
         rows.append({"unit": u, "arm": "B", "v": rng.normal(0.5, 0.1, size=200)})  # B > A
     df = pd.DataFrame(rows)
-    out = tcri.tl.compare_groups(df, value="v", splitby="arm", reference="A", paired=True, pair_on="unit")
+    out = compare_groups(df, value="v", splitby="arm", reference="A", paired=True,
+                         pair_on="unit")
     assert len(out) == 1
     assert out.iloc[0]["delta"] > 0 and out.iloc[0]["p_gt"] > 0.9  # B-A positive, high direction prob
     assert "hdi_low" in out.columns
