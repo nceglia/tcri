@@ -434,3 +434,55 @@ def test_nothing_connects_two_x_positions(cohort):
             assert xs.max() - xs.min() < 1.0, (
                 f"pl.{name} drew a line spanning x positions {xs.min()}..{xs.max()}"
             )
+
+
+def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
+    """The colour is a property of the level, not of where it lands on this figure.
+
+    Found by looking at rendered panels: the renderer sorts x by median, so a `response`
+    panel where NR sorted first drew NR purple while the panel beside it, where R sorted
+    first, drew R purple. Same variable, same figure, swapped — because `resolve_colors`
+    zipped the stored hex list against the caller's display order.
+    """
+    _, adata = trained_model
+    adata = adata.copy()
+    cats = list(adata.obs["patient"].astype("category").cat.categories)
+
+    forward = tcri.pl.resolve_colors(adata, "patient", cats)
+    reverse = tcri.pl.resolve_colors(adata, "patient", list(reversed(cats)))
+    assert forward == reverse, "the colour followed the order, not the level"
+
+    # a subset must keep each level's colour rather than restarting the cycle
+    subset = tcri.pl.resolve_colors(adata, "patient", cats[1:])
+    assert all(subset[c] == forward[c] for c in cats[1:])
+
+    # and the same holds for a key with no obs column to appeal to
+    a = tcri.pl.resolve_colors(adata, "phenotype", ["x", "y", "z"], persist=False)
+    b = tcri.pl.resolve_colors(adata, "phenotype", ["z", "y", "x"], persist=False)
+    assert a == b
+
+
+def test_the_same_level_keeps_its_colour_across_panels(cohort):
+    """The end-to-end version: two panels of the same split, drawn in different orders."""
+    _, adata = cohort
+    adata = adata.copy()
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+
+    def _colour_by_level(ax):
+        out = {}
+        for coll in ax.collections:
+            for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
+                lvl = ax.get_xticklabels()[int(round(x))].get_text()
+                out.setdefault(lvl, set()).add(matplotlib.colors.to_hex(c).lower())
+        return out
+
+    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="response")
+    first = _colour_by_level(tcri.pl.phenotypic_entropy(adata))
+    tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=rest[0], groupby="patient",
+                            splitby="response")
+    second = _colour_by_level(tcri.pl.phenotypic_flux(adata))
+
+    for level in set(first) & set(second):
+        assert first[level] == second[level], (
+            f"{level!r} was {first[level]} in one panel and {second[level]} in the next"
+        )
