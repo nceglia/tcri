@@ -13,6 +13,8 @@ from ._joint import joint_distribution
 from ._entropy import clonotypic_entropy, phenotypic_entropy
 from ._mutual_information import mutual_information
 from ._flux import phenotypic_flux
+from ._delta import (delta_clonotypic_entropy,
+                     delta_phenotypic_entropy)
 
 __all__ = [
     "joint_distribution",
@@ -20,4 +22,6 @@ __all__ = [
     "phenotypic_entropy",
     "mutual_information",
     "phenotypic_flux",
+    "delta_clonotypic_entropy",
+    "delta_phenotypic_entropy",
 ]

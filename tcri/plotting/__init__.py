@@ -7,6 +7,8 @@ with the frame the caller is holding. Run the ``tl`` twin first.
 from ._entropy import clonotypic_entropy, phenotypic_entropy
 from ._mutual_information import mutual_information
 from ._flux import phenotypic_flux
+from ._delta import (delta_clonotypic_entropy,
+                     delta_phenotypic_entropy)
 from ._colors import NA_COLOR, resolve_colors, tcri_colors
 
 __all__ = [
@@ -14,6 +16,8 @@ __all__ = [
     "phenotypic_entropy",
     "mutual_information",
     "phenotypic_flux",
+    "delta_clonotypic_entropy",
+    "delta_phenotypic_entropy",
     "resolve_colors",
     "tcri_colors",
     "NA_COLOR",

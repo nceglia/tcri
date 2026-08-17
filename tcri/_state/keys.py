@@ -55,6 +55,10 @@ MUTUAL_INFORMATION = "tcri_mutual_information"
 CLONOTYPIC_ENTROPY = "tcri_clonotypic_entropy"
 PHENOTYPIC_ENTROPY = "tcri_phenotypic_entropy"
 PHENOTYPIC_FLUX = "tcri_phenotypic_flux"
+#: The paired (cov_from -> cov_to) forms. Only metrics with an ITEM axis get one -- see the
+#: scope principle: a delta of a repertoire-level scalar is a subtraction, not a metric.
+DELTA_CLONOTYPIC_ENTROPY = "tcri_delta_clonotypic_entropy"
+DELTA_PHENOTYPIC_ENTROPY = "tcri_delta_phenotypic_entropy"
 
 #: The layer recorded by setup_anndata. Previously a bare literal in two places.
 LAYER = "tcri_layer"
