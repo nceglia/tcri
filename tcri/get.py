@@ -26,6 +26,8 @@ __all__ = [
     "clonotypic_entropy",
     "phenotypic_entropy",
     "phenotypic_flux",
+    "delta_clonotypic_entropy",
+    "delta_phenotypic_entropy",
     "table",
 ]
 
@@ -36,6 +38,8 @@ _RESULTS = {
     "clonotypic_entropy": K.CLONOTYPIC_ENTROPY,
     "phenotypic_entropy": K.PHENOTYPIC_ENTROPY,
     "phenotypic_flux": K.PHENOTYPIC_FLUX,
+    "delta_clonotypic_entropy": K.DELTA_CLONOTYPIC_ENTROPY,
+    "delta_phenotypic_entropy": K.DELTA_PHENOTYPIC_ENTROPY,
 }
 
 _PROVENANCE = ("params", "version")
@@ -125,3 +129,11 @@ def phenotypic_entropy(adata, *, key=None, which: str = "result"):
 
 def phenotypic_flux(adata, *, key=None, which: str = "result"):
     return table(adata, "phenotypic_flux", key=key, which=which)
+
+
+def delta_clonotypic_entropy(adata, *, key=None, which: str = "result"):
+    return table(adata, "delta_clonotypic_entropy", key=key, which=which)
+
+
+def delta_phenotypic_entropy(adata, *, key=None, which: str = "result"):
+    return table(adata, "delta_phenotypic_entropy", key=key, which=which)

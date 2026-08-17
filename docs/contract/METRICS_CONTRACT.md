@@ -144,6 +144,21 @@ silent.
   Two uncertainty families coexist and are named apart on purpose — `hdi_*` on `result` is
   the within-group posterior interval over draws; `ci_*` / `sd_*` / `n_*` on `stats` is the
   between-replicate spread of each arm, across groups.
+- **the delta family** — `delta_clonotypic_entropy` and `delta_phenotypic_entropy`:
+  `value(cov_to) − value(cov_from)`, computed **within a posterior draw**, so the summary is
+  of the difference's distribution rather than a difference of summaries. HDIs do not
+  subtract — the interval on a delta is not recoverable from the intervals on its endpoints.
+
+  Only metrics with an **item axis** get one. `mutual_information` has none, so its "delta" is
+  a subtraction of two cached scalars and belongs to the caller (see the scope principle in
+  the API contract).
+
+  The clone set is the **intersection** of clones present at both levels, within each
+  replicate. For `phenotypic_entropy` that decides which rows exist; for `clonotypic_entropy`
+  it constrains the clone set summed over inside H(c\|φ), which makes `log2(C)` identical on
+  both sides so the normalizer cancels. Without it a repertoire contracting 150 → 90 clones
+  reports +0.078 normalized entropy having not redistributed at all. The drop moves `n`, so it
+  warns.
 - **the contrast** — `stats` is a two-sided Mann–Whitney U on the per-group values, with
   stars at 0.05 / 0.01 / 0.001 / 0.0001. Neither document specifies a test; the metrics
   document defines quantities, not comparisons, so this one is ours. Rank-based because the
