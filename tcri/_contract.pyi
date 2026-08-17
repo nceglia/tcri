@@ -102,6 +102,21 @@ class tl:
         device: Any = ...,
             key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
+    # The paired forms. Only the two metrics with an ITEM axis have one: a delta of a
+    # repertoire-level scalar (mutual_information) is a subtraction, not a metric.
+    def delta_clonotypic_entropy(
+        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
+        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
+        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
+        key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
+    def delta_phenotypic_entropy(
+        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
+        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
+        device: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     # compare_groups was here. It is now internal (tools/_compare.py): `splitby` produces the
     # contrast as part of the metric, in the `stats` slot, with the replicate unit already
     # resolved. A separate public step meant the caller picked the replicate unit themselves.
@@ -132,6 +147,16 @@ class pl:
         adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
         show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def delta_clonotypic_entropy(
+        adata: AnnData, *, kind: str = ..., key: Optional[str] = ..., order: Any = ...,
+        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def delta_phenotypic_entropy(
+        adata: AnnData, *, kind: str = ..., key: Optional[str] = ..., order: Any = ...,
+        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def resolve_colors(
         adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,
