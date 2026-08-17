@@ -329,6 +329,44 @@ _(pass 2 — `pl` reading `tcri.get`, `compare_groups` internal, colours, `eti`/
   posterior contrast genuinely reachable now and which estimand it should use is a question
   for the authors. Sankey rebuild; `tcri.ut` star-import with no `__all__`.
 
+## Mark rule + the paired entropies  ·  ✅ done (branches `feat/pl-mark-rule`, `feat/metrics-delta`)
+
+**The mark rule.** A mark shows ONE variance component: within an x position the sample is the
+coarsest unit that varies there, replicate > item > draw. Measured defect it fixes, on
+`phenotypic_entropy(groupby="patient", splitby="response")` — the box and strip described
+**47 clones** while the p-value bracketed above them described **6 patients**. That is the
+pseudoreplication `build_stats` collapses away, surviving in the marks.
+`collapse_to_replicates` is extracted and called by both, so they cannot disagree by
+construction. `_bars` becomes `_points` (a bar's area encodes a magnitude from zero these
+metrics do not have), and draws are drawn as violins rather than summarised into a whisker.
+
+**The paired entropies.** `delta_clonotypic_entropy` and `delta_phenotypic_entropy`:
+`value(cov_to) − value(cov_from)` per item, within a draw. Two functions, not three — MI has
+no item axis, so a "ΔMI" is a subtraction of two cached scalars and belongs to the caller.
+This restores a capability deleted in PR6 whose nominal replacement, `compare_groups`, was on
+a different axis entirely. Support is the intersection within each replicate, which for the
+clonotypic metric also makes `log2(C)` cancel; seeding follows flux so a self-delta is exactly
+0. No `p_gt`. `pl.delta_*(kind="delta"|"endpoints")`, with the endpoints view rendered from the
+delta result so the unmatched version of that figure is unreachable.
+
+- **Tests:** 340 fast, 352 `--runslow` (from 256 on `main` before this run of work). Nine
+  mutations checked across the two branches, each failing exactly its own test.
+- **Rendering the figures found two bugs the tests could not.** `resolve_colors` assigned
+  colour by POSITION, so within one figure `phenotypic_entropy` drew NR purple while
+  `phenotypic_flux` beside it drew R purple — the exact bug that function exists to prevent,
+  missed because the test called it twice with the same order. And the delta endpoints legend
+  read "clones matched: 4" on a 4-phenotype fixture: for a phenotype-item metric the matched
+  clone count is not in `result` at all. Both fixed, both now covered.
+- **Two of my own test bugs, worth recording:** an HDI need NOT contain the mean (it is the
+  narrowest interval holding 94% of the mass, so an outlying draw is excluded from the
+  interval while still pulling the mean — the median is the invariant); and a test asserting a
+  cached key is absent must clear it, since `cohort` is session-scoped and the assertion
+  otherwise passes or fails on file ordering.
+- **Standing Audit:** removals ✅ (`_SELF`/dead `subkey`); deliverables ✅; new tests for the
+  mark rule, the strip unit, the connector prohibition, colour stability and the whole delta
+  family ✅; duplication removed ✅ (one collapse, one contrast, one palette); usability ✅;
+  contract conformance green ✅ (64); contract written BEFORE the code ✅.
+
 ## PR 10 — Public API + scverse CI  ·  ☐ todo
 - **Logged test (from grafiti parity):** once `pl.__all__` exists, add a conformance assertion `set(pl.__all__) == {pl entries in _contract.pyi}` — catches *extra/missing* plot functions (whole-surface), not just signature drift on onboarded ones. (tcri's namespaced `.pyi` checks drift incrementally via `IMPLEMENTED`; this closes the whole-surface gap grafiti gets from its markdown+`__all__` channel.)
 
