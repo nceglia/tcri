@@ -371,9 +371,23 @@ def _size_legend(ax, counts):
 
 
 def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False,
-                 connect=False, key=None, order=None, hue_order=None, palette=None, ax=None,
-                 figsize=(8, 4), save=None, show=None, return_df=False, rotation=90):
-    """Render a cached delta result — the change, or its two endpoints."""
+                 entity_matched=False, key=None, order=None, hue_order=None, palette=None,
+                 ax=None, figsize=(8, 4), save=None, show=None, return_df=False, rotation=90):
+    """Render a cached delta result — the change, or its two endpoints.
+
+    ``entity_matched`` says the ITEM is an entity that persists across the two levels (a
+    clonotype), rather than a category measured twice (a phenotype). It gates two things at
+    once because both are claims about the same fact:
+
+    * connectors — a line asserts "this is the same thing, later";
+    * dot area = matched count — the number of matched CLONES the value rests on.
+
+    The second is not merely cosmetic to gate. For a phenotype-item metric the matched clone
+    count is not in ``result`` at all: those clones were summed over inside ``H(c|phi)``, so
+    counting item rows would count PHENOTYPES and label them "clones matched". Measured on a
+    4-phenotype fixture the legend read "clones matched: 4", which is a different number
+    about a different thing.
+    """
     from .. import get as _get
     from ..tools._common import collapse_to_replicates
 
@@ -401,7 +415,8 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
             ax, f"{name} endpoints need a replicate axis\n(re-run with groupby=)", ylabel),
             save=save, show=show)
 
-    counts = _matched_counts(result, groupby=groupby, item_col=item_col)
+    counts = _matched_counts(result, groupby=groupby,
+                             item_col=item_col) if entity_matched else None
     per = collapse_to_replicates(result, groupby=groupby, value="value_from",
                                  keep=[params.get("splitby")] if params.get("splitby") else [])
     per_to = collapse_to_replicates(result, groupby=groupby, value="value_to")
@@ -414,7 +429,7 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
 
     for i, rep in enumerate(reps):
         y = [per["value_from"].iloc[i], per["value_to"].iloc[i]]
-        if connect:
+        if entity_matched:
             ax.plot([0, 1], y, lw=0.9, c=colours[rep], alpha=0.7, zorder=1,
                     label=CONNECTOR_LABEL)
         s = 60 if sizes is None else sizes[i]

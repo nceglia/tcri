@@ -604,3 +604,24 @@ def test_dot_area_is_the_matched_clone_count(cohort):
         flat = sorted(float(s[0]) for s in per_patient)
         assert flat[0] < flat[-1], "the matched count is not encoded in the area"
     assert ax.get_legend() is not None, "no size legend to read the areas against"
+
+
+def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
+    """The size legend says "clones matched", so it must be clones.
+
+    For `delta_clonotypic_entropy` the item is a phenotype and the matched clone count is not
+    in `result` — those clones were summed over inside H(c|phi). Counting item rows there
+    would count PHENOTYPES: measured on a 4-phenotype fixture the legend read
+    "clones matched: 4", a different number about a different thing.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    _compute_deltas(adata, groupby="patient")
+
+    sized = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    assert sized.get_legend() is not None
+
+    unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
+    assert unsized.get_legend() is None, "a phenotype count was labelled as clones matched"
+    areas = {round(float(s), 6) for c in unsized.collections for s in c.get_sizes()}
+    assert len(areas) == 1, "the phenotype panel encoded a count in the dot area"
