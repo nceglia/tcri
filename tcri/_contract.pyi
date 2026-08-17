@@ -10,6 +10,13 @@ This freezes the public *interface*. Its sibling — ``tcri/model/_model_contrac
 (Supplementary Note 1).
 
 RULES this file encodes:
+- **The scope principle** (api doc, "The scope principle"): a comparison belongs in the API
+  when producing it requires applying a metric at a level this surface does not already
+  expose; when it is arithmetic on values already computed, it belongs to the user. So a
+  metric with an item axis (clone / phenotype) gets cross-covariate functions, and one
+  without gets none — a "delta" of a repertoire-level scalar is a subtraction, not a metric.
+  Corollary: always know what a metric reduces to. If a proposed function cannot name its
+  unit of reduction, that is the signal to re-examine whether it belongs here.
 - Only the KEPT surface is declared. A symbol NOT in this file must NOT be public
   after the refactor (see the Removal Ledger in ``docs/contract/REFACTOR_AGENDA.md``).
 - ``tl``/``pp``/``pl``/``diag``/``ut`` are container classes purely for namespacing

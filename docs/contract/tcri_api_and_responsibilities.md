@@ -4,6 +4,54 @@
 
 ---
 
+## The scope principle — what the package computes, and what it hands over
+
+> **A comparison belongs in the API when producing it requires applying a metric at a level the
+> public surface does not already expose. When the comparison is arithmetic on values the
+> package has already computed, it belongs to the user.**
+
+This is the test for whether a proposed function should exist. It governs §7 and §8 and takes
+precedence over "it would be convenient."
+
+**The two sides.**
+
+*Inside — the package owes the computation.* A per-clone or per-phenotype quantity across two
+covariate levels — `H(φ|c)` at `pre` versus at `post` for the **same** clone — requires the
+metric evaluated inside the engine's draw loop, with clone identity aligned across two covariate
+blocks that hold different row sets. The raw material is reachable
+(`joint_distribution(covariate=None, n_samples=S)["table"]` is clone × phenotype at every level
+for every draw, off one shared draw stack), but turning it into that quantity means the caller
+**reimplementing the metric**: the support handling, the normalizer, the NaN and zero-mass
+conventions. That is re-deriving a frozen definition in notebook code, which the metrics contract
+exists to prevent — a delta computed by different code is not a delta of the same metric. So the
+package must provide it.
+
+*Outside — the package owes the material, not the answer.* A repertoire-level comparison —
+`mutual_information(patient 1, pre)` versus `mutual_information(patient 1, post)` — is a
+subtraction of two numbers already computed, already cached, already at the granularity the
+question asks about. Nothing below the public surface is needed. And everything that makes such a
+comparison *interesting* — how to handle repertoire imbalance between the levels, whether to pin a
+normalizer, which replicates are comparable, which test — is a study-specific analysis decision.
+Pre-empting it in the API imposes one answer on every user.
+
+**The consequence for the payload.** `table` in the cache is not an implementation detail of
+`result`. It **is** the population-level interface: the per-draw, per-item substrate, with
+provenance, that a user builds their own replicate-level comparison on. `result` and `stats` are
+the two reductions the package commits to; anything else is the user's to reduce.
+
+**The test in practice.** A metric with an item axis (clone or phenotype) is defined per item, so
+a cross-covariate comparison of it needs engine access — the API provides it. A metric with no
+item axis is already the repertoire-level number, so a cross-covariate comparison of it is
+subtraction — the user performs it. This is why `phenotypic_flux` and the entropy deltas are
+functions while a "Δ mutual information" is not: MI has no item axis, so it would be a subtraction
+dressed as a metric.
+
+Corollary, and the reason this is worth writing down: **always know what a metric reduces to.**
+It should be a clonotype or a phenotype wherever possible. If a proposed function cannot name its
+unit of reduction, that is the signal to re-examine whether it belongs on this side of the line.
+
+---
+
 ## 0. Conventions, notation, and resolved decisions
 
 ### 0.1 Layout principle
@@ -93,14 +141,26 @@ Additionally, because draws use the **clamped** concentration while the `n_sampl
 
 ### 0.7 Uniform return-shape rule
 
-| `groupby` | `n_samples` | Return |
-|---|---|---|
-| unset | `0` | scalar (MI, single-clone flux) or `Series` (entropies over phenotypes/clones) |
-| unset | `N>0` | draw array with a sample axis **+** summary columns `mean, sd, hdi_low, hdi_high` |
-| set | `0` | tidy `DataFrame`, one row per group [× phenotype / × clone] |
-| set | `N>0` | tidy `DataFrame`, one row per group [× phenotype / × clone] + `mean, sd, hdi_low, hdi_high` |
+**One shape, for every metric and every combination of axes — see §7.10.** `{table, result,
+stats}`, returned *and* stored under `uns[key_added or "tcri_<metric>"]` with a `params` block.
 
-> **`p_gt` fix (blocking).** `p_gt`/`P(>0)` is **removed from every single-metric summary**. Entropy, MI, L1 and KL flux are all **$\ge 0$**, so `P(draw>0) ≈ 1` always and is vacuous. A signed-direction probability is emitted **only** by `tl.compare_groups` on a between-group **difference** $\Delta$ (§7.6), where it is meaningful.
+The table that used to live here gave four different return types keyed on `groupby` × `n_samples`
+(scalar / draw-array+dict / tidy frame / tidy frame + summary), so a caller had to branch on their
+own arguments to read their own result. That is gone.
+
+> **`p_gt` is not a column of `result`.** Entropy, MI, L1 and KL flux are all $\ge 0$, so
+> `P(draw>0) ≈ 1` and the quantity is vacuous on a single metric. It is not restored for the
+> **delta** metrics either, even though there zero *is* a meaningful reference: `p_gt` is a
+> posterior direction probability that reads as a frequentist p-value, its resolution is capped at
+> `1/n_samples` (so `1.0` means "no draw crossed zero", not certainty), and per-item it invites
+> filtering on the survivors. `hdi_low`/`hdi_high` already answer the direction question in the
+> Bayesian idiom — an interval excluding zero — and the graded version is one line off the cached
+> `table` for a caller who wants it, which is the scope principle applied.
+>
+> This keeps exactly one representative per inferential frame: `hdi_*` in `result` (Bayesian,
+> within a replicate, over draws) and `p`/`stars` in `stats` (frequentist, between replicates,
+> over groups). They answer different questions and neither can be dropped without dropping a
+> question — see §7.10.
 
 > **HDI fix.** The interval columns are a **true highest-density interval** (`hdi_low/hdi_high`), i.e. the narrowest interval containing `hdi_prob` mass — **not** the equal-tailed `np.percentile(x,[2.5,97.5])` mislabeled "HDI" in today's code. For the bounded, right-skewed entropy/flux posteriors (mass piled against the boundary for committed clones) the equal-tailed interval is materially wrong. HDIs from few hundred draws near a boundary are documented as unstable.
 
