@@ -18,6 +18,24 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
    Audit Log.
 6. **Usability is a first-class check** — every session ask "is this easier to use than before?"
 
+## What a green suite does not catch
+
+Two bugs shipped through a green suite and were found only by **rendering the figures and
+looking at them** (#80, #81):
+
+- `resolve_colors` assigned colour by POSITION, not level. Within one figure,
+  `phenotypic_entropy` drew NR purple while `phenotypic_flux` beside it drew R purple. The
+  existing test called it twice with the same order, so the property it was written to protect
+  was never actually exercised.
+- the delta endpoints size legend read "clones matched: 4" on a 4-phenotype fixture. For a
+  phenotype-item metric the matched clone count is not in `result` at all.
+
+Both were in code written specifically to prevent those failures. That is the point worth
+keeping: **the suite verified the structure, and the structure was right.** The values flowing
+through it were wrong in a way no shape assertion can see. Where a function's output is a
+figure, the figure is the artifact under test — render it and look before calling the work
+done, and add the discriminating assertion once you know what to assert.
+
 ## Standing Audit (run after each PR — copy into the diary entry)
 - [ ] **Removed everything slated?** (cross-check the Removal Ledger; `__all__` + import-sites clean; `import tcri` green)
 - [ ] **Added everything wanted?** (the PR's deliverables all present)
@@ -25,6 +43,8 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 - [ ] **Streamline:** any duplication / dead branch / needless complexity spotted? Removed or logged?
 - [ ] **Usability:** simpler signatures / clearer errors / fewer steps than before?
 - [ ] **Contract conformance green?** (`test_contract_conformance`)
+- [ ] **If the change affects a figure, RENDER IT and look.** See "What a green suite does not
+      catch" above — twice now, a green suite passed a plot that was visibly wrong.
 - [ ] Diary entry written; ledger + statuses updated.
 
 ## Status legend: ☐ todo · ◐ in progress · ✅ done · ⚠ blocked
@@ -47,6 +67,16 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 ## Repo cleanup  ·  ☐ todo (its own pass — do NOT fold into a feature PR)
 
 Deliberately deferred; collected here so it stops accreting.
+
+- **Re-audit the Phase 5/6 removal ticks.** `tl.delta_clonotypic_entropy` and
+  `tl.delta_entropy_table` were ticked under *"delete WITH replacement, never before"* against
+  `compare_groups` — which contrasts between GROUPS on a tidy frame and cannot compute a metric
+  at two covariate levels. The replacement was on a different axis, so nothing replaced them,
+  and the capability was gone for four PRs until #81 rebuilt it. **The rule was right; the tick
+  was wrong.** Nobody checked that the named replacement covered the same axis, only that
+  something was named. Skim the remaining Phase 5/6 ticks for the same failure mode —
+  `mi_compare` -> `compare_groups` and `flux_table` -> `tl.phenotypic_flux` are the two worth
+  re-reading, and a tick should have to say *what* it replaces, not just *with what*.
 
 - **Rename `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`.** It is the only one of the
   four contracts not named for what it is — its siblings are `MODEL_CONTRACT.md`,
