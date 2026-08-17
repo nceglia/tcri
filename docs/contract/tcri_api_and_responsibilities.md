@@ -761,10 +761,24 @@ issue; `_sankey.py` (§8.4) is its unused drawing primitives.
 
 | Signature | Responsibility |
 |---|---|
-| `render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None, ...)` | The shared cache renderer every twin delegates to. Reads `tcri.get.result`/`params`, picks the x axis from the cached `groupby`/`splitby`, routes colours through `resolve_colors`, and brackets `stats` when x IS the split. Takes **no** metric arguments and never calls `tl`. |
-| `_boxstrip(...)` / `_bars(...)` | Box+strip over groups; bars with the posterior HDI as an error bar when there are no groups to box. |
-| `_annotate_contrasts(ax, stats, levels)` | Bracket + stars per contrast, drawn only where `stats` has a row for that exact pair of x levels. |
+| `render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None, ...)` | The shared cache renderer every twin delegates to. Reads `tcri.get.result`/`params`, picks the x axis from the cached `groupby`/`splitby`, applies the mark rule, routes colours through `resolve_colors`, and brackets `stats` when x IS the split. Takes **no** metric arguments and never calls `tl`. |
+| `_sample_unit(frame, table, *, x, groupby, item_col)` | **The mark rule.** Returns the coarsest unit that varies within an x position — `replicate` > `item` > `draw`, or `None`. One variance component per mark. |
+| `_boxstrip(...)` | Box + strip. Reached when replicates or items are the sample; items are collapsed to replicates first via `collapse_to_replicates`, the same function `build_stats` uses. |
+| `_violins(...)` | Violin over the draw distribution, read from `table`. Reached only when draws are the coarsest varying unit, so a violin can never span replicates. |
+| `_points(...)` | The floor: one point per x with the HDI as an error bar, when nothing varies. A point rather than a bar because a bar's area encodes a magnitude from zero these metrics do not have. |
+| `_annotate_contrasts(ax, stats, levels)` | Bracket + stars per contrast, drawn only where `stats` has a row for that exact pair of x levels. Bracket artists carry `BRACKET_LABEL` so the connector guard can tell them from a matched-identity line. |
 | `_finish(fig, ax, *, save=None, show=None)` | scanpy-style show/save/return finalizer. |
+
+**The mark rule (§8.5).** A mark shows ONE variance component; within an x position the sample
+is the coarsest unit that varies there. Pooling draws across replicates would render 6 patients
+× 100 draws as 600 samples — the pseudoreplication `build_stats` collapses away, drawn as a
+picture. Measured before the fix, on `phenotypic_entropy(groupby="patient", splitby="response")`:
+the box and strip described **47 clones** while the p-value bracketed above them described
+**6 patients**.
+
+**Connecting lines** are drawn only between points sharing an identity across the compared
+levels — never from adjacency. A line asserts the two points are the same entity observed
+twice, which is a claim only matched data supports.
 
 ### 8.6 `plotting/_colors.py`
 
