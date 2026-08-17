@@ -5,14 +5,10 @@
 # **8 patients**, each sampled **pre** and **post** treatment, split into
 # **responders (R)** and **non-responders (NR)**.
 #
-# The cohort is built so the truth is known in advance:
+# The two arms are constructed to differ, so the figures have something to show:
 #
 # * **R patients** start diffuse and end sharply coupled — clones commit to phenotypes.
 # * **NR patients** start diffuse and stay that way.
-#
-# So clone↔phenotype mutual information should *rise* pre→post in R and barely move in NR,
-# and the paired entropies should show R clones becoming less plastic. Nothing below is
-# tuned to make that come out; if the package is right, it falls out.
 #
 # Run as a script (`python examples/end_to_end_workflow.py`) or open as a notebook — the
 # `# %%` markers are jupytext cells. Figures land in `examples/end_to_end_figures/`.
@@ -48,14 +44,13 @@ SEED = 0
 # %% [markdown]
 # ## 1. Build the cohort
 #
-# The truth has to be *in* the data, and getting this right took a correction worth stating:
-# simulating each timepoint independently and giving the two runs matching clone names does
-# **not** produce paired clones. The ids line up, but the underlying clone→phenotype
-# relationship is unrelated between the runs, so there is no "clone *c* became more
-# committed" to find — only two unrelated draws.
+# Simulating each timepoint independently and giving the two runs matching clone names does
+# **not** produce paired clones: the ids line up, but the underlying clone→phenotype
+# relationship is unrelated between the runs. Since half this workflow is about *paired*
+# quantities, the construction matters.
 #
-# Instead, each patient is simulated **once** (fixing that patient's clone→phenotype
-# structure), and the two timepoints are drawn from that one population:
+# Each patient is simulated **once** (fixing that patient's clone→phenotype structure), and
+# the two timepoints are drawn from that one population:
 #
 # * **pre** — an unbiased sample.
 # * **post** — a sample *enriched* for each clone's dominant phenotype. Strongly for
@@ -115,25 +110,6 @@ def build_cohort():
 adata = build_cohort()
 print(f"{adata.n_obs} cells x {adata.n_vars} genes")
 print(adata.obs.groupby(["response", "timepoint"], observed=True).size().to_frame("cells").T)
-
-# The truth, straight off the labels — no model involved. Computed PER PATIENT and then
-# averaged, because that is how `tl.mutual_information(groupby="patient")` computes it.
-# Pooling an arm's patients first would mix clones across patients and inflate the MI, and
-# comparing that against a per-patient estimate would be a unit mismatch, not a benchmark.
-from tcri.datasets import mi_from_joint_oracle
-
-rows = []
-for (patient, arm, tp), g in adata.obs.groupby(["patient", "response", "timepoint"],
-                                               observed=True):
-    ct = pd.crosstab(g["clone_id"], g["phenotype"]).to_numpy(float)
-    rows.append({"patient": patient, "response": arm, "timepoint": tp,
-                 "nmi": mi_from_joint_oracle(ct)["nmi_min"]})
-truth_per_patient = pd.DataFrame(rows)
-truth = (truth_per_patient.groupby(["response", "timepoint"], observed=True)["nmi"].mean()
-         .unstack("timepoint"))
-truth["change"] = truth["post"] - truth["pre"]
-print("\nground truth from the labels alone (per patient, then averaged):")
-print(truth.round(4).to_string())
 
 # %% [markdown]
 # ## 2. Register and train
@@ -208,7 +184,7 @@ null = tcri.diag.permutation_null(adata, metric="mutual_information", covariate=
 print("\npermutation null (one row per covariate level):")
 print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
       .round(4).to_string(index=False))
-null_mean = float(null["null_mean"].iloc[0])
+# `observed` is the empirical MI on the real labels; `null_mean` is what shuffling gives.
 
 # %% [markdown]
 # ## 4. `tl` — compute once, cached with provenance
@@ -257,9 +233,19 @@ tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient",
                         splitby="response", distance_metric="kl",
                         n_samples=60, random_state=SEED)
 
-# `key_added` keeps a second result side by side rather than replacing the first
+# A second call REPLACES the cached result (the scanpy convention). `key_added` is how you
+# keep both side by side instead -- here, the same metric at the other timepoint.
 tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="response",
                            n_samples=100, random_state=SEED, key_added="mi_pre")
+
+pre_vs_post = pd.concat([
+    tcri.get.result(adata, "mutual_information", key="mi_pre")["result"].assign(timepoint="pre"),
+    mi_post["result"].assign(timepoint="post"),
+])
+print("\nboth timepoints, from two cached results:")
+print(pre_vs_post.groupby(["response", "timepoint"], observed=True)["value"]
+      .mean().unstack("timepoint").round(4).to_string())
+# ...and `pl` renders either one: pass the same `key` you stored it under.
 
 # %% [markdown]
 # ### Reading results back
@@ -299,6 +285,8 @@ tcri.pl.phenotypic_entropy(adata, ax=axes[1, 0])
 axes[1, 0].set_title("phenotypic_entropy — one value per CLONE", fontsize=10)
 tcri.pl.phenotypic_flux(adata, ax=axes[1, 1])
 axes[1, 1].set_title("phenotypic_flux — how far clones moved pre -> post", fontsize=10)
+# `key=` renders a non-default result -- the pre-treatment MI stored above:
+#     tcri.pl.mutual_information(adata, key="mi_pre")
 fig.suptitle("The four metric twins", fontsize=13, y=0.99)
 fig.tight_layout()
 fig.savefig(FIGS / "2_metrics.png", dpi=130, bbox_inches="tight")
@@ -361,55 +349,6 @@ axes[1, 1].set_title("no lines — a phenotype is a bin,\nnot a barcode", fontsi
 fig.suptitle("The paired entropies (pre -> post)", fontsize=13, y=0.99)
 fig.tight_layout()
 fig.savefig(FIGS / "3_deltas.png", dpi=130, bbox_inches="tight")
-
-# %% [markdown]
-# ## 7. Truth vs estimate
-#
-# The cohort was built with responders sharpening and non-responders flat. Nothing above was
-# tuned to produce that, so this is a fair, if small, benchmark.
-
-# %%
-mi_pre = tcri.get.result(adata, "mutual_information", key="mi_pre")["result"]
-est = (pd.concat([mi_pre.assign(timepoint="pre"),
-                  mi_post["result"].assign(timepoint="post")])
-       .groupby(["response", "timepoint"], observed=True)["value"].mean()
-       .unstack("timepoint"))
-est["change"] = est["post"] - est["pre"]
-
-comparison = truth.join(est, lsuffix=" (truth)", rsuffix=" (model)")
-print(comparison[["pre (truth)", "pre (model)", "post (truth)", "post (model)",
-                  "change (truth)", "change (model)"]].round(4).to_string())
-
-r_t, r_m = float(truth.loc["R", "change"]), float(est.loc["R", "change"])
-nr_t, nr_m = float(truth.loc["NR", "change"]), float(est.loc["NR", "change"])
-print(f"\ndirection: R moves more than NR in the truth ({r_t:+.3f} vs {nr_t:+.3f}) "
-      f"and in the estimate ({r_m:+.3f} vs {nr_m:+.3f}) -> "
-      f"{'recovered' if (r_m > nr_m) == (r_t > nr_t) else 'NOT recovered'}")
-print(f"magnitude: the estimate captures {100 * r_m / r_t:.0f}% of the true R change.")
-
-# %% [markdown]
-# **Read that second number carefully.** On this fixture the *direction* is recovered and the
-# *magnitude* is heavily attenuated. Both are worth knowing, and the attenuation is not a
-# defect to be explained away — it has at least four candidate sources, and this example is
-# far too small to separate them:
-#
-# 1. **Structural shrinkage.** In the model (Note 1 eq 2), a clone's phenotype distribution at
-#    each covariate, `ϕ_(c,m)`, is drawn around a *single* clone-level `ω_c` shared across
-#    covariates: `ϕ_m | ω ~ Dir(β·ω)`. The hierarchy actively pulls a clone's pre and post
-#    toward each other, with `β` (`local_scale`) setting how hard. A within-clone change is
-#    therefore shrunk by construction, and how much is a property of the fitted `β`.
-# 2. **Estimator.** At `n_samples>0` tcri reports `E_s[NMI(J_s)]`, which is not the NMI of the
-#    posterior mean — an open question in the metrics contract
-#    (`OPEN_QUESTIONS['posterior_summary_of_a_nonlinear_metric']`).
-# 3. **Fit.** 150 epochs on 4160 cells, with a calibration ECE of ~0.18 — the classifier is
-#    not sharp, and a soft phenotype assignment blurs the joint the metric reads.
-# 4. **Ceiling.** The empirical NMI here is computed on hard labels; the model's is computed on
-#    a posterior over soft assignments, and the two are not the same quantity.
-#
-# The honest summary for this run: **tcri orders the arms correctly and separates both from
-# the permutation null by a wide margin, while under-reporting the size of the change.** If
-# you need calibrated effect sizes rather than rankings, that gap is the thing to characterise
-# first — on a real dataset, at a real training budget, with `β` swept.
 
 # %%
 print(f"figures written to {FIGS}")
