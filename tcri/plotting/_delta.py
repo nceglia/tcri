@@ -25,12 +25,15 @@ def delta_clonotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_o
                              return_df=False):
     """ΔH[P(c|φ)] per phenotype, from the cached ``tl.delta_clonotypic_entropy``.
 
-    No connecting lines in the ``"endpoints"`` view: the item is a phenotype, a category
-    measured twice rather than an entity that persisted, and a line asserts persistence.
+    No connecting lines in the ``"endpoints"`` view, and no matched-count sizing: the item is a
+    phenotype, a category measured twice rather than an entity that persisted. A line would
+    assert persistence, and the matched CLONE count is not in this result at all — those clones
+    were summed over inside H(c|phi), so sizing by item rows would size by phenotype.
     """
     return render_delta(adata, "delta_clonotypic_entropy",
                         ylabel="Δ clonotypic entropy (bits)", item_col="phenotype",
-                        item_as_x=True, connect=False, kind=kind, key=key, order=order,
+                        item_as_x=True, entity_matched=False, kind=kind, key=key,
+                        order=order,
                         hue_order=hue_order, palette=palette, ax=ax, figsize=figsize,
                         save=save, show=show, return_df=return_df)
 
@@ -47,6 +50,7 @@ def delta_phenotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_o
     """
     return render_delta(adata, "delta_phenotypic_entropy",
                         ylabel="Δ phenotypic entropy (bits)", item_col="clonotype",
-                        connect=True, kind=kind, key=key, order=order, hue_order=hue_order,
+                        entity_matched=True, kind=kind, key=key, order=order,
+                        hue_order=hue_order,
                         palette=palette, ax=ax, figsize=figsize, save=save, show=show,
                         return_df=return_df)
