@@ -80,14 +80,21 @@ def test_stars_thresholds():
     assert S.stars(0.2) == "ns"
 
 
-def test_hdi_hugs_skew_and_matches_eti_on_symmetric():
+def test_hdi_hugs_skew():
+    """The HDI must be narrower than the equal-tailed interval on a skewed sample.
+
+    `eti` is deleted -- it had no caller outside this test, and every interval the package
+    reports is an HDI. The comparison is kept by computing the equal-tailed bound inline,
+    which is one line of numpy and keeps the property under test without keeping an API.
+    """
     x = np.array([0, 0, 0, 0, 0.1, 0.2, 5.0])
     hlo, hhi = S.hdi(x, prob=0.8)
-    elo, ehi = S.eti(x, prob=0.8)
+    elo, ehi = np.percentile(x, [10, 90])
     assert (hhi - hlo) <= (ehi - elo)          # HDI no wider than ETI on skew
     assert hhi < ehi                            # and it excludes the far tail
+
     g = np.random.default_rng(0).normal(size=20000)
-    assert np.allclose(S.hdi(g, prob=0.94), S.eti(g, prob=0.94), atol=0.08)
+    assert np.allclose(S.hdi(g, prob=0.94), np.percentile(g, [3, 97]), atol=0.08)
 
 
 def test_prob_direction():

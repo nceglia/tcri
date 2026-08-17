@@ -1,5 +1,6 @@
 import contextlib
 import io
+import logging
 
 import pytest
 import numpy as np
@@ -184,4 +185,58 @@ def trained_model(synthetic_adata):
             enable_model_summary=False,
         )
         model.to_anndata(adata)
+    return model, adata
+
+
+#: (patient, response, omega_concentration). Low omega => sharp clone->phenotype coupling.
+#: THREE patients per arm, not one. A contrast needs replicates: with one patient per arm a
+#: Mann-Whitney returns p=1.0 whatever the data says, so nothing downstream of `splitby` --
+#: the star, the bracket, the n that proves the unit is the patient -- is testable at all.
+COHORT = (
+    ("P0", "R", 0.15), ("P1", "R", 0.20), ("P2", "R", 0.25),
+    ("P3", "NR", 1.20), ("P4", "NR", 1.50), ("P5", "NR", 1.80),
+)
+
+
+@pytest.fixture(scope="session")
+def cohort():
+    """A fitted 6-patient / 2-arm AnnData: the smallest thing that can carry a contrast.
+
+    Returns ``(model, adata)``. Clone ids are patient-scoped, which is what makes ``groupby``
+    legal -- the metric restricts by clone, so a clone spanning patients would let one
+    patient's estimate absorb another's cells.
+    """
+    import anndata as ad
+    import pyro
+
+    from tcri.datasets import simulate_tcri
+    from tcri.model._model import TCRIModel
+
+    logging.disable(logging.INFO)
+    parts = []
+    for i, (patient, response, omega) in enumerate(COHORT):
+        block = simulate_tcri(n_clones=8, n_phenotypes=4, n_genes=25, n_cells=200,
+                              n_covariates=2, omega_concentration=omega, seed=i)
+        block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
+        block.obs["patient"] = patient
+        block.obs["response"] = response
+        block.obs_names = [f"{patient}_{j}" for j in range(block.n_obs)]
+        parts.append(block)
+
+    adata = ad.concat(parts, join="outer", label=None)
+    for col in ("clone_id", "phenotype", "covariate", "patient", "response"):
+        adata.obs[col] = adata.obs[col].astype("category")
+    adata.layers["counts"] = adata.X.copy()
+
+    pyro.clear_param_store()
+    TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                            phenotype_key="phenotype", covariate_key="covariate",
+                            batch_key="patient", replicate="patient")
+    model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
+                      classifier_hidden=16, K=4, seed=0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.train(max_epochs=10, batch_size=128, n_steps_kl_warmup=8, accelerator="cpu",
+                    enable_progress_bar=False, enable_model_summary=False)
+        model.to_anndata(adata)
+    logging.disable(logging.NOTSET)
     return model, adata

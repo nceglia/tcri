@@ -368,33 +368,40 @@ def build_stats(result, *, groupby, splitby, value="value"):
     contrast is over groups. That is what makes pseudoreplication structurally impossible here:
     15 clones from 2 patients contribute n=2, not n=15, because there are only 2 group rows to
     compare. The old path handed all 15 rows to a Mann-Whitney and returned p=0.040 with a star.
+
+    The contrast math itself is NOT here -- it is ``_compare.compare_groups``, so the package
+    has one implementation of "Mann-Whitney two levels and star the p". This function owns the
+    part that is specific to a metric result: collapsing items to groups first, and attaching
+    the between-replicate spread of each arm.
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
-    from .._stats import mann_whitney, stars
+    from ._compare import compare_groups
 
+    # THE pseudoreplication step. Everything after this sees one number per group.
     per_group = (result.groupby([groupby, splitby], observed=True, dropna=False)[value]
                  .mean().reset_index())
 
+    contrasts = compare_groups(per_group, value=value, splitby=splitby)
+    if contrasts is None or not len(contrasts):
+        return None
+
     rows = []
-    levels = [lv for lv in per_group[splitby].dropna().unique().tolist()]
-    for i, a in enumerate(levels):
-        for b in levels[i + 1:]:
-            va = per_group.loc[per_group[splitby] == a, value].to_numpy(dtype=float)
-            vb = per_group.loc[per_group[splitby] == b, value].to_numpy(dtype=float)
-            va, vb = va[np.isfinite(va)], vb[np.isfinite(vb)]
-            row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
-                   "n_a": int(va.size), "n_b": int(vb.size),
-                   "replicate_unit": groupby,
-                   "mean_a": float(va.mean()) if va.size else np.nan,
-                   "mean_b": float(vb.mean()) if vb.size else np.nan}
-            row["delta"] = row["mean_b"] - row["mean_a"]
-            if va.size and vb.size:
-                stat, p = mann_whitney(va, vb)
-                row.update(stat=float(stat), p=float(p), stars=stars(p))
-            else:
-                row.update(stat=np.nan, p=np.nan, stars="")
-            rows.append(row)
+    for _, c in contrasts.iterrows():
+        a, b = c["group_a"], c["group_b"]
+        row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b, "replicate_unit": groupby}
+        for suffix, level in (("a", a), ("b", b)):
+            arm = across_groups(per_group.loc[per_group[splitby] == level, value])
+            row[f"mean_{suffix}"] = arm["value"]
+            row[f"sd_{suffix}"] = arm["sd"]
+            row[f"ci_low_{suffix}"] = arm["ci_low"]
+            row[f"ci_high_{suffix}"] = arm["ci_high"]
+            row[f"n_{suffix}"] = arm["n_groups"]
+        row["delta"] = float(c["delta"])
+        row["stat"] = float(c["U"])
+        row["p"] = float(c["p"])
+        row["stars"] = c["stars"]
+        rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
