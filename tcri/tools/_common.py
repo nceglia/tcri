@@ -360,6 +360,31 @@ def build_result(table, *, value="value"):
     return pd.DataFrame(rows)
 
 
+def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep=()):
+    """One row per replicate: the item axis averaged away.
+
+    THE pseudoreplication step, and it is a shared function rather than a line inside
+    ``build_stats`` because the PLOT has to make exactly the same collapse. It did not: with
+    ``phenotypic_entropy(groupby='patient', splitby='response')`` the box and strip were drawn
+    from ``result`` directly -- 47 clone dots -- while the p-value beneath them came from 6
+    patients. The figure and the statistic described different units, which is the same defect
+    ``build_stats`` exists to prevent, surviving in the marks.
+
+    Keeping one implementation is the point: the marks and the test cannot disagree about the
+    replicate unit if they are the same collapse.
+
+    ``keep`` names further label columns to preserve -- the plotting layer passes whatever it
+    is about to put on x and hue, since collapsing away an axis it is drawing would silently
+    drop the split (measured: the ``response`` hue vanished from the clonotypic-entropy panel).
+    """
+    if result is None or not len(result) or groupby is None or groupby not in result.columns:
+        return result
+    keys = [c for c in (groupby, splitby, *keep) if c and c in result.columns]
+    keys = list(dict.fromkeys(keys))
+    return (result.groupby(keys, observed=True, dropna=False)[value]
+            .mean().reset_index())
+
+
 def build_stats(result, *, groupby, splitby, value="value"):
     """The between-split contrast, or ``None`` when ``splitby`` is not set.
 
@@ -378,9 +403,9 @@ def build_stats(result, *, groupby, splitby, value="value"):
         return None
     from ._compare import compare_groups
 
-    # THE pseudoreplication step. Everything after this sees one number per group.
-    per_group = (result.groupby([groupby, splitby], observed=True, dropna=False)[value]
-                 .mean().reset_index())
+    # THE pseudoreplication step. Everything after this sees one number per group. Shared with
+    # the plotting layer so the marks cannot describe a different unit from the p-value.
+    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
     contrasts = compare_groups(per_group, value=value, splitby=splitby)
     if contrasts is None or not len(contrasts):
