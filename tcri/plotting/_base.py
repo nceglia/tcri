@@ -228,7 +228,8 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation):
 
 def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None,
                   order=None, hue_order=None, palette=None, ax=None, figsize=(8, 4),
-                  save=None, show=None, return_df=False, annotate=True, rotation=90):
+                  save=None, show=None, return_df=False, annotate=True, rotation=90,
+                  decorate=None):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
@@ -307,8 +308,140 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
                 rotation=0 if single else rotation)
         _order = d[x].astype(str).tolist()
 
+    if decorate is not None:
+        decorate(ax)
     if single or x == "_all":
         ax.set_xlabel("")
     if annotate and x == splitby:
         _annotate_contrasts(ax, stats, _order)
+    return _finish(fig, ax, save=save, show=show)
+
+
+# ── the delta family ─────────────────────────────────────────────────────────
+
+#: Connectors carry this so the "nothing spans two x positions" guard can tell a
+#: matched-identity line from a claim made out of adjacency.
+CONNECTOR_LABEL = "_tcri_matched"
+
+
+def _zero_rule(ax):
+    """Zero is a real position on a delta axis, so mark it."""
+    ax.axhline(0.0, lw=0.8, ls="--", c="0.45", zorder=0, label=BRACKET_LABEL)
+
+
+def _matched_counts(result, *, groupby, item_col):
+    """Clones matched per replicate — the n each replicate's value rests on.
+
+    Derived, not stored: the intersection already decided which rows exist, so counting them
+    is the count. It varies per replicate (one patient may match 240 of 300, another 30 of
+    400), which is why it is encoded per point rather than stated once in a title.
+    """
+    if groupby is None or groupby not in result.columns or item_col not in result.columns:
+        return None
+    return result.groupby(groupby, observed=True)[item_col].nunique()
+
+
+def _sizes_from(counts, labels, *, lo=25.0, hi=190.0):
+    """Marker AREA proportional to the matched count, clamped to a legible band.
+
+    `s` is already area in points^2, so proportionality is perceptually right; the clamp stops
+    a 400-clone replicate from swallowing a 12-clone one at 33x the area.
+    """
+    n = np.array([counts.get(l, np.nan) for l in labels], dtype=float)
+    if not np.isfinite(n).any():
+        return None, None
+    lo_n, hi_n = np.nanmin(n), np.nanmax(n)
+    if not np.isfinite(lo_n) or hi_n <= lo_n:
+        return np.full(len(n), (lo + hi) / 2), n
+    return lo + (hi - lo) * (n - lo_n) / (hi_n - lo_n), n
+
+
+def _size_legend(ax, counts):
+    """Three reference dots spanning the observed range, labelled with real counts."""
+    vals = np.array(sorted(set(int(v) for v in counts.values if np.isfinite(v))), dtype=float)
+    if vals.size == 0:
+        return
+    picks = np.unique(np.percentile(vals, [0, 50, 100]).round().astype(int))
+    sizes, _ = _sizes_from(counts, list(counts.index))
+    lut = dict(zip(counts.values.astype(int), sizes))
+    handles = [plt.scatter([], [], s=lut.get(int(v), 60), c="0.6", edgecolor="black",
+                           linewidth=.3, label=str(int(v))) for v in picks]
+    ax.legend(handles=handles, title="clones matched", bbox_to_anchor=(1.02, 1.0),
+              loc="upper left", frameon=False, fontsize=8, title_fontsize=8, labelspacing=1.1)
+
+
+def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False,
+                 entity_matched=False, key=None, order=None, hue_order=None, palette=None,
+                 ax=None, figsize=(8, 4), save=None, show=None, return_df=False, rotation=90):
+    """Render a cached delta result — the change, or its two endpoints.
+
+    ``entity_matched`` says the ITEM is an entity that persists across the two levels (a
+    clonotype), rather than a category measured twice (a phenotype). It gates two things at
+    once because both are claims about the same fact:
+
+    * connectors — a line asserts "this is the same thing, later";
+    * dot area = matched count — the number of matched CLONES the value rests on.
+
+    The second is not merely cosmetic to gate. For a phenotype-item metric the matched clone
+    count is not in ``result`` at all: those clones were summed over inside ``H(c|phi)``, so
+    counting item rows would count PHENOTYPES and label them "clones matched". Measured on a
+    4-phenotype fixture the legend read "clones matched: 4", which is a different number
+    about a different thing.
+    """
+    from .. import get as _get
+    from ..tools._common import collapse_to_replicates
+
+    if kind not in ("delta", "endpoints"):
+        raise ValueError(f"kind must be 'delta' or 'endpoints', got {kind!r}")
+
+    payload = _get.result(adata, name, key=key)
+    params = _get.params(adata, name, key=key)
+    result = payload["result"]
+    if return_df:
+        return result
+
+    if kind == "delta":
+        return render_metric(adata, name, ylabel=ylabel, item_col=item_col,
+                             item_as_x=item_as_x, key=key, order=order, hue_order=hue_order,
+                             palette=palette, ax=ax, figsize=figsize, save=save, show=show,
+                             annotate=True, rotation=rotation,
+                             decorate=_zero_rule)
+
+    # ── the endpoints view ──────────────────────────────────────────────────
+    groupby = params.get("groupby")
+    fig, ax = _axes(ax, figsize)
+    if groupby is None or groupby not in result.columns:
+        return _finish(fig, _empty(
+            ax, f"{name} endpoints need a replicate axis\n(re-run with groupby=)", ylabel),
+            save=save, show=show)
+
+    counts = _matched_counts(result, groupby=groupby,
+                             item_col=item_col) if entity_matched else None
+    per = collapse_to_replicates(result, groupby=groupby, value="value_from",
+                                 keep=[params.get("splitby")] if params.get("splitby") else [])
+    per_to = collapse_to_replicates(result, groupby=groupby, value="value_to")
+    per = per.merge(per_to, on=groupby)
+
+    levels = [str(params["cov_from"]), str(params["cov_to"])]
+    reps = per[groupby].astype(str).tolist()
+    colours = _colors_for(adata, groupby, reps, palette)
+    sizes, _n = _sizes_from(counts, reps) if counts is not None else (None, None)
+
+    for i, rep in enumerate(reps):
+        y = [per["value_from"].iloc[i], per["value_to"].iloc[i]]
+        if entity_matched:
+            ax.plot([0, 1], y, lw=0.9, c=colours[rep], alpha=0.7, zorder=1,
+                    label=CONNECTOR_LABEL)
+        s = 60 if sizes is None else sizes[i]
+        # one replicate, one size: the matched clone set is the SAME on both sides, so a
+        # difference between a replicate's two dots would mean the intersection did not hold
+        ax.scatter([0, 1], y, s=[s, s], color=colours[rep], edgecolor="black",
+                   linewidth=0.3, zorder=3)
+
+    ax.set_xticks([0, 1]); ax.set_xticklabels(levels, rotation=0)
+    ax.set_xlim(-0.4, 1.4)
+    ax.set_ylabel(ylabel.replace("Δ ", "").replace(" (bits)", " (bits)"))
+    ax.set_xlabel(params.get("groupby") and "")
+    if counts is not None:
+        _size_legend(ax, counts)
     return _finish(fig, ax, save=save, show=show)

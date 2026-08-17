@@ -626,7 +626,7 @@ dispatched through `_distance` (§3.4): `"l1"` (default, bounded $[0,2]$), `"kl"
 
 `__all__ = ["phenotypic_flux"]`
 
-### 7.6 `tools/_compare.py` — `compare_groups` (public group-comparison orchestrator)
+### 7.6 `tools/_compare.py` — `compare_groups` (INTERNAL: the one contrast implementation)
 
 ```python
 compare_groups(
@@ -646,9 +646,64 @@ compare_groups(
 - **Unpaired point estimates:** Mann–Whitney $U$ + two-sided $p$ (`_stats.mann_whitney`), group means, and $\Delta=\text{mean}_B-\text{mean}_A$.
 - **Paired posterior draws** (`paired=True`, one draw vector per group per unit, aligned by `sample_id`): the signed difference $\Delta^{(s)}=\text{metric}_B^{(s)}-\text{metric}_A^{(s)}$, then `mean(Δ)`, `hdi(Δ)`, and **`p_gt`/`p_lt` via `prob_direction`** — the **only** place a direction probability is emitted (§0.7).
 
-**Return.** Tidy DataFrame, one row per contrast: `group_a, group_b, mean_a, mean_b, delta, U, p, p_gt, hdi_low, hdi_high, stars`. Recreates `mi_compare`'s per-pair output exactly.
+**Return.** Tidy DataFrame, one row per contrast: `group_a, group_b, mean_a, mean_b, delta, U, p, p_gt, hdi_low, hdi_high, stars`.
 
-`tools/__init__.py __all__ = ["joint_distribution", "clonotypic_entropy", "phenotypic_entropy", "mutual_information", "phenotypic_flux", "compare_groups"]`
+**NOT PUBLIC.** It was `tl.compare_groups` — a second function you had to remember to call, on
+the right frame, having picked the replicate unit yourself; picking the row-level frame gave
+`p=0.040` with a star off 15 clones from 2 patients. `splitby` now produces the contrast as
+part of the metric (the `stats` slot), and `build_stats` calls this after collapsing items to
+replicates, so that choice is no longer available to get wrong. One implementation, one caller.
+
+**The `paired=True` branch has no producer** — it wants a frame whose cells are draw *vectors*,
+and no `tl` emits that shape. Kept rather than deleted because `table` makes a paired
+replicate-level contrast reachable, and which estimand it should use is an open question.
+
+`tools/__init__.py __all__ = ["joint_distribution", "clonotypic_entropy", "phenotypic_entropy",
+"mutual_information", "phenotypic_flux", "delta_clonotypic_entropy",
+"delta_phenotypic_entropy"]`
+
+### 7.6a `tools/_delta.py` — the paired entropies
+
+```python
+delta_clonotypic_entropy(
+    adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    n_clones_ref=None, random_state=None, device=None, key_added=None,
+    inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
+```
+
+```python
+delta_phenotypic_entropy(
+    adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    random_state=None, device=None, key_added=None, inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
+```
+
+**(a) Responsibility.** `value(cov_to) − value(cov_from)` per item, taken **within a posterior
+draw**. Only the two metrics with an item axis have a paired form — `mutual_information` has
+none, so a "Δ MI" would be a subtraction of two cached scalars and belongs to the caller (the
+scope principle). Positive means it increased.
+
+**(b) Support.** The **intersection** of clones present at both levels, within each replicate,
+as `phenotypic_flux` already requires. It does two jobs depending on where the item axis sits:
+for `delta_phenotypic_entropy` it decides which rows exist (the pairing itself — the same
+clonotype at two timepoints); for `delta_clonotypic_entropy` it constrains the clone set summed
+over *inside* H(c\|φ), making `log2(C)` identical on both sides so the normalizer cancels.
+Without it a repertoire contracting 150 → 90 clones reports **+0.078** normalized entropy
+having not redistributed at all. The drop moves `n`, so it warns.
+
+**(c) Seeding.** Both sides come from **one shared sample** — the engine draws over every `ct`
+row then selects a covariate's block, so the same seed realises the same underlying draw. A
+self-delta is therefore exactly `0`. `phenotypic_flux` learned this: unpinned, its self-flux
+read 0.209 at `n_samples=16`, which was the noise floor reported as a result.
+
+**(d) Return.** `{table, result, stats}` as §7.10, plus `value_from` / `value_to` carried
+through so the paired endpoints view is renderable from this result alone — and therefore
+matched by construction. **No `p_gt`**: see §0.7.
+
+`__all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]`
 
 ### 7.7 h5ad-serializable return shapes (forward-compat with the deferred `@tl_result` uns-cache)
 
@@ -753,7 +808,49 @@ issue; `_sankey.py` (§8.4) is its unused drawing primitives.
 
 `__all__ = ["phenotypic_flux"]`
 
-### 8.4 `plotting/_sankey.py` — private drawing primitives
+### 8.4 `plotting/_delta.py` — the paired entropy twins
+
+```python
+delta_clonotypic_entropy(
+    adata, *, kind='delta', key=None, order=None, hue_order=None,
+    palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+    return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
+```
+
+```python
+delta_phenotypic_entropy(
+    adata, *, kind='delta', key=None, order=None, hue_order=None,
+    palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+    return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
+```
+
+Two views of one cached result, selected by `kind`:
+
+| `kind` | shows | marks |
+|---|---|---|
+| `"delta"` (default) | the change | the mark rule (§8.5) + a zero rule |
+| `"endpoints"` | `cov_from` and `cov_to` side by side | one dot per replicate per level |
+
+`"endpoints"` lives here rather than on `pl.phenotypic_entropy` because the endpoints are in
+the *delta's* payload, computed over the intersected clone set. The same figure drawn from two
+separate single-covariate results would use a **different clone set on each side**, and the
+values differ substantially — rendering it only from the delta result makes the unmatched
+version unreachable rather than merely discouraged.
+
+**Connecting lines only on `delta_phenotypic_entropy`.** A line asserts the two points are the
+same entity observed twice. A clonotype persists — a biological barcode. A phenotype is a bin:
+the same category measured twice, its occupants changed. Both can show their endpoints; only
+one may join them.
+
+**Dot area is the matched clone count**, with a size legend. It varies per replicate (one
+patient may match 240 of 300, another 30 of 400), which is why it is encoded per point rather
+than stated once in a title. A replicate's two endpoint dots are the same size by
+construction — the matched set is the same on both sides — and a difference would mean the
+intersection did not hold.
+
+### 8.4b `plotting/_sankey.py` — private drawing primitives
 
 **`class SankeyNode`** *(internal)* — `__init__(self, x, y, val, *, dx=0.2, color=None, **kwargs)`; `plot(self, ax)`; `plot_node_connection(self, destination_node, ax, **kwargs)` (curved, color-interpolated ribbon). `_phenotype_mass_per_clone(adata, covariate, clones, normalize) -> dict[str, np.ndarray]` — `{clone → phenotype-mass vector}` at one covariate. `SankeyNode.hex_to_rgb` is **deleted** (0 callers; ribbons use `mcolors.to_rgb`).
 
