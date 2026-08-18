@@ -34,11 +34,13 @@ programs are generated directly — so it is importable, seeded, and fast.
 """
 from __future__ import annotations
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-__all__ = ["simulate_tcri", "mi_from_joint_oracle", "simulate_from_fit_params",
+__all__ = ["simulate_tcri", "simulate_cohort", "mi_from_joint_oracle",
+           "simulate_from_fit_params",
            "temperature_scale"]
 
 
@@ -414,5 +416,230 @@ def simulate_from_fit_params(
                      "temperature": temperature, "fuzziness": fuzziness,
                      "label_error_rate": label_error_rate, "seed": seed,
                      "n_clones": n_clones, "n_phenotypes": P, "n_genes": D, "L": L},
+    }
+    return adata
+
+
+def _zipf_weights(n, exponent, rng):
+    """Clone-size weights following a power law — the shape real repertoires have.
+
+    TCR clone sizes are heavy-tailed: a handful of large expanded clones and a long tail of
+    singletons. The standard model is a power law (Zipf; Pareto in continuous form),
+    ``P(size) ~ size**-alpha`` with ``alpha`` near 2. ``simulate_tcri``'s own ``pi`` is a
+    symmetric Dirichlet, which is not heavy-tailed at all -- so a cohort that wants realistic
+    clone sizes has to impose them, which is what this does.
+
+    Ranks are shuffled so clone *identity* is unrelated to clone *size*; without that, low
+    clone ids would always be the expanded ones.
+    """
+    ranks = np.arange(1, n + 1, dtype=float)
+    w = ranks ** (-float(exponent))
+    rng.shuffle(w)
+    return w / w.sum()
+
+
+def simulate_cohort(
+    *,
+    n_patients: int = 8,
+    conditions=("pre", "post"),
+    responder_fraction: float = 0.5,
+    n_clones=(12, 30),
+    n_phenotypes: int = 4,
+    n_genes: int = 40,
+    n_cells_per_sample: int = 300,
+    clone_size_distribution: str = "powerlaw",
+    clone_size_exponent: float = 2.0,
+    responder_enrichment: float = 12.0,
+    nonresponder_enrichment: float = 1.1,
+    omega_concentration: float = 0.9,
+    seed: int = 0,
+):
+    """A multi-patient, multi-condition cohort in one line.
+
+    The shape most analyses actually have — patients as replicates, an ordered condition axis
+    *within* each patient, and a response label *between* them — which the single-sample
+    :func:`simulate_tcri` cannot express.
+
+    >>> adata = simulate_cohort(n_patients=10, conditions=("pre", "mid", "post"))
+
+    **Clones are paired across conditions.** Simulating each condition independently and
+    giving the runs matching clone names does *not* pair them: the ids line up but the
+    underlying clone->phenotype relationship is unrelated, so ``phenotypic_flux`` and every
+    ``delta_*`` would have nothing to measure. Each patient is simulated **once**, fixing that
+    patient's clone->phenotype structure and its clone sizes, and every condition is drawn
+    from that one population.
+
+    **Condition progression.** The first condition is an unbiased draw. Later ones oversample
+    each clone's dominant phenotype, ramping linearly to the arm's full enrichment at the last
+    condition — so responders' clones commit over time and non-responders' barely move.
+    Nothing is relabelled, so a cell's phenotype still matches the expression it was generated
+    with; only the clone->phenotype *concentration* changes.
+
+    Parameters
+    ----------
+    n_patients
+        Total patients. Each contributes one sample per condition.
+    conditions
+        Ordered condition labels, two or more (``("pre", "post")``, or a timeseries).
+    responder_fraction
+        Fraction assigned to the ``"R"`` arm; the rest are ``"NR"``.
+    n_clones
+        Clones per patient. An ``int`` for a fixed count, or ``(lo, hi)`` to draw each
+        patient's count uniformly — real cohorts are ragged, and a metric normalized by
+        ``log2(C)`` is not comparable across patients with different ``C``, which is exactly
+        what ``n_clones_ref`` exists to pin.
+    clone_size_distribution
+        ``"powerlaw"`` (default) or ``"uniform"``. Power law is what repertoires look like:
+        a few large expanded clones over a long tail of singletons.
+    clone_size_exponent
+        The power-law exponent ``alpha`` in ``P(size) ~ size**-alpha``. ~2 is the usual
+        repertoire regime; larger is more skewed toward singletons. It is a **target**: cells
+        are drawn without replacement from a finite pool, so a clone whose target share
+        exceeds its pool supply is capped and the realized tail comes out shallower. Measured
+        at the default (40 clones, 1200 cells/sample): requested 2.0 -> realized log-log slope
+        about -1.5, Gini 0.70, largest clone ~22% of cells. Still firmly heavy-tailed; just
+        not the exact exponent asked for.
+    responder_enrichment, nonresponder_enrichment
+        How hard the final condition oversamples each clone's dominant phenotype. ``1.0`` is
+        no enrichment. Jittered +/-15% per patient so replicates are not identical.
+    omega_concentration
+        Passed to :func:`simulate_tcri` per patient. Lower = sharper coupling at baseline;
+        the default is deliberately diffuse so there is room to concentrate.
+    seed
+        Seeds everything.
+
+    Returns
+    -------
+    AnnData
+        ``obs`` with ``clone_id``, ``phenotype``, ``condition``, ``patient``, ``response``;
+        ``layers['counts']``; and ``uns['tcri_truth']`` carrying ``per_sample`` — the
+        empirical NMI of each (patient, condition) from the labels alone, computed **per
+        patient** because that is the unit a per-patient metric estimates — plus ``per_arm``
+        and the generating ``settings``.
+
+    Notes
+    -----
+    ``per_sample`` is the **plug-in estimate on the observed labels**, not a target a fitted
+    model should reproduce. Two reasons it sits above what ``tl.mutual_information`` reports,
+    and neither is a defect:
+
+    * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits
+      (see this module's header) — it is the quantity the model is trying to see *past*;
+    * the model shrinks toward a covariate-free ``omega_c`` (Note 1 eq 2), deliberately, since
+      the cells in hand are a sample of a much larger unobserved repertoire. Conservative is
+      the intent.
+
+    Use it to check that arms are ordered as constructed and separate from a permutation null
+    — not to score agreement in absolute bits.
+    """
+    conditions = tuple(str(c) for c in conditions)
+    if len(conditions) < 2:
+        raise ValueError(f"conditions needs at least two labels, got {conditions}")
+    if len(set(conditions)) != len(conditions):
+        raise ValueError(f"conditions must be unique, got {conditions}")
+    if n_patients < 2:
+        raise ValueError("n_patients must be >= 2")
+    if clone_size_distribution not in ("powerlaw", "uniform"):
+        raise ValueError("clone_size_distribution must be 'powerlaw' or 'uniform', "
+                         f"got {clone_size_distribution!r}")
+    for name, value in (("responder_enrichment", responder_enrichment),
+                        ("nonresponder_enrichment", nonresponder_enrichment)):
+        if value < 1.0:
+            raise ValueError(f"{name} must be >= 1.0 (1.0 = no enrichment), got {value}")
+
+    lo, hi = (n_clones, n_clones) if isinstance(n_clones, (int, np.integer)) else n_clones
+    if lo < 2:
+        raise ValueError(f"n_clones must be >= 2, got {n_clones}")
+
+    rng = np.random.default_rng(seed)
+    n_responders = max(1, min(n_patients - 1, round(n_patients * responder_fraction)))
+    width = max(2, len(str(n_patients)))
+    n_steps = len(conditions) - 1
+
+    blocks = []
+    for i in range(n_patients):
+        patient = f"P{i + 1:0{width}d}"
+        arm = "R" if i < n_responders else "NR"
+        target = responder_enrichment if arm == "R" else nonresponder_enrichment
+        target = float(target * rng.uniform(0.85, 1.15))
+        n_c = int(rng.integers(lo, hi + 1))
+
+        # ONE simulation per patient fixes its clone -> phenotype structure. Oversampled so
+        # the clone-size reshaping below has cells to draw on for the expanded clones.
+        pool = simulate_tcri(
+            n_clones=n_c, n_phenotypes=n_phenotypes, n_genes=n_genes,
+            n_cells=6 * n_cells_per_sample, n_covariates=1,
+            omega_concentration=omega_concentration, seed=seed + i,
+        )
+        clones = pool.obs["clone_id"].astype(str).to_numpy()
+        uniq = np.array(sorted(set(clones)))
+        size_w = (_zipf_weights(len(uniq), clone_size_exponent, rng)
+                  if clone_size_distribution == "powerlaw"
+                  else np.full(len(uniq), 1.0 / len(uniq)))
+        # per-cell weight from its clone's target share, divided by how many cells that clone
+        # has in the pool -- so the realized clone SIZES follow the target, not the pool's
+        pool_counts = pd.Series(clones).value_counts()
+        share = dict(zip(uniq, size_w))
+        base_w = np.array([share[c] / pool_counts[c] for c in clones])
+
+        modal = pool.obs.groupby("clone_id", observed=True)["phenotype"].agg(
+            lambda x: x.value_counts().idxmax())
+        is_modal = (pool.obs["clone_id"].map(modal).astype(str)
+                    == pool.obs["phenotype"].astype(str)).to_numpy()
+
+        for step, condition in enumerate(conditions):
+            # linear ramp: unbiased at the first condition, full enrichment at the last
+            enrichment = 1.0 + (target - 1.0) * (step / n_steps)
+            w = base_w * np.where(is_modal, enrichment, 1.0)
+            idx = rng.choice(pool.n_obs, size=n_cells_per_sample, replace=False, p=w / w.sum())
+
+            block = pool[idx].copy()
+            block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
+            block.obs["condition"] = condition
+            block.obs["patient"] = patient
+            block.obs["response"] = arm
+            block.obs_names = [f"{patient}_{condition}_{k}" for k in range(block.n_obs)]
+            blocks.append(block)
+
+    adata = ad.concat(blocks, join="outer", label=None)
+    # `covariate` and `batch` come from the per-patient sims and are single-valued there;
+    # `condition` and `patient` supersede them, and leaving them would point someone at the
+    # wrong column when they reach for setup_anndata(covariate_key=...)
+    adata.obs = adata.obs.drop(columns=["covariate", "batch"], errors="ignore")
+    for col in ("clone_id", "phenotype", "condition", "patient", "response"):
+        adata.obs[col] = adata.obs[col].astype("category")
+    adata.obs["condition"] = adata.obs["condition"].cat.reorder_categories(list(conditions))
+    adata.layers["counts"] = adata.X.copy()
+
+    # The oracle, per (patient, condition). PER PATIENT on purpose: pooling an arm's patients
+    # first mixes clones across patients and inflates the NMI, so comparing that against a
+    # per-patient estimate would be a unit mismatch rather than a benchmark.
+    rows = []
+    for (patient, arm, condition), g in adata.obs.groupby(
+            ["patient", "response", "condition"], observed=True):
+        crosstab = pd.crosstab(g["clone_id"], g["phenotype"]).to_numpy(dtype=float)
+        oracle = mi_from_joint_oracle(crosstab)
+        rows.append({"patient": patient, "response": arm, "condition": condition,
+                     "n_clones": int(g["clone_id"].nunique()),
+                     "empirical_mi": oracle["mi"],
+                     "empirical_nmi_min": oracle["nmi_min"],
+                     "empirical_nmi_average": oracle["nmi_average"]})
+    per_sample = pd.DataFrame(rows)
+
+    adata.uns["tcri_truth"] = {
+        "per_sample": per_sample,
+        "per_arm": (per_sample.groupby(["response", "condition"], observed=True)
+                    ["empirical_nmi_min"].mean().unstack("condition")[list(conditions)]),
+        "settings": {
+            "n_patients": n_patients, "n_responders": n_responders,
+            "conditions": conditions, "n_clones": n_clones,
+            "n_phenotypes": n_phenotypes, "n_genes": n_genes,
+            "n_cells_per_sample": n_cells_per_sample,
+            "clone_size_distribution": clone_size_distribution,
+            "clone_size_exponent": clone_size_exponent,
+            "responder_enrichment": responder_enrichment,
+            "nonresponder_enrichment": nonresponder_enrichment,
+            "omega_concentration": omega_concentration, "seed": seed,
+        },
     }
     return adata

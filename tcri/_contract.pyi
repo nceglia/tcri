@@ -209,6 +209,14 @@ class ut:
 # outside the contract entirely until the conformance test moved from a hand-maintained
 # allowlist to set equality against the live surface, which is what surfaced it.
 class datasets:
+    def simulate_cohort(
+        *, n_patients: int = ..., conditions: Any = ..., responder_fraction: float = ...,
+        n_clones: Any = ..., n_phenotypes: int = ..., n_genes: int = ...,
+        n_cells_per_sample: int = ..., clone_size_distribution: str = ...,
+        clone_size_exponent: float = ..., responder_enrichment: float = ...,
+        nonresponder_enrichment: float = ..., omega_concentration: float = ...,
+        seed: int = ...,
+    ) -> AnnData: ...
     def simulate_tcri(
         *, n_clones: int = ..., n_phenotypes: int = ..., n_genes: int = ...,
         n_cells: int = ..., n_covariates: int = ..., n_factors: int = ...,
