@@ -61,6 +61,7 @@ _RESERVED = {"key_added", "inplace"}
 _DF = "__tcri_df__"
 _SERIES = "__tcri_series__"
 _MAP = "__tcri_map__"
+_MULTI = "__tcri_multiindex__"
 
 #: Tag a body attaches (via :func:`with_resolved_params`) to carry effective values.
 _RESOLVED_PARAMS = "__tcri_resolved_params__"
@@ -75,6 +76,37 @@ def _key_safe(k) -> bool:
     return isinstance(k, str) and "/" not in k and k not in ("", ".", "..")
 
 
+def _encode_index(index):
+    """Index -> h5ad-safe arrays, flattening a MultiIndex into one array per level.
+
+    ``index.to_numpy()`` on a MultiIndex yields an object array of TUPLES, and h5py has no
+    writer for a tuple -- it fails with "Can't implicitly convert non-string objects to
+    strings", named against the enclosing group rather than the index, which is a long way
+    from the cause. ``joint_distribution(n_samples>0)`` produces exactly that: a
+    (clonotype, sample_id) MultiIndex on its `table`. So the whole result was unwritable to
+    .h5ad, which is the one thing this module exists to guarantee.
+    """
+    if isinstance(index, pd.MultiIndex):
+        return {
+            _MULTI: 1,
+            "levels": {str(i): np.asarray(index.get_level_values(i))
+                       for i in range(index.nlevels)},
+            "level_names": np.asarray([("" if n is None else str(n)) for n in index.names],
+                                      dtype=object),
+        }
+    return {"index": index.to_numpy(), "index_name": index.name}
+
+
+def _decode_index(obj):
+    """Inverse of :func:`_encode_index`."""
+    if obj.get(_MULTI):
+        levels = obj["levels"]
+        names = [n or None for n in obj["level_names"]]
+        arrays = [np.asarray(levels[str(i)]) for i in range(len(names))]
+        return pd.MultiIndex.from_arrays(arrays, names=names)
+    return pd.Index(np.asarray(obj["index"]), name=obj.get("index_name"))
+
+
 def _encode(obj):
     """Convert a result into an ``.h5ad``-safe structure.
 
@@ -85,8 +117,7 @@ def _encode(obj):
     if isinstance(obj, pd.DataFrame):
         return {
             _DF: 1,
-            "index": obj.index.to_numpy(),
-            "index_name": obj.index.name,
+            **_encode_index(obj.index),
             # positional column storage: labels live as VALUES, so "/" is harmless and
             # duplicate labels survive
             "columns": np.asarray([str(c) for c in obj.columns], dtype=object),
@@ -96,8 +127,7 @@ def _encode(obj):
     if isinstance(obj, pd.Series):
         return {
             _SERIES: 1,
-            "index": obj.index.to_numpy(),
-            "index_name": obj.index.name,
+            **_encode_index(obj.index),
             "values": obj.to_numpy(),
             "name": obj.name,
         }
@@ -121,7 +151,7 @@ def _decode(obj):
             data = obj["data"]
             frame = pd.DataFrame(
                 {i: np.asarray(data[str(i)]) for i in range(len(cols))},
-                index=pd.Index(np.asarray(obj["index"]), name=obj.get("index_name")),
+                index=_decode_index(obj),
             )
             # assign AFTER construction so duplicate labels survive
             frame.columns = pd.Index(cols, name=obj.get("columns_name"))
@@ -129,7 +159,7 @@ def _decode(obj):
         if obj.get(_SERIES):
             return pd.Series(
                 np.asarray(obj["values"]),
-                index=pd.Index(np.asarray(obj["index"]), name=obj.get("index_name")),
+                index=_decode_index(obj),
                 name=obj.get("name"),
             )
         if obj.get(_MAP):

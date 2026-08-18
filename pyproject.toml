@@ -51,6 +51,13 @@ test = [
     "pytest>=7",
     "pytest-cov",
 ]
+# Building examples/example.ipynb with its outputs embedded. Not needed to use tcri.
+notebook = [
+    "jupytext>=1.16",
+    "nbclient>=0.10",
+    "nbformat>=5.10",
+    "ipykernel>=6",
+]
 
 [project.urls]
 Homepage = "https://github.com/nceglia/tcri"
