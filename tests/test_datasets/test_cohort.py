@@ -177,3 +177,22 @@ def test_clone_counts_can_vary_across_patients():
 
     fixed = simulate_cohort(n_patients=4, n_clones=11, n_cells_per_sample=150, seed=0)
     assert fixed.uns["tcri_truth"]["per_sample"]["n_clones"].max() == 11
+
+
+def test_the_cohort_can_be_written_to_h5ad(tmp_path):
+    """A tuple anywhere in `uns` makes the object unwritable, and it surfaces far from the
+    cause — as an `IORegistryError` out of `ut.save_tcri_session`, long after generation."""
+    import anndata as ad
+
+    a = simulate_cohort(n_patients=4, conditions=("pre", "post"), n_clones=(6, 10),
+                        n_cells_per_sample=60, seed=0)
+    settings = a.uns["tcri_truth"]["settings"]
+    assert not any(isinstance(v, tuple) for v in settings.values()), (
+        f"tuples in settings: {[k for k, v in settings.items() if isinstance(v, tuple)]}"
+    )
+
+    path = tmp_path / "cohort.h5ad"
+    a.write_h5ad(path)
+    back = ad.read_h5ad(path)
+    assert back.n_obs == a.n_obs
+    assert list(back.uns["tcri_truth"]["settings"]["conditions"]) == ["pre", "post"]

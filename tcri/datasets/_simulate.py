@@ -630,9 +630,14 @@ def simulate_cohort(
         "per_sample": per_sample,
         "per_arm": (per_sample.groupby(["response", "condition"], observed=True)
                     ["empirical_nmi_min"].mean().unstack("condition")[list(conditions)]),
+        # LISTS, not tuples: h5py has no writer for a tuple, so a tuple anywhere in `uns`
+        # makes the whole object unwritable to .h5ad -- which surfaces far from here, as an
+        # IORegistryError out of save_tcri_session.
         "settings": {
             "n_patients": n_patients, "n_responders": n_responders,
-            "conditions": conditions, "n_clones": n_clones,
+            "conditions": list(conditions),
+            "n_clones": list(n_clones) if not isinstance(n_clones, (int, np.integer))
+                        else int(n_clones),
             "n_phenotypes": n_phenotypes, "n_genes": n_genes,
             "n_cells_per_sample": n_cells_per_sample,
             "clone_size_distribution": clone_size_distribution,
