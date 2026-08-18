@@ -43,7 +43,7 @@ wrong**, and **the rules that must never be violated again**. Read this before t
    `build_tcri_inventory.py`), labeled from CODE, critic-verified 0 missing. **(CLEAN input.)**
    *Caveat: its plotting-triage used a "move to examples" disposition — now BANNED by Rule 2; those become DROP.*
 6. **Design decisions locked** (see §2).
-7. **← LEAK POINT. 13-agent draft→audit→synthesize workflow** → `tcri_api_and_responsibilities.md` +
+7. **← LEAK POINT. 13-agent draft→audit→synthesize workflow** → `API_CONTRACT.md` +
    `tcri_implementation_plan.md`. The math/stats resolution, prior-vs-mean answer, and GPU architecture it
    produced are CLEAN. **But my audit prompts instructed a "caller census over `example/` + `docs/` notebooks,"
    which resurrected `gene_entropy` (→examples) and `probability_ternary` (→kept) *because notebooks use them*,
@@ -56,7 +56,7 @@ wrong**, and **the rules that must never be violated again**. Read this before t
 - **CLEAN, keep:** `tcri_api_contract.*`, `tcri_dependency_map.*`, `tcri_function_inventory.md` (+ data)
   *(apply examples→DROP)*. And, *as salvageable content*: the math/stats resolution, prior-vs-mean answer, GPU
   architecture, metric design, layout, rename map — all inside the quarantined docs but not themselves contaminated.
-- **CONTAMINATED, quarantined:** `tcri_api_and_responsibilities.md`, `tcri_implementation_plan.md`,
+- **CONTAMINATED, quarantined:** `API_CONTRACT.md`, `tcri_implementation_plan.md`,
   `tcri_arg_consistency_sufficiency.md`, `tcri_refactor_audit_data.json`, `tcri_arg_audit_data.json`.
   The contamination is confined to the **deletion/disposition** sections (API §11; Plan §3 + Phase 0 + risk rows)
   and the **sufficiency** findings.

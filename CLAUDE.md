@@ -31,7 +31,7 @@ conformance test means **stop and decide**, not "adjust the contract until it pa
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
-| **API contract** | the public *interface* | `tcri/_contract.pyi` | `docs/contract/tcri_api_and_responsibilities.md` | `tests/test_contract_conformance.py` |
+| **API contract** | the public *interface* | `tcri/_contract.pyi` | `docs/contract/API_CONTRACT.md` | `tests/test_contract_conformance.py` |
 | **Model contract** | the generative *mathematics* | `tcri/model/_model_contract.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
 | **Metrics contract** | what the *metrics compute* | `tcri/tools/_metrics_contract.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
 | **Training contract** | how the model is *fit* | `tcri/model/_training_contract.py` | `docs/contract/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |

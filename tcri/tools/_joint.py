@@ -3,7 +3,7 @@
 ``tcri.joint_distribution``; unifies the old ``joint_distribution`` +
 ``joint_distribution_posterior``.
 
-See §7.1 of ``docs/contract/tcri_api_and_responsibilities.md`` for the math. This
+See §7.1 of ``docs/contract/API_CONTRACT.md`` for the math. This
 is the substrate every metric consumes (Phase 6 migrates them onto it).
 """
 from __future__ import annotations

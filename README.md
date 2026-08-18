@@ -119,7 +119,7 @@ TCRi is governed by four frozen, machine-checked contracts — the manuscript
 
 | Contract | Freezes | Prose |
 |----------|---------|-------|
-| **API** | the public interface | [`tcri_api_and_responsibilities.md`](docs/contract/tcri_api_and_responsibilities.md) |
+| **API** | the public interface | [`API_CONTRACT.md`](docs/contract/API_CONTRACT.md) |
 | **Model** | the generative mathematics | [`MODEL_CONTRACT.md`](docs/contract/MODEL_CONTRACT.md) |
 | **Metrics** | what the metrics compute | [`METRICS_CONTRACT.md`](docs/contract/METRICS_CONTRACT.md) |
 | **Training** | how the model is fit | [`TRAINING_CONTRACT.md`](docs/contract/TRAINING_CONTRACT.md) |

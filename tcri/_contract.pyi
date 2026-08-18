@@ -3,7 +3,7 @@
 The conformance test (``tests/test_contract_conformance.py``) checks each
 *implemented* function's live signature against its declaration here; declared-
 but-absent functions are the refactor worklist. Prose spec:
-``docs/contract/tcri_api_and_responsibilities.md``.
+``docs/contract/API_CONTRACT.md``.
 
 This freezes the public *interface*. Its sibling — ``tcri/model/_model_contract.py``
 (prose: ``docs/contract/MODEL_CONTRACT.md``) — freezes the model's *mathematics*

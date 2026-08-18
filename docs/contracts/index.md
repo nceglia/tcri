@@ -46,7 +46,7 @@ graph TB
 
 | Contract | Freezes | Manifest | Prose |
 |----------|---------|----------|-------|
-| **API** | the public interface | `tcri/_contract.pyi` | `tcri_api_and_responsibilities.md` |
+| **API** | the public interface | `tcri/_contract.pyi` | `API_CONTRACT.md` |
 | **Model** | the generative mathematics | `tcri/model/_model_contract.py` | `MODEL_CONTRACT.md` |
 | **Metrics** | what the metrics compute | `tcri/tools/_metrics_contract.py` | `METRICS_CONTRACT.md` |
 | **Training** | how the model is fit | `tcri/model/_training_contract.py` | `TRAINING_CONTRACT.md` |

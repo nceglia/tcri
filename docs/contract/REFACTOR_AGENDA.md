@@ -1,9 +1,9 @@
 # TCRI Refactor — Agenda, Tasklist & Diary (LIVING DOC)
 
 **Update this every working session. Refer back to it before starting anything.** It is the operational
-tracker + running diary for the whole refactor. The detailed spec lives in `tcri_api_and_responsibilities.md`
-+ `tcri_implementation_plan.md`; the rules/history in `REFACTOR_HISTORY.md`; the scratch/deferred pile in
-`REFACTOR_NOTES.md` (not checked in).
+tracker + running diary for the whole refactor. The detailed spec lives in `API_CONTRACT.md`; the
+rules/history in `REFACTOR_HISTORY.md`; the scratch/deferred pile in `REFACTOR_NOTES.md` (not checked
+in).
 
 ## How to use this doc
 1. **Removal is a hard bar.** The default failure mode is keeping old code around and over-engineering to
@@ -64,38 +64,103 @@ done, and add the discriminating assertion once you know what to assert.
 | 9 | PGM→docs; utils finalize | ✅ | low | 1,8 | import green sans daft |
 | 10 | Public API + scverse CI | ☐ | low-med | all | ecosystem checklist |
 
-## Repo cleanup  ·  ☐ todo (its own pass — do NOT fold into a feature PR)
+## Repo cleanup  ·  ✅ done (own pass, no PR — 2026-08-18)
 
-Deliberately deferred; collected here so it stops accreting.
+All four items closed. `docs/contract/` went from 33 files to 11. Kept below in full rather than
+compressed to ticks, because three of the four turned up a **generalisable failure mode** and those
+are the point: a rename that silently drops a governance rule, a generated doc outliving its
+generator's input, and a future-tense contract clause that never expired.
 
-- **Re-audit the Phase 5/6 removal ticks.** `tl.delta_clonotypic_entropy` and
-  `tl.delta_entropy_table` were ticked under *"delete WITH replacement, never before"* against
-  `compare_groups` — which contrasts between GROUPS on a tidy frame and cannot compute a metric
-  at two covariate levels. The replacement was on a different axis, so nothing replaced them,
-  and the capability was gone for four PRs until #81 rebuilt it. **The rule was right; the tick
-  was wrong.** Nobody checked that the named replacement covered the same axis, only that
-  something was named. Skim the remaining Phase 5/6 ticks for the same failure mode —
-  `mi_compare` -> `compare_groups` and `flux_table` -> `tl.phenotypic_flux` are the two worth
-  re-reading, and a tick should have to say *what* it replaces, not just *with what*.
+- ✅ **Re-audited the Phase 5/6 removal ticks.** The rule was right, the tick was wrong: nobody
+  checked that the named replacement covered the same *axis*, only that something was named. A tick
+  must now say **what** it replaces, not just **with what**. Result of re-reading all nine:
 
-- **Rename `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`.** It is the only one of the
-  four contracts not named for what it is — its siblings are `MODEL_CONTRACT.md`,
-  `METRICS_CONTRACT.md`, `TRAINING_CONTRACT.md`. In-tree referrers to update: `CLAUDE.md`,
-  `README.md`, `tcri/_contract.pyi`, `tcri/tools/_joint.py`.
-- **Issues do not live in the contract.** The contract docs have accreted "deferred", "tracked
-  as a follow-up", "open question" prose that belongs in GitHub issues. A contract states what
-  is frozen; a tracker states what is pending. Mixing them means a reader cannot tell which
-  sentences bind. Sweep them out, open issues, leave pointers only where a *decision* is
-  genuinely pending (e.g. `OPEN_QUESTIONS` in `_metrics_contract.py`, which is machine-checked
-  and therefore load-bearing — that one stays).
-- **Stale and duplicate artifacts in `docs/contract/`.** Observed while working:
-  `tcri_dependency_map.md` announces itself as "the post-refactor API" but its call graph still
-  contains `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table`, `pl.ridge_delta_entropy` and
-  `pp.joint_distribution` — all deleted in PR6/PR7. It reads as current and is not. Alongside it:
-  three overlapping API documents (`tcri_api_and_responsibilities.md`, `tcri_api_contract.md`,
-  `tcri_api_contract.html`), the dependency map in three formats (`.md`/`.dot`/`.html`), and a
-  `_quarantine/` directory. Decide which are generated (regenerate or delete), which are
-  historical (move to `REFACTOR_HISTORY.md`), and which are live.
+  | Removed | Named replacement | Verdict |
+  |---|---|---|
+  | `pp.joint_distribution_posterior` | `tl.joint_distribution(n_samples>0)` | ✅ same axis, strictly wider |
+  | `metrics._mi_from_joint` | the `_compute` engine | ✅ internal, same axis |
+  | `tl.mi_compare` | `compare_groups` | ✅ **verified in code this pass** |
+  | `tl.flux_table` | `tl.phenotypic_flux` | ⚠️ axis covered, one column dropped |
+  | `tl.clonotypic_entropy_base` | `tl.clonotypic_entropy` | ✅ strictly wider |
+  | `tl.clonality` | `tl.clonotypic_entropy` | ⚠️ **stated reason is wrong**, removal still right |
+  | `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table` | `compare_groups` | ❌ known bad — rebuilt in #81 |
+  | plural `*_entropies` shims, `metrics/` dir | renames / deletion | ✅ |
+
+  **`mi_compare` clears.** The worry was that it enumerated all group pairs and the replacement only
+  handled a two-level split. It does not: `compare_groups` builds `itertools.combinations` over the
+  `splitby` levels exactly as `mi_compare` did over `groupby`, and adds a `reference=` mode it never
+  had. Same axis, wider.
+
+  **`flux_table` drops `clone_size`.** `tl.phenotypic_flux` covers the metric axis (per-clone
+  distance `cov_from`→`cov_to`, one row per clone per draw, `splitby` via the shared machinery), but
+  `flux_table` also carried a `clone_size` column and **computed it within each `splitby` group**
+  (`adata_g.obs[clone_col].value_counts()`). `pp.clone_size` writes a **global** count over the whole
+  object, so joining it back is *not* equivalent — a user who wants the old column must subset first.
+  It is denormalised convenience data rather than a metric, so the scope principle leaves it to the
+  user; recorded here so it is not rediscovered as a defect.
+
+  **`tl.clonality`: right removal, wrong justification.** Its docstring is explicit that it used the
+  **observed (hard)** clone and phenotype labels — `1 − H/log₂K` on raw clone counts per phenotype,
+  needing no model. `tl.clonotypic_entropy` has no hard-label path: `n_samples=0` is the deterministic
+  plug-in of the *posterior*, not the observed labels. So the replacement changes the **estimator**,
+  which is the same class of substitution that made the delta tick wrong. It survives re-audit anyway,
+  but on different grounds: computing clonality needs no metric applied at a level the public surface
+  hides — it is a `value_counts` and a Shannon entropy on `obs`, so the scope principle puts it on the
+  user. **The tick should have said that.** A replacement that changes the estimator is not a
+  replacement; it needs its own justification.
+
+- ✅ **Renamed `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`**, so all four contracts are
+  named for what they are. Referrers updated: `CLAUDE.md`, `README.md`, `tcri/_contract.pyi`,
+  `tcri/tools/_joint.py` — **and `.github/CODEOWNERS`, which the first sweep missed** because it
+  matched on file extension and CODEOWNERS has none. That rule is what makes the API contract
+  maintainer-approval-only; for the length of that sweep it pointed at a path that no longer
+  existed and therefore protected nothing. A rename that silently drops a governance rule is the
+  failure mode to watch: **grep for the old name with `-I` across the whole tree, not by
+  extension.**
+- ✅ **Issues do not live in the contract — swept, and the problem was smaller than assumed.**
+  Across all five contract documents there were **six** tracker-flavoured passages, not the pile the
+  item implied. Four were correct as written and stay: the `paired=True` estimand (§7.6) and the
+  training contract's two open questions are *genuinely pending decisions*, which the rule permits;
+  the Sankey enhancement (§8.4) already points at its own issue, which is the pattern we want; and
+  the eqs 8–12 perturbation row in `METHODS_CONFORMANCE.md` is deviation history, not a to-do.
+
+  **§7.7 of the API contract was the real defect, and it was worse than stale prose.** It was titled
+  "forward-compat with the **deferred** `@tl_result` uns-cache" long after `@tl_result` shipped, and
+  it specified three carriers that do not exist in the code: a `_provenance` JSON-string column, a
+  `df.attrs["params"]` durable copy, and a cache key hashed over the argument list. The `attrs`
+  mechanism had not merely failed to ship — it was **removed during implementation** because attrs
+  does not survive most pandas operations (`tcri/tools/_joint.py:220` says so), so the contract was
+  mandating the exact carrier the code had already rejected on evidence. Anyone conforming new work
+  to §7.7 would have been conformed to the wrong design by the document whose job is to prevent that.
+  Rewritten to describe what shipped (`{table, result, stats, params, version}` siblings, a `draw`
+  column, `_encode_index` for MultiIndex), with the correction recorded inline.
+
+  **The lesson generalises past this section.** A "deferred" or "forward-compat" clause is a claim
+  about the future, and nothing makes it expire when the future arrives by a different route. The
+  same disease produced `tcri_dependency_map.md` announcing itself as "the post-refactor API".
+  **Every contract clause written in the future tense needs an owner and a re-read at the moment the
+  thing lands** — the landing PR is the trigger, not a later audit.
+
+- ✅ **Stale and duplicate artifacts in `docs/contract/` — 22 files, ~1.5 MB, removed** (33 files → 11).
+  Deleted: the three generated pre-refactor snapshots and *their generators*
+  (`tcri_function_inventory.md` + `tcri_inventory_data.json` + `build_tcri_inventory.py`;
+  `tcri_api_contract.md`/`.html` + `build_tcri_contract.py`;
+  `tcri_dependency_map.md`/`.dot`/`.html` + `build_tcri_depgraph.py`), the superseded plans
+  (`tcri_implementation_plan.md`, `tcri_consistency_sufficiency.md`, `TRAINING_SPEC_DRAFT.md`,
+  `REDO_LIST.md`, `PR_PLAN.md`), the `_quarantine/` directory, and a 0-byte `.Rhistory`.
+  `docs/contract/README.md` was rewritten around the four contracts — it had been describing two of
+  the deleted files as "the authoritative pair".
+
+  **The generators were the finding.** The three `build_*.py` scripts read as live tooling, so the
+  obvious move was "regenerate rather than delete". They do not introspect the package — none of them
+  imports `tcri` — they print hardcoded tables, which is why `build_tcri_inventory.py` still reports
+  **131 functions** for a package that now has 39 public ones. Re-running them would have re-emitted
+  the same stale documents with a fresh timestamp, which is worse than deleting them: it launders a
+  pre-refactor snapshot as current. That is what `tcri_dependency_map.md` had already become —
+  it announced itself as "the post-refactor API" while its call graph carried 49 references to
+  `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table`, `pl.ridge_delta_entropy` and
+  `pp.joint_distribution`, all deleted in PR6/PR7. **A generated doc is only as live as its
+  generator's input; check what the generator reads before trusting "just regenerate it."**
 
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
