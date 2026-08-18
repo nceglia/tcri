@@ -203,3 +203,39 @@ def test_load_result_provenance_asymmetry_is_deliberate(adata):
     # params are reachable identically in both cases
     assert isinstance(load_result_params(adata, "tcri_df_case"), dict)
     assert isinstance(load_result_params(adata, "tcri_dict_case"), dict)
+
+
+def test_a_multiindex_result_survives_h5ad(tmp_path):
+    """`index.to_numpy()` on a MultiIndex yields an object array of TUPLES, and h5py has no
+    writer for a tuple.
+
+    Found by an example notebook, not by this suite: `joint_distribution(n_samples>0)` puts a
+    (clonotype, sample_id) MultiIndex on its `table`, so the whole cached result was
+    unwritable to .h5ad. The failure surfaced as `TypeError: Can't implicitly convert
+    non-string objects to strings` named against the enclosing group -- a long way from the
+    index that caused it -- and only when someone tried to save a session.
+    """
+    import anndata as ad
+    import numpy as np
+    import pandas as pd
+
+    from tcri._state.storage import decode_blob, tl_result
+
+    idx = pd.MultiIndex.from_product([["clone/1", "clone 2"], [0, 1]],
+                                     names=["clonotype", "sample_id"])
+    frame = pd.DataFrame({"a": np.arange(4.0), "b": np.arange(4.0)[::-1]}, index=idx)
+
+    @tl_result(key="tcri_multi_probe", version=1)
+    def probe(adata, *, key_added=None, inplace=True):
+        return {"table": frame}
+
+    adata = ad.AnnData(X=np.zeros((2, 2), dtype="float32"))
+    probe(adata)
+
+    path = tmp_path / "multi.h5ad"
+    adata.write_h5ad(path)                      # the step that used to raise
+    back = decode_blob(ad.read_h5ad(path).uns["tcri_multi_probe"])["table"]
+
+    assert isinstance(back.index, pd.MultiIndex)
+    assert list(back.index.names) == ["clonotype", "sample_id"]
+    pd.testing.assert_frame_equal(back, frame, check_dtype=False)
