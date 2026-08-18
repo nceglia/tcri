@@ -10,6 +10,13 @@ This freezes the public *interface*. Its sibling — ``tcri/model/_model_contrac
 (Supplementary Note 1).
 
 RULES this file encodes:
+- **The scope principle** (api doc, "The scope principle"): a comparison belongs in the API
+  when producing it requires applying a metric at a level this surface does not already
+  expose; when it is arithmetic on values already computed, it belongs to the user. So a
+  metric with an item axis (clone / phenotype) gets cross-covariate functions, and one
+  without gets none — a "delta" of a repertoire-level scalar is a subtraction, not a metric.
+  Corollary: always know what a metric reduces to. If a proposed function cannot name its
+  unit of reduction, that is the signal to re-examine whether it belongs here.
 - Only the KEPT surface is declared. A symbol NOT in this file must NOT be public
   after the refactor (see the Removal Ledger in ``docs/contract/REFACTOR_AGENDA.md``).
 - ``tl``/``pp``/``pl``/``diag``/``ut`` are container classes purely for namespacing
@@ -95,6 +102,21 @@ class tl:
         device: Any = ...,
             key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
+    # The paired forms. Only the two metrics with an ITEM axis have one: a delta of a
+    # repertoire-level scalar (mutual_information) is a subtraction, not a metric.
+    def delta_clonotypic_entropy(
+        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
+        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
+        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
+        key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
+    def delta_phenotypic_entropy(
+        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
+        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
+        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
+        device: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
     # compare_groups was here. It is now internal (tools/_compare.py): `splitby` produces the
     # contrast as part of the metric, in the `stats` slot, with the replicate unit already
     # resolved. A separate public step meant the caller picked the replicate unit themselves.
@@ -125,6 +147,16 @@ class pl:
         adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
         show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def delta_clonotypic_entropy(
+        adata: AnnData, *, kind: str = ..., key: Optional[str] = ..., order: Any = ...,
+        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def delta_phenotypic_entropy(
+        adata: AnnData, *, kind: str = ..., key: Optional[str] = ..., order: Any = ...,
+        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def resolve_colors(
         adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,

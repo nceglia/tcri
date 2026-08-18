@@ -26,19 +26,20 @@ __all__ = [
     "clonotypic_entropy",
     "phenotypic_entropy",
     "phenotypic_flux",
+    "delta_clonotypic_entropy",
+    "delta_phenotypic_entropy",
     "table",
 ]
 
-#: The decoded payload IS the table (no sub-key to pull).
-_SELF = object()
-
-#: tool name -> (canonical uns key, the sub-key holding the primary tidy table)
+#: tool name -> canonical uns key
 _RESULTS = {
-    "joint_distribution": (K.JOINT_DISTRIBUTION, "result"),
-    "mutual_information": (K.MUTUAL_INFORMATION, "result"),
-    "clonotypic_entropy": (K.CLONOTYPIC_ENTROPY, "result"),
-    "phenotypic_entropy": (K.PHENOTYPIC_ENTROPY, "result"),
-    "phenotypic_flux": (K.PHENOTYPIC_FLUX, "result"),
+    "joint_distribution": K.JOINT_DISTRIBUTION,
+    "mutual_information": K.MUTUAL_INFORMATION,
+    "clonotypic_entropy": K.CLONOTYPIC_ENTROPY,
+    "phenotypic_entropy": K.PHENOTYPIC_ENTROPY,
+    "phenotypic_flux": K.PHENOTYPIC_FLUX,
+    "delta_clonotypic_entropy": K.DELTA_CLONOTYPIC_ENTROPY,
+    "delta_phenotypic_entropy": K.DELTA_PHENOTYPIC_ENTROPY,
 }
 
 _PROVENANCE = ("params", "version")
@@ -49,7 +50,7 @@ def _resolve_key(name: str, key):
     if key is not None:
         return key
     if name in _RESULTS:
-        return _RESULTS[name][0]
+        return _RESULTS[name]
     if isinstance(name, str) and name.startswith("tcri_"):
         return name
     raise KeyError(
@@ -100,9 +101,6 @@ def table(adata, name: str, *, key=None, which: str = "result"):
     ``which="table"`` is the unreduced substrate, one row per (covariate, group, item[, draw]).
     """
     payload = load_result(adata, _require(adata, name, key))
-    subkey = _RESULTS[name][1] if name in _RESULTS else which
-    if subkey is _SELF:
-        return payload
     if not isinstance(payload, dict) or which not in payload:
         raise KeyError(
             f"cached result for {name!r} has no {which!r} frame "
@@ -131,3 +129,11 @@ def phenotypic_entropy(adata, *, key=None, which: str = "result"):
 
 def phenotypic_flux(adata, *, key=None, which: str = "result"):
     return table(adata, "phenotypic_flux", key=key, which=which)
+
+
+def delta_clonotypic_entropy(adata, *, key=None, which: str = "result"):
+    return table(adata, "delta_clonotypic_entropy", key=key, which=which)
+
+
+def delta_phenotypic_entropy(adata, *, key=None, which: str = "result"):
+    return table(adata, "delta_phenotypic_entropy", key=key, which=which)

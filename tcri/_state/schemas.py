@@ -28,6 +28,8 @@ __all__ = [
     "ClonotypicEntropy",
     "PhenotypicEntropy",
     "PhenotypicFlux",
+    "DeltaClonotypicEntropy",
+    "DeltaPhenotypicEntropy",
     "validate",
 ]
 
@@ -69,6 +71,33 @@ class PhenotypicFlux(TypedDict):
 
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw, value
     result: pd.DataFrame
+
+
+class DeltaClonotypicEntropy(TypedDict):
+    """H(c|phi) at ``cov_to`` minus at ``cov_from`` — one value per PHENOTYPE.
+
+    The clone set is intersected across the two levels within each replicate, so ``log2(C)``
+    is the same on both sides and cancels out of the difference. That is why no special
+    ``n_clones_ref`` default is needed here.
+    """
+
+    table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], phenotype, draw,
+                            #       value, value_from, value_to
+    result: pd.DataFrame
+    stats: object
+
+
+class DeltaPhenotypicEntropy(TypedDict):
+    """H(phi|c) at ``cov_to`` minus at ``cov_from`` — one value per CLONE.
+
+    The only metric whose item axis is entity-matched: the same clonotype observed at both
+    levels, a biological barcode rather than a category measured twice.
+    """
+
+    table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw,
+                            #       value, value_from, value_to
+    result: pd.DataFrame
+    stats: object
 
 
 def validate(schema, result, *, name: str = "result") -> None:
