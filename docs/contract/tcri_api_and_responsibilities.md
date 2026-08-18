@@ -4,6 +4,54 @@
 
 ---
 
+## The scope principle — what the package computes, and what it hands over
+
+> **A comparison belongs in the API when producing it requires applying a metric at a level the
+> public surface does not already expose. When the comparison is arithmetic on values the
+> package has already computed, it belongs to the user.**
+
+This is the test for whether a proposed function should exist. It governs §7 and §8 and takes
+precedence over "it would be convenient."
+
+**The two sides.**
+
+*Inside — the package owes the computation.* A per-clone or per-phenotype quantity across two
+covariate levels — `H(φ|c)` at `pre` versus at `post` for the **same** clone — requires the
+metric evaluated inside the engine's draw loop, with clone identity aligned across two covariate
+blocks that hold different row sets. The raw material is reachable
+(`joint_distribution(covariate=None, n_samples=S)["table"]` is clone × phenotype at every level
+for every draw, off one shared draw stack), but turning it into that quantity means the caller
+**reimplementing the metric**: the support handling, the normalizer, the NaN and zero-mass
+conventions. That is re-deriving a frozen definition in notebook code, which the metrics contract
+exists to prevent — a delta computed by different code is not a delta of the same metric. So the
+package must provide it.
+
+*Outside — the package owes the material, not the answer.* A repertoire-level comparison —
+`mutual_information(patient 1, pre)` versus `mutual_information(patient 1, post)` — is a
+subtraction of two numbers already computed, already cached, already at the granularity the
+question asks about. Nothing below the public surface is needed. And everything that makes such a
+comparison *interesting* — how to handle repertoire imbalance between the levels, whether to pin a
+normalizer, which replicates are comparable, which test — is a study-specific analysis decision.
+Pre-empting it in the API imposes one answer on every user.
+
+**The consequence for the payload.** `table` in the cache is not an implementation detail of
+`result`. It **is** the population-level interface: the per-draw, per-item substrate, with
+provenance, that a user builds their own replicate-level comparison on. `result` and `stats` are
+the two reductions the package commits to; anything else is the user's to reduce.
+
+**The test in practice.** A metric with an item axis (clone or phenotype) is defined per item, so
+a cross-covariate comparison of it needs engine access — the API provides it. A metric with no
+item axis is already the repertoire-level number, so a cross-covariate comparison of it is
+subtraction — the user performs it. This is why `phenotypic_flux` and the entropy deltas are
+functions while a "Δ mutual information" is not: MI has no item axis, so it would be a subtraction
+dressed as a metric.
+
+Corollary, and the reason this is worth writing down: **always know what a metric reduces to.**
+It should be a clonotype or a phenotype wherever possible. If a proposed function cannot name its
+unit of reduction, that is the signal to re-examine whether it belongs on this side of the line.
+
+---
+
 ## 0. Conventions, notation, and resolved decisions
 
 ### 0.1 Layout principle
@@ -93,14 +141,26 @@ Additionally, because draws use the **clamped** concentration while the `n_sampl
 
 ### 0.7 Uniform return-shape rule
 
-| `groupby` | `n_samples` | Return |
-|---|---|---|
-| unset | `0` | scalar (MI, single-clone flux) or `Series` (entropies over phenotypes/clones) |
-| unset | `N>0` | draw array with a sample axis **+** summary columns `mean, sd, hdi_low, hdi_high` |
-| set | `0` | tidy `DataFrame`, one row per group [× phenotype / × clone] |
-| set | `N>0` | tidy `DataFrame`, one row per group [× phenotype / × clone] + `mean, sd, hdi_low, hdi_high` |
+**One shape, for every metric and every combination of axes — see §7.10.** `{table, result,
+stats}`, returned *and* stored under `uns[key_added or "tcri_<metric>"]` with a `params` block.
 
-> **`p_gt` fix (blocking).** `p_gt`/`P(>0)` is **removed from every single-metric summary**. Entropy, MI, L1 and KL flux are all **$\ge 0$**, so `P(draw>0) ≈ 1` always and is vacuous. A signed-direction probability is emitted **only** by `tl.compare_groups` on a between-group **difference** $\Delta$ (§7.6), where it is meaningful.
+The table that used to live here gave four different return types keyed on `groupby` × `n_samples`
+(scalar / draw-array+dict / tidy frame / tidy frame + summary), so a caller had to branch on their
+own arguments to read their own result. That is gone.
+
+> **`p_gt` is not a column of `result`.** Entropy, MI, L1 and KL flux are all $\ge 0$, so
+> `P(draw>0) ≈ 1` and the quantity is vacuous on a single metric. It is not restored for the
+> **delta** metrics either, even though there zero *is* a meaningful reference: `p_gt` is a
+> posterior direction probability that reads as a frequentist p-value, its resolution is capped at
+> `1/n_samples` (so `1.0` means "no draw crossed zero", not certainty), and per-item it invites
+> filtering on the survivors. `hdi_low`/`hdi_high` already answer the direction question in the
+> Bayesian idiom — an interval excluding zero — and the graded version is one line off the cached
+> `table` for a caller who wants it, which is the scope principle applied.
+>
+> This keeps exactly one representative per inferential frame: `hdi_*` in `result` (Bayesian,
+> within a replicate, over draws) and `p`/`stars` in `stats` (frequentist, between replicates,
+> over groups). They answer different questions and neither can be dropped without dropping a
+> question — see §7.10.
 
 > **HDI fix.** The interval columns are a **true highest-density interval** (`hdi_low/hdi_high`), i.e. the narrowest interval containing `hdi_prob` mass — **not** the equal-tailed `np.percentile(x,[2.5,97.5])` mislabeled "HDI" in today's code. For the bounded, right-skewed entropy/flux posteriors (mass piled against the boundary for committed clones) the equal-tailed interval is materially wrong. HDIs from few hundred draws near a boundary are documented as unstable.
 
@@ -566,7 +626,7 @@ dispatched through `_distance` (§3.4): `"l1"` (default, bounded $[0,2]$), `"kl"
 
 `__all__ = ["phenotypic_flux"]`
 
-### 7.6 `tools/_compare.py` — `compare_groups` (public group-comparison orchestrator)
+### 7.6 `tools/_compare.py` — `compare_groups` (INTERNAL: the one contrast implementation)
 
 ```python
 compare_groups(
@@ -586,9 +646,64 @@ compare_groups(
 - **Unpaired point estimates:** Mann–Whitney $U$ + two-sided $p$ (`_stats.mann_whitney`), group means, and $\Delta=\text{mean}_B-\text{mean}_A$.
 - **Paired posterior draws** (`paired=True`, one draw vector per group per unit, aligned by `sample_id`): the signed difference $\Delta^{(s)}=\text{metric}_B^{(s)}-\text{metric}_A^{(s)}$, then `mean(Δ)`, `hdi(Δ)`, and **`p_gt`/`p_lt` via `prob_direction`** — the **only** place a direction probability is emitted (§0.7).
 
-**Return.** Tidy DataFrame, one row per contrast: `group_a, group_b, mean_a, mean_b, delta, U, p, p_gt, hdi_low, hdi_high, stars`. Recreates `mi_compare`'s per-pair output exactly.
+**Return.** Tidy DataFrame, one row per contrast: `group_a, group_b, mean_a, mean_b, delta, U, p, p_gt, hdi_low, hdi_high, stars`.
 
-`tools/__init__.py __all__ = ["joint_distribution", "clonotypic_entropy", "phenotypic_entropy", "mutual_information", "phenotypic_flux", "compare_groups"]`
+**NOT PUBLIC.** It was `tl.compare_groups` — a second function you had to remember to call, on
+the right frame, having picked the replicate unit yourself; picking the row-level frame gave
+`p=0.040` with a star off 15 clones from 2 patients. `splitby` now produces the contrast as
+part of the metric (the `stats` slot), and `build_stats` calls this after collapsing items to
+replicates, so that choice is no longer available to get wrong. One implementation, one caller.
+
+**The `paired=True` branch has no producer** — it wants a frame whose cells are draw *vectors*,
+and no `tl` emits that shape. Kept rather than deleted because `table` makes a paired
+replicate-level contrast reachable, and which estimand it should use is an open question.
+
+`tools/__init__.py __all__ = ["joint_distribution", "clonotypic_entropy", "phenotypic_entropy",
+"mutual_information", "phenotypic_flux", "delta_clonotypic_entropy",
+"delta_phenotypic_entropy"]`
+
+### 7.6a `tools/_delta.py` — the paired entropies
+
+```python
+delta_clonotypic_entropy(
+    adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    n_clones_ref=None, random_state=None, device=None, key_added=None,
+    inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
+```
+
+```python
+delta_phenotypic_entropy(
+    adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
+    temperature=1.0, clones=None, weighted=False, normalized=True,
+    random_state=None, device=None, key_added=None, inplace=True
+) -> dict   # {table, result, stats}; also stored in uns (§7.10)
+```
+
+**(a) Responsibility.** `value(cov_to) − value(cov_from)` per item, taken **within a posterior
+draw**. Only the two metrics with an item axis have a paired form — `mutual_information` has
+none, so a "Δ MI" would be a subtraction of two cached scalars and belongs to the caller (the
+scope principle). Positive means it increased.
+
+**(b) Support.** The **intersection** of clones present at both levels, within each replicate,
+as `phenotypic_flux` already requires. It does two jobs depending on where the item axis sits:
+for `delta_phenotypic_entropy` it decides which rows exist (the pairing itself — the same
+clonotype at two timepoints); for `delta_clonotypic_entropy` it constrains the clone set summed
+over *inside* H(c\|φ), making `log2(C)` identical on both sides so the normalizer cancels.
+Without it a repertoire contracting 150 → 90 clones reports **+0.078** normalized entropy
+having not redistributed at all. The drop moves `n`, so it warns.
+
+**(c) Seeding.** Both sides come from **one shared sample** — the engine draws over every `ct`
+row then selects a covariate's block, so the same seed realises the same underlying draw. A
+self-delta is therefore exactly `0`. `phenotypic_flux` learned this: unpinned, its self-flux
+read 0.209 at `n_samples=16`, which was the noise floor reported as a result.
+
+**(d) Return.** `{table, result, stats}` as §7.10, plus `value_from` / `value_to` carried
+through so the paired endpoints view is renderable from this result alone — and therefore
+matched by construction. **No `p_gt`**: see §0.7.
+
+`__all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]`
 
 ### 7.7 h5ad-serializable return shapes (forward-compat with the deferred `@tl_result` uns-cache)
 
@@ -693,7 +808,49 @@ issue; `_sankey.py` (§8.4) is its unused drawing primitives.
 
 `__all__ = ["phenotypic_flux"]`
 
-### 8.4 `plotting/_sankey.py` — private drawing primitives
+### 8.4 `plotting/_delta.py` — the paired entropy twins
+
+```python
+delta_clonotypic_entropy(
+    adata, *, kind='delta', key=None, order=None, hue_order=None,
+    palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+    return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
+```
+
+```python
+delta_phenotypic_entropy(
+    adata, *, kind='delta', key=None, order=None, hue_order=None,
+    palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+    return_df=False
+) -> matplotlib.axes.Axes | pandas.DataFrame  # renders the cache (§7.10)
+```
+
+Two views of one cached result, selected by `kind`:
+
+| `kind` | shows | marks |
+|---|---|---|
+| `"delta"` (default) | the change | the mark rule (§8.5) + a zero rule |
+| `"endpoints"` | `cov_from` and `cov_to` side by side | one dot per replicate per level |
+
+`"endpoints"` lives here rather than on `pl.phenotypic_entropy` because the endpoints are in
+the *delta's* payload, computed over the intersected clone set. The same figure drawn from two
+separate single-covariate results would use a **different clone set on each side**, and the
+values differ substantially — rendering it only from the delta result makes the unmatched
+version unreachable rather than merely discouraged.
+
+**Connecting lines only on `delta_phenotypic_entropy`.** A line asserts the two points are the
+same entity observed twice. A clonotype persists — a biological barcode. A phenotype is a bin:
+the same category measured twice, its occupants changed. Both can show their endpoints; only
+one may join them.
+
+**Dot area is the matched clone count**, with a size legend. It varies per replicate (one
+patient may match 240 of 300, another 30 of 400), which is why it is encoded per point rather
+than stated once in a title. A replicate's two endpoint dots are the same size by
+construction — the matched set is the same on both sides — and a difference would mean the
+intersection did not hold.
+
+### 8.4b `plotting/_sankey.py` — private drawing primitives
 
 **`class SankeyNode`** *(internal)* — `__init__(self, x, y, val, *, dx=0.2, color=None, **kwargs)`; `plot(self, ax)`; `plot_node_connection(self, destination_node, ax, **kwargs)` (curved, color-interpolated ribbon). `_phenotype_mass_per_clone(adata, covariate, clones, normalize) -> dict[str, np.ndarray]` — `{clone → phenotype-mass vector}` at one covariate. `SankeyNode.hex_to_rgb` is **deleted** (0 callers; ribbons use `mcolors.to_rgb`).
 
@@ -701,10 +858,24 @@ issue; `_sankey.py` (§8.4) is its unused drawing primitives.
 
 | Signature | Responsibility |
 |---|---|
-| `render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None, ...)` | The shared cache renderer every twin delegates to. Reads `tcri.get.result`/`params`, picks the x axis from the cached `groupby`/`splitby`, routes colours through `resolve_colors`, and brackets `stats` when x IS the split. Takes **no** metric arguments and never calls `tl`. |
-| `_boxstrip(...)` / `_bars(...)` | Box+strip over groups; bars with the posterior HDI as an error bar when there are no groups to box. |
-| `_annotate_contrasts(ax, stats, levels)` | Bracket + stars per contrast, drawn only where `stats` has a row for that exact pair of x levels. |
+| `render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None, ...)` | The shared cache renderer every twin delegates to. Reads `tcri.get.result`/`params`, picks the x axis from the cached `groupby`/`splitby`, applies the mark rule, routes colours through `resolve_colors`, and brackets `stats` when x IS the split. Takes **no** metric arguments and never calls `tl`. |
+| `_sample_unit(frame, table, *, x, groupby, item_col)` | **The mark rule.** Returns the coarsest unit that varies within an x position — `replicate` > `item` > `draw`, or `None`. One variance component per mark. |
+| `_boxstrip(...)` | Box + strip. Reached when replicates or items are the sample; items are collapsed to replicates first via `collapse_to_replicates`, the same function `build_stats` uses. |
+| `_violins(...)` | Violin over the draw distribution, read from `table`. Reached only when draws are the coarsest varying unit, so a violin can never span replicates. |
+| `_points(...)` | The floor: one point per x with the HDI as an error bar, when nothing varies. A point rather than a bar because a bar's area encodes a magnitude from zero these metrics do not have. |
+| `_annotate_contrasts(ax, stats, levels)` | Bracket + stars per contrast, drawn only where `stats` has a row for that exact pair of x levels. Bracket artists carry `BRACKET_LABEL` so the connector guard can tell them from a matched-identity line. |
 | `_finish(fig, ax, *, save=None, show=None)` | scanpy-style show/save/return finalizer. |
+
+**The mark rule (§8.5).** A mark shows ONE variance component; within an x position the sample
+is the coarsest unit that varies there. Pooling draws across replicates would render 6 patients
+× 100 draws as 600 samples — the pseudoreplication `build_stats` collapses away, drawn as a
+picture. Measured before the fix, on `phenotypic_entropy(groupby="patient", splitby="response")`:
+the box and strip described **47 clones** while the p-value bracketed above them described
+**6 patients**.
+
+**Connecting lines** are drawn only between points sharing an identity across the compared
+levels — never from adjacency. A line asserts the two points are the same entity observed
+twice, which is a claim only matched data supports.
 
 ### 8.6 `plotting/_colors.py`
 

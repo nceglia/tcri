@@ -330,7 +330,7 @@ def across_groups(values):
             "ci_low": float(lo), "ci_high": float(hi), "n_groups": n}
 
 
-def build_result(table, *, value="value"):
+def build_result(table, *, value="value", extra_values=()):
     """Reduce ``table`` (per draw) to ``result`` (per group[, item]).
 
     ``result`` is built FROM ``table`` rather than computed alongside it, so the two cannot
@@ -344,11 +344,19 @@ def build_result(table, *, value="value"):
     Items are KEPT: a swarm plot needs one point per clone, and collapsing them here would make
     the per-item view unreachable from the cached result.
     """
-    keys = [c for c in table.columns if c not in ("draw", value)]
+    val_cols = (value, *extra_values)
+    keys = [c for c in table.columns if c not in ("draw", *val_cols)]
+
+    def _extra(chunk):
+        # the endpoints of a delta: their posterior means, carried so the paired view is
+        # renderable from the delta result alone and therefore matched by construction
+        return {c: float(np.nanmean(chunk[c].to_numpy(dtype=float))) if len(chunk) else np.nan
+                for c in extra_values}
+
     if not keys:
         agg = summarize(table[value].to_numpy())
-        return pd.DataFrame([{value: agg["mean"], **{k: v for k, v in agg.items()
-                                                     if k != "mean"}}])
+        row = {value: agg.pop("mean"), **agg, **_extra(table)}
+        return pd.DataFrame([row])
     rows = []
     for label, chunk in table.groupby(keys, observed=True, dropna=False):
         label = label if isinstance(label, tuple) else (label,)
@@ -356,8 +364,34 @@ def build_result(table, *, value="value"):
         agg = summarize(chunk[value].to_numpy())
         row[value] = agg.pop("mean")
         row.update(agg)
+        row.update(_extra(chunk))
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep=()):
+    """One row per replicate: the item axis averaged away.
+
+    THE pseudoreplication step, and it is a shared function rather than a line inside
+    ``build_stats`` because the PLOT has to make exactly the same collapse. It did not: with
+    ``phenotypic_entropy(groupby='patient', splitby='response')`` the box and strip were drawn
+    from ``result`` directly -- 47 clone dots -- while the p-value beneath them came from 6
+    patients. The figure and the statistic described different units, which is the same defect
+    ``build_stats`` exists to prevent, surviving in the marks.
+
+    Keeping one implementation is the point: the marks and the test cannot disagree about the
+    replicate unit if they are the same collapse.
+
+    ``keep`` names further label columns to preserve -- the plotting layer passes whatever it
+    is about to put on x and hue, since collapsing away an axis it is drawing would silently
+    drop the split (measured: the ``response`` hue vanished from the clonotypic-entropy panel).
+    """
+    if result is None or not len(result) or groupby is None or groupby not in result.columns:
+        return result
+    keys = [c for c in (groupby, splitby, *keep) if c and c in result.columns]
+    keys = list(dict.fromkeys(keys))
+    return (result.groupby(keys, observed=True, dropna=False)[value]
+            .mean().reset_index())
 
 
 def build_stats(result, *, groupby, splitby, value="value"):
@@ -378,9 +412,9 @@ def build_stats(result, *, groupby, splitby, value="value"):
         return None
     from ._compare import compare_groups
 
-    # THE pseudoreplication step. Everything after this sees one number per group.
-    per_group = (result.groupby([groupby, splitby], observed=True, dropna=False)[value]
-                 .mean().reset_index())
+    # THE pseudoreplication step. Everything after this sees one number per group. Shared with
+    # the plotting layer so the marks cannot describe a different unit from the p-value.
+    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
     contrasts = compare_groups(per_group, value=value, splitby=splitby)
     if contrasts is None or not len(contrasts):
@@ -431,7 +465,11 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
                 rows.append({**label_row, "draw": draw, "value": payload})
             else:
                 for item, value in payload.items():
-                    rows.append({**label_row, item_col: item, "draw": draw, "value": value})
+                    row = {**label_row, item_col: item, "draw": draw}
+                    # an item's payload is a scalar, or a mapping of value columns when the
+                    # metric carries more than one (the delta and its two endpoints)
+                    row.update(value if isinstance(value, dict) else {"value": value})
+                    rows.append(row)
 
     rows = []
     if groupby is None:

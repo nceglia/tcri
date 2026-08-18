@@ -17,6 +17,7 @@ import pytest
 
 import tcri
 from tcri import _keys as K
+from tcri.plotting._base import BRACKET_LABEL
 
 TWINS = ["mutual_information", "clonotypic_entropy", "phenotypic_entropy", "phenotypic_flux"]
 
@@ -30,6 +31,17 @@ METRIC_ARGS = {
 
 def _cov(adata):
     return list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+
+
+def _n_points(ax):
+    """Markers drawn by the point mark — the floor of the mark rule."""
+    return sum(len(c.get_offsets()) for c in ax.collections)
+
+
+def _n_violins(ax):
+    from matplotlib.collections import PolyCollection
+
+    return sum(isinstance(c, PolyCollection) for c in ax.collections)
 
 
 def _compute_all(adata, **kw):
@@ -110,7 +122,7 @@ def test_pl_renders_the_axes_the_tl_call_used(trained_model):
 
     tcri.tl.mutual_information(adata, covariate=cov)
     ungrouped = tcri.pl.mutual_information(adata)
-    assert len(ungrouped.patches) == 1, "an ungrouped MI is one number, not a box per patient"
+    assert _n_points(ungrouped) == 1, "an ungrouped MI is one number, not a box per patient"
 
     tcri.tl.mutual_information(adata, covariate=cov, groupby="patient")
     grouped = tcri.pl.mutual_information(adata)
@@ -125,7 +137,7 @@ def test_pl_renders_the_axes_the_tl_call_used(trained_model):
     adata.uns[K.METADATA]["batch_col"] = "not_a_column"
     assert tcri.pl.mutual_information(adata).get_xlabel() == "patient"
     tcri.tl.mutual_information(adata, covariate=cov, key_added="mi_flat")
-    assert len(tcri.pl.mutual_information(adata, key="mi_flat").patches) == 1
+    assert _n_points(tcri.pl.mutual_information(adata, key="mi_flat")) == 1
 
 
 def test_pl_key_selects_a_non_default_result(trained_model):
@@ -137,7 +149,7 @@ def test_pl_key_selects_a_non_default_result(trained_model):
     tcri.tl.mutual_information(adata, covariate=cov, key_added="mi_ungrouped")
 
     assert tcri.pl.mutual_information(adata).get_xlabel() == "patient"
-    assert len(tcri.pl.mutual_information(adata, key="mi_ungrouped").patches) == 1
+    assert _n_points(tcri.pl.mutual_information(adata, key="mi_ungrouped")) == 1
 
 
 def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
@@ -208,22 +220,53 @@ def test_flux_labels_the_distance_it_was_computed_with(trained_model):
     assert "kl" in tcri.pl.phenotypic_flux(adata).get_ylabel()
 
 
-def test_posterior_draws_become_error_bars(trained_model):
-    """An ungrouped metric with draws has an HDI; a bar with no interval hides it."""
+def test_draws_become_violins_not_a_summary(trained_model):
+    """When draws are the sample, show the draws.
+
+    A bar-plus-HDI is a lossy summary of a distribution the package already stored in
+    ``table``. With no group and no item axis to vary, the draws ARE the sample, so the mark
+    is a violin. At ``n_samples=0`` there is no distribution and it degrades to a point with
+    no interval — NOT a zero-width one, which would state certainty never measured.
+    """
     _, adata = trained_model
     adata = adata.copy()
     cov = _cov(adata)
-
     from matplotlib.container import ErrorbarContainer
 
-    tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=0)
-    plain = tcri.pl.clonotypic_entropy(adata)
+    tcri.tl.mutual_information(adata, covariate=cov, n_samples=0)
+    plain = tcri.pl.mutual_information(adata)
+    assert _n_violins(plain) == 0
+    assert _n_points(plain) == 1
     assert not any(isinstance(c, ErrorbarContainer) for c in plain.containers)
 
-    tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0)
-    drawn = tcri.pl.clonotypic_entropy(adata)
-    bars = [c for c in drawn.containers if not isinstance(c, ErrorbarContainer)][0]
-    assert bars.errorbar is not None, "the posterior HDI is not on the figure"
+    tcri.tl.mutual_information(adata, covariate=cov, n_samples=30, random_state=0)
+    drawn = tcri.pl.mutual_information(adata)
+    assert _n_violins(drawn) == 1, "the draws were summarized away instead of drawn"
+
+
+def test_a_violin_never_spans_replicates(cohort):
+    """Pooling draws across replicates is pseudoreplication drawn as a picture.
+
+    6 patients x 30 draws would read as 180 samples and give a tight violin for a reason
+    unrelated to evidence. With a replicate axis present the sample must be replicates.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    cov = _cov(adata)
+
+    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", splitby="response",
+                               n_samples=30, random_state=0)
+    ax = tcri.pl.mutual_information(adata)
+    assert ax.get_xlabel() == "response"
+    assert _n_violins(ax) == 0, "a violin was drawn where replicates vary"
+    assert _n_points(ax) == 6, "the dots are not the 6 patients"
+
+    # ...and with the replicate ON x, each patient's own draws are its own violin
+    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                               n_samples=30, random_state=0)
+    per_patient = tcri.pl.mutual_information(adata)
+    assert per_patient.get_xlabel() == "patient"
+    assert _n_violins(per_patient) == 6, "one violin per patient over its own draws"
 
 
 # ── colours ──────────────────────────────────────────────────────────────────
@@ -293,6 +336,7 @@ def test_plots_route_through_the_shared_palette(trained_model):
     drawn = {matplotlib.colors.to_hex(c).lower()
              for coll in ax.collections for c in coll.get_facecolor()}
     assert drawn and drawn <= stored, f"colours off the shared palette: {drawn - stored}"
+    
 
     # and a stored assignment wins on the next figure, which is the whole point of persisting
     fixed = ["#123456", "#654321"][: len(stored)]
@@ -301,3 +345,283 @@ def test_plots_route_through_the_shared_palette(trained_model):
     redrawn = {matplotlib.colors.to_hex(c).lower()
                for coll in again.collections for c in coll.get_facecolor()}
     assert redrawn <= set(fixed), f"the stored palette did not reach the canvas: {redrawn}"
+
+
+# ── the mark and the statistic must describe one unit ────────────────────────
+
+@pytest.mark.parametrize("metric", ["phenotypic_entropy", "clonotypic_entropy",
+                                    "mutual_information"])
+def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
+    """Measured before this fix, on ``phenotypic_entropy(groupby, splitby)``::
+
+        x axis        : response
+        result rows   : 47 (one per patient x clone)
+        strip dots    : 47
+        stats n_a/n_b : 3 / 3   p = 0.1
+
+    The box and strip described 47 clones; the p-value bracketed above them described 6
+    patients. That is the pseudoreplication ``build_stats`` collapses away, surviving in the
+    marks — and it is invisible on ``mutual_information``, which has no item axis, so the
+    parametrization matters.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    cov = _cov(adata)
+
+    from tcri.tools._common import collapse_to_replicates
+
+    res = getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient",
+                                   splitby="response")
+    ax = getattr(tcri.pl, metric)(adata)
+
+    # whatever the x axis is, every dot is a replicate -- never an item
+    expected = collapse_to_replicates(
+        res["result"], groupby="patient",
+        keep=[c for c in (ax.get_xlabel(), "response") if c in res["result"].columns],
+    )
+    assert _n_points(ax) == len(expected), (
+        f"{metric}: {_n_points(ax)} dots against {len(expected)} replicate rows "
+        f"(result has {len(res['result'])})"
+    )
+    assert _n_points(ax) % 6 == 0, f"{metric}: dots are not a whole number of patients"
+
+
+def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
+    """Not merely the same COUNT — the same values, from the shared helper.
+
+    Two implementations of "average the items to one number per replicate" is how the
+    ``tl``/``pl`` ``distance_metric`` disagreement happened. `collapse_to_replicates` has one
+    definition and both callers use it.
+    """
+    from tcri.tools._common import collapse_to_replicates
+
+    _, adata = cohort
+    adata = adata.copy()
+    cov = _cov(adata)
+    res = tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient",
+                                     splitby="response")
+
+    expected = collapse_to_replicates(res["result"], groupby="patient", splitby="response")
+    ax = tcri.pl.phenotypic_entropy(adata)
+    drawn = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections]))
+    assert np.allclose(drawn, np.sort(expected["value"].to_numpy()))
+
+
+def test_nothing_connects_two_x_positions(cohort):
+    """A line between x positions claims the two points are the same entity observed twice.
+
+    Only matched data supports that, and matched data does not exist on this side of the API
+    yet. Box internals (whiskers, caps, medians) stay within one box; a connector spans
+    categories, which are 1.0 apart — so the span is the discriminator.
+
+    This is a prohibition, not a feature: when connectors arrive with the delta metrics they
+    must be drawn from an identity key, never from adjacency, and this test is what forces
+    that to be a deliberate change.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+    _compute_all(adata, groupby="patient", splitby="response")
+
+    for name in TWINS:
+        ax = getattr(tcri.pl, name)(adata)
+        for line in ax.lines:
+            if line.get_label() == BRACKET_LABEL:
+                continue      # a significance bracket spans x by design
+            xs = np.asarray(line.get_xdata(), dtype=float)
+            if xs.size < 2 or not np.isfinite(xs).all():
+                continue
+            assert xs.max() - xs.min() < 1.0, (
+                f"pl.{name} drew a line spanning x positions {xs.min()}..{xs.max()}"
+            )
+
+
+def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
+    """The colour is a property of the level, not of where it lands on this figure.
+
+    Found by looking at rendered panels: the renderer sorts x by median, so a `response`
+    panel where NR sorted first drew NR purple while the panel beside it, where R sorted
+    first, drew R purple. Same variable, same figure, swapped — because `resolve_colors`
+    zipped the stored hex list against the caller's display order.
+    """
+    _, adata = trained_model
+    adata = adata.copy()
+    cats = list(adata.obs["patient"].astype("category").cat.categories)
+
+    forward = tcri.pl.resolve_colors(adata, "patient", cats)
+    reverse = tcri.pl.resolve_colors(adata, "patient", list(reversed(cats)))
+    assert forward == reverse, "the colour followed the order, not the level"
+
+    # a subset must keep each level's colour rather than restarting the cycle
+    subset = tcri.pl.resolve_colors(adata, "patient", cats[1:])
+    assert all(subset[c] == forward[c] for c in cats[1:])
+
+    # and the same holds for a key with no obs column to appeal to
+    a = tcri.pl.resolve_colors(adata, "phenotype", ["x", "y", "z"], persist=False)
+    b = tcri.pl.resolve_colors(adata, "phenotype", ["z", "y", "x"], persist=False)
+    assert a == b
+
+
+def test_the_same_level_keeps_its_colour_across_panels(cohort):
+    """The end-to-end version: two panels of the same split, drawn in different orders."""
+    _, adata = cohort
+    adata = adata.copy()
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+
+    def _colour_by_level(ax):
+        out = {}
+        for coll in ax.collections:
+            for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
+                lvl = ax.get_xticklabels()[int(round(x))].get_text()
+                out.setdefault(lvl, set()).add(matplotlib.colors.to_hex(c).lower())
+        return out
+
+    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="response")
+    first = _colour_by_level(tcri.pl.phenotypic_entropy(adata))
+    tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=rest[0], groupby="patient",
+                            splitby="response")
+    second = _colour_by_level(tcri.pl.phenotypic_flux(adata))
+
+    for level in set(first) & set(second):
+        assert first[level] == second[level], (
+            f"{level!r} was {first[level]} in one panel and {second[level]} in the next"
+        )
+
+
+# ── the delta twins ──────────────────────────────────────────────────────────
+
+DELTAS = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
+
+
+def _compute_deltas(adata, **kw):
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+    to = rest[0] if rest else cov
+    for name in DELTAS:
+        getattr(tcri.tl, name)(adata, cov_from=cov, cov_to=to, **kw)
+
+
+@pytest.mark.parametrize("name", DELTAS)
+def test_delta_twins_obey_the_renderer_contract(name, cohort):
+    """Same rules as every other twin: no metric arguments, and it names the tool to run."""
+    _, adata = cohort
+    adata = adata.copy()
+    params = set(inspect.signature(getattr(tcri.pl, name)).parameters)
+    assert not (params & METRIC_ARGS)
+    assert {"kind", "key"} <= params
+
+    # `cohort` is session-scoped and other modules compute on it, so a copy inherits whatever
+    # they cached. Asserting a key is ABSENT has to clear it first or the test passes or fails
+    # on file ordering rather than on behaviour.
+    adata.uns.pop(getattr(K, name.upper()), None)
+    with pytest.raises(KeyError, match=f"tcri.tl.{name}"):
+        getattr(tcri.pl, name)(adata)
+
+    _compute_deltas(adata, groupby="patient")
+    with pytest.raises(ValueError, match="kind must be"):
+        getattr(tcri.pl, name)(adata, kind="nonsense")
+
+
+@pytest.mark.parametrize("name", DELTAS)
+def test_the_delta_view_marks_zero(name, cohort):
+    """Zero is a real position on a delta axis — an unmarked one hides the direction."""
+    _, adata = cohort
+    adata = adata.copy()
+    _compute_deltas(adata, groupby="patient", splitby="response")
+    ax = getattr(tcri.pl, name)(adata, kind="delta")
+    rules = [l for l in ax.lines
+             if l.get_label() == BRACKET_LABEL and len(set(np.round(l.get_ydata(), 12))) == 1
+             and float(l.get_ydata()[0]) == 0.0]
+    assert rules, "the delta axis has no zero rule"
+
+
+def test_only_the_clone_metric_connects_its_endpoints(cohort):
+    """A line asserts persistence. A clonotype persists; a phenotype is a bin.
+
+    Both metrics can show their endpoints, but only the clone-item one may join them — the
+    entity/category distinction, drawn.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    _compute_deltas(adata, groupby="patient")
+    from tcri.plotting._base import CONNECTOR_LABEL
+
+    def _connectors(ax):
+        return [l for l in ax.lines if l.get_label() == CONNECTOR_LABEL]
+
+    clone_ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    assert len(_connectors(clone_ax)) == adata.obs["patient"].nunique()
+
+    pheno_ax = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
+    assert not _connectors(pheno_ax), "a phenotype is a category, not a barcode"
+
+    # and no connector survives into the delta view, where a point IS the pairing
+    assert not _connectors(tcri.pl.delta_phenotypic_entropy(adata, kind="delta"))
+
+
+def test_endpoints_come_from_the_matched_result(cohort):
+    """The endpoints view is rendered from the DELTA result, where both sides were computed
+    over the intersected clone set — so the unmatched version of this figure is unreachable
+    rather than merely discouraged."""
+    _, adata = cohort
+    adata = adata.copy()
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+    tcri.tl.delta_phenotypic_entropy(adata, cov_from=cov, cov_to=rest[0], groupby="patient")
+
+    res = tcri.get.result(adata, "delta_phenotypic_entropy")["result"]
+    assert {"value_from", "value_to"} <= set(res.columns), (
+        "the endpoints are not in the payload, so the view would need a second result"
+    )
+    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    assert [t.get_text() for t in ax.get_xticklabels()] == [str(cov), str(rest[0])]
+
+    drawn = np.concatenate([c.get_offsets()[:, 1] for c in ax.collections])
+    from tcri.tools._common import collapse_to_replicates
+    for col in ("value_from", "value_to"):
+        want = collapse_to_replicates(res, groupby="patient", value=col)[col].to_numpy()
+        assert all(np.isclose(drawn, w).any() for w in want), f"{col} is not on the figure"
+
+
+def test_dot_area_is_the_matched_clone_count(cohort):
+    """`n_matched` varies per replicate, so it is encoded per point rather than in a title.
+
+    And a replicate's two endpoint dots must be the SAME size: the matched clone set is the
+    same on both sides, so a size difference would mean the intersection did not hold.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+    tcri.tl.delta_phenotypic_entropy(adata, cov_from=cov, cov_to=rest[0], groupby="patient")
+    res = tcri.get.result(adata, "delta_phenotypic_entropy")["result"]
+    counts = res.groupby("patient", observed=True)["clonotype"].nunique()
+
+    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    per_patient = [c.get_sizes() for c in ax.collections if len(c.get_offsets()) == 2]
+    assert len(per_patient) == len(counts)
+    for sizes in per_patient:
+        assert len(set(np.round(sizes, 9))) == 1, "a patient's two endpoints differ in size"
+
+    if counts.nunique() > 1:
+        flat = sorted(float(s[0]) for s in per_patient)
+        assert flat[0] < flat[-1], "the matched count is not encoded in the area"
+    assert ax.get_legend() is not None, "no size legend to read the areas against"
+
+
+def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
+    """The size legend says "clones matched", so it must be clones.
+
+    For `delta_clonotypic_entropy` the item is a phenotype and the matched clone count is not
+    in `result` — those clones were summed over inside H(c|phi). Counting item rows there
+    would count PHENOTYPES: measured on a 4-phenotype fixture the legend read
+    "clones matched: 4", a different number about a different thing.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    _compute_deltas(adata, groupby="patient")
+
+    sized = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    assert sized.get_legend() is not None
+
+    unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
+    assert unsized.get_legend() is None, "a phenotype count was labelled as clones matched"
+    areas = {round(float(s), 6) for c in unsized.collections for s in c.get_sizes()}
+    assert len(areas) == 1, "the phenotype panel encoded a count in the dot area"

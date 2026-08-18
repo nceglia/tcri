@@ -54,11 +54,26 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     """
     if categories is None:
         categories = adata.obs[cat_key].astype("category").cat.categories
-    cats = list(categories)
-    n = len(cats)
+    requested = list(dict.fromkeys(categories))
+
+    # The colour is a property of the LEVEL, never of its position in this particular figure.
+    # Assignment therefore runs over a canonical order -- scanpy's convention, the obs
+    # categorical's categories, which is also what `uns[<key>_colors]` is aligned to -- and the
+    # requested order only selects from the result.
+    #
+    # Zipping against the caller's order instead made the colour follow position: the renderer
+    # sorts x by median, so a `response` panel where NR sorted first drew NR purple, and the
+    # panel beside it where R sorted first drew R purple. Same variable, same figure, swapped.
+    # Without an obs column to appeal to, sorting is enough to make it order-independent.
+    if cat_key in adata.obs:
+        canon = list(adata.obs[cat_key].astype("category").cat.categories)
+        canon += [c for c in requested if c not in canon]
+    else:
+        canon = sorted(requested, key=str)
+    n = len(canon)
 
     if isinstance(palette, dict):
-        raw = [palette.get(c, tcri_colors[i % len(tcri_colors)]) for i, c in enumerate(cats)]
+        raw = [palette.get(c, tcri_colors[i % len(tcri_colors)]) for i, c in enumerate(canon)]
     elif isinstance(palette, (list, tuple)):
         raw = [palette[i % len(palette)] for i in range(n)]
     elif isinstance(palette, str):
@@ -76,4 +91,5 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     hexes = [to_hex(c) for c in raw]
     if persist:
         adata.uns[K.colors(cat_key)] = hexes
-    return dict(zip(cats, hexes))
+    mapping = dict(zip(canon, hexes))
+    return {c: mapping[c] for c in requested}

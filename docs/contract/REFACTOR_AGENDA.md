@@ -18,6 +18,24 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
    Audit Log.
 6. **Usability is a first-class check** — every session ask "is this easier to use than before?"
 
+## What a green suite does not catch
+
+Two bugs shipped through a green suite and were found only by **rendering the figures and
+looking at them** (#80, #81):
+
+- `resolve_colors` assigned colour by POSITION, not level. Within one figure,
+  `phenotypic_entropy` drew NR purple while `phenotypic_flux` beside it drew R purple. The
+  existing test called it twice with the same order, so the property it was written to protect
+  was never actually exercised.
+- the delta endpoints size legend read "clones matched: 4" on a 4-phenotype fixture. For a
+  phenotype-item metric the matched clone count is not in `result` at all.
+
+Both were in code written specifically to prevent those failures. That is the point worth
+keeping: **the suite verified the structure, and the structure was right.** The values flowing
+through it were wrong in a way no shape assertion can see. Where a function's output is a
+figure, the figure is the artifact under test — render it and look before calling the work
+done, and add the discriminating assertion once you know what to assert.
+
 ## Standing Audit (run after each PR — copy into the diary entry)
 - [ ] **Removed everything slated?** (cross-check the Removal Ledger; `__all__` + import-sites clean; `import tcri` green)
 - [ ] **Added everything wanted?** (the PR's deliverables all present)
@@ -25,6 +43,8 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 - [ ] **Streamline:** any duplication / dead branch / needless complexity spotted? Removed or logged?
 - [ ] **Usability:** simpler signatures / clearer errors / fewer steps than before?
 - [ ] **Contract conformance green?** (`test_contract_conformance`)
+- [ ] **If the change affects a figure, RENDER IT and look.** See "What a green suite does not
+      catch" above — twice now, a green suite passed a plot that was visibly wrong.
 - [ ] Diary entry written; ledger + statuses updated.
 
 ## Status legend: ☐ todo · ◐ in progress · ✅ done · ⚠ blocked
@@ -43,6 +63,39 @@ tracker + running diary for the whole refactor. The detailed spec lives in `tcri
 | 8 | `diag/` seeding | ✅ | low-med | 4,5 | PPC columns |
 | 9 | PGM→docs; utils finalize | ✅ | low | 1,8 | import green sans daft |
 | 10 | Public API + scverse CI | ☐ | low-med | all | ecosystem checklist |
+
+## Repo cleanup  ·  ☐ todo (its own pass — do NOT fold into a feature PR)
+
+Deliberately deferred; collected here so it stops accreting.
+
+- **Re-audit the Phase 5/6 removal ticks.** `tl.delta_clonotypic_entropy` and
+  `tl.delta_entropy_table` were ticked under *"delete WITH replacement, never before"* against
+  `compare_groups` — which contrasts between GROUPS on a tidy frame and cannot compute a metric
+  at two covariate levels. The replacement was on a different axis, so nothing replaced them,
+  and the capability was gone for four PRs until #81 rebuilt it. **The rule was right; the tick
+  was wrong.** Nobody checked that the named replacement covered the same axis, only that
+  something was named. Skim the remaining Phase 5/6 ticks for the same failure mode —
+  `mi_compare` -> `compare_groups` and `flux_table` -> `tl.phenotypic_flux` are the two worth
+  re-reading, and a tick should have to say *what* it replaces, not just *with what*.
+
+- **Rename `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`.** It is the only one of the
+  four contracts not named for what it is — its siblings are `MODEL_CONTRACT.md`,
+  `METRICS_CONTRACT.md`, `TRAINING_CONTRACT.md`. In-tree referrers to update: `CLAUDE.md`,
+  `README.md`, `tcri/_contract.pyi`, `tcri/tools/_joint.py`.
+- **Issues do not live in the contract.** The contract docs have accreted "deferred", "tracked
+  as a follow-up", "open question" prose that belongs in GitHub issues. A contract states what
+  is frozen; a tracker states what is pending. Mixing them means a reader cannot tell which
+  sentences bind. Sweep them out, open issues, leave pointers only where a *decision* is
+  genuinely pending (e.g. `OPEN_QUESTIONS` in `_metrics_contract.py`, which is machine-checked
+  and therefore load-bearing — that one stays).
+- **Stale and duplicate artifacts in `docs/contract/`.** Observed while working:
+  `tcri_dependency_map.md` announces itself as "the post-refactor API" but its call graph still
+  contains `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table`, `pl.ridge_delta_entropy` and
+  `pp.joint_distribution` — all deleted in PR6/PR7. It reads as current and is not. Alongside it:
+  three overlapping API documents (`tcri_api_and_responsibilities.md`, `tcri_api_contract.md`,
+  `tcri_api_contract.html`), the dependency map in three formats (`.md`/`.dot`/`.html`), and a
+  `_quarantine/` directory. Decide which are generated (regenerate or delete), which are
+  historical (move to `REFACTOR_HISTORY.md`), and which are live.
 
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
@@ -305,6 +358,44 @@ _(pass 2 — `pl` reading `tcri.get`, `compare_groups` internal, colours, `eti`/
   frame whose cells are draw vectors. Kept, not deleted, because `table` makes a paired
   posterior contrast genuinely reachable now and which estimand it should use is a question
   for the authors. Sankey rebuild; `tcri.ut` star-import with no `__all__`.
+
+## Mark rule + the paired entropies  ·  ✅ done (branches `feat/pl-mark-rule`, `feat/metrics-delta`)
+
+**The mark rule.** A mark shows ONE variance component: within an x position the sample is the
+coarsest unit that varies there, replicate > item > draw. Measured defect it fixes, on
+`phenotypic_entropy(groupby="patient", splitby="response")` — the box and strip described
+**47 clones** while the p-value bracketed above them described **6 patients**. That is the
+pseudoreplication `build_stats` collapses away, surviving in the marks.
+`collapse_to_replicates` is extracted and called by both, so they cannot disagree by
+construction. `_bars` becomes `_points` (a bar's area encodes a magnitude from zero these
+metrics do not have), and draws are drawn as violins rather than summarised into a whisker.
+
+**The paired entropies.** `delta_clonotypic_entropy` and `delta_phenotypic_entropy`:
+`value(cov_to) − value(cov_from)` per item, within a draw. Two functions, not three — MI has
+no item axis, so a "ΔMI" is a subtraction of two cached scalars and belongs to the caller.
+This restores a capability deleted in PR6 whose nominal replacement, `compare_groups`, was on
+a different axis entirely. Support is the intersection within each replicate, which for the
+clonotypic metric also makes `log2(C)` cancel; seeding follows flux so a self-delta is exactly
+0. No `p_gt`. `pl.delta_*(kind="delta"|"endpoints")`, with the endpoints view rendered from the
+delta result so the unmatched version of that figure is unreachable.
+
+- **Tests:** 340 fast, 352 `--runslow` (from 256 on `main` before this run of work). Nine
+  mutations checked across the two branches, each failing exactly its own test.
+- **Rendering the figures found two bugs the tests could not.** `resolve_colors` assigned
+  colour by POSITION, so within one figure `phenotypic_entropy` drew NR purple while
+  `phenotypic_flux` beside it drew R purple — the exact bug that function exists to prevent,
+  missed because the test called it twice with the same order. And the delta endpoints legend
+  read "clones matched: 4" on a 4-phenotype fixture: for a phenotype-item metric the matched
+  clone count is not in `result` at all. Both fixed, both now covered.
+- **Two of my own test bugs, worth recording:** an HDI need NOT contain the mean (it is the
+  narrowest interval holding 94% of the mass, so an outlying draw is excluded from the
+  interval while still pulling the mean — the median is the invariant); and a test asserting a
+  cached key is absent must clear it, since `cohort` is session-scoped and the assertion
+  otherwise passes or fails on file ordering.
+- **Standing Audit:** removals ✅ (`_SELF`/dead `subkey`); deliverables ✅; new tests for the
+  mark rule, the strip unit, the connector prohibition, colour stability and the whole delta
+  family ✅; duplication removed ✅ (one collapse, one contrast, one palette); usability ✅;
+  contract conformance green ✅ (64); contract written BEFORE the code ✅.
 
 ## PR 10 — Public API + scverse CI  ·  ☐ todo
 - **Logged test (from grafiti parity):** once `pl.__all__` exists, add a conformance assertion `set(pl.__all__) == {pl entries in _contract.pyi}` — catches *extra/missing* plot functions (whole-surface), not just signature drift on onboarded ones. (tcri's namespaced `.pyi` checks drift incrementally via `IMPLEMENTED`; this closes the whole-surface gap grafiti gets from its markdown+`__all__` channel.)
