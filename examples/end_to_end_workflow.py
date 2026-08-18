@@ -1,9 +1,8 @@
 # %% [markdown]
-# # tcri end-to-end — a multi-patient, two-timepoint cohort
+# # tcri end-to-end — a multi-patient, multi-condition cohort
 #
-# One pass through the whole package on synthetic data with a known answer:
-# **8 patients**, each sampled **pre** and **post** treatment, split into
-# **responders (R)** and **non-responders (NR)**.
+# One pass through the whole package: **8 patients**, each sampled **pre** and **post**
+# treatment, split into **responders (R)** and **non-responders (NR)**.
 #
 # The two arms are constructed to differ, so the figures have something to show:
 #
@@ -31,7 +30,7 @@ import matplotlib.pyplot as plt
 
 import tcri
 from tcri import _keys as K
-from tcri.datasets import simulate_tcri
+from tcri.datasets import simulate_cohort
 from tcri.model import TCRIModel
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -42,74 +41,50 @@ FIGS.mkdir(exist_ok=True)
 SEED = 0
 
 # %% [markdown]
-# ## 1. Build the cohort
+# ## 1. Build the cohort — one line
 #
-# Simulating each timepoint independently and giving the two runs matching clone names does
-# **not** produce paired clones: the ids line up, but the underlying clone→phenotype
-# relationship is unrelated between the runs. Since half this workflow is about *paired*
-# quantities, the construction matters.
+# `simulate_cohort` produces the shape most analyses have: patients as replicates, an ordered
+# condition axis *within* each patient, and a response label *between* them.
 #
-# Each patient is simulated **once** (fixing that patient's clone→phenotype structure), and
-# the two timepoints are drawn from that one population:
+# Two properties it gives you that matter downstream:
 #
-# * **pre** — an unbiased sample.
-# * **post** — a sample *enriched* for each clone's dominant phenotype. Strongly for
-#   responders, barely for non-responders.
+# * **Clones are paired across conditions.** Each patient is simulated once, fixing its
+#   clone→phenotype structure, and every condition is drawn from that one population. (Doing
+#   it the obvious way — simulating each condition separately and matching clone names —
+#   yields ids that line up over unrelated structure, so `phenotypic_flux` and the `delta_*`
+#   metrics would have nothing to measure.)
+# * **Clone sizes are heavy-tailed**, as real repertoires are: a power law, a few large
+#   expanded clones over a long tail of singletons. `simulate_tcri`'s own clone abundance is a
+#   symmetric Dirichlet, which is not.
 #
-# So the same clones are observed twice, expression stays consistent with its phenotype label
-# (nothing is relabelled), and only the clone→phenotype *concentration* moves. Clone ids are
-# suffixed per patient (`clone_3@P02`) so none spans two patients — the metric `groupby`
-# restricts by clone id, and `tcri` raises rather than let one patient absorb another's cells.
+# Only the clone→phenotype *concentration* changes between conditions — responders' clones
+# commit, non-responders' barely move. Nothing is relabelled, so a cell's phenotype still
+# matches the expression it was generated with.
 
 # %%
-#: (patient, arm, enrichment). Higher enrichment = post-treatment clones commit harder.
-COHORT = [
-    ("P01", "R",  14.0), ("P02", "R",  10.0), ("P03", "R", 18.0), ("P04", "R",  12.0),
-    ("P05", "NR",  1.2), ("P06", "NR",  1.0), ("P07", "NR", 1.3), ("P08", "NR",  1.1),
-]
-N_CLONES, N_PHENOTYPES, N_GENES, N_CELLS = 18, 4, 40, 260
-
-
-def build_cohort():
-    rng = np.random.default_rng(SEED)
-    blocks = []
-    for i, (patient, arm, enrichment) in enumerate(COHORT):
-        # ONE simulation per patient: this fixes that patient's clone->phenotype structure
-        pool = simulate_tcri(
-            n_clones=N_CLONES, n_phenotypes=N_PHENOTYPES, n_genes=N_GENES,
-            n_cells=3 * N_CELLS, n_covariates=1, omega_concentration=0.9, seed=SEED + i,
-        )
-        obs = pool.obs
-        modal = obs.groupby("clone_id", observed=True)["phenotype"].agg(
-            lambda x: x.value_counts().idxmax())
-        is_modal = (obs["clone_id"].map(modal).astype(str) == obs["phenotype"].astype(str))
-
-        # pre: unbiased. post: oversample each clone's dominant phenotype, so the SAME clones
-        # concentrate. Nothing is relabelled, so expression still matches its phenotype.
-        take = {}
-        take["pre"] = rng.choice(pool.n_obs, size=N_CELLS, replace=False)
-        w = np.where(is_modal.to_numpy(), enrichment, 1.0)
-        take["post"] = rng.choice(pool.n_obs, size=N_CELLS, replace=False, p=w / w.sum())
-
-        for timepoint, idx in take.items():
-            block = pool[idx].copy()
-            block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
-            block.obs["timepoint"] = timepoint
-            block.obs["patient"] = patient
-            block.obs["response"] = arm
-            block.obs_names = [f"{patient}_{timepoint}_{k}" for k in range(block.n_obs)]
-            blocks.append(block)
-
-    adata = ad.concat(blocks, join="outer", label=None)
-    for col in ("clone_id", "phenotype", "timepoint", "patient", "response"):
-        adata.obs[col] = adata.obs[col].astype("category")
-    adata.layers["counts"] = adata.X.copy()
-    return adata
-
-
-adata = build_cohort()
+adata = simulate_cohort(
+    n_patients=8,
+    conditions=("pre", "post"),
+    responder_fraction=0.5,
+    n_clones=(14, 24),                  # ragged, as real cohorts are
+    n_phenotypes=4,
+    n_genes=40,
+    n_cells_per_sample=260,
+    clone_size_distribution="powerlaw", # "uniform" for a flat repertoire
+    clone_size_exponent=2.0,
+    responder_enrichment=12.0,
+    nonresponder_enrichment=1.1,
+    seed=SEED,
+)
 print(f"{adata.n_obs} cells x {adata.n_vars} genes")
-print(adata.obs.groupby(["response", "timepoint"], observed=True).size().to_frame("cells").T)
+print(adata.obs.groupby(["response", "condition"], observed=True).size().to_frame("cells").T)
+
+sizes = (adata.obs.query("condition == 'pre'")
+         .groupby("patient", observed=True)["clone_id"].value_counts())
+sizes = sizes[sizes > 0]
+top = sizes.groupby(level=0).apply(lambda s: s.iloc[0] / s.sum())
+print(f"\nclones per patient: {sorted(adata.uns['tcri_truth']['per_sample']['n_clones'].unique())}")
+print(f"largest clone holds {top.min():.0%}-{top.max():.0%} of a patient's cells")
 
 # %% [markdown]
 # ## 2. Register and train
@@ -131,7 +106,7 @@ TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="timepoint",     # the axis a delta is taken across
+    covariate_key="condition",     # the axis a delta is taken across
     batch_key="patient",           # one-hot into the networks
     replicate="patient",           # the independent unit for statistics
 )
@@ -234,17 +209,17 @@ tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient",
                         n_samples=60, random_state=SEED)
 
 # A second call REPLACES the cached result (the scanpy convention). `key_added` is how you
-# keep both side by side instead -- here, the same metric at the other timepoint.
+# keep both side by side instead -- here, the same metric at the other condition.
 tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="response",
                            n_samples=100, random_state=SEED, key_added="mi_pre")
 
 pre_vs_post = pd.concat([
-    tcri.get.result(adata, "mutual_information", key="mi_pre")["result"].assign(timepoint="pre"),
-    mi_post["result"].assign(timepoint="post"),
+    tcri.get.result(adata, "mutual_information", key="mi_pre")["result"].assign(condition="pre"),
+    mi_post["result"].assign(condition="post"),
 ])
-print("\nboth timepoints, from two cached results:")
-print(pre_vs_post.groupby(["response", "timepoint"], observed=True)["value"]
-      .mean().unstack("timepoint").round(4).to_string())
+print("\nboth conditions, from two cached results:")
+print(pre_vs_post.groupby(["response", "condition"], observed=True)["value"]
+      .mean().unstack("condition").round(4).to_string())
 # ...and `pl` renders either one: pass the same `key` you stored it under.
 
 # %% [markdown]
