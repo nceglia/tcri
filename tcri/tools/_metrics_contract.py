@@ -19,8 +19,13 @@ wrong, not the manuscript. If the manuscript is ambiguous, ASK the authors — d
 a definition from what makes the code or a benchmark look correct.
 
 Two source documents, both archived under ``docs/contract/source/`` (see ``SOURCES``).
-**Their equation numbers COLLIDE** — "eq 3" is the clonotypic entropy in one and the
-VampPrior in the other — so every ``note_eq`` below names its document explicitly.
+
+**Metrics are identified by a stable internal ``tag``, not by a manuscript equation number.**
+The two documents number independently and both are revised, so "eq 3" has meant the
+clonotypic entropy in one and the VampPrior in the other, and a renumbering upstream silently
+invalidated every citation here. Chasing that was ongoing work for no benefit: what the
+contract needs to freeze is *what is computed*, and ``formula`` already states that exactly.
+``source`` records which document defines a metric, without asserting where in it.
 
 Changing any definition here means changing what the published numbers mean.
 **Update this manifest and ``docs/contract/METRICS_CONTRACT.md`` FIRST, then the
@@ -69,14 +74,15 @@ LOG_BASE = 2
 class MetricSpec:
     """One frozen metric definition."""
 
-    def __init__(self, name, formula, per, support, normalizer, empty, note_eq):
+    def __init__(self, name, formula, per, support, normalizer, empty, tag, source):
         self.name = name
         self.formula = formula      # the exact quantity computed
         self.per = per              # what one output value corresponds to
         self.support = support      # how zero/absent mass is handled
         self.normalizer = normalizer
         self.empty = empty          # value when there is no mass
-        self.note_eq = note_eq
+        self.tag = tag              # STABLE internal name -- see the module docstring
+        self.source = source        # which document defines it, WITHOUT pinning a number
 
     def __repr__(self):  # pragma: no cover - debug aid
         return f"MetricSpec({self.name!r}, {self.formula!r})"
@@ -94,7 +100,8 @@ METRIC_SPECS = {
         ),
         normalizer="log2(#supported clones), or log2(n_clones_ref) when given",
         empty="NaN when the phenotype column has no positive mass",
-        note_eq="METRICS eq 3",
+        tag="TCRI-CLONOTYPIC-ENTROPY",
+        source="METRICS",
     ),
     "phenotypic_entropy": MetricSpec(
         name="phenotypic_entropy",
@@ -107,7 +114,8 @@ METRIC_SPECS = {
         ),
         normalizer="log2(P), P = number of phenotype categories",
         empty="NaN when the clone row has no positive mass",
-        note_eq="METRICS eq 4",
+        tag="TCRI-PHENOTYPIC-ENTROPY",
+        source="METRICS",
     ),
     "mutual_information": MetricSpec(
         name="mutual_information",
@@ -124,7 +132,8 @@ METRIC_SPECS = {
             "comparable across groups with different clone counts."
         ),
         empty="NaN when the table has no positive mass",
-        note_eq="METRICS eq 5 (MI); METRICS eq 6 (NMI, mean denominator)",
+        tag="TCRI-MUTUAL-INFORMATION",
+        source="METRICS",
     ),
     "phenotypic_flux": MetricSpec(
         name="phenotypic_flux",
@@ -140,10 +149,8 @@ METRIC_SPECS = {
             "kernel: KL and JS in bits (log2), L1 in [0, 2]."
         ),
         empty="NaN when the clone has no mass in either condition",
-        note_eq=(
-            "METRICS eq 7 -- D_KL(P||Q) = sum_x P(x) log(P(x)/Q(x)); the prose defines "
-            "phenotypic flux AS that divergence, and 'kl' is the DEFAULT accordingly."
-        ),
+        tag="TCRI-PHENOTYPIC-FLUX",
+        source="METRICS",  # the prose defines flux AS the KL divergence, hence kl by default
     ),
 }
 
@@ -163,17 +170,9 @@ UNIMPLEMENTED = {
 #: Live disagreements with the METRICS document. NOT sanctioned extensions -- each is a
 #: decision someone has to make. A test asserts no key appears in both dicts, so a pending
 #: decision cannot be quietly refiled as a feature.
-OPEN_QUESTIONS = {
-    "posterior_summary_of_a_nonlinear_metric": (
-        "At n_samples>0 tcri reports E_s[NMI(J_s)] -- the mean of the per-draw NMI. NMI is "
-        "nonlinear in the joint, so this is not the NMI of the posterior, and the two "
-        "differ materially (measured 0.224 vs 0.123 on a benchmark cell). Note 1's "
-        "benchmark prose says 'we report the posterior mean NMI over 200 posterior draws', "
-        "which reads as the current behaviour but is ambiguous. ASK the authors which "
-        "estimand is intended. Affects every metric accepting n_samples>0, not only "
-        "mutual_information."
-    ),
-}
+OPEN_QUESTIONS = {}
+#: (empty -- `posterior_summary_of_a_nonlinear_metric` was resolved; see
+#: SANCTIONED_EXTENSIONS['posterior_summary_is_the_per_draw_mean'].)
 
 
 #: Identities the conformance test enforces. These are what make a redefinition
@@ -267,11 +266,14 @@ SANCTIONED_EXTENSIONS = {
         "(tcri/datasets/_simulate.py) are abundance-weighted, so anything reproducing the "
         "note MUST pass weighted=True explicitly, exactly as with normalize_mode.\n"
         "\n"
-        "The DEFAULT IS NOT SETTLED and is deliberately left at False pending a dedicated "
-        "review -- see the working agreement: the meaning of this argument is to be examined "
-        "with it as the only variable moving. This entry pins the current default so a change "
-        "to it is a contract change and cannot happen silently, which was DE-7: `weighted` "
-        "appeared nowhere in this manifest, so the conformance test could not see it move."
+        "DECIDED: the default is False -- one vote per CLONE. tcri measures the repertoire, "
+        "and the per-clone estimand is the one that does not move when sequencing depth or "
+        "capture bias reshapes clone sizes. `weighted=True` remains available for anyone "
+        "reproducing a cell-weighted analysis (Note 1's benchmark protocol and this repo's "
+        "own simulator oracle are abundance-weighted, so a like-for-like comparison must pass "
+        "it explicitly). This entry pins the default so a change is a contract change and "
+        "cannot happen silently, which was DE-7: `weighted` appeared nowhere in this manifest, "
+        "so the conformance test could not see it move."
     ),
     "normalize_mode_default": (
         "DEVIATION FROM eq 6. The note's eq 6 defines "
@@ -324,6 +326,28 @@ SANCTIONED_EXTENSIONS = {
         "different questions -- how sure the model is about one patient, versus how much the "
         "quantity varies between patients -- and reporting them under one name would make a "
         "between-patient interval read as a posterior."
+    ),
+    "posterior_summary_is_the_per_draw_mean": (
+        "At n_samples>0, `result.value` is E_s[NMI(J_s)] -- the mean of the PER-DRAW metric -- "
+        "not NMI(E_s[J_s]), the metric of the posterior-mean joint. NMI is nonlinear in the "
+        "joint so the two differ materially (0.224 vs 0.123 on a benchmark cell).\n"
+        "\n"
+        "DECIDED: the per-draw mean. It is the only one of the two with a coherent interval -- "
+        "collapsing the posterior before computing the metric leaves nothing to form an HDI "
+        "from, and every interval this package reports rests on the per-draw path. It is also "
+        "the posterior of the quantity of interest rather than a plug-in on a point estimate.\n"
+        "\n"
+        "NEITHER IS HIDDEN, which is what makes this a default rather than a question for the "
+        "authors: `table` holds one row per draw, so the per-draw mean is its mean; and "
+        "`joint_distribution`'s `result` IS the posterior-mean joint, so the alternative is\n"
+        "\n"
+        "    _mi_from_joint(tcri.get.result(adata, 'joint_distribution')['result'])\n"
+        "\n"
+        "HYPOTHESIS, untested: NMI(E[J]) is essentially the n_samples=0 point estimate, and "
+        "issue #59 reports that reading LOW against simulator truth. If the mean joint is "
+        "over-smoothed by shrinkage then the point estimate would be biased low and the "
+        "per-draw mean would recover part of it -- making #59 and this the same finding. Worth "
+        "measuring before either is treated as settled science."
     ),
     "the_delta_family": (
         "The paired (cov_from -> cov_to) forms of the two entropies. Neither metrics document "

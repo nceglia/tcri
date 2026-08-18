@@ -58,6 +58,9 @@ sweep)
     done
   done
   # BIG: 2000 genes. Large batches only -- this is where a GPU should finally have real work.
+  # No CPU point: 525k x 2000 on 10 cores would not finish inside the 24h limit, so the
+  # denominator it would provide is not obtainable here. GPU configs compare against each
+  # other; the CPU/GPU ratio comes from the SMALL dataset, which does fit.
   for bs in 8192 32768 65536; do
     ids+=("$(submit "big_cuda_bs${bs}" "$BIG" gpu:1 8 320G 24:00:00 \
       "python benchmarks/cluster/profile_real.py --data $WORK/big.h5ad \
@@ -65,12 +68,6 @@ sweep)
          --n-samples 100 --n-latent 20 --n-hidden 128 --k 8 \
          --out $WORK/results/big_cuda_bs${bs}.json")")
   done
-  # one CPU point on the big data for a speedup denominator; capped epochs so it can finish
-  ids+=("$(submit big_cpu_bs8192 "$BIG" gpu:0 10 320G 24:00:00 \
-    "python benchmarks/cluster/profile_real.py --data $WORK/big.h5ad \
-       --tag big_cpu_bs8192 --device cpu --batch-size 8192 --epochs 200 \
-       --n-samples 100 --n-latent 20 --n-hidden 128 --k 8 \
-       --out $WORK/results/big_cpu_bs8192.json")")
   printf '%s\n' "${ids[@]}" > "$WORK/.sweep.jobids"
   echo "submitted ${#ids[@]} jobs:"; printf '  %s\n' "${ids[@]}"
   ;;

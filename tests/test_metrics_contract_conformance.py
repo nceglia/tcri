@@ -27,7 +27,7 @@ def test_manifest_is_complete():
         "phenotypic_flux",
     }
     for name, spec in MC.METRIC_SPECS.items():
-        for field in ("formula", "per", "support", "normalizer", "empty", "note_eq"):
+        for field in ("formula", "per", "support", "normalizer", "empty", "tag", "source"):
             assert getattr(spec, field), f"{name}.{field} is empty"
     assert MC.LOG_BASE == 2
 
@@ -37,13 +37,17 @@ def test_every_spec_names_its_source_document():
     entropy in one and the VampPrior in the other — so a bare "eq 3" is ambiguous. This makes
     that ambiguity un-shippable."""
     for name, spec in MC.METRIC_SPECS.items():
-        assert any(src in spec.note_eq for src in MC.SOURCES), (
-            f"{name}.note_eq must name its source document (one of {sorted(MC.SOURCES)}); "
-            f"got {spec.note_eq!r}"
+        assert spec.source in MC.SOURCES, (
+            f"{name}.source must name a document in SOURCES ({sorted(MC.SOURCES)}); "
+            f"got {spec.source!r}"
         )
-    assert "NOTE_1" not in " ".join(s.note_eq for s in MC.METRIC_SPECS.values()), (
-        "Supplementary Note 1 carries no entropy/MI definitions — a metric citing it is "
-        "citing the wrong document."
+        assert spec.tag.startswith("TCRI-"), (
+            f"{name}.tag must be a stable internal id, not a manuscript equation number; "
+            f"got {spec.tag!r}"
+        )
+    assert not any(s.source == "NOTE_1" for s in MC.METRIC_SPECS.values()), (
+        "NOTE_1 carries no entropy or MI definitions; a metric citing it cites the wrong "
+        "document"
     )
 
 
@@ -66,10 +70,29 @@ def test_sources_are_archived_with_a_hash():
 
 def test_open_questions_are_not_quietly_sanctioned():
     """A live disagreement with the source document must not be filed as an 'extension'.
-    Extensions are things the document does not specify; these are things it does."""
-    for key in ("posterior_summary_of_a_nonlinear_metric",):
-        assert key in MC.OPEN_QUESTIONS and len(MC.OPEN_QUESTIONS[key]) > 40
-        assert key not in MC.SANCTIONED_EXTENSIONS
+
+    Extensions are things the document does not specify; open questions are things it does,
+    ambiguously. The two dicts must stay disjoint or a pending decision could be refiled as a
+    feature and stop being visible.
+    """
+    overlap = set(MC.OPEN_QUESTIONS) & set(MC.SANCTIONED_EXTENSIONS)
+    assert not overlap, f"filed as both a question and a feature: {sorted(overlap)}"
+    for key, text in MC.OPEN_QUESTIONS.items():
+        assert len(text) > 40, f"{key} is an open question with no statement of the question"
+
+
+def test_the_posterior_summary_default_is_recorded_as_decided():
+    """`E_s[NMI(J_s)]` vs `NMI(E_s[J_s])` was an open question; it is now a recorded default.
+
+    It moved because neither estimand is hidden: `table` holds one row per draw, so the
+    per-draw mean is its mean, and `joint_distribution`'s `result` IS the posterior-mean
+    joint, so the alternative is one call away. What made it a *decision* rather than a
+    presentation detail is that only the per-draw path carries an interval -- collapsing the
+    posterior before computing the metric leaves nothing to form an HDI from.
+    """
+    assert "posterior_summary_of_a_nonlinear_metric" not in MC.OPEN_QUESTIONS
+    entry = MC.SANCTIONED_EXTENSIONS["posterior_summary_is_the_per_draw_mean"]
+    assert "DECIDED" in entry and "per-draw mean" in entry
 
 
 # ── the manuscript equations, transcribed literally ─────────────────────────
