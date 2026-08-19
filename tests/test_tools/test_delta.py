@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 
 DELTAS = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
 ITEM = {"delta_clonotypic_entropy": "phenotype", "delta_phenotypic_entropy": "clonotype"}

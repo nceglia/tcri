@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 from tcri.plotting._base import BRACKET_LABEL
 
 TWINS = ["mutual_information", "clonotypic_entropy", "phenotypic_entropy", "phenotypic_flux"]

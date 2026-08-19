@@ -1,5 +1,5 @@
 from __future__ import print_function, division
-from .. import _keys as K
+from .._state import keys as K
 import os
 import sys
 import numpy as np

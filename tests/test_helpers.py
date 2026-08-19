@@ -1,8 +1,8 @@
 """Unit tests for the shared private helpers. Pure and fast — no model.
 
 These moved in the layout pass: `_stats.py` became the `_stats/` package (`_core` primitives +
-`_compare`), and `_distance.py` moved under `_compute/` with the rest of the numerics. `_keys`
-is still importable as a shim over `_state.keys`.
+`_compare`), `_distance.py` moved under `_compute/`, and the `_keys` shim over `_state.keys` was
+deleted along with the dead `_console` module.
 """
 import json
 import os
@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pytest
 
-from tcri import _console, _keys as K
+from tcri._state import keys as K
 from tcri._compute import _distance as D
 from tcri._stats import _core as S
 
@@ -68,14 +68,6 @@ def test_preprocessing_import_is_light():
     )
     assert "False" in out.stdout, f"import tcri eagerly loaded umap: {out.stdout!r}"
 
-
-def test_console_aliases_and_callables():
-    assert _console.MAG == _console.MAGENT
-    assert _console.GRN == _console.GREEN
-    assert _console.CYN == _console.CYAN
-    for fn in (_console._ok, _console._info, _console._warn, _console._fin):
-        callable(fn)
-    _console._ok("x", quiet=True)  # quiet path prints nothing, must not raise
 
 
 def test_stars_thresholds():

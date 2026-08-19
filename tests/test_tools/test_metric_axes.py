@@ -38,7 +38,7 @@ import pytest
 warnings.filterwarnings("ignore")
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 from tcri.model._model import TCRIModel
 

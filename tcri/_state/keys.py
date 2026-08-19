@@ -1,6 +1,6 @@
 """AnnData key constants — every literal tcri writes or reads lives here.
 
-Re-exported as ``tcri._keys`` for backwards compatibility; the canonical import is
+The canonical -- and now only -- import is
 ``from tcri._state import keys as K``.
 """
 # ── uns: metadata + learned priors ───────────────────────────────────────────

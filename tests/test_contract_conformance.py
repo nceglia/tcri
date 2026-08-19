@@ -195,7 +195,7 @@ def test_import_smoke():
     # diag is added in Phase 8; assert once it lands.
 
 
-# migrated canonical keys (PR1) — must come from _keys.K.*, never a literal.
+# migrated canonical keys (PR1) — must come from `_state.keys` K.*, never a literal.
 # legacy keys (tcri_clone_key/…, X_tcri_phenotypes) are exempt until their removal phase.
 _MIGRATED_KEYS = [
     "METADATA", "P_CT", "LOCAL_SCALE", "CT_TO_COV", "CT_TO_C", "CT_ARRAY",
@@ -209,14 +209,12 @@ def test_no_canonical_key_literals():
     """Migrated canonical keys must be accessed via `K.*` **in code** (subscripts /
     `.get(...)`), never a string literal. Docstrings and display/log strings may show
     the readable key name — this AST check only inspects real key-access code."""
-    from tcri import _keys as K
+    from tcri._state import keys as K
 
     pkg = Path(tcri.__file__).parent
     forbidden = {getattr(K, n) for n in _MIGRATED_KEYS}
     offenders = []
     for py in pkg.rglob("*.py"):
-        if py.name == "_keys.py":
-            continue
         for node in ast.walk(ast.parse(py.read_text())):
             key = None
             if (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)

@@ -53,6 +53,18 @@ REMOVED = {
     "ml": ["plot_loss", "plot_archetypes"],
 }
 
+#: Module-level names that must NOT be on the top-level package. ``sys`` and
+#: ``PackageNotFoundError`` were never intended as API — they were module machinery imported at
+#: module scope, advertised by ``dir(tcri)`` because nothing bounded the surface. They are aliased
+#: private now AND covered by ``__all__``; this pins both so a plain ``import sys`` at the top of
+#: ``__init__.py`` cannot quietly re-export it.
+LEAKED_FROM_INIT = ["sys", "PackageNotFoundError", "version", "annotations"]
+
+#: Deleted modules. ``hasattr`` on a namespace cannot catch these — they were never attributes of
+#: a namespace, they were importable module paths — so they need an import check.
+DELETED_MODULES = ["tcri._console", "tcri._keys", "tcri.tools._common", "tcri.tools._compare",
+                   "tcri._distance"]
+
 
 @pytest.mark.parametrize(
     ("namespace", "symbol"),
@@ -88,3 +100,31 @@ def test_the_delta_pair_was_reinstated_and_must_exist():
     """
     assert hasattr(tcri.tl, "delta_clonotypic_entropy")
     assert hasattr(tcri.tl, "delta_phenotypic_entropy")
+
+
+@pytest.mark.parametrize("name", LEAKED_FROM_INIT)
+def test_module_machinery_is_not_public(name):
+    assert not hasattr(tcri, name), (
+        f"tcri.{name} is exposed at the top level. It is module machinery, not API — alias it "
+        f"private (e.g. `import sys as _sys`) rather than deleting this assertion."
+    )
+    assert name not in getattr(tcri, "__all__", []), f"{name} must not be in tcri.__all__"
+
+
+def test_top_level_surface_is_bounded_by_all():
+    """Every public name on the package must be declared. This is what stops the next
+    ``import x`` at module scope from silently becoming part of the surface."""
+    undeclared = [n for n in dir(tcri) if not n.startswith("_") and n not in tcri.__all__]
+    assert not undeclared, f"undeclared public names on tcri: {undeclared}"
+
+
+@pytest.mark.parametrize("mod", DELETED_MODULES)
+def test_deleted_modules_stay_deleted(mod):
+    """Import-path removals, which the namespace checks above cannot see.
+
+    ``tcri._keys`` in particular would resolve happily if someone re-added the shim, and every
+    `hasattr` test here would still pass.
+    """
+    import importlib
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(mod)

@@ -80,7 +80,7 @@ def _perfectly_coupled_adata(n_clones=6, per_clone=30):
     import anndata as ad
     import pandas as pd
 
-    from tcri import _keys as K
+    from tcri._state import keys as K
 
     clones = np.repeat([f"clone_{i}" for i in range(n_clones)], per_clone)
     phenos = np.repeat([f"phen_{i}" for i in range(n_clones)], per_clone)

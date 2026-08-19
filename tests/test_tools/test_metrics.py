@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 
 
 def _cov(adata):

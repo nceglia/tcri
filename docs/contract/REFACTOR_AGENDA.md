@@ -226,6 +226,21 @@ add the symbol there.**
 - [x] `tl.clonotypic_entropy_base` · [x] `tl.clonality` · [x] `tl.dkl` local `dkl_func`
 - [x] plural `*_entropies` shims · [x] `metrics/` package — the `.py` files went in PR6 but an **empty dir with a `.DS_Store` survived**; removed now
 
+**Layout pass (shared internals + top-level cleanup):** ✅ all deleted.
+- [x] `tcri/_console.py` — 47 lines, **zero** package importers; the only thing keeping it alive was
+  its own test in `test_helpers.py`. A module whose sole consumer is its test is dead by definition.
+- [x] `tcri/_keys.py` — the back-compat shim over `_state.keys`. It existed so ~25 `from .. import
+  _keys as K` sites kept working after the `_state/` migration; those sites were never finished off,
+  so the shim outlived its purpose by several PRs. 14 sites repointed to `from .._state import keys
+  as K`, plus a now-dead `if py.name == "_keys.py"` skip in `test_contract_conformance`.
+- [x] `_compute/_tables.grouped_scalar` / `grouped_series` — 106 lines, zero callers. `grouped_scalar`'s
+  only reference in the whole repo was a docstring cross-ref from `grouped_series`, which itself had
+  none: two dead functions holding each other up. Pre-existing, surfaced by the review that read the
+  file closely because it had just moved.
+- [x] `sys` / `PackageNotFoundError` leaking from `dir(tcri)` — imported at module scope with no
+  `__all__` to bound the surface, so both were advertised as top-level API. Aliased private and an
+  explicit `__all__` added.
+
 **Phase 7 (non-core plots — DROP, not to examples):**
 - [x] `pl.probability_ternary` · [x] `pl.top_clone_umap` · [x] `pl.clone_size_umap` · [x] `pl.plot_phenotype_probabilities`
 - [x] `pl.compare_phenotypes` · [x] `pl.ridge_delta_entropy` · [x] `pl.flux` boxplot · [x] `pl.clonality` plot
