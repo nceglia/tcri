@@ -119,10 +119,10 @@ TCRi is governed by four frozen, machine-checked contracts — the manuscript
 
 | Contract | Freezes | Prose |
 |----------|---------|-------|
-| **API** | the public interface | [`API_CONTRACT.md`](docs/contract/API_CONTRACT.md) |
-| **Model** | the generative mathematics | [`MODEL_CONTRACT.md`](docs/contract/MODEL_CONTRACT.md) |
-| **Metrics** | what the metrics compute | [`METRICS_CONTRACT.md`](docs/contract/METRICS_CONTRACT.md) |
-| **Training** | how the model is fit | [`TRAINING_CONTRACT.md`](docs/contract/TRAINING_CONTRACT.md) |
+| **API** | the public interface | [`API_CONTRACT.md`](governance/API_CONTRACT.md) |
+| **Model** | the generative mathematics | [`MODEL_CONTRACT.md`](governance/MODEL_CONTRACT.md) |
+| **Metrics** | what the metrics compute | [`METRICS_CONTRACT.md`](governance/METRICS_CONTRACT.md) |
+| **Training** | how the model is fit | [`TRAINING_CONTRACT.md`](governance/TRAINING_CONTRACT.md) |
 
 A failing conformance test means *stop and decide* — never loosen a contract to make it
 pass. See [The contracts](https://tcri.readthedocs.io/en/latest/contracts/index.html).

@@ -6,7 +6,7 @@ table, so they are pinned by **numeric identities**: uniform -> log2(k),
 independent -> MI 0, and the entropy/MI decomposition.
 
 A failure here means the *meaning* of a published number changed. Update the manifest
-and ``docs/contract/METRICS_CONTRACT.md`` first, deliberately — never relax an
+and ``governance/METRICS_CONTRACT.md`` first, deliberately — never relax an
 identity to make this pass.
 """
 from __future__ import annotations

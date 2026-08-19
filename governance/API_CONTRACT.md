@@ -989,4 +989,4 @@ Read-only checks on the finalized model. PPCs return `DataFrame`s; the two reloc
 
 ---
 
-*Source of truth cross-checked against `tcri/model/_model.py`, `tcri/model/_module.py`, `tcri/preprocessing/_preprocessing.py`, `tcri/metrics/_metrics.py`, `tcri/plotting/_plotting.py`, `tcri/plotting/_sankey.py`, `tcri/utils/_utils.py`, and the grafiti reference at `/Users/ceglian/Codebase/GitHub/grafiti/grafiti`. Intended document home: `/Users/ceglian/Codebase/GitHub/tcri/docs/contract/API_CONTRACT.md`.*
+*Source of truth cross-checked against `tcri/model/_model.py`, `tcri/model/_module.py`, `tcri/preprocessing/_preprocessing.py`, `tcri/metrics/_metrics.py`, `tcri/plotting/_plotting.py`, `tcri/plotting/_sankey.py`, `tcri/utils/_utils.py`, and the grafiti reference at `/Users/ceglian/Codebase/GitHub/grafiti/grafiti`. Intended document home: `/Users/ceglian/Codebase/GitHub/tcri/governance/API_CONTRACT.md`.*

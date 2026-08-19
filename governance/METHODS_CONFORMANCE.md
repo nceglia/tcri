@@ -1,13 +1,13 @@
 # Methods Conformance — code ↔ Supplementary Note 1
 
 > **This is the eq-by-eq map + deviation history.** The *enforced* contract is
-> `docs/contract/MODEL_CONTRACT.md` (prose) + `tcri/model/_model_contract.py`
+> `governance/MODEL_CONTRACT.md` (prose) + `tcri/model/_model_contract.py`
 > (manifest), checked by `tests/test_model_contract_conformance.py`. Model math
 > changes require updating that contract **first**.
 
 Maps the TCRi generative model in **Supplementary Note 1: Methods for Information
 theoretic metrics for single cell RNA and T-cell receptor sequencing**
-(`docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf`) to the implementation, and records
+(`governance/source/supplementary_note_1_SS_2026-08-03.pdf`) to the implementation, and records
 every known deviation. The PDF is the source of truth; this file is the living
 conformance record (update it whenever the model changes).
 

@@ -1,7 +1,7 @@
 """Model-contract conformance — the guardrail for the model's *mathematics*.
 
 ``tests/contracts/model.py`` freezes the probabilistic structure of
-Supplementary Note 1 (prose: ``docs/contract/MODEL_CONTRACT.md``). This test traces
+Supplementary Note 1 (prose: ``governance/MODEL_CONTRACT.md``). This test traces
 the live ``TCRIModule.model``/``.guide`` and asserts they match that manifest
 exactly — declared sites present with the right distribution family / plate /
 event-dim, **no undeclared sites**, the guide's variational family intact, and the
@@ -113,7 +113,7 @@ def test_generative_sites_match_contract(traced):
         assert spec.name in live, (
             f"model() is missing the declared site '{spec.name}' (note eq {spec.eq}). "
             "If you removed it, update tests/contracts/model.py + "
-            "docs/contract/MODEL_CONTRACT.md first."
+            "governance/MODEL_CONTRACT.md first."
         )
         node = live[spec.name]
         base = _unwrap(node["fn"])
@@ -147,7 +147,7 @@ def test_no_undeclared_generative_sites(traced):
     assert not extra, (
         f"model() has undeclared stochastic site(s): {sorted(extra)}. Every site "
         "changes the joint p(Ω,Φ,z,x). Declare it in tests/contracts/model.py "
-        "(with its note equation) and document it in docs/contract/MODEL_CONTRACT.md."
+        "(with its note equation) and document it in governance/MODEL_CONTRACT.md."
     )
 
 
@@ -415,7 +415,7 @@ def test_sanctioned_deviations_are_documented():
 
     import tcri
 
-    doc = Path(tcri.__file__).parent.parent / "docs" / "contract" / "MODEL_CONTRACT.md"
+    doc = Path(tcri.__file__).parent.parent / "governance" / "MODEL_CONTRACT.md"
     assert doc.exists(), f"missing prose model contract: {doc}"
     text = doc.read_text()
     for key in MC.SANCTIONED_DEVIATIONS:

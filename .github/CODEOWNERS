@@ -10,7 +10,7 @@
 # without it changes nothing except who gets auto-requested for review.
 
 # --- source documents: upstream of every contract ---------------------------------
-/docs/contract/source/                    @nceglia @salehis
+/governance/source/                    @nceglia @salehis
 
 # --- machine-checked manifests ----------------------------------------------------
 /tests/contracts/api.pyi                     @nceglia @salehis
@@ -26,11 +26,11 @@
 /tests/test_metrics_contract_conformance.py   @nceglia @salehis
 
 # --- the prose twins --------------------------------------------------------------
-/docs/contract/MODEL_CONTRACT.md          @nceglia @salehis
-/docs/contract/TRAINING_CONTRACT.md       @nceglia @salehis
-/docs/contract/METRICS_CONTRACT.md        @nceglia @salehis
-/docs/contract/METHODS_CONFORMANCE.md     @nceglia @salehis
-/docs/contract/API_CONTRACT.md            @nceglia @salehis
+/governance/MODEL_CONTRACT.md          @nceglia @salehis
+/governance/TRAINING_CONTRACT.md       @nceglia @salehis
+/governance/METRICS_CONTRACT.md        @nceglia @salehis
+/governance/METHODS_CONFORMANCE.md     @nceglia @salehis
+/governance/API_CONTRACT.md            @nceglia @salehis
 
 # --- the governance rule itself ---------------------------------------------------
 /CLAUDE.md                                @nceglia @salehis
