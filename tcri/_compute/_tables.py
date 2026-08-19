@@ -15,7 +15,11 @@ import pandas as pd
 
 from .._state import keys as K
 from .._stats import hdi
-from ._joint import joint_distribution
+# NOTE: ``tools._joint`` is imported lazily inside the functions that need it, never at module
+# level. ``_compute`` is the lower layer — every tools/* metric imports *down* into this module —
+# so a module-level import back up into ``tools`` inverts the layering and makes the package
+# import-order dependent. It happened to resolve here only because ``tools/_joint`` does not
+# itself reach back into ``_tables``; that is a property of today's code, not a guarantee.
 
 
 # `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
@@ -40,7 +44,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
 
     ``covariate`` is REQUIRED here. See the guard below.
     """
-    from ._joint import _engine_blocks
+    from ..tools._joint import _engine_blocks  # lazy: see module note
 
     # covariate=None used to stack the per-covariate blocks row-wise, so a clone present in k
     # covariate levels contributed k ROWS and the row axis of the joint became the
@@ -136,7 +140,7 @@ def summarize(values, *, hdi_prob=0.94) -> dict:
 
 
 def clone_col(adata):
-    from .. import _keys as K
+    from .._state import keys as K
     return adata.uns[K.METADATA]["clone_col"]
 
 
@@ -410,7 +414,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
-    from ._compare import compare_groups
+    from .._stats import compare_groups
 
     # THE pseudoreplication step. Everything after this sees one number per group. Shared with
     # the plotting layer so the marks cannot describe a different unit from the p-value.

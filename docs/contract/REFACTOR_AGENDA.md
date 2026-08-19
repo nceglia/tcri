@@ -167,6 +167,33 @@ generator's input, and a future-tense contract clause that never expired.
   `pp.joint_distribution`, all deleted in PR6/PR7. **A generated doc is only as live as its
   generator's input; check what the generator reads before trusting "just regenerate it."**
 
+## Moving a module: sweep the WHOLE tree, twice burned
+
+Two path-sweep misses in two passes, same root cause — the sweep was scoped to where the author
+expected references, not to where they are.
+
+1. **The rename pass** matched by file extension (`*.md`, `*.py`, `*.pyi`, …) and so skipped
+   `.github/CODEOWNERS`, which has none. That line is what makes the API contract
+   maintainer-approval-only; for the length of the sweep it pointed at a path that no longer
+   existed and therefore protected nothing.
+2. **The layout pass** repointed all 181 import sites in `tcri/` and `tests/` and never looked at
+   `docs/`. `docs/api/metrics.md` carried `.. automodule:: tcri.tools._compare`, which the move
+   deleted. Sphinx cannot import it, emits a warning — and `.readthedocs.yaml` sets no
+   `fail_on_warning` and no CI job builds docs, so **the build SUCCEEDS and publishes a page with
+   a "Group comparison" heading and nothing under it.** The API reference silently loses
+   `compare_groups` with no failing signal anywhere. Caught only by an adversarial review that
+   built the docs from both trees and diffed the rendered HTML: 4303 chars before, 140 after.
+
+**The rule:** after moving or renaming a module, `grep -rIn "<old.dotted.path>\|<old/file/path>"`
+across the ENTIRE repo — no `--include` filters, no directory scoping — and only then decide what
+is a real referrer. Extensionless files, docs trees, and build-time-resolved references
+(`automodule`, entry points, CODEOWNERS) are exactly what a filtered grep hides.
+
+**And note what "tests pass" is worth here:** 401 passed at every point during both misses. A
+reference that is resolved by a *docs build* or by *GitHub's rule engine* is invisible to pytest.
+When a change moves a file, the acceptance test is the thing that consumes the path — build the
+wheel, build the docs — not the unit suite.
+
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
 
@@ -175,7 +202,7 @@ hand-maintained and nothing verified them, which is how the `delta_clonotypic_en
 wrong for four PRs and why "is it still gone?" could only ever be answered by someone re-checking by
 hand. 43 removed symbols are now asserted absent from their public namespace, one test per symbol.
 Two entries are deliberately narrower: `compare_groups` is asserted *internal* (removed from `tl`,
-still importable from `tcri.tools._compare` — the ledger's own wording is "it is not dead, it is no
+still importable from `tcri._stats._compare` — the ledger's own wording is "it is not dead, it is no
 longer a step the user performs"), and the reinstated delta pair is asserted **present**, so that a
 failure cannot be "fixed" by quietly re-adding them to the removed list. **When you tick a row here,
 add the symbol there.**

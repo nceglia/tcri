@@ -368,7 +368,7 @@ def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
     adata = adata.copy()
     cov = _cov(adata)
 
-    from tcri.tools._common import collapse_to_replicates
+    from tcri._compute._tables import collapse_to_replicates
 
     res = getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient",
                                    splitby="response")
@@ -393,7 +393,7 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
     ``tl``/``pl`` ``distance_metric`` disagreement happened. `collapse_to_replicates` has one
     definition and both callers use it.
     """
-    from tcri.tools._common import collapse_to_replicates
+    from tcri._compute._tables import collapse_to_replicates
 
     _, adata = cohort
     adata = adata.copy()
@@ -575,7 +575,7 @@ def test_endpoints_come_from_the_matched_result(cohort):
     assert [t.get_text() for t in ax.get_xticklabels()] == [str(cov), str(rest[0])]
 
     drawn = np.concatenate([c.get_offsets()[:, 1] for c in ax.collections])
-    from tcri.tools._common import collapse_to_replicates
+    from tcri._compute._tables import collapse_to_replicates
     for col in ("value_from", "value_to"):
         want = collapse_to_replicates(res, groupby="patient", value=col)[col].to_numpy()
         assert all(np.isclose(drawn, w).any() for w in want), f"{col} is not on the figure"

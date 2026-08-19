@@ -75,7 +75,7 @@ def test_compare_groups_is_internal_not_public():
     assertion is narrower than for the rest — absent from `tl`, still importable internally.
     """
     assert not hasattr(tcri.tl, "compare_groups")
-    from tcri.tools._compare import compare_groups  # noqa: F401
+    from tcri._stats import compare_groups  # noqa: F401
 
 
 def test_the_delta_pair_was_reinstated_and_must_exist():

@@ -23,7 +23,7 @@ import itertools
 import numpy as np
 import pandas as pd
 
-from .._stats import hdi, mann_whitney, prob_direction, stars
+from ._core import hdi, mann_whitney, prob_direction, stars
 
 __all__ = ["compare_groups"]
 

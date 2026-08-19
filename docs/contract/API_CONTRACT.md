@@ -196,12 +196,15 @@ tcri/
   __init__.py               # explicit re-export + sys.modules aliases (tl/pp/pl/ml/ut/diag); top-level joint_distribution; NO import *
   _keys.py                  # single source of every uns/obsm/obs key string (constants only)
   _console.py               # leveled, silenceable logging over scanpy.logging (no raw ANSI, no _ascii_hist)
-  _stats.py                 # stars, AUROC+permutation, bootstrap, MWU, prob_direction, hdi, summarize
-  _distance.py              # kl_divergence, l1_distance, js_divergence, phenotype_distance dispatcher
+  _stats/                   # statistics, private
+    _core.py                #   stars, AUROC+permutation, bootstrap, MWU, prob_direction, hdi
+    _compare.py             #   compare_groups (INTERNAL; reached only via a metric's splitby)
   _compute/                 # NEW private numeric+device seam (grafiti-mirrored)
     _xp.py                  #   resolve_device, torch_device, asnumpy (torch-first, cupy optional later, CPU default)
     _joint.py               #   _joint_draws(p_ct, ct_to_cov, ct_to_c, ct_array, cov_array, *, ...) -> (blocks, n_draws)
-    _reduce.py              #   batched entropy / mutual-information / distance reductions over the stack
+    _distance.py            #   kl_divergence, l1_distance, js_divergence, phenotype_distance dispatcher
+    _tables.py              #   metric_table / build_result / build_stats / collapse_to_replicates
+                            #   (the plumbing every tools/ metric reduces through)
   model/                    # ml
     _model.py               #   TCRIModel
     _module.py              #   TCRIModule (pyro model/guide, get_latent, get_p_ct)
@@ -216,7 +219,6 @@ tcri/
     _entropy.py             #   clonotypic_entropy, phenotypic_entropy
     _mutual_information.py   #   mutual_information (+ private _mi_from_joint)
     _flux.py                #   phenotypic_flux
-    _compare.py             #   compare_groups (public group-comparison orchestrator)
   plotting/                 # pl
     _base.py                #   _metric_boxplot, _finish
     _colors.py              #   tcri_colors, NA_COLOR, resolve_colors
@@ -315,7 +317,7 @@ Thin wrappers over `scanpy.logging`; respects scanpy verbosity. Raw ANSI prints 
 | `success(msg)` | `scanpy.logging.hint`. |
 | `done(msg="done")` | terminal completion line. |
 
-### 3.3 `tcri/_stats.py` — significance + posterior-comparison statistics (private)
+### 3.3 `tcri/_stats/` — significance + posterior-comparison statistics (private)
 
 | Signature | Responsibility / math |
 |---|---|
@@ -327,7 +329,7 @@ Thin wrappers over `scanpy.logging`; respects scanpy verbosity. Raw ANSI prints 
 | `auc_and_label_permutation(scores, labels, *, pos_label=None, n_perm=200_000, seed=42, max_exact=200_000)` | Observed ROC-AUC + two-sided permutation $p$: exact enumeration when $\binom{n}{k}\le$`max_exact`, else Monte-Carlo; $p_{\text{perm}}=\text{mean}(|\mathrm{AUC}_{\text{perm}}-0.5|\ge|\mathrm{AUC}_{\text{obs}}-0.5|)$. Returns `(auc, p, perm_stats, mode)`. |
 | `bootstrap_auc(scores, labels, *, pos_label=None, n_boot=5000, seed=42)` | Resample cells with replacement (reject draws missing a class), recompute AUROC, return the 2.5/97.5 quantiles. Returns `np.array([lo, hi])`. |
 
-### 3.4 `tcri/_distance.py` — phenotype-distribution distances (private)
+### 3.4 `tcri/_compute/_distance.py` — phenotype-distribution distances (private)
 
 Dedupes the old module-level `dkl` and `flux.dkl_func`; **one base (bits, $\log_2$) and one $\varepsilon=10^{-12}$ library-wide**, matching entropy/MI.
 
@@ -626,7 +628,7 @@ dispatched through `_distance` (§3.4): `"l1"` (default, bounded $[0,2]$), `"kl"
 
 `__all__ = ["phenotypic_flux"]`
 
-### 7.6 `tools/_compare.py` — `compare_groups` (INTERNAL: the one contrast implementation)
+### 7.6 `tcri/_stats/_compare.py` — `compare_groups` (INTERNAL: the one contrast implementation)
 
 ```python
 compare_groups(

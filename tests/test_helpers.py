@@ -1,12 +1,18 @@
-"""Unit tests for the shared helper modules introduced in PR1
-(`_keys`, `_console`, `_stats`, `_distance`). These are pure and fast — no model."""
+"""Unit tests for the shared private helpers. Pure and fast — no model.
+
+These moved in the layout pass: `_stats.py` became the `_stats/` package (`_core` primitives +
+`_compare`), and `_distance.py` moved under `_compute/` with the rest of the numerics. `_keys`
+is still importable as a shim over `_state.keys`.
+"""
 import json
 import os
 
 import numpy as np
 import pytest
 
-from tcri import _console, _distance as D, _keys as K, _stats as S
+from tcri import _console, _keys as K
+from tcri._compute import _distance as D
+from tcri._stats import _core as S
 
 
 def test_keys_constants():

@@ -15,7 +15,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", tempe
                            clones=None, random_state=None):
     """Model vs empirical per-clone phenotype frequencies (the fixed
     ``compare_joint_distribution``). Per-clone distance + per-covariate aggregate. adata-only."""
-    from .._distance import phenotype_distance
+    from .._compute._distance import phenotype_distance
     from ..tools import joint_distribution
 
     dist_fn = phenotype_distance(distance_metric)
@@ -218,7 +218,7 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     if groupby is not None:
         if groupby not in adata.obs.columns:
             raise ValueError(f"groupby={groupby!r} is not a column of adata.obs")
-        from ..tools._common import _validate_group_clones
+        from .._compute._tables import _validate_group_clones
         _validate_group_clones(adata.obs, groupby, clone_col)
         groups = adata.obs[groupby].dropna().unique().tolist()
     else:
