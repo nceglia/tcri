@@ -82,7 +82,7 @@ generator's input, and a future-tense contract clause that never expired.
   | `tl.mi_compare` | `compare_groups` | ✅ **verified in code this pass** |
   | `tl.flux_table` | `tl.phenotypic_flux` | ⚠️ axis covered, one column dropped |
   | `tl.clonotypic_entropy_base` | `tl.clonotypic_entropy` | ✅ strictly wider |
-  | `tl.clonality` | `tl.clonotypic_entropy` | ⚠️ **stated reason is wrong**, removal still right |
+  | `tl.clonality` | `tl.clonotypic_entropy` | ✅ **deleted** (verified gone); the tick's stated reason was wrong |
   | `tl.delta_clonotypic_entropy`, `tl.delta_entropy_table` | `compare_groups` | ❌ known bad — rebuilt in #81 |
   | plural `*_entropies` shims, `metrics/` dir | renames / deletion | ✅ |
 
@@ -99,15 +99,20 @@ generator's input, and a future-tense contract clause that never expired.
   It is denormalised convenience data rather than a metric, so the scope principle leaves it to the
   user; recorded here so it is not rediscovered as a defect.
 
-  **`tl.clonality`: right removal, wrong justification.** Its docstring is explicit that it used the
+  **`tl.clonality` — deleted, and the deletion is not in question.** Re-verified this pass: no `def`
+  anywhere in `tcri/`, no mention in any module, not on `tl.__all__`, not importable. The ledger tick
+  is accurate.
+
+  What was wrong is only the **justification written beside the tick**, which named
+  `tl.clonotypic_entropy` as the replacement. That is not what replaced it. `clonality` used the
   **observed (hard)** clone and phenotype labels — `1 − H/log₂K` on raw clone counts per phenotype,
-  needing no model. `tl.clonotypic_entropy` has no hard-label path: `n_samples=0` is the deterministic
-  plug-in of the *posterior*, not the observed labels. So the replacement changes the **estimator**,
-  which is the same class of substitution that made the delta tick wrong. It survives re-audit anyway,
-  but on different grounds: computing clonality needs no metric applied at a level the public surface
-  hides — it is a `value_counts` and a Shannon entropy on `obs`, so the scope principle puts it on the
-  user. **The tick should have said that.** A replacement that changes the estimator is not a
-  replacement; it needs its own justification.
+  needing no model at all — while `tl.clonotypic_entropy` has no hard-label path (`n_samples=0` is
+  the deterministic plug-in of the *posterior*). Naming it as the replacement asserts an equivalence
+  that does not hold: it changes the **estimator**, which is the same class of substitution that made
+  the delta tick wrong. The correct justification is the scope principle — computing clonality needs
+  no metric applied at a level the public surface hides; it is a `value_counts` and a Shannon entropy
+  on `obs`, so it belongs to the user. **The tick should have said that**, and a replacement that
+  changes the estimator needs its own justification rather than inheriting one.
 
 - ✅ **Renamed `tcri_api_and_responsibilities.md` → `API_CONTRACT.md`**, so all four contracts are
   named for what they are. Referrers updated: `CLAUDE.md`, `README.md`, `tcri/_contract.pyi`,
@@ -164,6 +169,16 @@ generator's input, and a future-tense contract clause that never expired.
 
 ## Removal Ledger (the hard bar — every one MUST end deleted)
 Tick only when the symbol is gone from source AND `__all__`/imports AND `import tcri` is green.
+
+**Machine-checked since the cleanup pass — `tests/test_removal_ledger.py`.** The ticks below were
+hand-maintained and nothing verified them, which is how the `delta_clonotypic_entropy` tick stayed
+wrong for four PRs and why "is it still gone?" could only ever be answered by someone re-checking by
+hand. 43 removed symbols are now asserted absent from their public namespace, one test per symbol.
+Two entries are deliberately narrower: `compare_groups` is asserted *internal* (removed from `tl`,
+still importable from `tcri.tools._compare` — the ledger's own wording is "it is not dead, it is no
+longer a step the user performs"), and the reinstated delta pair is asserted **present**, so that a
+failure cannot be "fixed" by quietly re-adding them to the removed list. **When you tick a row here,
+add the symbol there.**
 
 **Phase 2 (dead / out-of-scope):** ✅ ALL DELETED (PR2) — 14 symbols, 384 lines, `import tcri` green.
 - [x] `pp.get_latent_embedding` · [x] `pp.group_small_clones` · [x] `pp.register_probability_columns`
