@@ -37,7 +37,12 @@ conceptual reference is [Information-theoretic metrics](../concepts/metrics.md).
 
 ## Group comparison
 
+`compare_groups` is **not public API** — it is not on `tcri.tl`, and
+`tests/test_removal_ledger.py` pins that it stays off. It is reached only through a metric's
+`splitby` argument, never as a step you perform. It is documented here because the contrast it
+computes is part of what a metric with `splitby` *means*, not because you should call it.
+
 ```{eval-rst}
-.. automodule:: tcri.tools._compare
+.. automodule:: tcri._stats._compare
    :members:
 ```

@@ -15,7 +15,11 @@ import pandas as pd
 
 from .._state import keys as K
 from .._stats import hdi
-from ._joint import joint_distribution
+# NOTE: ``tools._joint`` is imported lazily inside the functions that need it, never at module
+# level. ``_compute`` is the lower layer — every tools/* metric imports *down* into this module —
+# so a module-level import back up into ``tools`` inverts the layering and makes the package
+# import-order dependent. It happened to resolve here only because ``tools/_joint`` does not
+# itself reach back into ``_tables``; that is a property of today's code, not a guarantee.
 
 
 # `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
@@ -40,7 +44,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
 
     ``covariate`` is REQUIRED here. See the guard below.
     """
-    from ._joint import _engine_blocks
+    from ..tools._joint import _engine_blocks  # lazy: see module note
 
     # covariate=None used to stack the per-covariate blocks row-wise, so a clone present in k
     # covariate levels contributed k ROWS and the row axis of the joint became the
@@ -136,7 +140,7 @@ def summarize(values, *, hdi_prob=0.94) -> dict:
 
 
 def clone_col(adata):
-    from .. import _keys as K
+    from .._state import keys as K
     return adata.uns[K.METADATA]["clone_col"]
 
 
@@ -157,112 +161,6 @@ def _validate_group_clones(obs, groupby, cc):
                 )
             seen[c] = g
 
-
-def grouped_scalar(adata, *, groupby, splitby, value, compute, hdi_prob=0.94,
-                   restrict_to=None):
-    """Loop over ``adata.obs[groupby]`` values, restrict to each group's clones, compute a
-    scalar-valued metric per group, and tidy into a DataFrame with the ``splitby`` label.
-
-    ``compute(clones) -> (point, draws_or_None)``: ``point`` is the ``n_samples=0`` scalar (or
-    the draw mean), ``draws`` is the per-draw vector (or ``None`` at ``n_samples=0``).
-    """
-    cc = clone_col(adata)
-    obs = adata.obs
-    _validate_group_clones(obs, groupby, cc)
-
-    # D9: cells with no group label are dropped by `.dropna()`. Silently excluding part of the
-    # data from every reported number is not a default anyone opted into -- measured 20% of
-    # cells dropped with no warning on a fixture with a partially-populated column.
-    n_missing = int(obs[groupby].isna().sum())
-    if n_missing:
-        warnings.warn(
-            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
-            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
-            f"from every row of this result.",
-            UserWarning, stacklevel=3,
-        )
-
-    rows = []
-    for g in obs[groupby].dropna().unique().tolist():
-        gmask = obs[groupby] == g
-        clones_g = obs.loc[gmask, cc].dropna().unique().tolist()
-        # D3: the caller's `clones=` was shadowed by the group's clone list, so
-        # `groupby=... , clones=[...]` returned a frame identical to the unrestricted call --
-        # the restriction was accepted and discarded. Intersect instead, preserving the
-        # caller's order so the engine's stable reorder is unchanged.
-        if restrict_to is not None:
-            allowed = set(clones_g)
-            clones_g = [c for c in restrict_to if c in allowed]
-            if not clones_g:
-                continue
-        point, draws = compute(clones_g)
-        row = {groupby: g, value: point}
-        if splitby is not None and splitby in obs.columns:
-            row[splitby] = obs.loc[gmask, splitby].iloc[0]
-        if draws is not None:
-            row.update(summarize(draws, hdi_prob=hdi_prob))
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-def grouped_series(adata, *, groupby, splitby, item_name, value, compute, hdi_prob=0.94,
-                   restrict_to=None):
-    """Like :func:`grouped_scalar` but the metric is a per-item (phenotype/clone) map.
-
-    ``compute(clones) -> (point, draws_or_None)``: ``point`` is ``{item: value}``;
-    ``draws`` is ``{item: [per-draw values]}`` (or ``None`` at ``n_samples=0``). Tidies to
-    one row per (group, item).
-    """
-    cc = clone_col(adata)
-    obs = adata.obs
-    _validate_group_clones(obs, groupby, cc)
-
-    # D9: cells with no group label are dropped by `.dropna()`. Silently excluding part of the
-    # data from every reported number is not a default anyone opted into -- measured 20% of
-    # cells dropped with no warning on a fixture with a partially-populated column.
-    n_missing = int(obs[groupby].isna().sum())
-    if n_missing:
-        warnings.warn(
-            f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
-            f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
-            f"from every row of this result.",
-            UserWarning, stacklevel=3,
-        )
-
-    rows = []
-    for g in obs[groupby].dropna().unique().tolist():
-        gmask = obs[groupby] == g
-        clones_g = obs.loc[gmask, cc].dropna().unique().tolist()
-        # D3: the caller's `clones=` was shadowed by the group's clone list, so
-        # `groupby=... , clones=[...]` returned a frame identical to the unrestricted call --
-        # the restriction was accepted and discarded. Intersect instead, preserving the
-        # caller's order so the engine's stable reorder is unchanged.
-        if restrict_to is not None:
-            allowed = set(clones_g)
-            clones_g = [c for c in restrict_to if c in allowed]
-            if not clones_g:
-                continue
-        point, draws = compute(clones_g)
-        split_val = obs.loc[gmask, splitby].iloc[0] if (splitby and splitby in obs.columns) else None
-        for item, val in point.items():
-            row = {groupby: g, item_name: item, value: val}
-            if split_val is not None:
-                row[splitby] = split_val
-            if draws is not None and item in draws:
-                row.update(summarize(draws[item], hdi_prob=hdi_prob))
-            rows.append(row)
-    return pd.DataFrame(rows)
-
-
-# ── the store-once reduction machinery ───────────────────────────────────────
-#
-# NOTE on slot design. Grafiti puts statistics inline as COLUMNS of its tidy table, and the
-# plan for this refactor followed that. Implementing it showed the pattern does not transfer:
-# grafiti's tests are per-motif, so "one row per thing tested" and "one row per result row"
-# coincide. tcri's contrast is BETWEEN SPLITS -- one row per (split_a, split_b) pair -- which is
-# a different cardinality from `result`. Forcing it into columns would either broadcast one
-# contrast across every group row or silently pick a row to hang it on. So `stats` is its own
-# slot, as originally sketched.
 
 def resolve_groupby(adata, groupby):
     """``groupby`` if given, else the column registered as ``replicate`` at setup.
@@ -410,7 +308,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
-    from ._compare import compare_groups
+    from .._stats import compare_groups
 
     # THE pseudoreplication step. Everything after this sees one number per group. Shared with
     # the plotting layer so the marks cannot describe a different unit from the p-value.

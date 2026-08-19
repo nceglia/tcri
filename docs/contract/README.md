@@ -1,38 +1,47 @@
-# TCRI refactor contract
+# `docs/contract/` — the four contracts and their history
 
-Internal planning/design docs for the `tcri` API refactor (target: a standalone scverse-ecosystem
-package, "Door A"). **Not** part of the published Sphinx site (excluded via `exclude_patterns` in
-`docs/conf.py`). Structural reference is the `../grafiti` package.
+Internal governance docs for `tcri`. **Not** part of the published Sphinx site (excluded via
+`exclude_patterns` in `docs/conf.py`); the reader-facing overview is `docs/contracts/index.md`.
 
-## ⚠ Read first — governance
+**The manuscript is upstream of the contracts.** `source/` holds Supplementary Note 1 and the
+metrics document, hash-pinned and checked by a test. Where a contract disagrees with them, the
+contract is wrong. Their equation numbers **collide** — every reference must name its document.
+
+## The four contracts
+
+Each pairs a machine-checked manifest with prose. A failing conformance test means **stop and
+decide**, never "loosen the manifest until it passes."
+
+| Contract | Freezes | Manifest | Prose here |
+|---|---|---|---|
+| **API** | the public interface | `tcri/_contract.pyi` | `API_CONTRACT.md` |
+| **Model** | the generative mathematics | `tcri/model/_model_contract.py` | `MODEL_CONTRACT.md` |
+| **Metrics** | what the metrics compute | `tcri/tools/_metrics_contract.py` | `METRICS_CONTRACT.md` |
+| **Training** | how the model is fit | `tcri/model/_training_contract.py` | `TRAINING_CONTRACT.md` |
+
+`METHODS_CONFORMANCE.md` is the equation-by-equation code map and deviation history.
+
+Only @nceglia and @salehis may change a contract, a conformance test, or a source document
+(enforced by `.github/CODEOWNERS`).
+
+## Working documents
 
 | File | What it is |
 |---|---|
-| **`REFACTOR_HISTORY.md`** | Single source of truth: the **Hard Rules**, the chronology, and all settled decisions (§2). Read before touching anything. |
-| **`REDO_LIST.md`** | The corrected **disposition map** (keep / drop) + the clean re-implementation plan. |
+| `REFACTOR_AGENDA.md` | The living tracker — read before starting, diary entry after each PR, Standing Audit. |
+| `REFACTOR_HISTORY.md` | Chronology and settled decisions, including what was removed and where it lives. |
+| `DEFECTS.md` | The defect log. |
 
-**Hard Rules (never violate):** the `example/` notebooks are **disposable** — never read them or use them
-for any decision. **Non-core = DROP (delete); nothing moves to `examples/`.** Disposition is decided by one
-test: *is it core?*
+**Hard rule:** the `example/` notebooks are **disposable outputs**, never an input — never read
+them, and never use them for a caller census or an "is it used" check.
 
-## The authoritative pair
+## What used to be here
 
-| File | What it is |
-|---|---|
-| **`tcri_api_and_responsibilities.md`** | Final API surface + per-function math/stats spec + prior-vs-mean resolution. **Clean** (post-recovery). |
-| **`tcri_implementation_plan.md`** | Ordered PR sequence + model→AnnData streamline + GPU architecture + testing/CI. **Clean** (post-recovery). |
-| `tcri_consistency_sufficiency.md` | Argument consistency deltas + sufficiency-from-responsibility (clean re-derivation). |
-
-## Supporting artifacts
-
-| File | What it is |
-|---|---|
-| `tcri_function_inventory.md` (+ data, `build_tcri_inventory.py`) | 131-function labeled inventory |
-| `tcri_api_contract.*`, `tcri_dependency_map.*` (+ build scripts) | early target API + dependency graph |
-
-## `_quarantine/` — do not use
-
-Earlier versions of the two authoritative docs + their audit data, contaminated by a **notebook-caller-census
-leak** (a workflow prompt treated the disposable notebooks as an authority on what to keep, resurrecting
-`gene_entropy`/`probability_ternary`). Their **disposition sections are wrong**; their math/design was clean and
-was salvaged into the current authoritative docs. Kept only as a record. See `REFACTOR_HISTORY.md`.
+The pre-refactor planning corpus — a 131-function inventory, an early target-API contract, a
+dependency map in three formats, their three generator scripts, the superseded implementation
+and PR plans, the training spec draft, and the contaminated `_quarantine/` directory — was
+removed in the cleanup pass (22 files, ~1.5 MB). They described the package as it was *before*
+the refactor and had begun to read as current: `tcri_dependency_map.md` announced itself as
+"the post-refactor API" while its call graph still contained four functions deleted in PR6/PR7.
+The generators hardcoded their tables rather than introspecting the package, so they could not
+be brought up to date by re-running them. Recoverable from git at `dfbb4cd`.

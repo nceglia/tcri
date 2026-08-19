@@ -15,11 +15,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .._distance import phenotype_distance
+from .._compute._distance import phenotype_distance
 from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
-from ._common import (build_result, build_stats, joint_draws, metric_table,
+from .._compute._tables import (build_result, build_stats, joint_draws, metric_table,
                       resolve_groupby, validate_splitby)
 
 __all__ = ["phenotypic_flux"]

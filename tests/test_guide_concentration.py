@@ -101,7 +101,7 @@ def test_guide_concentration_reaches_the_metric_draw(fitted):
     """
     import numpy as np
     import tcri
-    from tcri import _keys as K
+    from tcri._state import keys as K
 
     model = fitted
     adata = model.adata

@@ -18,7 +18,7 @@ import pandas as pd
 from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
-from ._common import (build_result, build_stats, joint_draws,
+from .._compute._tables import (build_result, build_stats, joint_draws,
                       metric_table, resolve_groupby,
                       validate_splitby)
 

@@ -1,6 +1,6 @@
 """Model-contract conformance — the guardrail for the model's *mathematics*.
 
-``tcri/model/_model_contract.py`` freezes the probabilistic structure of
+``tests/contracts/model.py`` freezes the probabilistic structure of
 Supplementary Note 1 (prose: ``docs/contract/MODEL_CONTRACT.md``). This test traces
 the live ``TCRIModule.model``/``.guide`` and asserts they match that manifest
 exactly — declared sites present with the right distribution family / plate /
@@ -9,7 +9,7 @@ semantic invariants (α and β scaling, the surrogate's sign, the gate rule, glo
 alignment indices) holding.
 
 If you changed the model and this test fails: **update the contract first**
-(``_model_contract.py`` + ``MODEL_CONTRACT.md``, citing the note), then make the
+(``tests/contracts/model.py`` + ``MODEL_CONTRACT.md``, citing the note), then make the
 code agree. Do not loosen the manifest to match new code — that silently rewrites
 the model the package claims to implement.
 
@@ -27,7 +27,7 @@ import torch
 from anndata import AnnData
 
 from tcri.model._model import TCRIModel
-from tcri.model import _model_contract as MC
+from tests.contracts import model as MC
 
 # pyro wrappers that carry no model semantics — unwrapped before comparing.
 _WRAPPERS = ("Independent", "ExpandedDistribution", "MaskedDistribution")
@@ -112,7 +112,7 @@ def test_generative_sites_match_contract(traced):
     for spec in MC.GENERATIVE_SITES:
         assert spec.name in live, (
             f"model() is missing the declared site '{spec.name}' (note eq {spec.eq}). "
-            "If you removed it, update tcri/model/_model_contract.py + "
+            "If you removed it, update tests/contracts/model.py + "
             "docs/contract/MODEL_CONTRACT.md first."
         )
         node = live[spec.name]
@@ -146,7 +146,7 @@ def test_no_undeclared_generative_sites(traced):
     extra = live - declared
     assert not extra, (
         f"model() has undeclared stochastic site(s): {sorted(extra)}. Every site "
-        "changes the joint p(Ω,Φ,z,x). Declare it in tcri/model/_model_contract.py "
+        "changes the joint p(Ω,Φ,z,x). Declare it in tests/contracts/model.py "
         "(with its note equation) and document it in docs/contract/MODEL_CONTRACT.md."
     )
 
@@ -420,6 +420,6 @@ def test_sanctioned_deviations_are_documented():
     text = doc.read_text()
     for key in MC.SANCTIONED_DEVIATIONS:
         assert key in text, (
-            f"sanctioned deviation '{key}' is declared in _model_contract.py but not "
+            f"sanctioned deviation '{key}' is declared in tests/contracts/model.py but not "
             f"documented in {doc.name}. Keep the machine contract and the prose in sync."
         )

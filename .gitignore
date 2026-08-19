@@ -134,9 +134,12 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-#Figures
-example/*.png
-example/*.pdf
+# Disposable notebooks. This directory was 491.7 MB of the ~520 MB ever committed to this
+# repo — a dozen 10-24 MB example.ipynb revisions with outputs embedded, plus datasets that
+# should never have entered git (yost_final.h5ad, wu2020_3k.h5ad, four .pkl dumps). It was
+# purged from all history with git filter-repo; this entry is what stops it coming back.
+# Its own DO_NOT_READ.md says never to use these for any decision. examples/ is the real one.
+example/
 
 
 # MacOS

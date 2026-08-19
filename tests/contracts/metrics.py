@@ -367,7 +367,7 @@ SANCTIONED_EXTENSIONS = {
         "checkable at these sizes. It is UNCORRECTED across contrasts: with more than two "
         "split levels every pair is reported, and multiplicity is the analyst's to handle.\n"
         "\n"
-        "One implementation, in tools/_compare.py, reached only through `splitby`. It was "
+        "One implementation, in tcri/_stats/_compare.py, reached only through `splitby`. It was "
         "`tl.compare_groups`, a separate public step -- which meant the caller chose the "
         "replicate unit, and choosing the row-level frame gave p=0.040 with a star off 15 "
         "clones from 2 patients. `build_stats` collapses items to groups before calling it, "

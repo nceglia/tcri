@@ -1,6 +1,6 @@
 """Contract conformance — the interface guardrail for the refactor.
 
-``tcri/_contract.pyi`` freezes the public surface. Two things are checked:
+``tests/contracts/api.pyi`` freezes the public surface. Two things are checked:
 
 1. **Set equality** — the set of public callables the package actually exposes equals
    the set the contract declares. Neither direction may drift.
@@ -29,7 +29,12 @@ import pytest
 
 import tcri
 
-PYI = Path(tcri.__file__).parent / "_contract.pyi"
+#: The API manifest. It lives under ``tests/contracts/`` rather than inside the package because
+#: nothing in ``tcri`` imports it — it is contract enforcement, and shipping it in the wheel gave
+#: users a frozen declaration they could mistake for an API. Resolved relative to THIS file, not
+#: to ``tcri.__file__``, so it is found from any working directory and an installed-package copy
+#: can never shadow the repo one.
+PYI = Path(__file__).parent / "contracts" / "api.pyi"
 
 #: Contract namespace -> the live object whose public callables it declares.
 #: ``TCRIModel`` is the class itself; the rest are the ``tcri.*`` accessor modules.
@@ -136,7 +141,7 @@ CONTRACT = _contract_signatures()
 
 def test_contract_pyi_parses():
     """The frozen contract is present and declares a non-trivial surface."""
-    assert PYI.exists(), "tcri/_contract.pyi missing"
+    assert PYI.exists(), "tests/contracts/api.pyi missing"
     assert len(CONTRACT) >= 20, f"contract looks truncated: {len(CONTRACT)} entries"
     # every declared key is Namespace-qualified (no accidental bare defs)
     assert all("." in k for k in CONTRACT), "unexpected un-namespaced contract entry"
@@ -155,7 +160,7 @@ def test_public_surface_equals_the_contract():
     assert not undeclared, (
         f"public but NOT in the contract: {undeclared}\n"
         f"Every public callable is part of the frozen surface. Declare it in "
-        f"tcri/_contract.pyi (a contract change, so CODEOWNERS applies), make it private "
+        f"tests/contracts/api.pyi (a contract change, so CODEOWNERS applies), make it private "
         f"with a leading underscore, or delete it."
     )
     missing = sorted(declared - live)
@@ -190,7 +195,7 @@ def test_import_smoke():
     # diag is added in Phase 8; assert once it lands.
 
 
-# migrated canonical keys (PR1) — must come from _keys.K.*, never a literal.
+# migrated canonical keys (PR1) — must come from `_state.keys` K.*, never a literal.
 # legacy keys (tcri_clone_key/…, X_tcri_phenotypes) are exempt until their removal phase.
 _MIGRATED_KEYS = [
     "METADATA", "P_CT", "LOCAL_SCALE", "CT_TO_COV", "CT_TO_C", "CT_ARRAY",
@@ -204,14 +209,12 @@ def test_no_canonical_key_literals():
     """Migrated canonical keys must be accessed via `K.*` **in code** (subscripts /
     `.get(...)`), never a string literal. Docstrings and display/log strings may show
     the readable key name — this AST check only inspects real key-access code."""
-    from tcri import _keys as K
+    from tcri._state import keys as K
 
     pkg = Path(tcri.__file__).parent
     forbidden = {getattr(K, n) for n in _MIGRATED_KEYS}
     offenders = []
     for py in pkg.rglob("*.py"):
-        if py.name == "_keys.py":
-            continue
         for node in ast.walk(ast.parse(py.read_text())):
             key = None
             if (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)

@@ -1,5 +1,5 @@
 from __future__ import print_function, division
-from .. import _keys as K
+from .._state import keys as K
 import os
 import sys
 import numpy as np
@@ -30,7 +30,8 @@ import pyro as _pyro
 import numpy as np
 
 
-# stars / auc_and_label_permutation / bootstrap_auc → moved to tcri/_stats.py (PR1).
+# stars / auc_and_label_permutation / bootstrap_auc → moved to tcri/_stats/_core.py (PR1;
+# the flat _stats.py became the _stats/ package in the layout pass).
 
 
 def _ensure_pyro_posterior_params(model, adata) -> None:

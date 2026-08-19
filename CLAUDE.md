@@ -31,10 +31,10 @@ conformance test means **stop and decide**, not "adjust the contract until it pa
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
-| **API contract** | the public *interface* | `tcri/_contract.pyi` | `docs/contract/tcri_api_and_responsibilities.md` | `tests/test_contract_conformance.py` |
-| **Model contract** | the generative *mathematics* | `tcri/model/_model_contract.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
-| **Metrics contract** | what the *metrics compute* | `tcri/tools/_metrics_contract.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
-| **Training contract** | how the model is *fit* | `tcri/model/_training_contract.py` | `docs/contract/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |
+| **API contract** | the public *interface* | `tests/contracts/api.pyi` | `docs/contract/API_CONTRACT.md` | `tests/test_contract_conformance.py` |
+| **Model contract** | the generative *mathematics* | `tests/contracts/model.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
+| **Metrics contract** | what the *metrics compute* | `tests/contracts/metrics.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
+| **Training contract** | how the model is *fit* | `tests/contracts/training.py` | `docs/contract/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |
 
 ### Model integrity (read before touching `tcri/model/`)
 
@@ -55,7 +55,7 @@ If you are an AI agent and a model change appears necessary, **surface the contr
 implication to the user** rather than editing the manifest to fit your change.
 
 Accepted departures from the note live in `SANCTIONED_DEVIATIONS`
-(`_model_contract.py`) with a rationale, mirrored in `MODEL_CONTRACT.md`. Anything
+(`tests/contracts/model.py`) with a rationale, mirrored in `MODEL_CONTRACT.md`. Anything
 not listed there that departs from the note is a defect.
 
 `docs/contract/METHODS_CONFORMANCE.md` is the eq-by-eq code map + deviation history.
@@ -64,7 +64,7 @@ not listed there that departs from the note is a defect.
 
 The entropies and mutual information are frozen by the **metrics contract**. Changing
 a definition means changing what every published number means. Same rule: update
-`_metrics_contract.py` + `METRICS_CONTRACT.md` first, then the code.
+`tests/contracts/metrics.py` + `METRICS_CONTRACT.md` first, then the code.
 
 The conformance test pins numeric identities, the keystone being
 `I(c;φ) = H(c) − Σ_φ P(φ)·H[P(c|φ)]` — it ties the entropy and MI families together so

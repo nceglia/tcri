@@ -194,7 +194,7 @@ def test_predict_binds_p_ct_by_cell_not_by_loader_position(view):
 
 def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
     """NEW-1 in the other place it appeared: to_anndata's logit/prior loop."""
-    from tcri._keys import X_LOGPOSTERIOR
+    from tcri._state.keys import X_LOGPOSTERIOR
 
     model, adata = _fitted_for_binding()
     full = model.to_anndata(adata.copy())

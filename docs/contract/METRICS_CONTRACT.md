@@ -5,7 +5,7 @@ information over a clone × phenotype joint.
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
-| API contract | the public *interface* | `tcri/_contract.pyi` | `tcri_api_and_responsibilities.md` | `test_contract_conformance.py` |
+| API contract | the public *interface* | `tcri/_contract.pyi` | `API_CONTRACT.md` | `test_contract_conformance.py` |
 | Model contract | the *generative mathematics* | `tcri/model/_model_contract.py` | `MODEL_CONTRACT.md` | `test_model_contract_conformance.py` |
 | **Metrics contract** | **what the metrics compute** | `tcri/tools/_metrics_contract.py` | this file | `test_metrics_contract_conformance.py` |
 

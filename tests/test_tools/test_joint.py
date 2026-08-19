@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 
 
 def _first_covariate(adata):

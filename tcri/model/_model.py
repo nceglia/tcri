@@ -565,7 +565,7 @@ class TCRIModel(BaseModelClass):
     @torch.no_grad()
     def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
-        ``tcri_*`` keys (from :mod:`tcri._keys`) and return it. Replaces the old
+        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it. Replaces the old
         ``preprocessing.register_model``; writes no manager stash.
 
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,

@@ -6,7 +6,7 @@ numba/llvmlite) for a dependency this file never used.
 """
 import numpy as np
 
-from .. import _keys as K
+from .._state import keys as K
 
 __all__ = ["group_singletons", "clone_size"]
 

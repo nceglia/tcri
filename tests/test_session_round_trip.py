@@ -17,7 +17,7 @@ import numpy as np
 import pyro
 import pytest
 
-from tcri import _keys as K
+from tcri._state import keys as K
 from tcri.utils._utils import load_tcri_session, save_tcri_session
 
 

@@ -6,7 +6,7 @@ provenance block, and returns the same object. ``pl`` reads that cache; it never
 ``compare_groups`` is no longer here. It was a separate user-facing step only because there
 was nowhere to put statistics -- so a contrast meant remembering to call a second function on
 the right frame, and getting the replicate unit right yourself. Now ``splitby`` produces the
-contrast as part of the metric (``stats``), and the contrast math lives in ``_compare`` as an
+contrast as part of the metric (``stats``), and the contrast math lives in ``tcri/_stats/_compare.py`` as an
 internal helper with one caller.
 """
 from ._joint import joint_distribution

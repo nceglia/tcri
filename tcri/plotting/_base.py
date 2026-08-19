@@ -237,7 +237,7 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
     clone in the repertoire.
     """
     from .. import get as _get
-    from ..tools._common import collapse_to_replicates
+    from .._compute._tables import collapse_to_replicates
 
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)
@@ -389,7 +389,7 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
     about a different thing.
     """
     from .. import get as _get
-    from ..tools._common import collapse_to_replicates
+    from .._compute._tables import collapse_to_replicates
 
     if kind not in ("delta", "endpoints"):
         raise ValueError(f"kind must be 'delta' or 'endpoints', got {kind!r}")

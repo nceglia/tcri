@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 
 
 def _cov(adata):
@@ -142,7 +142,7 @@ def test_compare_groups_is_not_public():
     contrast as part of the metric, so the separate step has nothing left to do."""
     assert "compare_groups" not in tcri.tl.__all__
     assert not hasattr(tcri.tl, "compare_groups")
-    from tcri.tools._compare import compare_groups   # still there, just not a public step
+    from tcri._stats import compare_groups   # still there, just not a public step
 
     assert callable(compare_groups)
 
@@ -154,7 +154,7 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
     ``distance_metric`` disagreement happened. This asserts they cannot drift: the delta and
     p in ``stats`` equal what ``compare_groups`` returns on the per-group frame.
     """
-    from tcri.tools._compare import compare_groups
+    from tcri._stats import compare_groups
 
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
@@ -234,7 +234,7 @@ def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_
 
 def test_compare_groups_unpaired():
     """Mann–Whitney contrast on a tidy per-unit frame (R vs NR)."""
-    from tcri.tools._compare import compare_groups
+    from tcri._stats import compare_groups
 
     df = pd.DataFrame({
         "patient": [f"p{i}" for i in range(8)],
@@ -257,7 +257,7 @@ def test_compare_groups_paired_direction():
     group/item/draw) makes a paired posterior contrast genuinely reachable now, and which
     estimand that should be is a question for the authors. Tracked as an issue.
     """
-    from tcri.tools._compare import compare_groups
+    from tcri._stats import compare_groups
 
     rng = np.random.default_rng(0)
     rows = []

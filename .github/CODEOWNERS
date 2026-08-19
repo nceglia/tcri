@@ -13,10 +13,10 @@
 /docs/contract/source/                    @nceglia @salehis
 
 # --- machine-checked manifests ----------------------------------------------------
-/tcri/_contract.pyi                       @nceglia @salehis
-/tcri/model/_model_contract.py            @nceglia @salehis
-/tcri/model/_training_contract.py         @nceglia @salehis
-/tcri/tools/_metrics_contract.py          @nceglia @salehis
+/tests/contracts/api.pyi                     @nceglia @salehis
+/tests/contracts/model.py                    @nceglia @salehis
+/tests/contracts/training.py                 @nceglia @salehis
+/tests/contracts/metrics.py                  @nceglia @salehis
 
 # --- the conformance tests that give the manifests teeth --------------------------
 # Weakening a test is equivalent to weakening the contract, so these carry the same bar.
@@ -30,7 +30,7 @@
 /docs/contract/TRAINING_CONTRACT.md       @nceglia @salehis
 /docs/contract/METRICS_CONTRACT.md        @nceglia @salehis
 /docs/contract/METHODS_CONFORMANCE.md     @nceglia @salehis
-/docs/contract/tcri_api_and_responsibilities.md  @nceglia @salehis
+/docs/contract/API_CONTRACT.md            @nceglia @salehis
 
 # --- the governance rule itself ---------------------------------------------------
 /CLAUDE.md                                @nceglia @salehis

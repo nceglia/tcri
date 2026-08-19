@@ -3,7 +3,7 @@
 The conformance test (``tests/test_contract_conformance.py``) checks each
 *implemented* function's live signature against its declaration here; declared-
 but-absent functions are the refactor worklist. Prose spec:
-``docs/contract/tcri_api_and_responsibilities.md``.
+``docs/contract/API_CONTRACT.md``.
 
 This freezes the public *interface*. Its sibling — ``tcri/model/_model_contract.py``
 (prose: ``docs/contract/MODEL_CONTRACT.md``) — freezes the model's *mathematics*
@@ -117,7 +117,7 @@ class tl:
         clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
         device: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
-    # compare_groups was here. It is now internal (tools/_compare.py): `splitby` produces the
+    # compare_groups was here. It is now internal (tcri/_stats/_compare.py): `splitby` produces the
     # contrast as part of the metric, in the `stats` slot, with the replicate unit already
     # resolved. A separate public step meant the caller picked the replicate unit themselves.
 
