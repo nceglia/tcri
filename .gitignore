@@ -9,8 +9,7 @@ __pycache__/
 # Backup / scratch files
 *.bak
 
-# Refactor scratchpad — running notes, intentionally not tracked
-docs/contract/REFACTOR_NOTES.md
+# Refactor scratchpad + running trackers live in dev/, which is ignored wholesale below.
 
 # Distribution / packaging
 .Python
@@ -150,7 +149,6 @@ example/
 
 # local-only dev harnesses (real-data tests; NOT CI)
 dev/
-docs/contract/ss-small-team-handbook.md
 
 # scvi/lightning write these into the repo root on every fit
 scvi_log/

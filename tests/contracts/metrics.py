@@ -18,12 +18,12 @@ The **manuscript is upstream of this contract.** Where they disagree, the contra
 wrong, not the manuscript. If the manuscript is ambiguous, ASK the authors — do not infer
 a definition from what makes the code or a benchmark look correct.
 
-Two source documents, both archived under ``docs/contract/source/`` (see ``SOURCES``).
+Two source documents, both archived under ``governance/source/`` (see ``SOURCES``).
 **Their equation numbers COLLIDE** — "eq 3" is the clonotypic entropy in one and the
 VampPrior in the other — so every ``note_eq`` below names its document explicitly.
 
 Changing any definition here means changing what the published numbers mean.
-**Update this manifest and ``docs/contract/METRICS_CONTRACT.md`` FIRST, then the
+**Update this manifest and ``governance/METRICS_CONTRACT.md`` FIRST, then the
 code** — never loosen a definition to make a failing conformance test pass.
 """
 from __future__ import annotations
@@ -44,13 +44,13 @@ __all__ = [
 #: revision fails the build instead of going unnoticed.
 SOURCES = {
     "METRICS": {
-        "file": "docs/contract/source/metrics_2026-08-05.docx",
+        "file": "governance/source/metrics_2026-08-05.docx",
         "sha256_16": "2eac587d730d2e5e",
         "owns": "eqs 2-7: joint entropy, clonotypic/phenotypic entropy, MI, NMI, KL",
         "note": "The authority for everything in this module.",
     },
     "NOTE_1": {
-        "file": "docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf",
+        "file": "governance/source/supplementary_note_1_SS_2026-08-03.pdf",
         "sha256_16": "d71df651af7b6e94",
         "owns": "eqs 1-12: generative model, variational family, ELBO, in-silico perturbation",
         "note": (

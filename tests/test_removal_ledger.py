@@ -1,6 +1,6 @@
 """The Removal Ledger, as a test.
 
-`docs/contract/REFACTOR_AGENDA.md` carries a Removal Ledger whose rule is "every one MUST end
+`dev/REFACTOR_AGENDA.md` carries a Removal Ledger whose rule is "every one MUST end
 deleted", ticked by hand. Nothing checked the ticks. That gap is not hypothetical: the
 `tl.delta_clonotypic_entropy` tick was wrong for four PRs — the named replacement
 (`compare_groups`) contrasts between groups on a tidy frame and cannot compute a metric at two
@@ -22,7 +22,7 @@ import pytest
 import tcri
 
 #: namespace -> symbols the ledger says are deleted. Mirrors
-#: ``docs/contract/REFACTOR_AGENDA.md`` §"Removal Ledger". Add a row here when you tick one.
+#: ``dev/REFACTOR_AGENDA.md`` §"Removal Ledger". Add a row here when you tick one.
 REMOVED = {
     # Phase 2 (dead / out-of-scope) + Phase 4 (folded into to_anndata / session)
     "pp": [
@@ -75,7 +75,7 @@ def test_removed_symbols_stay_removed(namespace, symbol):
     mod = getattr(tcri, namespace)
     assert not hasattr(mod, symbol), (
         f"tcri.{namespace}.{symbol} is back. It is ticked as deleted in the Removal Ledger "
-        f"(docs/contract/REFACTOR_AGENDA.md). If the reinstatement is deliberate, remove it from "
+        f"(dev/REFACTOR_AGENDA.md). If the reinstatement is deliberate, remove it from "
         f"REMOVED here and say in the ledger what changed — do not delete this assertion."
     )
 

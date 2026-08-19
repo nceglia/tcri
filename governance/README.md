@@ -1,7 +1,14 @@
-# `docs/contract/` — the four contracts and their history
+# `governance/` — the four contracts and their history
 
-Internal governance docs for `tcri`. **Not** part of the published Sphinx site (excluded via
-`exclude_patterns` in `docs/conf.py`); the reader-facing overview is `docs/contracts/index.md`.
+Internal governance docs for `tcri`. It lives outside `docs/` on purpose: this is not
+documentation, it is the frozen record the project is held to, and while it sat at
+`docs/contract/` it was one letter away from `docs/contracts/` — the *published* reader-facing
+page. Two directories differing by a plural, one built by Sphinx and one deliberately excluded
+from it, is a naming trap rather than a structure.
+
+The running trackers (`REFACTOR_AGENDA.md`, `DEFECTS.md`, `REFACTOR_NOTES.md`) moved the other
+way, into the gitignored `dev/`: they record what is *pending*, which is not something a
+contract should carry.
 
 **The manuscript is upstream of the contracts.** `source/` holds Supplementary Note 1 and the
 metrics document, hash-pinned and checked by a test. Where a contract disagrees with them, the

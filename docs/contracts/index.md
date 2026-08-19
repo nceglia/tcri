@@ -6,7 +6,7 @@ training plan — so that a change to any of them is deliberate and reviewed rat
 accidental. The manuscript (**Supplementary Note 1**) is upstream of all of them.
 
 ```{note}
-This page is a reader's overview. The authoritative prose lives in `docs/contract/` and the
+This page is a reader's overview. The authoritative prose lives in `governance/` and the
 machine-checkable manifests live next to the code. Only the maintainers (@nceglia, @salehis)
 may change a contract, a conformance test, or a source document.
 ```
@@ -90,8 +90,8 @@ weighting and weight-decay-as-a-prior) are explicitly left open.
 
 ## Source documents
 
-The manuscript and the metrics document are archived under `docs/contract/source/` with
+The manuscript and the metrics document are archived under `governance/source/` with
 their hashes recorded in a manifest and checked by a test, so a revision is *detectable*.
 Their equation numbers **collide** — "eq 3" is the VampPrior in Note 1 but the clonotypic
 entropy in the metrics document — so every reference names its document. The eq-by-eq code
-map and deviation history live in `docs/contract/METHODS_CONFORMANCE.md`.
+map and deviation history live in `governance/METHODS_CONFORMANCE.md`.
