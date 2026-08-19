@@ -1,8 +1,12 @@
 name: tests
 
 on:
+  # Every pull request, not just those targeting main. Restricting to `branches: [main]`
+  # meant a STACKED pr — one based on another branch — got no checks at all, so every PR in
+  # a stack but the first would merge unverified and only be tested once its base had
+  # already landed. That is exactly backwards: the whole point of a stack is that each
+  # piece is reviewable and verifiable on its own.
   pull_request:
-    branches: [main]
 
 jobs:
   test:
