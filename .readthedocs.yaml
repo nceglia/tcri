@@ -17,3 +17,7 @@ python:
 
 sphinx:
   configuration: docs/conf.py
+  # Agree with the `docs` job in .github/workflows/tests.yml. Without this, CI fails on a
+  # warning that RTD would happily publish, so the two builds would disagree about whether
+  # the docs are broken — and the published site is the one users read.
+  fail_on_warning: true

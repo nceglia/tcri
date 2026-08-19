@@ -27,3 +27,31 @@ jobs:
           pip install -e ".[test]"
       - name: Run tests
         run: pytest tests/ -v --runslow
+
+  docs:
+    # Builds the docs the way Read the Docs does and FAILS ON WARNING.
+    #
+    # Without this, a broken autodoc target only warns: the build still exits 0, and RTD
+    # publishes a page with the heading present and nothing under it. That is not
+    # hypothetical — moving tcri/tools/_compare.py left `.. automodule:: tcri.tools._compare`
+    # in docs/api/metrics.md, and the rendered "Group comparison" section silently went from
+    # 4303 characters to 140 while the full test suite stayed green. No pytest run can see
+    # this class of defect; only a docs build can.
+    #
+    # The setup deliberately MIRRORS .readthedocs.yaml — python 3.12, docs/requirements.txt
+    # only, package NOT installed, heavy deps mocked via autodoc_mock_imports in conf.py. A
+    # job that installed the real package would pass in environments where RTD fails, which
+    # is worse than no job at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install docs toolchain (mirrors .readthedocs.yaml)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r docs/requirements.txt
+      - name: Build docs, failing on warning
+        run: sphinx-build -b html docs _build/html -W --keep-going
