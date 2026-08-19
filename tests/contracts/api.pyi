@@ -3,10 +3,10 @@
 The conformance test (``tests/test_contract_conformance.py``) checks each
 *implemented* function's live signature against its declaration here; declared-
 but-absent functions are the refactor worklist. Prose spec:
-``docs/contract/API_CONTRACT.md``.
+``governance/API_CONTRACT.md``.
 
 This freezes the public *interface*. Its sibling — ``tcri/model/_model_contract.py``
-(prose: ``docs/contract/MODEL_CONTRACT.md``) — freezes the model's *mathematics*
+(prose: ``governance/MODEL_CONTRACT.md``) — freezes the model's *mathematics*
 (Supplementary Note 1).
 
 RULES this file encodes:
@@ -18,7 +18,7 @@ RULES this file encodes:
   Corollary: always know what a metric reduces to. If a proposed function cannot name its
   unit of reduction, that is the signal to re-examine whether it belongs here.
 - Only the KEPT surface is declared. A symbol NOT in this file must NOT be public
-  after the refactor (see the Removal Ledger in ``docs/contract/REFACTOR_AGENDA.md``).
+  after the refactor (see the Removal Ledger in ``dev/REFACTOR_AGENDA.md``).
 - ``tl``/``pp``/``pl``/``diag``/``ut`` are container classes purely for namespacing
   (so the ``tl``/``pl`` twins can share a name); ``TCRIModel`` is the real model class.
 - Decisions baked in: ``n_samples=250`` default (sampling; ``0`` = opt-in point

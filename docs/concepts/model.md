@@ -5,7 +5,7 @@ hierarchical Bayesian model, fit with [Pyro](https://pyro.ai) on top of an
 [scvi-tools](https://scvi-tools.org) variational autoencoder, that ties each clone's
 phenotype distribution to gene expression. This page is the conceptual walk-through; the
 mathematics are frozen by the [model contract](../contracts/index.md), and the
-eq-by-eq code map lives in `docs/contract/METHODS_CONFORMANCE.md`.
+eq-by-eq code map lives in `governance/METHODS_CONFORMANCE.md`.
 
 ```{note}
 Equation numbers here refer to **Supplementary Note 1**. The metrics document numbers

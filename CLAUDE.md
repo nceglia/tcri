@@ -10,7 +10,7 @@ contract disagrees with them, **the contract is wrong**. The documents are the f
 if one is ambiguous, **ASK** — never infer a definition from what makes the code, a test,
 or a benchmark come out right.
 
-Both are archived in `docs/contract/source/` with their hashes recorded in the metrics
+Both are archived in `governance/source/` with their hashes recorded in the metrics
 manifest and checked by a test, so a revision is detectable rather than something someone
 has to notice.
 
@@ -31,14 +31,14 @@ conformance test means **stop and decide**, not "adjust the contract until it pa
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
-| **API contract** | the public *interface* | `tests/contracts/api.pyi` | `docs/contract/API_CONTRACT.md` | `tests/test_contract_conformance.py` |
-| **Model contract** | the generative *mathematics* | `tests/contracts/model.py` | `docs/contract/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
-| **Metrics contract** | what the *metrics compute* | `tests/contracts/metrics.py` | `docs/contract/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
-| **Training contract** | how the model is *fit* | `tests/contracts/training.py` | `docs/contract/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |
+| **API contract** | the public *interface* | `tests/contracts/api.pyi` | `governance/API_CONTRACT.md` | `tests/test_contract_conformance.py` |
+| **Model contract** | the generative *mathematics* | `tests/contracts/model.py` | `governance/MODEL_CONTRACT.md` | `tests/test_model_contract_conformance.py` |
+| **Metrics contract** | what the *metrics compute* | `tests/contracts/metrics.py` | `governance/METRICS_CONTRACT.md` | `tests/test_metrics_contract_conformance.py` |
+| **Training contract** | how the model is *fit* | `tests/contracts/training.py` | `governance/TRAINING_CONTRACT.md` | `tests/test_training_contract_conformance.py` + `tests/test_training_invariants.py` |
 
 ### Model integrity (read before touching `tcri/model/`)
 
-The model implements **Supplementary Note 1** (`docs/contract/source/supplementary_note_1_SS_2026-08-03.pdf`)
+The model implements **Supplementary Note 1** (`governance/source/supplementary_note_1_SS_2026-08-03.pdf`)
 — the source of truth. Changing its mathematics means: adding/removing a stochastic
 site, changing a distribution family or plate, altering the ELBO or the phenotype
 surrogate, or changing what a prior is scaled by (α on eq 1, β on eq 2).
@@ -58,7 +58,7 @@ Accepted departures from the note live in `SANCTIONED_DEVIATIONS`
 (`tests/contracts/model.py`) with a rationale, mirrored in `MODEL_CONTRACT.md`. Anything
 not listed there that departs from the note is a defect.
 
-`docs/contract/METHODS_CONFORMANCE.md` is the eq-by-eq code map + deviation history.
+`governance/METHODS_CONFORMANCE.md` is the eq-by-eq code map + deviation history.
 
 ### Metric integrity (read before touching `tcri/tools/`)
 
@@ -96,12 +96,26 @@ I3 and I4 are **open** and say so. Do not mark an invariant satisfied without a 
 
 ## Working agreement
 
-- **`docs/contract/REFACTOR_AGENDA.md` is the living tracker** — read it before
-  starting, write a diary entry after each PR, and run the Standing Audit in it.
+- **`dev/REFACTOR_AGENDA.md` is the living tracker** — read it before starting, write a diary
+  entry after each PR, and run the Standing Audit in it. **`dev/` is gitignored**, so it is
+  local-only and a fresh clone will not have it: it records what is *pending*, which is a
+  different kind of claim from what a contract freezes, and mixing the two meant a reader could
+  not tell which sentences bind. Anything in there that others must act on belongs in a GitHub
+  issue, not in the tracker.
+- **`governance/` holds the four contracts, their prose, and the source documents.** It sits
+  outside `docs/` deliberately — it is the frozen record, not documentation, and at its old
+  `docs/contract/` home it was one letter from `docs/contracts/`, the published reader page.
 - **Removal is a hard bar.** Delete dead code rather than keeping it "just in case";
   git has it. Tick the Removal Ledger.
 - **Never read the `example/` notebooks.** They are disposable *outputs* of the
-  refactor, never an input — no caller census, no "is-it-used" checks.
+  refactor, never an input — no caller census, no "is-it-used" checks. They are untracked and
+  purged from history; `example/` is gitignored.
+- **After moving or renaming anything, grep the WHOLE repo** — `grep -rIn "<old-path>" .` with
+  no `--include` filters and no directory scoping. Extensionless files (`CODEOWNERS`), docs
+  trees, and build-time-resolved references (Sphinx `automodule`) are exactly what a filtered
+  grep hides, and each has already caused a silent break. Then run the acceptance check that
+  *consumes* the path — build the wheel, build the docs — because the unit suite cannot see any
+  of them.
 - Run tests with the pinned venv: `MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q`.
 
 ### Branching (this has gone wrong more than once)

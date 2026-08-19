@@ -2,7 +2,7 @@
 
 The API contract (``tcri/_contract.pyi``) freezes the public *interface*; this file
 freezes the *model* — the generative program and variational family of
-**Supplementary Note 1** (``docs/contract/MODEL_CONTRACT.md``, prose; the PDF is the
+**Supplementary Note 1** (``governance/MODEL_CONTRACT.md``, prose; the PDF is the
 source of truth). The conformance test
 (``tests/test_model_contract_conformance.py``) traces ``TCRIModule.model``/``.guide``
 and asserts the live program matches this manifest **exactly** — no missing sites and
@@ -12,7 +12,7 @@ RULES this file encodes:
 - Every stochastic site in ``model()``/``guide()`` is declared here, with the
   equation of the note it realizes. A site NOT declared here must NOT exist.
 - Changing the model's mathematics **requires updating this contract first**
-  (and ``docs/contract/MODEL_CONTRACT.md``). The conformance test is the forcing
+  (and ``governance/MODEL_CONTRACT.md``). The conformance test is the forcing
   function: it fails until the contract and the code agree. Do not "fix" a failure
   by loosening the manifest to match new code — update the contract deliberately,
   with the note reference, so the change is reviewed as a model change.
