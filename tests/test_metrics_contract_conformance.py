@@ -1,4 +1,4 @@
-"""Conformance test for the METRICS contract (``tcri/tools/_metrics_contract.py``).
+"""Conformance test for the METRICS contract (``tests/contracts/metrics.py``).
 
 Companion to ``test_model_contract_conformance.py``. Where the model contract is
 verified by tracing ``model()``/``guide()``, metrics are pure functions of a joint
@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tcri.tools import _metrics_contract as MC
+from tests.contracts import metrics as MC
 from tcri.tools._entropy import _clonotypic_one, _phenotypic_one
 from tcri.tools._mutual_information import _mi_from_joint
 

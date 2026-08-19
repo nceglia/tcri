@@ -1,4 +1,4 @@
-"""Conformance test for the TRAINING contract (``tcri/model/_training_contract.py``).
+"""Conformance test for the TRAINING contract (``tests/contracts/training.py``).
 
 The model and metrics contracts are checked against the manuscript. This one cannot be —
 Note 1 says nothing about optimization beyond "SVI in Pyro, mini-batching, KL scaling, Adam".
@@ -20,7 +20,7 @@ import textwrap
 
 import pytest
 
-from tcri.model import _training_contract as TC
+from tests.contracts import training as TC
 from tcri.model._training import UnifiedTrainingPlan
 
 
@@ -99,7 +99,7 @@ def test_specified_invariants_are_not_claimed_to_hold():
 
 def test_no_reset_knob_on_train():
     """B1: restarting the KL ramp is the behaviour DE-4 removes, and adding a reset to
-    ``train()`` would also be an API-contract change to ``_contract.pyi``."""
+    ``train()`` would also be an API-contract change to ``tests/contracts/api.pyi``."""
     from tcri.model._model import TCRIModel
 
     params = inspect.signature(TCRIModel.train).parameters

@@ -3,7 +3,7 @@
 METRICS eq 5 (MI) and eq 6 (NMI). Default ``normalize_mode="min"`` (coefficient of constraint
 I/min(H_c,H_p)) — the ``"average"`` denominator scales with log2(C) and is not comparable
 across groups with different clone counts, which is why it is not the default. See
-``tcri/tools/_metrics_contract.py`` for the frozen definitions.
+``tests/contracts/metrics.py`` for the frozen definitions.
 """
 from __future__ import annotations
 
