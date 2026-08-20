@@ -1,7 +1,6 @@
 """Self-contained synthetic generator with an **exact mutual-information oracle**.
 
-Implements the semi-synthetic generative story from Supplementary Note 1
-("Generative Model for Semi-Synthetic Simulations")::
+The semi-synthetic generative story, with every quantity known in closed form::
 
     pi        ~ Dirichlet(alpha_pi)              # clone abundance P(c)
     omega_c   ~ Dirichlet(alpha_omega)           # P(phi | c)
@@ -275,8 +274,7 @@ def temperature_scale(P, T, eps=1e-12):
     # matrix and would have propagated into a benchmark as though it meant something.
     if not np.isfinite(T) or T <= 0.0:
         raise ValueError(
-            f"temperature must be finite and > 0 (Supplementary Note 1, 'Temperature "
-            f"Scaling of Conditional Distributions'); got T={T!r}"
+            f"temperature must be finite and > 0; got T={T!r}"
         )
 
     P = np.clip(np.asarray(P, dtype=float), eps, None)
@@ -525,7 +523,7 @@ def simulate_cohort(
 
     * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits
       (see this module's header) — it is the quantity the model is trying to see *past*;
-    * the model shrinks toward a covariate-free ``omega_c`` (Note 1 eq 2), deliberately, since
+    * the model shrinks toward a covariate-free ``omega_c``, deliberately, since
       the cells in hand are a sample of a much larger unobserved repertoire. Conservative is
       the intent.
 

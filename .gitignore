@@ -153,3 +153,7 @@ dev/
 # scvi/lightning write these into the repo root on every fit
 scvi_log/
 lightning_logs/
+
+# local docs preview env — mirrors docs/requirements.txt, i.e. exactly what RTD installs
+# (the package itself is NOT installed; heavy deps are mocked via autodoc_mock_imports)
+.venv-docs/

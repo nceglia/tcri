@@ -2,8 +2,8 @@
 
 This guide walks through a full TCRi analysis: register your data, fit the model, write
 the learned quantities back onto the `AnnData`, and read out the information-theoretic
-metrics. For the concepts behind each step, see [The data model](../concepts/data-model.md),
-[The model](../concepts/model.md), and [the metrics](../concepts/metrics.md).
+metrics. For the concepts behind each step, see [The data model](../concepts/index.md),
+[The model](../concepts/index.md), and [the metrics](../concepts/index.md).
 
 ## 1. Prepare your AnnData
 
@@ -85,9 +85,9 @@ flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
 
 ```{important}
-To reproduce the manuscript's normalized MI benchmark, pass
-`normalize_mode="average"` explicitly — the default (`"min"`) is a deliberate,
-group-comparable deviation from eq 6. See [the metrics concepts](../concepts/metrics.md).
+For the classical NMI, pass `normalize_mode="average"` explicitly. The default
+(`"min"`) is group-comparable, which is usually what you want when clone counts differ
+between groups. See [Concepts](../concepts/index.md).
 ```
 
 ## 6. Visualize
@@ -104,21 +104,26 @@ tcri.pl.phenotypic_flux(adata, order=["pre", "post"])
 
 ## 7. Compare groups
 
-Contrast a metric across cohorts (e.g. responders vs non-responders) with direction
-probabilities. Compute one value per unit (`groupby`) carrying the cohort label
-(`splitby`), then contrast — `value` is the metric column, `"MI"` for mutual information:
+Contrasting a metric across cohorts is **not a separate step**. Pass `splitby` and the
+metric produces the contrast itself, with the replicate unit already resolved:
 
 ```python
-mi_df = tcri.tl.mutual_information(
+res = tcri.tl.mutual_information(
     adata, covariate="pre", groupby="patient", splitby="response"
 )
-result = tcri.tl.compare_groups(mi_df, value="MI", splitby="response")
+
+res["result"]   # one row per patient, carrying its response label
+res["stats"]    # the R-vs-NR contrast: delta, U, p, stars, and direction probabilities
 ```
+
+`groupby` is the replicate — one value per patient — and `splitby` is the cohort label,
+which must be constant within each group. The contrast in `stats` is computed **over
+groups**, not over rows, so a handful of patients cannot be inflated into significance by
+the number of clones they happen to contain.
 
 ## Next steps
 
 - [Tutorials](../tutorials/index.md) — runnable, end-to-end examples for preprocessing,
   training, metrics, and diagnostics.
-- [The data model](../concepts/data-model.md) — what lives on your `AnnData` after
-  `to_anndata`.
+- [Concepts](../concepts/index.md) — the model, the data it writes, and what the metrics mean.
 - [API reference](../api/model.md) — exact call signatures.

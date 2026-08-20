@@ -81,7 +81,10 @@ html_theme = 'furo'
 # Add any paths that contain custom static files (such as style sheets) here.
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+# '_static' keeps the Sphinx-convention assets (CSS, favicon) that the theme and config
+# reference by name. 'images' holds figures the pages embed — they are content, not theme
+# machinery, and mixing the two made it unclear which files a page could safely reference.
+html_static_path = ['_static', 'images']
 
 # These paths are either relative to html_static_path
 # or fully qualified paths (eg. https://...)

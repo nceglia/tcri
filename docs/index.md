@@ -1,6 +1,6 @@
 # TCRi
 
-```{image} _static/tcri_logo_hero.png
+```{image} images/tcri_logo_hero.png
 :alt: TCRi
 :width: 360px
 :align: center
@@ -31,9 +31,7 @@ tutorials/index
 :maxdepth: 2
 :caption: Concepts
 
-concepts/data-model
-concepts/model
-concepts/metrics
+concepts/index
 ```
 
 ```{toctree}
@@ -51,10 +49,9 @@ api/utils
 
 ```{toctree}
 :maxdepth: 1
-:caption: Governance & notes
+:caption: Governance
 
 contracts/index
-nmi_temperature_bias
 ```
 
 ## Citation
