@@ -41,7 +41,7 @@ import pandas as pd
 import pyro
 
 import tcri
-from tcri import _keys as K
+from tcri._state import keys as K
 from tcri.datasets import simulate_cohort
 from tcri.model import TCRIModel
 

@@ -5,7 +5,7 @@ information and learns the clone–phenotype distribution. Exposed as
 ``tcri.ml.TCRIModel``.
 
 The generative mathematics are frozen by the [model contract](../contracts/index.md) and
-described conceptually in [The model](../concepts/model.md).
+described conceptually in [The model](../concepts/index.md).
 
 ```{eval-rst}
 .. autoclass:: tcri.model._model.TCRIModel

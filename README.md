@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://tcri.readthedocs.io">
-    <img src="https://github.com/nceglia/tcri/blob/main/tcri_logo_hero.png?raw=true" alt="TCRi" width="420">
+    <img src="https://raw.githubusercontent.com/nceglia/tcri/main/docs/images/tcri_logo_hero.png" alt="TCRi" width="420">
   </a>
 </p>
 
@@ -52,7 +52,7 @@ gene-expression matrix.
 - **Diagnostics** — posterior-predictive checks, phenotype calibration, and permutation
   nulls for the metrics.
 - **Contract-governed** — the public API, the generative model, the metric definitions,
-  and the training plan are each frozen by a machine-checked contract (see below).
+  and the training plan are each frozen by a machine-checked contract.
 
 ## Installation
 
@@ -105,27 +105,23 @@ TCRi models the joint distribution of clonotype and phenotype hierarchically: a
 clonotype-level prior `p_c` over phenotypes, a covariate-specific `p_ct` anchored to it,
 and a per-cell phenotype that fuses a classifier on the latent embedding `z` with the
 clone's local prior. The metrics are then pure functions of the learned clone × phenotype
-joint. The full generative model (Supplementary Note 1) and its plate diagram are
-documented under [The model](https://tcri.readthedocs.io/en/latest/concepts/model.html).
+joint. The full generative model and its plate diagram are documented under
+[Concepts](https://tcri.readthedocs.io/en/latest/concepts/index.html).
 
 <p align="center">
-  <img src="https://github.com/nceglia/tcri/blob/main/framework.png?raw=true" alt="TCRi framework" width="760">
+  <img src="https://raw.githubusercontent.com/nceglia/tcri/main/docs/images/framework.png" alt="TCRi framework" width="760">
 </p>
 
-## The contracts
+## Governance
 
-TCRi is governed by four frozen, machine-checked contracts — the manuscript
-(Supplementary Note 1) is upstream of all of them:
+The public interface, the generative mathematics, the metric definitions and the training
+plan are each frozen by a machine-checked contract. A published number only means something
+if the definition behind it is stable, so a metric cannot be silently redefined and the model
+the package claims to implement is the model it does implement.
 
-| Contract | Freezes | Prose |
-|----------|---------|-------|
-| **API** | the public interface | [`API_CONTRACT.md`](governance/API_CONTRACT.md) |
-| **Model** | the generative mathematics | [`MODEL_CONTRACT.md`](governance/MODEL_CONTRACT.md) |
-| **Metrics** | what the metrics compute | [`METRICS_CONTRACT.md`](governance/METRICS_CONTRACT.md) |
-| **Training** | how the model is fit | [`TRAINING_CONTRACT.md`](governance/TRAINING_CONTRACT.md) |
-
-A failing conformance test means *stop and decide* — never loosen a contract to make it
-pass. See [The contracts](https://tcri.readthedocs.io/en/latest/contracts/index.html).
+A failing conformance test means *stop and decide* — never loosen a contract to make it pass.
+See [Governance](https://tcri.readthedocs.io/en/latest/contracts/index.html) for what each
+contract covers, and `governance/` in the repository for the contracts themselves.
 
 ## Related tools
 

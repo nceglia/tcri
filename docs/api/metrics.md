@@ -5,7 +5,7 @@ engine, the two entropies, mutual information, phenotypic flux, and group compar
 All entropies and MI are in **bits** (log base 2). Exposed as ``tcri.tl``.
 
 The definitions are frozen by the [metrics contract](../contracts/index.md); the
-conceptual reference is [Information-theoretic metrics](../concepts/metrics.md).
+conceptual reference is [Information-theoretic metrics](../concepts/index.md).
 
 ## Joint distribution
 

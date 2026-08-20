@@ -1,9 +1,8 @@
 """``tl.mutual_information`` — clone↔phenotype coupling I(c;φ|m) in **bits** (§7.4).
 
-METRICS eq 5 (MI) and eq 6 (NMI). Default ``normalize_mode="min"`` (coefficient of constraint
-I/min(H_c,H_p)) — the ``"average"`` denominator scales with log2(C) and is not comparable
-across groups with different clone counts, which is why it is not the default. See
-``tests/contracts/metrics.py`` for the frozen definitions.
+Default ``normalize_mode="min"`` — the coefficient of constraint, I/min(H_c,H_p). The
+``"average"`` denominator (classical NMI) scales with log2(C) and is not comparable across
+groups with different clone counts, which is why it is not the default.
 """
 from __future__ import annotations
 
