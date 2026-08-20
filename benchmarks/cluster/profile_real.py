@@ -22,6 +22,9 @@ import io
 import json
 import logging
 import math
+
+#: Mirrors the train_size TCRIModel.train() hardcodes in its DataSplitter.
+TRAIN_SIZE = 0.9
 import os
 import platform
 import time
@@ -70,7 +73,11 @@ def main():
     ap.add_argument("--covariate-key", default="treatment")
     ap.add_argument("--batch-key", default="patient_ID")
     ap.add_argument("--replicate", default="patient_ID")
-    ap.add_argument("--validation-size", type=float, default=0.1)
+    # NOTE: no --validation-size. TCRIModel.train() fixes the split at train_size=0.9 in its
+    # DataSplitter and does not accept a validation_size; anything it does not name falls into
+    # **kwargs and is forwarded to Lightning's Trainer, which rejects it with a TypeError
+    # raised four frames deep in scvi. That is what killed job 9172386 after prep had already
+    # succeeded.
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -96,7 +103,10 @@ def main():
 
     # the ramp has to finish at the same point in training for every batch size, or the
     # configurations are not comparable -- see the module docstring
-    n_train = adata.n_obs * (1.0 - args.validation_size)
+    # 0.9 is not a guess: TCRIModel.train() constructs its DataSplitter with train_size=0.9,
+    # so this MUST track that constant or the KL ramp lands at a different epoch than intended
+    # and batch sizes stop being comparable.
+    n_train = adata.n_obs * TRAIN_SIZE
     steps_per_epoch = max(1, math.ceil(n_train / args.batch_size))
     n_steps_kl_warmup = max(1, int(round(steps_per_epoch * args.epochs * args.ramp_by_epoch)))
     rec.update(steps_per_epoch=steps_per_epoch, n_steps_kl_warmup=n_steps_kl_warmup)
@@ -117,7 +127,6 @@ def main():
     with s("train"), contextlib.redirect_stdout(io.StringIO()):
         model.train(max_epochs=args.epochs, batch_size=args.batch_size,
                     n_steps_kl_warmup=n_steps_kl_warmup, accelerator=accelerator,
-                    validation_size=args.validation_size,
                     enable_progress_bar=False, enable_model_summary=False)
     rec["training_record"] = {k: (v if isinstance(v, (int, float, str, bool, type(None)))
                                   else str(v))
