@@ -6,11 +6,53 @@ API reference will make sense.
 
 ## The problem
 
-TCRi works on **paired single-cell data**: every cell has both a gene-expression profile and
-a TCR **clonotype** label, and belongs to a **covariate** group (timepoint, response status,
-and so on). The questions it answers are *distributional* — for a given clonotype, what is
-its distribution over **phenotypes**, and how does that distribution shift across covariates?
-From those distributions TCRi computes information-theoretic summaries.
+You never observe the distribution you care about.
+
+A repertoire is enormous and a sequencing run samples a sliver of it. What comes back is a
+few hundred or few thousand cells, unevenly distributed: a handful of expanded clones supply
+most of the cells, while the long tail of the repertoire shows up once or twice, or not at
+all. The clone→phenotype distribution you can count directly from that sample is not the
+distribution of the underlying repertoire — it is one noisy realisation of it, and the noise
+is worst exactly where the data is thinnest.
+
+**TCRi is an estimator for that unobserved joint distribution** $P(c, \phi)$ over clonotypes
+and phenotypes. Everything else in the package is downstream of it: the entropies, the mutual
+information, and the flux are all pure functions of the joint, so the estimate is the engine
+and the metrics are readouts of it.
+
+### Why not just count?
+
+You can build the joint empirically — crosstab clone against phenotype and normalize. The
+difference is what each does when the data runs out.
+
+The empirical table treats every clone's counts at face value. A clone seen twice at one
+timepoint and forty times at the next gets a phenotype distribution from two cells, and the
+apparent change between timepoints is mostly the two-cell estimate being wrong.
+
+TCRi instead ties each clone's covariate-level distribution to that **clone's own distribution
+pooled across covariates**, and shrinks toward it. A clone with plenty of cells at a covariate
+level barely moves; a clone with two cells is pulled most of the way back to its overall
+behaviour, because two cells are not evidence that it changed.
+
+The consequence is deliberate: **differences between covariates come out attenuated.** The
+estimator understates change rather than overstating it.
+
+### Why conservative is the right failure mode here
+
+Two reasons, and they compound:
+
+- **There is no ground truth to check against.** The true joint of the underlying repertoire
+  is unobservable, so an estimator that over-reads cannot be caught by comparing it to
+  anything. A method that errs toward "no change" produces claims that survive scrutiny; one
+  that errs toward change produces claims nobody can falsify.
+- **The sampling is biased toward exactly the clones that look most convincing.** Large
+  expanded clones fill most of a run's cell budget, so they carry tight per-clone estimates,
+  while the small clones — where most of the repertoire's diversity lives — carry almost none.
+  Reading raw counts weights the confident-looking part of a biased sample most heavily.
+
+So the shift TCRi reports for a clone is a lower bound on the shift in the repertoire it was
+drawn from. When it does report a difference, the difference is not an artefact of having
+sequenced two cells.
 
 Three index sets recur throughout:
 
@@ -40,9 +82,6 @@ index sets above: clonotypes $c$, clone × covariate pairs $ct$, and cells $i$. 
 column names the argument that tunes each piece — so if you want a clone's covariate levels to
 stay closer to its overall distribution, the figure tells you that `local_scale` is the knob.
 
-Regenerate the figure with `python docs/model_pgm.py` after changing it; the PNG is committed
-so the docs build needs no plotting dependency.
-
 The generative story has four steps:
 
 **1 — Clonotype prior $p_c$.** Each clonotype draws a distribution over phenotypes from a
@@ -71,13 +110,19 @@ So a cell's phenotype call fuses two sources: *what its expression looks like* a
 clone tends to be at this covariate*. The variational guide learns approximate posteriors
 $q(p_c)$ and $q(p_{ct})$; `get_p_ct()` returns the posterior-mean $p_{ct}$.
 
-### Scales are semantics, not tuning
+### What the two scales actually control
 
-$\alpha$ (`global_scale`, default `5.0`) scales the clonotype prior's concentration and
-$\beta$ (`local_scale`, default `3.0`) scales the covariate-level one. These are not knobs to
-sweep for fit. Dropping either changes the prior's *shape*: with concentration entries below
-1 a Dirichlet turns U-shaped, putting mass at the simplex corners — the opposite of a prior
-peaked at the archetype.
+$\alpha$ (`global_scale`, default `5.0`) is the concentration of the clonotype prior and
+$\beta$ (`local_scale`, default `3.0`) the concentration of the covariate-level one. $\beta$ is
+the shrinkage knob described above: raise it and each covariate level is held
+closer to its clone's overall distribution, so differences between covariates attenuate further.
+
+Neither is a hyperparameter to sweep for a better fit, because **a Dirichlet changes shape, not
+just width, as its concentration crosses 1.** Above 1 the distribution is peaked at its mean —
+"this clone looks like its archetype, give or take". Below 1 it turns U-shaped, piling mass at
+the corners of the simplex — "this clone is entirely one phenotype, we just don't know which".
+Those are opposite claims about what a clone is. Lowering a scale past 1 to loosen the prior
+does not weaken the assumption; it replaces it with a different one.
 
 ### Gating
 
@@ -227,20 +272,12 @@ other, and it is enforced by test. The same tests pin the sanity limits: uniform
 gives $\log_2 k$ (normalized $1.0$), all mass on one outcome gives $0$, an independent joint
 gives $I=0$, and $I(c;\phi) = I(\phi;c) \ge 0$.
 
-## Typical flow
+## Where to go next
 
-```mermaid
-graph LR
-    A["setup_anndata"] --> B["TCRIModel(...)"]
-    B --> C["model.train(...)"]
-    C --> D["model.to_anndata(adata)"]
-    D --> E["tcri.tl metrics<br/>entropy · mutual_information · flux"]
-    D --> F["tcri.pl plots"]
-    D --> G["tcri.diag<br/>PPCs · calibration · nulls"]
-    classDef fit fill:#eafbe7,stroke:#1f9e16,color:#0a0a0a;
-    class D fit;
-```
+The [walkthrough](../tutorials/index.md) runs this end to end on a simulated cohort, in the
+order you would actually work: register and fit, **check the fit with `tcri.diag`**, then
+compute metrics, then plot them. The diagnostics step is not optional — an estimate of an
+unobservable joint is only worth reading if the model that produced it checks out.
 
-With those objects on your `AnnData`, the API reference for
-[metrics](../api/metrics.md), [plotting](../api/plotting.md), and
-[diagnostics](../api/diagnostics.md) gives the exact call signatures.
+The API reference gives exact signatures for [metrics](../api/metrics.md),
+[plotting](../api/plotting.md), and [diagnostics](../api/diagnostics.md).
