@@ -15,8 +15,11 @@ holds for every metric. :func:`params` reads the provenance separately.
 """
 from __future__ import annotations
 
-from ._state import keys as K
-from ._state.storage import load_result, load_result_params
+# Aliased private: this module IS the public accessor namespace, so anything bound at module
+# scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` advertised K,
+# load_result and load_result_params -- the storage internals the accessors exist to hide.
+from ._state import keys as _K
+from ._state.storage import load_result as _load_result, load_result_params as _load_result_params
 
 __all__ = [
     "result",
@@ -33,13 +36,13 @@ __all__ = [
 
 #: tool name -> canonical uns key
 _RESULTS = {
-    "joint_distribution": K.JOINT_DISTRIBUTION,
-    "mutual_information": K.MUTUAL_INFORMATION,
-    "clonotypic_entropy": K.CLONOTYPIC_ENTROPY,
-    "phenotypic_entropy": K.PHENOTYPIC_ENTROPY,
-    "phenotypic_flux": K.PHENOTYPIC_FLUX,
-    "delta_clonotypic_entropy": K.DELTA_CLONOTYPIC_ENTROPY,
-    "delta_phenotypic_entropy": K.DELTA_PHENOTYPIC_ENTROPY,
+    "joint_distribution": _K.JOINT_DISTRIBUTION,
+    "mutual_information": _K.MUTUAL_INFORMATION,
+    "clonotypic_entropy": _K.CLONOTYPIC_ENTROPY,
+    "phenotypic_entropy": _K.PHENOTYPIC_ENTROPY,
+    "phenotypic_flux": _K.PHENOTYPIC_FLUX,
+    "delta_clonotypic_entropy": _K.DELTA_CLONOTYPIC_ENTROPY,
+    "delta_phenotypic_entropy": _K.DELTA_PHENOTYPIC_ENTROPY,
 }
 
 _PROVENANCE = ("params", "version")
@@ -83,7 +86,7 @@ def result(adata, name: str, *, key=None):
     Strips ``params``/``version``, which ``load_result`` carries through for dict payloads but
     not for DataFrame ones — normalising that asymmetry is most of this function's job.
     """
-    payload = load_result(adata, _require(adata, name, key))
+    payload = _load_result(adata, _require(adata, name, key))
     if isinstance(payload, dict):
         return {k: v for k, v in payload.items() if k not in _PROVENANCE}
     return payload
@@ -91,7 +94,7 @@ def result(adata, name: str, *, key=None):
 
 def params(adata, name: str, *, key=None) -> dict:
     """The provenance block: every argument the tool ran with, including untouched defaults."""
-    return load_result_params(adata, _require(adata, name, key))
+    return _load_result_params(adata, _require(adata, name, key))
 
 
 def table(adata, name: str, *, key=None, which: str = "result"):
@@ -100,7 +103,7 @@ def table(adata, name: str, *, key=None, which: str = "result"):
     ``which="result"`` (default) is the reduced, per-group frame the plots consume;
     ``which="table"`` is the unreduced substrate, one row per (covariate, group, item[, draw]).
     """
-    payload = load_result(adata, _require(adata, name, key))
+    payload = _load_result(adata, _require(adata, name, key))
     if not isinstance(payload, dict) or which not in payload:
         raise KeyError(
             f"cached result for {name!r} has no {which!r} frame "

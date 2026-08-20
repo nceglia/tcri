@@ -34,6 +34,15 @@ import numpy as np
 # the flat _stats.py became the _stats/ package in the layout pass).
 
 
+#: Star-imported by ``tcri/utils/__init__.py``. Without this, `import *` pulled in every
+#: module-level name the file happened to bind -- numpy, os, sys, matplotlib, typing
+#: aliases, scipy functions, the private path constants -- and ``dir(tcri.ut)`` listed
+#: 27 public names for a namespace that has 4. The contract could not see any of it:
+#: its surface check freezes tcri-DEFINED callables, so a re-exported third-party name
+#: is invisible to it by construction.
+__all__ = ["save_tcri_session", "load_tcri_session"]
+
+
 def _ensure_pyro_posterior_params(model, adata) -> None:
     import pyro, torch
     from pyro.distributions import constraints

@@ -126,3 +126,79 @@ def test_the_wheel_ships_only_the_package():
                              capture_output=True, text=True, check=True).stdout.split()
     strays = [f for f in tracked if not (f.endswith(".py") or f.endswith("py.typed"))]
     assert not strays, f"non-Python files tracked inside the package: {strays}"
+
+
+#: The public view namespaces. Each must expose exactly what it declares.
+VIEW_NAMESPACES = ["tl", "pl", "pp", "ut", "ml", "diag", "datasets", "get"]
+
+#: `from __future__ import annotations` binds a module-scope `_Feature` object literally named
+#: `annotations`. It is a language artifact present in every module using the import, not
+#: something the package exports, and there is no way to suppress it short of dropping the
+#: import. Excluded by name rather than by a blanket "ignore anything non-callable", which
+#: would also hide real leaks like the AD_FILE/META_FILE path constants.
+_FUTURE_ARTIFACTS = {"annotations"}
+
+
+@pytest.mark.parametrize("ns", VIEW_NAMESPACES)
+def test_namespace_exposes_exactly_its_all(ns):
+    """A view namespace must declare its surface, and the declaration must be complete.
+
+    `__all__` alone is not enough: it governs `from x import *`, but `dir(x)` — which is what
+    tab-completion and `help()` show, and what a reader treats as the API — still lists every
+    module-scope binding. `tcri.ut` was the worst case, advertising 27 public names for a
+    namespace with 4: numpy, os, sys, matplotlib, typing aliases, scipy functions and the
+    private session-path constants, all pulled in by `from ._utils import *` over a module with
+    no `__all__`.
+
+    The contract's surface check could not see any of it. `_public_callables` freezes callables
+    whose `__module__` starts with "tcri", so a re-exported third-party name is invisible to it
+    by construction — correctly, since freezing scipy's signature is not tcri's business. That
+    is exactly why this test is separate: it asks a different question, whether the namespace
+    exposes anything it did not mean to.
+    """
+    mod = getattr(tcri, ns)
+    declared = getattr(mod, "__all__", None)
+    assert declared is not None, (
+        f"tcri.{ns} has no __all__. Every public namespace declares its surface; without one, "
+        f"`import *` re-exports whatever the module happened to bind at import time."
+    )
+    public = {n for n in dir(mod) if not n.startswith("_")} - _FUTURE_ARTIFACTS
+    undeclared = sorted(public - set(declared))
+    assert not undeclared, (
+        f"tcri.{ns} exposes names not in its __all__: {undeclared}. Either add them to __all__ "
+        f"(and to tests/contracts/api.pyi, since that is a contract change), or alias the import "
+        f"private — `import numpy as _np`. Adding to __all__ without declaring it in the contract "
+        f"will fail test_public_surface_equals_the_contract."
+    )
+
+
+@pytest.mark.parametrize("ns", VIEW_NAMESPACES)
+def test_namespace_all_contains_only_tcri_objects(ns):
+    """Declaring a name is not the same as owning it.
+
+    The companion test above asks whether anything is exposed but undeclared. That alone is
+    satisfiable the wrong way: adding ``"np"`` to ``__all__`` makes the leak *declared* and the
+    test green. The contract's surface check does not catch it either — ``_public_callables``
+    requires ``callable(attr)``, and a module is not callable — so a re-exported third-party
+    module could sit in the public API with both guards passing. This was found by mutating
+    exactly that and watching the suite stay green.
+
+    So: every name a namespace declares must be something tcri defines, or a tcri submodule.
+    """
+    import types
+
+    mod = getattr(tcri, ns)
+    foreign = []
+    for name in getattr(mod, "__all__", []):
+        obj = getattr(mod, name, None)
+        origin = getattr(obj, "__module__", None) or getattr(obj, "__name__", "")
+        if isinstance(obj, types.ModuleType):
+            if not getattr(obj, "__name__", "").startswith("tcri"):
+                foreign.append(f"{name} (module {obj.__name__})")
+        elif origin and not str(origin).startswith("tcri"):
+            foreign.append(f"{name} (from {origin})")
+    assert not foreign, (
+        f"tcri.{ns}.__all__ declares things tcri does not define: {foreign}. Re-exporting a "
+        f"third-party name makes it part of tcri's public API — its signature, its deprecations, "
+        f"its breakage. Import it privately (`import numpy as _np`) instead."
+    )
