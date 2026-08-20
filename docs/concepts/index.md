@@ -29,17 +29,19 @@ Every cell maps to exactly one `ct` pair.
 [scvi-tools](https://scvi-tools.org) variational autoencoder. It ties each clone's phenotype
 distribution to gene expression.
 
-<!-- PGM FIGURE GOES HERE.
-     Drop the rendered plate diagram at docs/images/model_pgm.png and replace this comment with:
+```{image} ../images/model_pgm.png
+:alt: TCRi plate diagram, annotated with the arguments that tune each part
+:width: 780px
+:align: center
+```
 
-     ```{image} ../images/model_pgm.png
-     :alt: TCRi plate diagram
-     :width: 620px
-     :align: center
-     ```
+Shaded nodes are **observed**; open nodes are latent. The three nested plates are the three
+index sets above: clonotypes $c$, clone × covariate pairs $ct$, and cells $i$. The right-hand
+column names the argument that tunes each piece — so if you want a clone's covariate levels to
+stay closer to its overall distribution, the figure tells you that `local_scale` is the knob.
 
-     Left as a comment deliberately: the docs CI builds with -W, so referencing an image that
-     does not exist yet would fail the build rather than merely look empty. -->
+Regenerate the figure with `python docs/model_pgm.py` after changing it; the PNG is committed
+so the docs build needs no plotting dependency.
 
 The generative story has four steps:
 
