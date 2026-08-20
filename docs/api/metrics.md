@@ -35,14 +35,21 @@ conceptual reference is [Information-theoretic metrics](../concepts/index.md).
    :members:
 ```
 
-## Group comparison
+## The `stats` slot
 
-`compare_groups` is **not public API** — it is not on `tcri.tl`, and
-`tests/test_removal_ledger.py` pins that it stays off. It is reached only through a metric's
-`splitby` argument, never as a step you perform. It is documented here because the contrast it
-computes is part of what a metric with `splitby` *means*, not because you should call it.
+Every metric returns `{table, result, stats}`. When you pass `splitby`, the between-group
+contrast lands in `stats` — you do not call a second function.
 
-```{eval-rst}
-.. automodule:: tcri._stats._compare
-   :members:
-```
+| column | meaning |
+|---|---|
+| `group_a`, `group_b` | the two levels contrasted |
+| `mean_a`, `mean_b`, `delta` | group means and their difference |
+| `U`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker |
+| `p_gt`, `p_lt` | direction probabilities |
+| `hdi_low`, `hdi_high` | interval on the difference |
+
+**`n` counts replicates, never items.** Items are collapsed to their group before the contrast,
+so 18 clones from 4 patients give n=4. Handing the row-level frame to a rank test instead is
+what produces a starred p-value off a handful of patients.
+
+With more than two levels every pair is reported; multiplicity is yours to handle.
