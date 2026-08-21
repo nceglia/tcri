@@ -77,6 +77,51 @@ def _slurm_autodetect_disabled():
                 os.environ[k] = v
 
 
+def _accepted_train_kwargs() -> set[str]:
+    """Every name ``train(**kwargs)`` may legitimately forward.
+
+    Introspected from the INSTALLED lightning and scvi rather than hardcoded: the set differs
+    across versions, and a frozen list would reject valid options after an upgrade — turning a
+    guard meant to produce clear errors into a source of new ones.
+    """
+    import inspect
+
+    names = {
+        # popped by train() itself before anything is forwarded
+        "early_stopping_monitor", "early_stopping_mode", "early_stopping_patience",
+        "callbacks", "early_stopping",
+    }
+    for obj in _train_kwarg_sources():
+        try:
+            names |= set(inspect.signature(obj).parameters)
+        except (TypeError, ValueError):  # C-implemented or otherwise unintrospectable
+            continue
+    names.discard("self")
+    names.discard("kwargs")
+    return names
+
+
+def _train_kwarg_sources():
+    """The callables train()'s kwargs eventually reach. Import failures are non-fatal."""
+    out = []
+    try:
+        from scvi.train import TrainRunner
+        out.append(TrainRunner.__init__)
+    except Exception:
+        pass
+    try:
+        from lightning.pytorch import Trainer
+        out.append(Trainer.__init__)
+    except Exception:
+        pass
+    try:
+        from scvi.train import Trainer as ScviTrainer
+        out.append(ScviTrainer.__init__)
+    except Exception:
+        pass
+    return out
+
+
 class TCRIModel(BaseModelClass):
     @classmethod
     def setup_anndata(
@@ -348,7 +393,7 @@ class TCRIModel(BaseModelClass):
 
     def train(
         self,
-        max_epochs: int = 1000,
+        max_epochs: int = 2000,
         batch_size: int = 1000,
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
@@ -360,6 +405,19 @@ class TCRIModel(BaseModelClass):
         validation_step, and let scvi handle early stopping automatically
         by passing early_stopping parameters to TrainRunner.
         """
+
+        # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
+        # **kwargs to TrainRunner and on into Trainer.__init__, so a name this package does not
+        # accept surfaces as a TypeError raised four frames deep in scvi with no mention of tcri
+        # -- which is exactly how `validation_size=0.1` killed a 17-minute run, after training.
+        _unknown = sorted(set(kwargs) - _accepted_train_kwargs())
+        if _unknown:
+            raise TypeError(
+                f"train() got unexpected keyword argument(s): {', '.join(_unknown)}. "
+                f"train() accepts its own named parameters plus anything lightning's Trainer "
+                f"or scvi's TrainRunner accepts; the train/validation split is fixed at 0.9 and "
+                f"is not configurable."
+            )
         # Re-seed per call, offset by the call index: a second train() on the same model is
         # reproducible without being a bit-for-bit replay of the first.
         if self._seed is not None:
