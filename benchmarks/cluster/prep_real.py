@@ -70,7 +70,20 @@ def main():
     if adata.n_vars > args.n_top_genes:
         used = None
         try:
+            import numpy as _np
             import rapids_singlecell as rsc
+            # rapids rejects integer matrices outright:
+            #   ValueError: Only bool, float32, float64, complex64 and complex128 are supported
+            # Count matrices are routinely stored as int32/int64, so without this cast the GPU
+            # path raises on every real dataset and silently falls back to scanpy -- which is
+            # what happened on smith_new (525444 x 35683), where HVG took 94s of a 132s prep
+            # and the rapids branch had never once executed.
+            for _name, _m in [("X", adata.X)] + list(adata.layers.items()):
+                if _m.dtype.kind in "iub":
+                    if _name == "X":
+                        adata.X = _m.astype(_np.float32)
+                    else:
+                        adata.layers[_name] = _m.astype(_np.float32)
             rsc.get.anndata_to_GPU(adata)
             rsc.pp.highly_variable_genes(adata, n_top_genes=args.n_top_genes,
                                          flavor="seurat_v3", layer="counts")

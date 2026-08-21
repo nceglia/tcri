@@ -346,3 +346,67 @@ def test_monitor_excludes_the_global_block(adata):
     assert float(out["global_block"]) == pytest.approx(global_block, rel=1e-6), (
         "the excluded block must still be logged, so the exclusion stays inspectable"
     )
+
+
+def test_hitting_the_epoch_cap_warns_and_is_recorded(adata):
+    """Reaching max_epochs means the stopping rule never fired — say so.
+
+    A truncated fit and a converged one are otherwise indistinguishable: same record shape,
+    same outputs, no signal. That silence has a measured cost. On a 100k-cell dataset the
+    mutual information kept climbing well past the default budget — 0.236 at 200 epochs,
+    0.290 at 600, 0.328 at 1000, and 0.342 once early stopping finally engaged at epoch 1208
+    of a 2000 budget. Every run at or below 1000 epochs hit its cap, and 1000 is the default,
+    so a default fit understated MI by roughly 31% with nothing to indicate it.
+    """
+    import warnings as _w
+
+    m = _fresh(adata)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        # a budget this small cannot converge, so the cap is certainly why training ended
+        m.train(max_epochs=2, batch_size=128, accelerator="cpu",
+                enable_progress_bar=False, enable_model_summary=False)
+
+    assert m.training_record_["stopped_early"] is False, (
+        "a fit that ran to max_epochs did not stop early, and the record must say so"
+    )
+    msgs = " ".join(str(c.message) for c in caught)
+    assert "max_epochs" in msgs and "converge" in msgs, (
+        f"the warning must say the cap, not convergence, ended training: {msgs}"
+    )
+
+
+def test_train_rejects_unknown_kwargs_itself(adata):
+    """An unsupported argument must fail HERE, naming tcri, not four frames deep in scvi.
+
+    train() forwards **kwargs to TrainRunner and on into Trainer.__init__, so before this
+    guard a name train() does not accept produced
+
+        TypeError: Trainer.__init__() got an unexpected keyword argument 'validation_size'
+
+    from inside lightning, with nothing pointing at tcri or at what the caller should do.
+    That is how `validation_size=0.1` killed a 17-minute run — after training had finished,
+    on the first metric call.
+    """
+    m = _fresh(adata)
+    with pytest.raises(TypeError) as exc:
+        m.train(max_epochs=1, batch_size=128, accelerator="cpu", validation_size=0.1)
+    msg = str(exc.value)
+    assert "validation_size" in msg, f"the error must name the offending argument: {msg}"
+    assert "train()" in msg, f"the error must come from train(), not lightning: {msg}"
+
+
+def test_train_still_accepts_genuine_lightning_kwargs(adata):
+    """The guard must not reject what lightning legitimately takes.
+
+    The accepted set is introspected from the INSTALLED lightning and scvi, not hardcoded,
+    precisely so an upgrade cannot turn this guard into a new source of errors.
+    """
+    from tcri.model._model import _accepted_train_kwargs
+
+    accepted = _accepted_train_kwargs()
+    for name in ("accelerator", "max_epochs", "callbacks", "enable_progress_bar"):
+        assert name in accepted, f"{name} is a real option and must not be rejected"
+    assert "validation_size" not in accepted, (
+        "train() fixes the split at 0.9; accepting validation_size would imply otherwise"
+    )

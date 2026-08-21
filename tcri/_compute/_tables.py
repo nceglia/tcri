@@ -243,6 +243,17 @@ def build_result(table, *, value="value", extra_values=()):
     the per-item view unreachable from the cached result.
     """
     val_cols = (value, *extra_values)
+
+    # An empty table has NO columns at all, so `keys` comes back empty and the scalar branch
+    # below indexes table[value] -- which does not exist -- raising KeyError('value') four
+    # frames deep in pandas. That is a real path, not a defensive check: phenotypic_flux
+    # produces nothing when no replicate has clones at BOTH covariate levels, which is exactly
+    # what happens if the covariate is constant within replicate (a between-group label like
+    # treatment arm rather than a within-patient axis). The metric is right to find nothing;
+    # crashing on it hides why.
+    if table is None or not len(table):
+        return pd.DataFrame(columns=[value])
+
     keys = [c for c in table.columns if c not in ("draw", *val_cols)]
 
     def _extra(chunk):

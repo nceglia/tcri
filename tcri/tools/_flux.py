@@ -11,6 +11,8 @@ default too.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -97,6 +99,18 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
                          item_col="clonotype", compute=_compute,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
+    if not len(table):
+        # Say WHY rather than returning a silently empty frame. The overwhelmingly likely cause
+        # is a covariate that does not vary within a replicate, and the user cannot tell that
+        # from an empty result.
+        warnings.warn(
+            f"phenotypic_flux found no clone present at both {cov_from!r} and {cov_to!r} "
+            f"within any {gkey!r}, so the result is empty. Flux is a WITHIN-replicate "
+            f"comparison: it needs a covariate that varies inside a single {gkey!r} (a "
+            f"timepoint, say). A covariate that is constant within {gkey!r} and only "
+            f"distinguishes one {gkey!r} from another cannot produce flux.",
+            stacklevel=2,
+        )
     result = build_result(table)
     stats = build_stats(result, groupby=gkey, splitby=splitby)
 
