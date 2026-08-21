@@ -209,6 +209,11 @@ belongs to you, not the package.
 every cached `tl` result, since those live in `uns`.
 
 ```python
-tcri.ut.save_tcri_session(adata, model, "run1/")
-adata, model = tcri.ut.load_tcri_session("run1/")
+tcri.ut.save_tcri_session(model, adata, "run1/")
+model, adata = tcri.ut.load_tcri_session("run1/")
 ```
+
+Note the order: **model first, in both directions.** Passing them the other way round raises
+`RuntimeError: Expected model.save ... to exist on TCRIModel`, because the AnnData arrives where
+the model was expected — and unpacking `load` backwards binds each name to the wrong object
+without any error at all.
