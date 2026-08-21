@@ -270,3 +270,58 @@ def test_compare_groups_paired_direction():
     assert len(out) == 1
     assert out.iloc[0]["delta"] > 0 and out.iloc[0]["p_gt"] > 0.9  # B-A positive, high direction prob
     assert "hdi_low" in out.columns
+
+
+def test_build_result_survives_an_empty_table():
+    """An empty table has NO columns, which is what made this crash.
+
+    `build_result` derives its grouping keys from `table.columns`. When the table is empty
+    those columns are a bare RangeIndex, so `keys` is empty, the scalar branch runs, and
+    `table["value"]` raises KeyError('value') from four frames inside pandas.
+
+    This is a real path, not a hypothetical: `phenotypic_flux` legitimately produces nothing
+    when no replicate has clones at both covariate levels — which is always true if the
+    covariate is constant within replicate. Found on a 525k-cell run that had already spent
+    17 minutes training before it died here.
+    """
+    import pandas as pd
+    from tcri._compute._tables import build_result
+
+    out = build_result(pd.DataFrame())
+    assert out is not None and len(out) == 0, "an empty table must reduce to an empty result"
+    assert "value" in out.columns, "the result must keep its schema so downstream code can read it"
+
+
+def test_flux_explains_an_empty_result(cohort, monkeypatch):
+    """A flux that finds nothing must say WHY, not return a silently empty frame.
+
+    The empty result is legitimate — no clone present at both covariate levels within any
+    replicate — and is exactly what a covariate that is constant within replicate produces.
+    A user who points flux at a between-group label (treatment arm, response) gets nothing
+    back, and without the warning has no way to tell that their covariate is the problem
+    rather than their data.
+
+    The empty table is injected rather than contrived from the fixture: the fixture's
+    covariate is already registered on the model, so making it constant within replicate
+    would mean refitting, and that would test the fixture rather than the warning.
+    """
+    import warnings as _w
+
+    import tcri
+    from tcri._compute import _tables
+
+    _model, adata = cohort
+    covs = list(adata.uns[K.COVARIATE_CATEGORIES])
+
+    monkeypatch.setattr(_tables, "metric_table", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr("tcri.tools._flux.metric_table", lambda *a, **k: pd.DataFrame())
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        res = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1],
+                                      inplace=False)
+
+    assert len(res["result"]) == 0, "an empty table must yield an empty result, not a crash"
+    msgs = " ".join(str(c.message) for c in caught)
+    assert "within" in msgs.lower(), f"the warning must name the within-replicate rule: {msgs}"
+    assert covs[0] in msgs and covs[1] in msgs, f"it must name both levels: {msgs}"
