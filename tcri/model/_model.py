@@ -471,8 +471,33 @@ class TCRIModel(BaseModelClass):
                                     else "last epoch (ramp incomplete)"),
             "selected_epoch": snapshot.best_epoch,
             "selected_score": snapshot.best_score,
+            # Did the stopping rule ever engage, or did we simply run out of budget? Without
+            # this the two are indistinguishable in the record, and they mean opposite things
+            # about whether the fit is finished.
+            "stopped_early": bool(epochs_run < max_epochs),
             "seed": self._seed,
         }
+        if epochs_run >= max_epochs:
+            # Hitting the cap means early stopping never fired -- the model was still
+            # improving when the budget ran out, so this fit is truncated rather than
+            # converged. It is silent otherwise: the run looks identical to a converged one.
+            #
+            # This is not hypothetical. On a 100k-cell dataset the metric kept climbing well
+            # past the default: mutual information read 0.236 at 200 epochs, 0.290 at 600,
+            # 0.328 at 1000, and 0.342 once the rule finally engaged at epoch 1208 of a 2000
+            # budget. Every run at or below 1000 epochs hit its cap, and the default is 1000.
+            # A user taking the default there would have understated MI by about 31% with no
+            # indication anything was wrong.
+            warnings.warn(
+                f"training stopped because it reached max_epochs={max_epochs}, not because "
+                f"it converged -- the early-stopping rule never engaged, so the model was "
+                f"still improving when the budget ran out. The best epoch was "
+                f"{snapshot.best_epoch}. Metrics computed from this fit may be understated. "
+                f"Re-run with a larger max_epochs and compare: if the value moves, the "
+                f"shorter fit was truncated. `model.training_record_['stopped_early']` "
+                f"records this.",
+                stacklevel=2,
+            )
         if not ramp_done:
             warnings.warn(
                 f"the KL ramp did not complete: {self.module._kl_warmup_step} of "
