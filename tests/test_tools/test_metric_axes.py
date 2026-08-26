@@ -42,27 +42,27 @@ from tcri._state import keys as K
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 from tcri.model._model import TCRIModel
 
-#: (patient, response, omega_concentration). Low omega => sharp clone→phenotype coupling.
+#: (patient, cohort, omega_concentration). Low omega => sharp clone→phenotype coupling.
 #: The blocks MUST differ: if every block scored the same, a `groupby` that silently ignored
 #: its argument would still pass every test here.
-BLOCKS = (("P0", "R", 0.15), ("P1", "NR", 1.5))
+BLOCKS = (("P0", "disease", 0.15), ("P1", "control", 1.5))
 
 
 def _build_blocks(n_cells=250, seed=0):
     parts = []
-    for i, (patient, response, omega) in enumerate(BLOCKS):
+    for i, (patient, cohort, omega) in enumerate(BLOCKS):
         block = simulate_tcri(n_clones=8, n_phenotypes=4, n_genes=25, n_cells=n_cells,
                               n_covariates=2, omega_concentration=omega, seed=seed + i)
         # patient-scoped clone ids. This is what makes `groupby` legal — the metric restricts
         # by clone, so a clone spanning groups would let one group absorb another's cells.
         block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
         block.obs["patient"] = patient
-        block.obs["response"] = response
+        block.obs["disease_status"] = cohort
         block.obs_names = [f"{patient}_{j}" for j in range(block.n_obs)]
         parts.append(block)
 
     adata = ad.concat(parts, join="outer", label=None)
-    for col in ("clone_id", "phenotype", "covariate", "patient", "response"):
+    for col in ("clone_id", "phenotype", "covariate", "patient", "disease_status"):
         adata.obs[col] = adata.obs[col].astype("category")
     adata.layers["counts"] = adata.X.copy()
     return adata, parts
@@ -173,15 +173,15 @@ def test_splitby_labels_the_groups(blocks):
 
     plain = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient")["result"]
     split = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                       splitby="response")["result"]
+                                       splitby="disease_status")["result"]
 
-    assert "response" in split.columns
+    assert "disease_status" in split.columns
     assert np.allclose(plain["value"].to_numpy(), split["value"].to_numpy()), (
         "splitby changed the values; it is a labelling axis, not a computation axis"
     )
     expected = {p: r for p, r, _o in BLOCKS}
     for _, row in split.iterrows():
-        assert row["response"] == expected[row["patient"]], "splitby carried the wrong label"
+        assert row["disease_status"] == expected[row["patient"]], "splitby carried the wrong label"
 
 
 def test_clones_restriction_is_live(blocks):

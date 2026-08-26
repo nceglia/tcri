@@ -23,12 +23,13 @@ adata = sc.read_h5ad("your_data.h5ad")
 
 No paired data yet? {func}`simulate_cohort <tcri.datasets.simulate_cohort>` gives a synthetic
 cohort with the shape the rest of this page assumes — patients as replicates, an ordered
-condition axis within each patient, and a response label between them:
+condition axis within each patient, and a `disease_status` label between them:
 
 ```python
 adata = tcri.datasets.simulate_cohort(seed=0)
 
-# obs: clone_id, phenotype, condition ("pre"/"post"), patient, response ("R"/"NR")
+# obs: clone_id, phenotype, condition ("pre"/"post"), patient,
+#      disease_status ("disease"/"control")
 ```
 
 {func}`simulate_tcri <tcri.datasets.simulate_tcri>` is the single-sample alternative, with a
@@ -106,7 +107,7 @@ and the figure cannot disagree with the frame in your hand:
 
 ```python
 # MI per patient, boxed by cohort
-tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="response")
+tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="disease_status")
 tcri.pl.mutual_information(adata)
 
 # per-clone phenotype flux from the first to the last covariate
@@ -121,11 +122,11 @@ metric produces the contrast itself, with the replicate unit already resolved:
 
 ```python
 res = tcri.tl.mutual_information(
-    adata, covariate="pre", groupby="patient", splitby="response"
+    adata, covariate="pre", groupby="patient", splitby="disease_status"
 )
 
-res["result"]   # one row per patient, carrying its response label
-res["stats"]    # the R-vs-NR contrast: mean_a/mean_b, delta, stat, p, stars
+res["result"]   # one row per patient, carrying its disease_status label
+res["stats"]    # the disease-vs-control contrast: mean_a/mean_b, delta, stat, p, stars
 ```
 
 `groupby` is the replicate — one value per patient — and `splitby` is the cohort label,

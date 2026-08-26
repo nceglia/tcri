@@ -42,7 +42,7 @@ contrast lands in `stats` — you do not call a second function.
 
 | column | meaning |
 |---|---|
-| *`<splitby>`* | the contrast as a label, e.g. `response` → `"R vs NR"` |
+| *`<splitby>`* | the contrast as a label, e.g. `disease_status` → `"disease vs control"` |
 | `level_a`, `level_b` | the two levels contrasted |
 | `replicate_unit` | the column `groupby` resolved to |
 | `mean_a`, `sd_a`, `n_a` | first level's mean over replicates, its spread, and how many |

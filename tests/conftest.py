@@ -188,13 +188,13 @@ def trained_model(synthetic_adata):
     return model, adata
 
 
-#: (patient, response, omega_concentration). Low omega => sharp clone->phenotype coupling.
+#: (patient, cohort, omega_concentration). Low omega => sharp clone->phenotype coupling.
 #: THREE patients per arm, not one. A contrast needs replicates: with one patient per arm a
 #: Mann-Whitney returns p=1.0 whatever the data says, so nothing downstream of `splitby` --
 #: the star, the bracket, the n that proves the unit is the patient -- is testable at all.
 COHORT = (
-    ("P0", "R", 0.15), ("P1", "R", 0.20), ("P2", "R", 0.25),
-    ("P3", "NR", 1.20), ("P4", "NR", 1.50), ("P5", "NR", 1.80),
+    ("P0", "disease", 0.15), ("P1", "disease", 0.20), ("P2", "disease", 0.25),
+    ("P3", "control", 1.20), ("P4", "control", 1.50), ("P5", "control", 1.80),
 )
 
 
@@ -214,17 +214,17 @@ def cohort():
 
     logging.disable(logging.INFO)
     parts = []
-    for i, (patient, response, omega) in enumerate(COHORT):
+    for i, (patient, cohort, omega) in enumerate(COHORT):
         block = simulate_tcri(n_clones=8, n_phenotypes=4, n_genes=25, n_cells=200,
                               n_covariates=2, omega_concentration=omega, seed=i)
         block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
         block.obs["patient"] = patient
-        block.obs["response"] = response
+        block.obs["disease_status"] = cohort
         block.obs_names = [f"{patient}_{j}" for j in range(block.n_obs)]
         parts.append(block)
 
     adata = ad.concat(parts, join="outer", label=None)
-    for col in ("clone_id", "phenotype", "covariate", "patient", "response"):
+    for col in ("clone_id", "phenotype", "covariate", "patient", "disease_status"):
         adata.obs[col] = adata.obs[col].astype("category")
     adata.layers["counts"] = adata.X.copy()
 

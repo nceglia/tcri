@@ -1,7 +1,7 @@
 # Walkthrough
 
 One pass through the package on a synthetic cohort: **16 patients**, sampled **pre** and
-**post** treatment, split into **responders** and **non-responders**.
+**post** treatment, split into a **disease** and a **control** arm.
 
 The order below is the order you would actually work in — build, fit, *check the fit*, then
 measure, then plot. The diagnostics come before the metrics on purpose: none of the numbers
@@ -13,8 +13,8 @@ complete notebook, with outputs, is in `examples/example.ipynb` in the repositor
 ## 1. Build a cohort
 
 {func}`simulate_cohort <tcri.datasets.simulate_cohort>` gives the shape most analyses have:
-patients as replicates, an ordered condition axis *within* each patient, and a response label
-*between* them.
+patients as replicates, an ordered condition axis *within* each patient, and a
+`disease_status` label *between* them.
 
 ```python
 import tcri
@@ -23,15 +23,15 @@ from tcri.datasets import simulate_cohort
 adata = simulate_cohort(
     n_patients=16,
     conditions=("pre", "post"),
-    responder_fraction=0.5,
+    disease_fraction=0.5,
     n_clones=(14, 24),                   # ragged, as real cohorts are
     n_phenotypes=4,
     n_genes=40,
     n_cells_per_sample=260,
     clone_size_distribution="powerlaw",
     clone_size_exponent=2.0,
-    responder_enrichment=12.0,
-    nonresponder_enrichment=1.1,
+    disease_enrichment=12.0,
+    control_enrichment=1.1,
     seed=0,
 )
 ```
@@ -44,8 +44,8 @@ Two properties matter downstream:
 - **Clone sizes are heavy-tailed** — a power law, as real repertoires are: a few large
   expanded clones over a long tail of singletons.
 
-Only the clone→phenotype *concentration* changes between conditions. Responders' clones
-commit; non-responders' barely move. Nothing is relabelled, so each cell's phenotype still
+Only the clone→phenotype *concentration* changes between conditions. Disease clones
+commit; control clones barely move. Nothing is relabelled, so each cell's phenotype still
 matches the expression it was generated with.
 
 ```{note}
@@ -135,10 +135,10 @@ n=18.
 
 ```python
 res = tcri.tl.mutual_information(
-    adata, covariate="pre", groupby="patient", splitby="response", n_samples=100
+    adata, covariate="pre", groupby="patient", splitby="disease_status", n_samples=100
 )
 res["result"]   # one row per patient
-res["stats"]    # the responder vs non-responder contrast
+res["stats"]    # the disease vs control contrast
 ```
 
 ```{important}
@@ -167,7 +167,7 @@ groupby, splitby and `n_samples` it draws are the ones actually used — a figur
 disagree with the frame in your hand. Run the `tl` twin first.
 
 ```python
-tcri.tl.clonotypic_entropy(adata, covariate="pre", groupby="patient", splitby="response")
+tcri.tl.clonotypic_entropy(adata, covariate="pre", groupby="patient", splitby="disease_status")
 tcri.pl.clonotypic_entropy(adata)
 ```
 
@@ -179,7 +179,7 @@ replicates.
 ### Colours are a property of the level
 
 {func}`tcri.pl.resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps
-its colour in every later figure — and `sc.pl.umap(color="response")` matches too.
+its colour in every later figure — and `sc.pl.umap(color="disease_status")` matches too.
 
 ## 6. The paired entropies — what changed, per clone
 
@@ -188,7 +188,7 @@ interval is the interval of the *difference*.
 
 ```python
 tcri.tl.delta_phenotypic_entropy(
-    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="response"
+    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status"
 )
 ```
 
