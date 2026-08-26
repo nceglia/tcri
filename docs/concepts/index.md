@@ -6,53 +6,42 @@ API reference will make sense.
 
 ## The problem
 
-You never observe the distribution you care about.
+A repertoire is large and a sequencing run samples a small part of it. What comes back is a
+few hundred to a few thousand cells, unevenly distributed: a handful of expanded clones supply
+most of the cells, while the long tail of the repertoire appears once or twice, or not at all.
+The clone→phenotype table counted from that sample is one realisation of the underlying joint
+distribution $P(c, \phi)$, and its variance is largest where the counts are smallest.
 
-A repertoire is enormous and a sequencing run samples a sliver of it. What comes back is a
-few hundred or few thousand cells, unevenly distributed: a handful of expanded clones supply
-most of the cells, while the long tail of the repertoire shows up once or twice, or not at
-all. The clone→phenotype distribution you can count directly from that sample is not the
-distribution of the underlying repertoire — it is one noisy realisation of it, and the noise
-is worst exactly where the data is thinnest.
+Information-theoretic quantities — the entropies, the mutual information between clonotype and
+phenotype, and the divergence between a clone's phenotype distributions across conditions — are
+a natural description of the clonotype–phenotype relationship. TCRi computes them on an
+inferred joint rather than on the empirical table. Cells of the same clonotype, wherever and
+whenever they were sampled, share a clone-level phenotype profile and a common latent
+expression space, so a clone observed at different depths in different conditions is estimated
+from all of its cells rather than from each sample independently.
 
-**TCRi is an estimator for that unobserved joint distribution** $P(c, \phi)$ over clonotypes
-and phenotypes. Everything else in the package is downstream of it: the entropies, the mutual
-information, and the flux are all pure functions of the joint, so the estimate is the engine
-and the metrics are readouts of it.
+### Advantages over the empirical distribution
 
-### Why not just count?
+The joint can be built directly: crosstab clonotype against phenotype and normalize. The
+empirical table takes every clone's counts at face value, so a clone contributing two cells at
+one timepoint and forty at the next is assigned a phenotype distribution from two cells, and
+most of the apparent change between timepoints is the variance of that two-cell estimate.
 
-You can build the joint empirically — crosstab clone against phenotype and normalize. The
-difference is what each does when the data runs out.
+TCRi draws each clone's covariate-level distribution $p_{ct}$ from a Dirichlet centred on that
+**clone's own distribution pooled across covariates**, with concentration set by `local_scale`.
+Every covariate level of a clone is anchored to the same clone-level profile, so differences
+between covariates come out attenuated relative to the empirical table. The attenuation is a
+property of the prior; it does not vary with the number of cells behind a given level.
 
-The empirical table treats every clone's counts at face value. A clone seen twice at one
-timepoint and forty times at the next gets a phenotype distribution from two cells, and the
-apparent change between timepoints is mostly the two-cell estimate being wrong.
+Two consequences worth stating:
 
-TCRi instead ties each clone's covariate-level distribution to that **clone's own distribution
-pooled across covariates**, and shrinks toward it. A clone with plenty of cells at a covariate
-level barely moves; a clone with two cells is pulled most of the way back to its overall
-behaviour, because two cells are not evidence that it changed.
-
-The consequence is deliberate: **differences between covariates come out attenuated.** The
-estimator understates change rather than overstating it.
-
-### Why conservative is the right failure mode here
-
-Two reasons, and they compound:
-
-- **There is no ground truth to check against.** The true joint of the underlying repertoire
-  is unobservable, so an estimator that over-reads cannot be caught by comparing it to
-  anything. A method that errs toward "no change" produces claims that survive scrutiny; one
-  that errs toward change produces claims nobody can falsify.
-- **The sampling is biased toward exactly the clones that look most convincing.** Large
-  expanded clones fill most of a run's cell budget, so they carry tight per-clone estimates,
-  while the small clones — where most of the repertoire's diversity lives — carry almost none.
-  Reading raw counts weights the confident-looking part of a biased sample most heavily.
-
-So the shift TCRi reports for a clone is a lower bound on the shift in the repertoire it was
-drawn from. When it does report a difference, the difference is not an artefact of having
-sequenced two cells.
+- The reported shift for a clone is a **lower bound** on the shift in the population it was
+  drawn from. The estimator understates change rather than overstating it, which matters
+  because the true joint is unobservable and an over-reading estimator cannot be caught by
+  comparison against anything.
+- Sampling is biased toward the clones that look most convincing. Expanded clones occupy most
+  of a run's cell budget and carry tight per-clone estimates, while the small clones that hold
+  most of the repertoire's diversity carry almost none.
 
 Three index sets recur throughout:
 

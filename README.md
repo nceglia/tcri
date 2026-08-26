@@ -48,7 +48,7 @@ gene-expression matrix.
 - **Uncertainty-aware** — every metric can be reported as a posterior mean ± HDI by
   drawing from the fitted Dirichlet posterior (`n_samples > 0`).
 - **Group comparisons** — paired/unpaired contrasts across cohorts (e.g. responders vs
-  non-responders) with direction probabilities.
+  non-responders), with `n` counting replicates rather than items.
 - **Diagnostics** — posterior-predictive checks, phenotype calibration, and permutation
   nulls for the metrics.
 - **Contract-governed** — the public API, the generative model, the metric definitions,
@@ -56,18 +56,25 @@ gene-expression matrix.
 
 ## Installation
 
-TCRi targets **Python ≥ 3.10**. Install from source:
+TCRi targets **Python ≥ 3.10**.
+
+```bash
+pip install tcri
+```
+
+The heavy scientific stack (PyTorch, Pyro, scvi-tools, scanpy) is pulled in
+automatically. A GPU is optional but speeds up model fitting.
+
+For the development version:
 
 ```bash
 git clone https://github.com/nceglia/tcri.git
 cd tcri
-pip install .
+pip install -e ".[test]"
 ```
 
-The heavy scientific stack (PyTorch, Pyro, scvi-tools, scanpy) is pulled in
-automatically. A GPU is optional but speeds up model fitting. See the
-[installation guide](https://tcri.readthedocs.io/en/latest/usage/installation.html) for
-details.
+See the [installation guide](https://tcri.readthedocs.io/en/latest/usage/installation.html)
+for details.
 
 ## Quickstart
 
@@ -80,8 +87,9 @@ tcri.ml.TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="timepoint",
+    covariate_key="condition",
     batch_key="patient",
+    replicate="patient",
 )
 
 # 2. fit the model and write learned quantities back onto the AnnData
@@ -95,9 +103,12 @@ ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
 flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
 
-No paired data yet? `tcri.datasets.simulate_tcri()` returns a synthetic AnnData whose
-true mutual information is known in closed form — the basis for the
+No paired data yet? `tcri.datasets.simulate_cohort()` returns a synthetic AnnData with
+patients as replicates, an ordered `condition` axis within each, and a `response` label
+between them — the basis for the
 [tutorials](https://tcri.readthedocs.io/en/latest/tutorials/index.html).
+`tcri.datasets.simulate_tcri()` is the single-sample alternative, with a mutual information
+known in closed form.
 
 ## Framework
 
@@ -111,25 +122,6 @@ joint. The full generative model and its plate diagram are documented under
 <p align="center">
   <img src="https://raw.githubusercontent.com/nceglia/tcri/main/docs/images/framework.png" alt="TCRi framework" width="760">
 </p>
-
-## Governance
-
-The public interface, the generative mathematics, the metric definitions and the training
-plan are each frozen by a machine-checked contract. A published number only means something
-if the definition behind it is stable, so a metric cannot be silently redefined and the model
-the package claims to implement is the model it does implement.
-
-A failing conformance test means *stop and decide* — never loosen a contract to make it pass.
-See [Governance](https://tcri.readthedocs.io/en/latest/contracts/index.html) for what each
-contract covers, and `governance/` in the repository for the contracts themselves.
-
-## Related tools
-
-| Tool | Relationship |
-|------|-------------|
-| [scirpy](https://scirpy.readthedocs.io) | AIRR/TCR repertoire handling and analysis |
-| [scvi-tools](https://scvi-tools.org) | probabilistic modelling backbone TCRi builds on |
-| [scanpy](https://scanpy.readthedocs.io) / [AnnData](https://anndata.readthedocs.io) | single-cell data structures and workflows |
 
 ## Citation
 
