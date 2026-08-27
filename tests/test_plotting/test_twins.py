@@ -162,9 +162,9 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     adata = adata.copy()
     cov = _cov(adata)
 
-    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", splitby="response")
+    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", splitby="disease_status")
     split_ax = tcri.pl.mutual_information(adata)
-    assert split_ax.get_xlabel() == "response"
+    assert split_ax.get_xlabel() == "disease_status"
 
     stats = tcri.get.result(adata, "mutual_information")["stats"]
     assert stats is not None and len(stats) == 1
@@ -177,13 +177,13 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     assert not plain_ax.texts, "a contrast was annotated on an axis with no contrast"
 
     # the case the guard actually exists for: `stats` IS present, but x is the phenotype
-    # axis, so an R-vs-NR bracket over phenotype A vs phenotype B would be a claim the
+    # axis, so a disease-vs-control bracket over phenotype A vs phenotype B would be a claim the
     # numbers never made
-    tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient", splitby="response")
+    tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
     pheno_ax = tcri.pl.clonotypic_entropy(adata)
     assert pheno_ax.get_xlabel() == "phenotype"
     assert tcri.get.result(adata, "clonotypic_entropy")["stats"] is not None
-    assert not pheno_ax.texts, "the response contrast was bracketed over the phenotype axis"
+    assert not pheno_ax.texts, "the cohort contrast was bracketed over the phenotype axis"
 
 
 # ── shapes each twin chooses ─────────────────────────────────────────────────
@@ -254,10 +254,10 @@ def test_a_violin_never_spans_replicates(cohort):
     adata = adata.copy()
     cov = _cov(adata)
 
-    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", splitby="response",
+    tcri.tl.mutual_information(adata, covariate=cov, groupby="patient", splitby="disease_status",
                                n_samples=30, random_state=0)
     ax = tcri.pl.mutual_information(adata)
-    assert ax.get_xlabel() == "response"
+    assert ax.get_xlabel() == "disease_status"
     assert _n_violins(ax) == 0, "a violin was drawn where replicates vary"
     assert _n_points(ax) == 6, "the dots are not the 6 patients"
 
@@ -354,7 +354,7 @@ def test_plots_route_through_the_shared_palette(trained_model):
 def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
     """Measured before this fix, on ``phenotypic_entropy(groupby, splitby)``::
 
-        x axis        : response
+        x axis        : cohort
         result rows   : 47 (one per patient x clone)
         strip dots    : 47
         stats n_a/n_b : 3 / 3   p = 0.1
@@ -371,13 +371,13 @@ def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
     from tcri._compute._tables import collapse_to_replicates
 
     res = getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient",
-                                   splitby="response")
+                                   splitby="disease_status")
     ax = getattr(tcri.pl, metric)(adata)
 
     # whatever the x axis is, every dot is a replicate -- never an item
     expected = collapse_to_replicates(
         res["result"], groupby="patient",
-        keep=[c for c in (ax.get_xlabel(), "response") if c in res["result"].columns],
+        keep=[c for c in (ax.get_xlabel(), "disease_status") if c in res["result"].columns],
     )
     assert _n_points(ax) == len(expected), (
         f"{metric}: {_n_points(ax)} dots against {len(expected)} replicate rows "
@@ -399,9 +399,9 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
     adata = adata.copy()
     cov = _cov(adata)
     res = tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient",
-                                     splitby="response")
+                                     splitby="disease_status")
 
-    expected = collapse_to_replicates(res["result"], groupby="patient", splitby="response")
+    expected = collapse_to_replicates(res["result"], groupby="patient", splitby="disease_status")
     ax = tcri.pl.phenotypic_entropy(adata)
     drawn = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections]))
     assert np.allclose(drawn, np.sort(expected["value"].to_numpy()))
@@ -421,7 +421,7 @@ def test_nothing_connects_two_x_positions(cohort):
     _, adata = cohort
     adata = adata.copy()
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
-    _compute_all(adata, groupby="patient", splitby="response")
+    _compute_all(adata, groupby="patient", splitby="disease_status")
 
     for name in TWINS:
         ax = getattr(tcri.pl, name)(adata)
@@ -439,7 +439,7 @@ def test_nothing_connects_two_x_positions(cohort):
 def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
     """The colour is a property of the level, not of where it lands on this figure.
 
-    Found by looking at rendered panels: the renderer sorts x by median, so a `response`
+    Found by looking at rendered panels: the renderer sorts x by median, so a `cohort`
     panel where NR sorted first drew NR purple while the panel beside it, where R sorted
     first, drew R purple. Same variable, same figure, swapped — because `resolve_colors`
     zipped the stored hex list against the caller's display order.
@@ -476,10 +476,10 @@ def test_the_same_level_keeps_its_colour_across_panels(cohort):
                 out.setdefault(lvl, set()).add(matplotlib.colors.to_hex(c).lower())
         return out
 
-    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="response")
+    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
     first = _colour_by_level(tcri.pl.phenotypic_entropy(adata))
     tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=rest[0], groupby="patient",
-                            splitby="response")
+                            splitby="disease_status")
     second = _colour_by_level(tcri.pl.phenotypic_flux(adata))
 
     for level in set(first) & set(second):
@@ -526,7 +526,7 @@ def test_the_delta_view_marks_zero(name, cohort):
     """Zero is a real position on a delta axis — an unmarked one hides the direction."""
     _, adata = cohort
     adata = adata.copy()
-    _compute_deltas(adata, groupby="patient", splitby="response")
+    _compute_deltas(adata, groupby="patient", splitby="disease_status")
     ax = getattr(tcri.pl, name)(adata, kind="delta")
     rules = [l for l in ax.lines
              if l.get_label() == BRACKET_LABEL and len(set(np.round(l.get_ydata(), 12))) == 1

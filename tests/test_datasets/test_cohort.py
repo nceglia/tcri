@@ -19,8 +19,8 @@ def cohort():
 
 def test_the_shape_is_patients_x_conditions_x_arms(cohort):
     obs = cohort.obs
-    assert {"clone_id", "phenotype", "condition", "patient", "response"} <= set(obs.columns)
-    assert set(obs["response"].unique()) == {"R", "NR"}
+    assert {"clone_id", "phenotype", "condition", "patient", "disease_status"} <= set(obs.columns)
+    assert set(obs["disease_status"].unique()) == {"disease", "control"}
     assert list(obs["condition"].cat.categories) == ["pre", "post"]
 
     counts = obs.groupby(["patient", "condition"], observed=True).size()
@@ -63,13 +63,13 @@ def test_clones_never_span_two_patients(cohort):
 
 
 def test_only_the_concentration_moves(cohort):
-    """Responders' clones commit; non-responders' do not — and nothing was relabelled, so
+    """Disease clones commit; control clones do not — and nothing was relabelled, so
     each cell's phenotype still matches the expression it was generated with."""
     truth = cohort.uns["tcri_truth"]["per_arm"]
-    r_change = float(truth.loc["R", "post"] - truth.loc["R", "pre"])
-    nr_change = float(truth.loc["NR", "post"] - truth.loc["NR", "pre"])
+    r_change = float(truth.loc["disease", "post"] - truth.loc["disease", "pre"])
+    nr_change = float(truth.loc["control", "post"] - truth.loc["control", "pre"])
     assert r_change > nr_change, f"R moved {r_change:+.3f}, NR moved {nr_change:+.3f}"
-    assert r_change > 0.1, "the responder arm barely concentrated; the fixture is inert"
+    assert r_change > 0.1, "the disease arm barely concentrated; the fixture is inert"
 
     # `true_phenotype` is carried through from the source sims and still agrees, which is what
     # "nothing is relabelled" means concretely
@@ -85,7 +85,7 @@ def test_the_oracle_is_per_patient(cohort):
     benchmark. `per_sample` must therefore be one row per (patient, condition)."""
     per_sample = cohort.uns["tcri_truth"]["per_sample"]
     assert len(per_sample) == 6 * 2
-    assert {"patient", "response", "condition", "empirical_nmi_min"} <= set(per_sample.columns)
+    assert {"patient", "disease_status", "condition", "empirical_nmi_min"} <= set(per_sample.columns)
 
     row = per_sample.iloc[0]
     g = cohort.obs.query("patient == @row.patient and condition == @row.condition")
@@ -94,7 +94,8 @@ def test_the_oracle_is_per_patient(cohort):
         mi_from_joint_oracle(crosstab)["nmi_min"], rel=1e-9)
 
     # and it is NOT the pooled-per-arm value, which is the mistake it exists to prevent
-    arm = cohort.obs.query("response == @row.response and condition == @row.condition")
+    arm = cohort.obs.query("disease_status == @row.disease_status "
+                           "and condition == @row.condition")
     pooled = mi_from_joint_oracle(
         pd.crosstab(arm["clone_id"], arm["phenotype"]).to_numpy(dtype=float))["nmi_min"]
     assert not np.isclose(row["empirical_nmi_min"], pooled, atol=1e-3)
@@ -112,9 +113,9 @@ def test_reproducible_and_responsive_to_its_knobs(cohort):
     # enrichment=1.0 means the second condition is an unbiased draw too, so the arms stop
     # separating -- the knob is what creates the effect, not the labelling
     flat = simulate_cohort(n_patients=4, n_cells_per_sample=140, n_clones=10,
-                           responder_enrichment=1.0, nonresponder_enrichment=1.0, seed=0)
+                           disease_enrichment=1.0, control_enrichment=1.0, seed=0)
     per_arm = flat.uns["tcri_truth"]["per_arm"]
-    assert abs(float(per_arm.loc["R", "post"] - per_arm.loc["R", "pre"])) < 0.1
+    assert abs(float(per_arm.loc["disease", "post"] - per_arm.loc["disease", "pre"])) < 0.1
 
 
 @pytest.mark.parametrize("kwargs,match", [
@@ -122,7 +123,7 @@ def test_reproducible_and_responsive_to_its_knobs(cohort):
     (dict(conditions=("a", "a")), "unique"),
     (dict(clone_size_distribution="zipfish"), "clone_size_distribution"),
     (dict(n_patients=1), "n_patients"),
-    (dict(responder_enrichment=0.5), "responder_enrichment"),
+    (dict(disease_enrichment=0.5), "disease_enrichment"),
 ])
 def test_rejects_incoherent_settings(kwargs, match):
     with pytest.raises(ValueError, match=match):
@@ -163,8 +164,8 @@ def test_conditions_generalize_past_two():
 
     per_arm = a.uns["tcri_truth"]["per_arm"]
     assert list(per_arm.columns) == ["t0", "t1", "t2", "t3"], "conditions lost their order"
-    r = per_arm.loc["R"].to_numpy()
-    assert r[-1] > r[0], "the responder arm did not concentrate across the series"
+    r = per_arm.loc["disease"].to_numpy()
+    assert r[-1] > r[0], "the disease arm did not concentrate across the series"
 
 
 def test_clone_counts_can_vary_across_patients():

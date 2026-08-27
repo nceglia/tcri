@@ -226,7 +226,7 @@ def test_the_contrast_counts_replicates(name, cohort):
     _, adata = cohort
     a, b = _covs(adata)
     res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient",
-                                 splitby="response")
+                                 splitby="disease_status")
     row = res["stats"].iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3
     assert row["replicate_unit"] == "patient"

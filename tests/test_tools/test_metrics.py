@@ -159,12 +159,12 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
     res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
-                                     splitby="response")
+                                     splitby="disease_status")
     stats, result = res["stats"], res["result"]
 
-    per_group = (result.groupby(["patient", "response"], observed=True)["value"]
+    per_group = (result.groupby(["patient", "disease_status"], observed=True)["value"]
                  .mean().reset_index())
-    direct = compare_groups(per_group, value="value", splitby="response").iloc[0]
+    direct = compare_groups(per_group, value="value", splitby="disease_status").iloc[0]
     row = stats.iloc[0]
     assert row["p"] == pytest.approx(float(direct["p"]))
     assert row["delta"] == pytest.approx(float(direct["delta"]))
@@ -181,7 +181,7 @@ def test_stats_carries_the_between_replicate_spread(cohort):
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
     res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
-                                     splitby="response", n_samples=8, random_state=0)
+                                     splitby="disease_status", n_samples=8, random_state=0)
     row = res["stats"].iloc[0]
 
     assert row["replicate_unit"] == "patient"
@@ -212,7 +212,7 @@ def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_
     """
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
-    kwargs = dict(groupby="patient", splitby="response")
+    kwargs = dict(groupby="patient", splitby="disease_status")
     if metric == "phenotypic_flux":
         kwargs.update(cov_from=cov, cov_to=cov)
     else:

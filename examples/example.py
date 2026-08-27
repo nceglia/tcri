@@ -17,7 +17,7 @@
 # # tcri — an end-to-end walkthrough
 #
 # One pass through the package on a synthetic cohort: **8 patients**, sampled **pre** and
-# **post** treatment, split into **responders (R)** and **non-responders (NR)**.
+# **post** treatment, split into a **disease** and a **control** arm.
 #
 # The order below is the order you would actually work in — build, fit, *check the fit*,
 # then measure, then plot. The diagnostics come before the metrics on purpose: none of the
@@ -52,7 +52,7 @@ SEED = 0
 # ## 1. Build a cohort
 #
 # `simulate_cohort` gives the shape most analyses have: patients as replicates, an ordered
-# condition axis *within* each patient, and a response label *between* them.
+# condition axis *within* each patient, and a `disease_status` label *between* them.
 #
 # Two properties matter downstream:
 #
@@ -63,28 +63,28 @@ SEED = 0
 #   expanded clones over a long tail of singletons.
 #
 # Only the clone→phenotype *concentration* changes between conditions. Responders' clones
-# commit; non-responders' barely move. Nothing is relabelled, so each cell's phenotype still
+# commit; control clones barely move. Nothing is relabelled, so each cell's phenotype still
 # matches the expression it was generated with.
 
 # %%
 adata = simulate_cohort(
     n_patients=16,                       # 8 per arm -- 4 per arm cannot reach p<0.05
     conditions=("pre", "post"),
-    responder_fraction=0.5,
+    disease_fraction=0.5,
     n_clones=(14, 24),                   # ragged, as real cohorts are
     n_phenotypes=4,
     n_genes=40,
     n_cells_per_sample=260,
     clone_size_distribution="powerlaw",  # "uniform" for a flat repertoire
     clone_size_exponent=2.0,
-    responder_enrichment=12.0,
-    nonresponder_enrichment=1.1,
+    disease_enrichment=12.0,
+    control_enrichment=1.1,
     seed=SEED,
 )
 adata
 
 # %%
-print(adata.obs.groupby(["response", "condition"], observed=True).size().to_frame("cells").T)
+print(adata.obs.groupby(["disease_status", "condition"], observed=True).size().to_frame("cells").T)
 
 sizes = (adata.obs.query("condition == 'pre'")
          .groupby("patient", observed=True)["clone_id"].value_counts())
@@ -253,14 +253,14 @@ mi_post = tcri.tl.mutual_information(
     adata,
     covariate="post",
     groupby="patient",     # could be omitted -- `replicate` is registered
-    splitby="response",    # -> produces `stats`
+    splitby="disease_status",    # -> produces `stats`
     n_samples=100,         # posterior draws; 0 = plug-in point estimate
     normalize_mode="min",  # "average" is the manuscript's eq 6
     weighted=False,        # one vote per CLONE; True = one vote per CELL
     random_state=SEED,
 )
 print("slots:", sorted(mi_post))
-mi_post["result"][["patient", "response", "value", "sd", "hdi_low", "hdi_high"]].round(4)
+mi_post["result"][["patient", "disease_status", "value", "sd", "hdi_low", "hdi_high"]].round(4)
 
 # %%
 # the contrast. `n_a`/`n_b` count PATIENTS -- that is what makes pseudoreplication impossible
@@ -292,23 +292,23 @@ jd = tcri.tl.joint_distribution(adata, covariate="post", n_samples=20, random_st
 print(f"joint: {jd['result'].shape} (clone x phenotype), rows sum to 1: "
       f"{np.allclose(jd['result'].sum(axis=1), 1.0)}")
 
-tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient", splitby="response",
+tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient", splitby="disease_status",
                            n_samples=60, random_state=SEED)
-tcri.tl.phenotypic_entropy(adata, covariate="post", groupby="patient", splitby="response",
+tcri.tl.phenotypic_entropy(adata, covariate="post", groupby="patient", splitby="disease_status",
                            n_samples=60, random_state=SEED)
 tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient",
-                        splitby="response", distance_metric="kl",
+                        splitby="disease_status", distance_metric="kl",
                         n_samples=60, random_state=SEED)
 
 # a second call REPLACES the cached result (the scanpy convention). `key_added` keeps both.
-tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="response",
+tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="disease_status",
                            n_samples=100, random_state=SEED, key_added="mi_pre")
 
 pre_vs_post = pd.concat([
     tcri.get.result(adata, "mutual_information", key="mi_pre")["result"].assign(condition="pre"),
     mi_post["result"].assign(condition="post"),
 ])
-pre_vs_post.groupby(["response", "condition"], observed=True)["value"].mean().unstack("condition").round(4)
+pre_vs_post.groupby(["disease_status", "condition"], observed=True)["value"].mean().unstack("condition").round(4)
 
 # %% [markdown]
 # ### Reading results back
@@ -356,12 +356,12 @@ plt.show()
 # ### Colours are a property of the level
 #
 # `resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps its colour in
-# every later figure — and `sc.pl.umap(color="response")` matches too.
+# every later figure — and `sc.pl.umap(color="disease_status")` matches too.
 
 # %%
-palette = tcri.pl.resolve_colors(adata, "response", palette={"R": "#2E8B57", "NR": "#C1440E"})
-print("response palette:", palette)
-print("stored in uns   :", adata.uns[K.colors("response")])
+palette = tcri.pl.resolve_colors(adata, "disease_status", palette={"disease": "#2E8B57", "control": "#C1440E"})
+print("disease_status palette:", palette)
+print("stored in uns   :", adata.uns[K.colors("disease_status")])
 
 # %% [markdown]
 # ## 6. The paired entropies — what changed, per clone
@@ -380,14 +380,14 @@ print("stored in uns   :", adata.uns[K.colors("response")])
 
 # %%
 d_phen = tcri.tl.delta_phenotypic_entropy(
-    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="response",
+    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
     n_samples=60, random_state=SEED)
 d_clon = tcri.tl.delta_clonotypic_entropy(
-    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="response",
+    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
     n_samples=60, random_state=SEED)
 
 print("Δ phenotypic entropy (post − pre), per arm:")
-print(d_phen["result"].groupby("response", observed=True)["value"]
+print(d_phen["result"].groupby("disease_status", observed=True)["value"]
       .agg(["mean", "count"]).round(4).to_string())
 d_phen["stats"][["level_a", "level_b", "n_a", "n_b", "delta", "p", "stars"]].round(4)
 

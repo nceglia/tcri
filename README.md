@@ -47,8 +47,8 @@ gene-expression matrix.
   all in bits over the posterior joint.
 - **Uncertainty-aware** — every metric can be reported as a posterior mean ± HDI by
   drawing from the fitted Dirichlet posterior (`n_samples > 0`).
-- **Group comparisons** — paired/unpaired contrasts across cohorts (e.g. responders vs
-  non-responders), with `n` counting replicates rather than items.
+- **Group comparisons** — paired/unpaired contrasts across cohorts (e.g. disease vs
+  control), with `n` counting replicates rather than items.
 - **Diagnostics** — posterior-predictive checks, phenotype calibration, and permutation
   nulls for the metrics.
 - **Contract-governed** — the public API, the generative model, the metric definitions,
@@ -104,7 +104,7 @@ flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
 
 No paired data yet? `tcri.datasets.simulate_cohort()` returns a synthetic AnnData with
-patients as replicates, an ordered `condition` axis within each, and a `response` label
+patients as replicates, an ordered `condition` axis within each, and a `disease_status` label
 between them — the basis for the
 [tutorials](https://tcri.readthedocs.io/en/latest/tutorials/index.html).
 `tcri.datasets.simulate_tcri()` is the single-sample alternative, with a mutual information
