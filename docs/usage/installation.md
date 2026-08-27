@@ -1,6 +1,6 @@
 # Installation
 
-TCRi can be installed from source. We recommend using a virtual environment to avoid dependency conflicts.
+We recommend a virtual environment to avoid dependency conflicts.
 
 ## Prerequisites
 
@@ -9,26 +9,27 @@ TCRi can be installed from source. We recommend using a virtual environment to a
 
 A CUDA-capable GPU is optional but speeds up model fitting; TCRi runs on CPU otherwise.
 
-## Install from Source
-
-TCRi is not yet on PyPI, so install from the repository:
+## Install from PyPI
 
 ```bash
-# Clone the repository
-git clone https://github.com/nceglia/tcri.git
-cd tcri
-
-# (Recommended) create a virtual environment
-python3 -m venv tvenv
-source tvenv/bin/activate  # On Windows, use: tvenv\Scripts\activate
-
-# Install the package
-pip install .
+pip install tcri
 ```
 
-For a development install with the test dependencies:
+In a fresh virtual environment:
 
 ```bash
+python3 -m venv tvenv
+source tvenv/bin/activate  # On Windows, use: tvenv\Scripts\activate
+pip install tcri
+```
+
+## Install from Source
+
+For the development version, or to run the test suite:
+
+```bash
+git clone https://github.com/nceglia/tcri.git
+cd tcri
 pip install -e ".[test]"
 ```
 

@@ -18,15 +18,22 @@ import tcri
 adata = sc.read_h5ad("your_data.h5ad")
 # expected: adata.layers["counts"] (raw counts)
 #           adata.obs["clone_id"], adata.obs["phenotype"],
-#           adata.obs["timepoint"], adata.obs["patient"]
+#           adata.obs["condition"], adata.obs["patient"]
 ```
 
-No paired data yet? Generate a synthetic dataset with a known ground-truth mutual
-information:
+No paired data yet? {func}`simulate_cohort <tcri.datasets.simulate_cohort>` gives a synthetic
+cohort with the shape the rest of this page assumes — patients as replicates, an ordered
+condition axis within each patient, and a response label between them:
 
 ```python
-adata = tcri.datasets.simulate_tcri(seed=0)
+adata = tcri.datasets.simulate_cohort(seed=0)
+
+# obs: clone_id, phenotype, condition ("pre"/"post"), patient, response ("R"/"NR")
 ```
+
+{func}`simulate_tcri <tcri.datasets.simulate_tcri>` is the single-sample alternative, with a
+mutual information known in closed form; it has one covariate level, so the flux and
+group-comparison steps below do not apply to it.
 
 ## 2. Register the columns
 
@@ -39,8 +46,9 @@ tcri.ml.TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="timepoint",
+    covariate_key="condition",
     batch_key="patient",
+    replicate="patient",
 )
 ```
 
@@ -92,14 +100,18 @@ between groups. See [Concepts](../concepts/index.md).
 
 ## 6. Visualize
 
-Each `tcri.pl` function is a plotting twin of the `tcri.tl` metric of the same name:
+Each `tcri.pl` function is a plotting twin of the `tcri.tl` metric of the same name. A twin
+takes **no metric arguments** — it renders what its `tl` counterpart cached, so run that first
+and the figure cannot disagree with the frame in your hand:
 
 ```python
 # MI per patient, boxed by cohort
-tcri.pl.mutual_information(adata, groupby="patient", splitby="response")
+tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="response")
+tcri.pl.mutual_information(adata)
 
 # per-clone phenotype flux from the first to the last covariate
-tcri.pl.phenotypic_flux(adata, order=["pre", "post"])
+tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient")
+tcri.pl.phenotypic_flux(adata)
 ```
 
 ## 7. Compare groups
@@ -113,7 +125,7 @@ res = tcri.tl.mutual_information(
 )
 
 res["result"]   # one row per patient, carrying its response label
-res["stats"]    # the R-vs-NR contrast: delta, U, p, stars, and direction probabilities
+res["stats"]    # the R-vs-NR contrast: mean_a/mean_b, delta, stat, p, stars
 ```
 
 `groupby` is the replicate — one value per patient — and `splitby` is the cohort label,
