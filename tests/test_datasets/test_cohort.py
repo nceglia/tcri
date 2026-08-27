@@ -165,7 +165,7 @@ def test_conditions_generalize_past_two():
     per_arm = a.uns["tcri_truth"]["per_arm"]
     assert list(per_arm.columns) == ["t0", "t1", "t2", "t3"], "conditions lost their order"
     r = per_arm.loc["disease"].to_numpy()
-    assert r[-1] > r[0], "the responder arm did not concentrate across the series"
+    assert r[-1] > r[0], "the disease arm did not concentrate across the series"
 
 
 def test_clone_counts_can_vary_across_patients():
