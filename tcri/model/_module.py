@@ -134,6 +134,13 @@ class TCRIModule(PyroBaseModuleClass):
         self.c_count = 0
         self.ct_count = 0
         self.n_cells = 0
+        # The number of cells the training loader draws from (scvi's 90% split), set by
+        # ``TCRIModel.train``. It is the ``size`` of the data plate, so a minibatch's per-cell
+        # terms are scaled by N_train/B and the batch ELBO is an unbiased estimate of eq 7
+        # over the cells being fit. A plain attribute, deliberately not a buffer, for the same
+        # reason as ``_kl_warmup_step``: a buffer changes the state_dict key set. Unset (None)
+        # means "every cell", which is what a loader over the whole object supplies.
+        self.n_obs_training = None
 
         self.register_buffer("_target_phenotypes", torch.empty(0, dtype=torch.long))
 
@@ -172,6 +179,20 @@ class TCRIModule(PyroBaseModuleClass):
     def use_gate(self) -> bool:
         return self.gate_prob is not None
 
+    def plate_size(self) -> int:
+        """``size`` of the data plate: the cells the objective sums over (eq 7's ``N``).
+
+        Both ``model()`` and ``guide()`` declare ``pyro.plate("data", size=plate_size(),
+        subsample=indices)``, so Pyro scales every site inside the plate -- the ZINB
+        likelihood, the latent KL and the phenotype-alignment factor -- by ``size / B``. The
+        two Dirichlet KLs live in unsubsampled plates and enter at weight 1. Without the
+        scaling each minibatch step counted the global KLs at full weight against only B
+        cells' worth of data, so over an epoch of S steps the prior pull on ω_c and φ_m was
+        S times what eq 7 specifies (about 9x at 10k cells and batch 1000). The note's one
+        sentence on inference names "KL scaling for Dirichlet ... terms"; this is it.
+        """
+        return int(self.n_obs_training or self.n_cells)
+
     @staticmethod
     def _get_fn_args_from_batch(tensor_dict: Dict[str, torch.Tensor]):
         x = tensor_dict[REGISTRY_KEYS.X_KEY]
@@ -194,7 +215,14 @@ class TCRIModule(PyroBaseModuleClass):
         pyro.module("scvi", self)
 
         kl_weight = self.kl_weight
-        batch_size = x.shape[0]
+        # Global cell indices for this minibatch. They are BOTH the plate's subsample (so the
+        # per-cell sites are scaled by plate_size()/B, see plate_size) and the lookup into
+        # ct_array. The local plate position would be wrong for the lookup and is not used.
+        assert indices is not None, (
+            "model() requires global cell indices (supplied by "
+            "_get_fn_args_from_batch); the local plate index must not be used "
+            "for the clonotype x covariate lookup."
+        )
 
         with pyro.plate("clonotypes", self.c_count):
             B = self.mixture_concentration.shape[0]
@@ -219,7 +247,7 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct = torch.clamp(self.local_scale * base_p, min=1e-3)
             p_ct = pyro.sample("p_ct", dist.Dirichlet(conc_ct))
 
-        with pyro.plate("data", batch_size) as idx:
+        with pyro.plate("data", size=self.plate_size(), subsample=indices):
 
             with poutine.scale(scale=kl_weight):
                 # vamp_mixture = self.vamp_prior.get_mixture().to_event(1)
@@ -227,14 +255,8 @@ class TCRIModule(PyroBaseModuleClass):
                 z = pyro.sample("latent", vamp_mixture)
 
             # Map each cell to its (clonotype x covariate) group using GLOBAL indices,
-            # not the local plate index `idx` (which is 0..batch_size-1 and would
-            # scramble the alignment target across shuffled minibatches). Fail loudly
-            # rather than silently falling back to the (wrong) local index.
-            assert indices is not None, (
-                "model() requires global cell indices (supplied by "
-                "_get_fn_args_from_batch); the local plate index must not be used "
-                "for the clonotype x covariate lookup."
-            )
+            # never the local plate position (0..B-1), which would scramble the alignment
+            # target across shuffled minibatches.
             ct_idx = self.ct_array[indices]
             # The head reads the posterior MEAN, as predict() and to_anndata() already do.
             # Trained on the sample z it saw ~1% signal: the posterior scale (~2) is ~100x the
@@ -303,7 +325,10 @@ class TCRIModule(PyroBaseModuleClass):
         indices: torch.Tensor = None,
     ):
         pyro.module("scvi", self)
-        batch_size = x.shape[0]
+        assert indices is not None, (
+            "guide() requires global cell indices: they are the data plate's subsample, "
+            "and the guide's plate must match the model's."
+        )
 
         with pyro.plate("clonotypes", self.c_count):
             # Start from a scaled version of the prior.
@@ -376,7 +401,7 @@ class TCRIModule(PyroBaseModuleClass):
         # This line used scvi's VARIANCE output directly as the scale.
         z_loc, z_scale = encoder_posterior(self.encoder, x, batch_idx)
 
-        with pyro.plate("data", batch_size) as idx:
+        with pyro.plate("data", size=self.plate_size(), subsample=indices):
             latent_posterior = dist.Normal(z_loc, z_scale)
             with pyro.poutine.scale(scale=self.kl_weight):
                 z = pyro.sample("latent", latent_posterior.to_event(1))

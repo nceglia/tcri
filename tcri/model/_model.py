@@ -12,6 +12,7 @@ modules; this file holds only the high-level `BaseModelClass` API
 """
 import contextlib
 import logging
+import math
 import os
 import warnings
 
@@ -452,6 +453,12 @@ class TCRIModel(BaseModelClass):
             validation_size=None,
             batch_size=batch_size,
         )
+        # The data plate's `size`: the cells the training loader draws from, so a minibatch's
+        # per-cell terms are scaled by N_train/B and the batch ELBO is unbiased for eq 7 over
+        # the cells being fit (TCRIModule.plate_size). ceil(train_size * n_obs) is scvi's own
+        # split arithmetic (validate_data_split); test_plate_size_tracks_the_training_split
+        # pins it to the split the runner actually made.
+        self.module.n_obs_training = int(math.ceil(0.9 * n_obs))
 
         plan = UnifiedTrainingPlan(
             module=self.module,

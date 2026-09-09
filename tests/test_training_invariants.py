@@ -359,12 +359,16 @@ def test_monitor_excludes_the_global_block(adata):
     Both global plates are declared at full size with no subsampling, so their KL is the same
     number whichever cells are held out — a training-set quantity a validation criterion must
     not contain.
+
+    The per-cell block comes out of the trace already scaled by ``plate_size()/B`` (the data
+    plate carries the dataset size, I8), so "per cell" means dividing by ``plate_size()``,
+    not by the batch size.
     """
     m, plan, batch = _plan_and_batch(adata)
     plan.module.eval()
 
     out = plan.validation_step(batch, 0)
-    n_cells = int(batch["indices"].shape[0])
+    n_cells = int(plan.module.plate_size())
 
     args, kwargs = plan.module._get_fn_args_from_batch(batch)
     prev = plan.module.kl_weight
@@ -504,3 +508,92 @@ def test_weight_decay_does_not_reach_the_guide_concentrations(adata):
         "the network weight did not move under a zero gradient, so the test is not "
         "exercising weight decay at all -- check the optimizer wiring"
     )
+
+
+# ── I8: a minibatch is an unbiased estimate of eq 7 ──────────────────────────
+
+def _conditioned_objective(mod, args, kwargs, *, fixed, z_all):
+    """The batch objective with every stochastic site pinned, so it is a function of the
+    parameters and the batch alone. Same site walk as ``UnifiedTrainingPlan._objective_blocks``."""
+    import contextlib
+    import io
+
+    from pyro import poutine
+
+    idx = args[3]
+    data = {**fixed, "latent": z_all[idx]}
+    cond_model = poutine.condition(mod.model, data=data)
+    cond_guide = poutine.condition(mod.guide, data=data)
+    with torch.no_grad(), contextlib.redirect_stdout(io.StringIO()):
+        gt = poutine.trace(cond_guide).get_trace(*args, **kwargs)
+        mt = poutine.trace(poutine.replay(cond_model, trace=gt)).get_trace(*args, **kwargs)
+    mt.compute_log_prob()
+    gt.compute_log_prob()
+    total = 0.0
+    for tr, sign in ((mt, 1.0), (gt, -1.0)):
+        for site in tr.nodes.values():
+            if site["type"] in ("sample", "factor") and site.get("log_prob") is not None:
+                total += sign * float(site["log_prob"].sum())
+    return total
+
+
+def test_minibatch_objective_is_unbiased_for_the_full_batch(adata):
+    """Training contract I8 (formerly Q-B): the mean of the batch objectives over a partition
+    of the cells equals the full-batch objective.
+
+    eq 7 sums the per-cell terms over the N cells and the two Dirichlet KLs once. With the
+    data plate declared at ``size = B`` each minibatch counted the global KLs at full weight
+    against B cells of data, so over an epoch of S steps the prior pull on ω_c and φ_m was S
+    times eq 7's. With ``size = N`` and the minibatch as the plate's subsample, Pyro scales
+    the per-cell sites by N/B and the identity below is exact.
+
+    Every stochastic site is pinned (one z per cell from the encoder mean, one draw of p_c
+    and p_ct shared by every batch) so the comparison is deterministic and the tolerance is
+    float rounding, not Monte-Carlo noise. Under the old plate the mean of the parts is
+    ``Σ_cells/S + G`` against ``Σ_cells + G`` and the assertion fails by a wide margin.
+    """
+    import contextlib
+    import io
+
+    from pyro import poutine
+
+    m = _fresh(adata)
+    mod = m.module
+    mod.eval()
+    mod.kl_weight = mod.kl_weight_max
+    n, B = adata.n_obs, 50
+    assert n % B == 0, "the partition must be into equal batches for the identity to be exact"
+    assert mod.plate_size() == n, "a fresh model's plate spans every cell"
+
+    full_batch = next(iter(m._make_data_loader(adata=adata, batch_size=n, shuffle=False)))
+    fargs, fkw = mod._get_fn_args_from_batch(full_batch)
+    with torch.no_grad(), contextlib.redirect_stdout(io.StringIO()):
+        z_all = mod.encoder(fargs[0], fargs[1])[0]
+        g = poutine.trace(mod.guide).get_trace(*fargs, **fkw)
+    fixed = {k: g.nodes[k]["value"].detach() for k in ("p_c", "p_ct")}
+
+    full = _conditioned_objective(mod, fargs, fkw, fixed=fixed, z_all=z_all)
+    parts = [
+        _conditioned_objective(mod, *mod._get_fn_args_from_batch(b), fixed=fixed, z_all=z_all)
+        for b in m._make_data_loader(adata=adata, batch_size=B, shuffle=False)
+    ]
+    assert len(parts) == n // B
+    assert float(np.mean(parts)) == pytest.approx(full, rel=1e-4), (
+        f"mean of {len(parts)} batch objectives {np.mean(parts):.4f} != full-batch objective "
+        f"{full:.4f}: the minibatch estimator is biased for eq 7 (contract I8)"
+    )
+
+
+def test_plate_size_tracks_the_training_split(adata):
+    """The plate's ``size`` is the number of cells the training loader draws from, i.e. the
+    split the runner actually made -- not the full object, and not a hardcoded 0.9."""
+    import contextlib
+    import io
+
+    m = _fresh(adata)
+    assert m.module.n_obs_training is None and m.module.plate_size() == adata.n_obs
+    with contextlib.redirect_stdout(io.StringIO()):
+        m.train(max_epochs=1, batch_size=128, accelerator="cpu",
+                enable_progress_bar=False, enable_model_summary=False)
+    assert m.module.n_obs_training == len(m.train_indices) == m.module.plate_size()
+    assert m.module.plate_size() < adata.n_obs

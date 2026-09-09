@@ -268,9 +268,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         finally:
             self.module.kl_weight = prev_kl
 
-        n_cells = max(int(batch["indices"].shape[0]), 1)
+        # The data plate scales every per-cell site by plate_size()/B, so the per-cell block on
+        # this batch is (plate_size/B) * sum_b; dividing by plate_size() -- not by B -- returns
+        # the mean per cell, which is what the monitor's name promises and what it was before
+        # the plate carried a size.
+        n_ref = max(int(self.module.plate_size()), 1)
         val_dict = {
-            "loss": torch.as_tensor(-per_cell / n_cells, dtype=torch.float32, device=device),
+            "loss": torch.as_tensor(-per_cell / n_ref, dtype=torch.float32, device=device),
             "global_block": torch.as_tensor(global_block, dtype=torch.float32, device=device),
         }
 

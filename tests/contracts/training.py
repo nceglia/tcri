@@ -198,7 +198,15 @@ DERIVED_INVARIANTS = {
             "holds -- the data plate is declared with size = TCRIModule.plate_size() and the "
             "minibatch as its subsample (Q-B resolved). Before, at size = B, the global KLs "
             "were counted once per STEP, i.e. ceil(0.9 N / B) times per epoch against eq 7's "
-            "once; the fix moves every fitted number, see the PR that landed it."
+            "once. MEASURED EFFECT ON FITS: at the noise floor (3 seeds, 2000 cells, batch "
+            "256, 150 epochs: NMI moved by <1e-3, guide concentration totals by ~0.1 on ~7). "
+            "The reason is structural and worth knowing: the alignment target phi is "
+            "detached, so q_p_c_raw/q_p_ct_raw receive gradient from the global block ONLY "
+            "and every network parameter from the per-cell block ONLY. No parameter mixes "
+            "the two, and Adam's per-parameter normalisation absorbs a constant factor on "
+            "either block. The fix therefore corrects the OBJECTIVE and every logged ELBO, "
+            "and would matter under any optimizer without that invariance or the moment "
+            "anything couples the blocks -- it does not move today's fits."
         ),
         "enforced_by": (
             "tests/test_training_invariants.py::test_minibatch_objective_is_unbiased_for_the_full_batch "

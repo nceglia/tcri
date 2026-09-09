@@ -484,3 +484,43 @@ def test_sanctioned_deviations_are_documented():
             f"sanctioned deviation '{key}' is declared in tests/contracts/model.py but not "
             f"documented in {doc.name}. Keep the machine contract and the prose in sync."
         )
+
+
+def test_data_plate_is_scaled_to_the_dataset(traced):
+    """eq 7 sums the per-cell terms over N cells and the two Dirichlet KLs once, so a
+    minibatch is an unbiased estimate only if the data plate carries ``size = N`` with the
+    batch as its subsample. Checked on a live trace of a batch with ``B < N``: the per-cell
+    sites carry scale ``N/B`` (times their own poutine scale), the global sites carry 1.
+
+    Declared at ``size = B`` every site read scale 1 and the assertion below fails at the
+    first line. The second pass sets ``n_obs_training`` to a smaller number and asserts the
+    scale follows it, which is what makes the training split -- not the whole object -- the
+    reference.
+    """
+    model, _, _, _, _ = traced
+    mod = model.module
+    n = int(mod.n_cells)
+    loader = model._make_data_loader(adata=model.adata, batch_size=16, shuffle=False)
+    args, kwargs = mod._get_fn_args_from_batch(next(iter(loader)))
+    b = int(args[0].shape[0])
+    assert 0 < b < n
+
+    for size in (None, n - 6):
+        prev = mod.n_obs_training
+        mod.n_obs_training = size
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                mt = poutine.trace(mod.model).get_trace(*args, **kwargs)
+                gt = poutine.trace(mod.guide).get_trace(*args, **kwargs)
+        finally:
+            mod.n_obs_training = prev
+        expect = (size or n) / b
+        msg = MC.SEMANTIC_INVARIANTS["data_plate_is_scaled_to_the_dataset"]
+        assert float(mt.nodes["phenotype_alignment"]["scale"]) == pytest.approx(expect), msg
+        assert float(mt.nodes["obs"]["scale"]) == pytest.approx(
+            expect * mod.reconstruction_loss_scale), msg
+        assert float(mt.nodes["latent"]["scale"]) == pytest.approx(expect * mod.kl_weight), msg
+        assert float(gt.nodes["latent"]["scale"]) == pytest.approx(expect * mod.kl_weight), msg
+        for name in ("p_c", "p_ct"):
+            assert float(mt.nodes[name]["scale"]) == pytest.approx(1.0), msg
+            assert float(gt.nodes[name]["scale"]) == pytest.approx(1.0), msg
