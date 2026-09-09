@@ -80,6 +80,16 @@ where `indices` are *global* cell ids threaded in via `_get_fn_args_from_batch`.
 pyro data-plate index is local (`0..batch_size−1`); using it scrambles each cell's
 target across shuffled minibatches and collapses `f_cls` to a constant.
 
+**Minibatching is an unbiased estimate of eq 7.** The data plate is declared with
+`size = N_train` (the cells the training loader draws from) and the minibatch as an explicit
+subsample, so Pyro scales the ZINB likelihood, the latent KL and the alignment factor by
+`N_train/B`; the two Dirichlet KLs live in unsubsampled plates and enter once. Declared at
+`size = B`, as it was until 2026-09, each step counted the global KLs at full weight against
+`B` cells of data, so over an epoch of `S` steps the prior pull on `ω_c` and `φ_m` was `S`
+times what eq 7 specifies (≈9× at 10k cells and batch 1000). The note's one sentence on
+inference names "KL scaling for Dirichlet … terms"; this is that scaling. Asserted from a live
+trace on a batch with `B < N`: the per-cell sites carry scale `N_train/B`, the global sites 1.
+
 ## Gating (π)
 
 `gate_prob` = π ∈ (0,1), default **0.5** per the note. Endpoints are contract-tested:
@@ -162,6 +172,9 @@ final ELBO), so fits are not comparable across this change.
   `clamp(β·(ω_c[ct_to_c] + eps))` against the sampled `p_c` **from the same trace** —
   pinning the scale, the source tensor, and the index map h(m) together;
 - the surrogate factor is a *negative*, non-zero KL;
+- **the data plate is scaled**: on a batch with `B < N`, the traced `obs`, `latent` and
+  `phenotype_alignment` sites carry scale `N_train/B` (times their own poutine scale) and
+  `p_c`/`p_ct` carry 1, and the scale follows `n_obs_training` when it is set;
 - **the alignment target is verified behaviorally**: on a minibatch whose global
   indices differ from the local plate positions, the traced factor must equal the
   surrogate recomputed under the *global* map and must differ from the local one;

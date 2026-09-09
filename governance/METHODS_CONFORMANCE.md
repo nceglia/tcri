@@ -60,6 +60,13 @@ Code: `tcri/model/_module.py` (`TCRIModule.model`/`.guide`), `tcri/model/_priors
 Eq 7 is the standard SVI ELBO (`Trace_ELBO`; `TraceEnum_ELBO` when `use_enumeration`),
 `E[log p(x|z)] + E[log p(Ω,Φ,z,z^ϕ)] − E[log q]`, maximized by Adam.
 
+**Minibatch estimator.** The data plate carries `size = N_train` with the minibatch as an
+explicit subsample (`TCRIModule.plate_size`), so the per-cell terms are scaled by `N_train/B`
+and each step is an unbiased estimate of eq 7 over the cells being fit; the two Dirichlet KLs
+enter once. This is the note's "KL scaling for Dirichlet … terms". Until 2026-09 the plate was
+declared at size `B`, which counted the Dirichlet KLs once per step, i.e. `ceil(0.9N/B)` times
+per epoch (deviation J below).
+
 The note replaces the discrete `z^ϕ` terms with a surrogate:
 
 > `L_new = L#  +  γ Σ_i KL(probs_i ‖ ϕ_g(i))`,  `probs_i = softmax(ℓ_i)`
@@ -111,6 +118,7 @@ no code path yet.
 | G | α (`global_scale`) not applied to the clonotype prior (eq 1) in `model()`; concentration = normalized archetype centroid (sum≈1, U-shaped), so the prior was far more diffuse than `Dir(α·ψ_b)` and scaled inconsistently with the guide `q(ω_c)` | MED | **fixed** — `expanded_conc = global_scale * centroids` (eq 1); classifier recovery unchanged (1.000), suite green |
 | E | `reconstruction_loss_scale` down-weights ZINB vs eq-7 full weight | MED | **resolved** — default raised 1e-3 → 1e-2; real-data library ratio 1.40 → 0.99 (recovery/latent unchanged). The original ~6× over-generation was mostly the phantom optimizer shrinking the decoder. |
 | F | in-silico perturbation (eqs 8–12) not implemented | — | deferred — additive feature |
+| J | data plate declared at batch size, so the two Dirichlet KLs were counted once per step rather than once per pass over the data (`ceil(0.9N/B)`× eq 7's prior weight) | MED | **fixed** — plate `size = N_train` with the minibatch as explicit subsample; the conformance test asserts the traced scales and the training invariant I8 asserts the partition identity |
 
 **Training-only deviations from eq 7 (intentional, documented here):**
 - **KL warmup + z-only scope.** `UnifiedTrainingPlan` ramps `kl_weight` over `n_steps_kl_warmup`, and it scales only the `latent` (z) KL — the two Dirichlet KLs (`p_c`, `p_ct`) are unscaled. A standard annealing schedule; symmetric (no correctness bug) but not part of eq 7's full-weight KL.

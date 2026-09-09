@@ -75,7 +75,12 @@ class SiteSpec:
 PLATES = {
     "clonotypes": "c = 1..C  (clonotype)",
     "ct_plate": "m = 1..M  (clonotype x covariate group)",
-    "data": "i = 1..N  (cell; subsampled minibatch)",
+    "data": (
+        "i = 1..N  (cell). Declared with size = the cells the objective sums over "
+        "(TCRIModule.plate_size) and the minibatch as an explicit subsample, so every site "
+        "inside is scaled by N/B and a minibatch is an unbiased estimate of eq 7. The two "
+        "Dirichlet plates are not subsampled and enter at weight 1."
+    ),
 }
 
 
@@ -182,6 +187,15 @@ SEMANTIC_INVARIANTS = {
         "The per-cell target ϕ_g(i) must be indexed by GLOBAL cell indices, never the "
         "local pyro plate index (0..batch_size−1), which scrambles targets across "
         "shuffled minibatches and collapses f_cls to a constant."
+    ),
+    "data_plate_is_scaled_to_the_dataset": (
+        "eq 7 sums the per-cell terms over all N cells and the two Dirichlet KLs once. The "
+        "data plate must therefore carry size = N (the cells being fit) with the minibatch "
+        "as its subsample, so Pyro scales obs, latent and phenotype_alignment by N/B while "
+        "p_c and p_ct keep scale 1. Declared at size = B, every step counted the global KLs "
+        "at full weight against B cells of data: over an epoch of S steps the prior pull on "
+        "omega_c and phi_m was S times eq 7's (about 9x at 10k cells, batch 1000). The "
+        "note's 'KL scaling for Dirichlet ... terms' is this correction."
     ),
 }
 

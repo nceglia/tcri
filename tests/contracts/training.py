@@ -187,6 +187,26 @@ DERIVED_INVARIANTS = {
                   "with a '--' in its behavioural column are wiring-only and are the gap.",
         "enforced_by": "tests/test_model_knobs.py, tests/test_shared_defaults.py",
     },
+    "I8_minibatch_estimator_is_unbiased_for_eq7": {
+        "statement": (
+            "A minibatch's objective is an unbiased estimate of eq 7 over the cells being fit: "
+            "the per-cell sites are scaled by N_train/B through the data plate's size and "
+            "subsample, and the two Dirichlet KLs enter once. Equivalently, the mean of the "
+            "batch objectives over a partition of the cells equals the full-batch objective."
+        ),
+        "status": (
+            "holds -- the data plate is declared with size = TCRIModule.plate_size() and the "
+            "minibatch as its subsample (Q-B resolved). Before, at size = B, the global KLs "
+            "were counted once per STEP, i.e. ceil(0.9 N / B) times per epoch against eq 7's "
+            "once; the fix moves every fitted number, see the PR that landed it."
+        ),
+        "enforced_by": (
+            "tests/test_training_invariants.py::test_minibatch_objective_is_unbiased_for_the_full_batch "
+            "(the partition identity, every stochastic site pinned); "
+            "tests/test_model_contract_conformance.py::test_data_plate_is_scaled_to_the_dataset "
+            "(the traced scales); tests/test_training_invariants.py::test_plate_size_tracks_the_training_split"
+        ),
+    },
 }
 
 
@@ -318,10 +338,5 @@ AUTHORED_BOUNDS = {
 
 
 #: Questions that must be answered before the corresponding invariant can be enforced.
-OPEN = {
-    "Q-B_minibatch_weighting": (
-        "Does a minibatch estimate weight the N cell terms against the C+M global terms in "
-        "eq 7's ratio? Unanswered; affects whether the ELBO is an unbiased estimate of eq 7 "
-        "at any batch size other than the full data."
-    ),
-}
+#: Empty: Q-B (minibatch weighting) is answered by I8, Q-D (weight decay as a prior) by B8.
+OPEN = {}

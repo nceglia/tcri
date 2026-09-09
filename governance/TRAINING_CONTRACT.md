@@ -49,6 +49,7 @@ separate file from the manifest checks.
 | I4 | the reported model is the one the criterion selected | **holds** — snapshot spans `state_dict()` **and** the param store |
 | I5 | annealing is schedule-only and terminates | **holds** — DE-4 fixed |
 | I7 | a declared knob changes an observable | partial |
+| I8 | a minibatch is an unbiased estimate of eq 7 | **holds** — data plate `size = N_train` with the minibatch as explicit subsample; Q-B resolved |
 
 `SPECIFIED` — design settled, code not written — was used for I3/I4 in the contract-only PR
 that preceded the implementation. Both now read `holds`, and that claim is machine-checked:
@@ -141,9 +142,15 @@ neither had ever produced a wrong number to notice.
 
 ## Open questions
 
-**Q-B — minibatch weighting.** Does a minibatch estimate weight the N cell terms against the
-C+M global terms in eq 7's ratio? Affects whether the ELBO is unbiased for eq 7 at any batch
-size below the full data.
+**Q-B — minibatch weighting — RESOLVED (I8).** It did not. Both `model()` and `guide()`
+declared `pyro.plate("data", batch_size)` with no `size`, so nothing rescaled the per-cell
+terms and the two Dirichlet KLs, in unsubsampled plates, entered every step at full weight:
+over an epoch of `S = ceil(0.9N/B)` steps the prior pull on `ω_c` and `φ_m` was `S` times eq
+7's. The plate now carries `size = N_train` with the minibatch as its subsample, so Pyro
+scales the per-cell sites by `N_train/B` and the mean of the batch objectives over a
+partition of the cells equals the full-batch objective, which is what the test asserts with
+every stochastic site pinned. The note's "KL scaling for Dirichlet … terms" is this scaling.
+It changes every fitted number; the PR that landed it carries the before/after.
 
 **Q-D — weight decay as a prior — RESOLVED (removed).** Pyro's optimizer takes one
 `weight_decay` for every parameter in the store, so it reached `q_p_c_raw`/`q_p_ct_raw`, whose
