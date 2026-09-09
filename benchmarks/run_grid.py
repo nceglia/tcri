@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Synthetic benchmark grid — MAE of the NMI estimate against a known oracle.
 
-Reproduces the design of Supplementary Note 1's "Benchmarks" section: sweep the
+Follows the design of Supplementary Note 1's "Benchmarks" section: sweep the
 difficulty (``fuzziness``), the sample size (``N``), and the number of phenotypes
 supplied at inference (``K``), and compare TCRi's normalized MI against the closed-form
 truth from :func:`tcri.datasets.simulate_tcri` — plus a GMM/KMeans baseline.
+
+**The defaults are shake-out settings and do NOT reproduce the note's protocol.** The
+note trains for a maximum of 2,000 epochs, initialises phenotypes with K-Means at the
+supplied ``K``, and compares against a GMM baseline. This harness defaults to
+``--epochs 60``, hands the model the generator's ground-truth phenotype labels as
+``phenotype_key`` (an oracle, under which the fuzziness axis barely moves the estimate
+and ``K`` never reaches the phenotype dimension), and ``--baseline kmeans``. A run that
+claims to reproduce the note must set all three explicitly.
 
 Two things this harness is careful about, both of which are easy to get wrong:
 

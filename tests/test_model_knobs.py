@@ -142,11 +142,15 @@ def test_train_knobs_reach_the_optimizer_and_plan(adata):
         optimizer_config={"lr": 0.07, "betas": (0.8, 0.99), "eps": 1e-6,
                           "weight_decay": 2e-4},
     )
-    args = plan.optim.pt_optim_args
+    # per-parameter callable (B8): the networks get the full config, the guide concentrations
+    # the same lr/betas/eps with weight_decay forced to 0
+    args = plan.optim.pt_optim_args("scvi.encoder.fc_layers.0.weight")
     assert args["lr"] == 0.07
     assert args["weight_decay"] == 2e-4
     assert args["betas"] == (0.8, 0.99)
     assert args["eps"] == 1e-6
+    guide = plan.optim.pt_optim_args("q_p_c_raw")
+    assert guide["weight_decay"] == 0.0 and guide["lr"] == 0.07 and guide["betas"] == (0.8, 0.99)
     assert plan.n_steps_kl_warmup == 123
     assert plan.reconstruction_loss_scale == 5e-3
 

@@ -162,18 +162,8 @@ UNIMPLEMENTED = {
 
 #: Live disagreements with the METRICS document. NOT sanctioned extensions -- each is a
 #: decision someone has to make. A test asserts no key appears in both dicts, so a pending
-#: decision cannot be quietly refiled as a feature.
-OPEN_QUESTIONS = {
-    "posterior_summary_of_a_nonlinear_metric": (
-        "At n_samples>0 tcri reports E_s[NMI(J_s)] -- the mean of the per-draw NMI. NMI is "
-        "nonlinear in the joint, so this is not the NMI of the posterior, and the two "
-        "differ materially (measured 0.224 vs 0.123 on a benchmark cell). Note 1's "
-        "benchmark prose says 'we report the posterior mean NMI over 200 posterior draws', "
-        "which reads as the current behaviour but is ambiguous. ASK the authors which "
-        "estimand is intended. Affects every metric accepting n_samples>0, not only "
-        "mutual_information."
-    ),
-}
+#: decision cannot be quietly refiled as a feature. Empty at present.
+OPEN_QUESTIONS = {}
 
 
 #: Identities the conformance test enforces. These are what make a redefinition
@@ -212,6 +202,19 @@ IDENTITIES = {
 #: Deliberate additions beyond the note. Not deviations from its mathematics — the
 #: note simply does not specify them.
 SANCTIONED_EXTENSIONS = {
+    "posterior_summary_of_a_nonlinear_metric": (
+        "At n_samples>0 every metric reports E_s[F(J_s)] -- the metric evaluated on each "
+        "posterior draw of the joint, then summarised (mean, sd, HDI) over draws. This is "
+        "the manuscript's definition, not a choice: the Methods section 'Computing "
+        "Posterior Expectation' states E[F(p_ct)] ~= M^-1 sum_m F(p_ct^(m)) for a test "
+        "function F such as the normalized mutual information. Because F is nonlinear in "
+        "the joint, E_s[F(J_s)] differs from F(E_s[J_s]) by a Jensen gap (measured 0.224 vs "
+        "0.123 on a benchmark cell), and n_samples=0 -- the plug-in F(E[J]) -- is therefore "
+        "a DIFFERENT estimator, documented as such in API contract section 0.6. Neither is "
+        "the other's approximation. Formerly OPEN_QUESTIONS; settled by the Methods text. "
+        "The Methods are the main-text manuscript, not yet archived under "
+        "governance/source/; the archived metrics excerpt begins at the Entropy section."
+    ),
     "bits_log2": (
         "The note writes an unspecified `log`; tcri fixes base 2 so all entropies are "
         "in bits and normalizers are log2(k)."

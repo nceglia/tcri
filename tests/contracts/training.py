@@ -289,9 +289,14 @@ AUTHORED_BOUNDS = {
         "larger than several of the effects this stack measures."
     ),
     "B8_optimizer_settings_that_act_as_priors_are_declared": (
-        "weight_decay reaches q_p_c_raw/q_p_ct_raw, whose param-store leaves are log theta, so "
-        "it pulls every clone row toward the uniform simplex point. That is a prior acting "
-        "through an optimizer setting. Declare it as one or remove it (Q-D, open)."
+        "weight_decay applies to the NETWORK parameters only. The two guide concentrations "
+        "q_p_c_raw/q_p_ct_raw are excluded through Pyro's per-parameter optim_args callable "
+        "(tcri/model/_training.py::_per_param_optim_args). Their param-store leaves are "
+        "log theta, so L2 decay on them is a pull toward log theta = 0, i.e. every row toward "
+        "Dirichlet(1, ..., 1) -- a flat prior applied through an optimizer setting that the "
+        "model never declares. Resolved Q-D by removal rather than declaration: the objective "
+        "is eq 7 plus the surrogate, and nothing in it asks for that prior. Enforced by "
+        "tests/test_training_invariants.py::test_weight_decay_does_not_reach_the_guide_concentrations."
     ),
     "B9_the_plan_records_provenance": (
         "A fit records what actually happened -- epochs ACTUALLY run (not requested), warmup "
@@ -319,5 +324,4 @@ OPEN = {
         "eq 7's ratio? Unanswered; affects whether the ELBO is an unbiased estimate of eq 7 "
         "at any batch size other than the full data."
     ),
-    "Q-D_weight_decay_as_prior": "See AUTHORED_BOUNDS['B8_optimizer_settings_that_act_as_priors_are_declared'].",
 }

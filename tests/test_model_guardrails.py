@@ -113,9 +113,18 @@ def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
         optimizer_config={"lr": 0.05, "betas": (0.9, 0.999), "eps": 1e-5,
                           "weight_decay": 1e-4},
     )
+    # Pyro resolves per-parameter settings through a callable keyed by the normalised
+    # param-store name: module parameters arrive as "scvi.<path>", the two guide
+    # concentrations as their bare names.
     args = plan.optim.pt_optim_args
-    assert args["lr"] == 0.05, f"lr did not reach Pyro's SVI optimizer: {args}"
-    assert args["weight_decay"] == 1e-4, f"weight_decay did not reach Pyro: {args}"
+    assert callable(args), f"expected a per-parameter optim_args callable, got {args!r}"
+    net = args("scvi.encoder.fc_layers.0.weight")
+    assert net["lr"] == 0.05, f"lr did not reach Pyro's SVI optimizer: {net}"
+    assert net["weight_decay"] == 1e-4, f"weight_decay did not reach Pyro: {net}"
+    guide = args("q_p_ct_raw")
+    assert guide["lr"] == 0.05 and guide["weight_decay"] == 0.0, (
+        f"the guide concentrations must share lr but carry NO weight decay: {guide}"
+    )
 
     # and the Lightning-facing optimizer must be scvi's dummy shim, not the module
     opt = plan.configure_optimizers()
