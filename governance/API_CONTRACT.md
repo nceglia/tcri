@@ -741,7 +741,10 @@ tool stores its result, there is nothing to hand back in. Gone with it: the `ada
 union type, the `is_precomputed_joint` branch in three metrics, and the
 `reject_stacked_covariate_joint` guard that existed only to police that branch.
 
-`tl.*` takes an AnnData. That is the whole rule.
+`tl.*` reads the AnnData substrate and takes no model. `diag.*`, and any analysis namespace
+that needs the trained networks, take an AnnData **and** a model. (The sentence that stood here,
+"`tl.*` takes an AnnData, that is the whole rule", recorded the deletion above and was later read
+as a rule on argument lists; see `RULES.md`, "Retired rules".)
 
 ### 7.10 Return shape — one shape, stored once
 
@@ -953,6 +956,11 @@ Read-only checks on the finalized model. PPCs return `DataFrame`s; the two reloc
 ---
 
 ## 11. Surface deltas (removed / renamed / moved)
+
+> **CLOSED (2026-09).** This section is the refactor's disposition record: it says which
+> pre-refactor functions survived and why. The disposition rule below sorted that inventory once.
+> It is **not** a standing bar on adding non-core work; additions follow `RULES.md`. The
+> deletions it lists are pinned by `tests/test_removal_ledger.py`.
 
 **Disposition rule.** Every function is kept or dropped by ONE test — *is it core?* (the model, the joint engine, the four metrics + their plots, session I/O, PPC diagnostics, shared helpers). Non-core = **dropped (deleted)**; nothing is relocated to `examples/`, and the disposable notebooks are never consulted for disposition. Deletion PRs grep import-sites as well as call-sites so a top-level import (e.g. `utils.probabilities` at `_plotting.py:18`) is removed in the same PR as its symbol.
 

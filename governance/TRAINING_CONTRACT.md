@@ -1,6 +1,6 @@
 # Training contract
 
-**Manifest:** `tcri/model/_training_contract.py` · **Tests:** `tests/test_training_contract_conformance.py` (manifest + structure), `tests/test_training_invariants.py` (behaviour)
+**Manifest:** `tests/contracts/training.py` · **Policy:** `governance/RULES.md` · **Tests:** `tests/test_training_contract_conformance.py` (manifest + structure), `tests/test_training_invariants.py` (behaviour)
 
 ## Why this exists
 

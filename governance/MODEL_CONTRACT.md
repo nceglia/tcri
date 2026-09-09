@@ -1,37 +1,23 @@
 # TCRI Model Contract (FROZEN)
 
 **The model this package implements is Supplementary Note 1** (`governance/source/supplementary_note_1_SS_2026-08-03.pdf`).
-This document is the prose contract; `tcri/model/_model_contract.py` is its
+This document is the prose contract; `tests/contracts/model.py` is its
 machine-checkable form; `tests/test_model_contract_conformance.py` enforces it.
 
-Sibling of the API contract: `tcri/_contract.pyi` freezes the public *interface*,
+Sibling of the API contract: `tests/contracts/api.pyi` freezes the public *interface*,
 this freezes the *mathematics*. `governance/METHODS_CONFORMANCE.md` is the
 eq-by-eq code map and deviation history.
 
 ---
 
-## THE RULE
+## The rule
 
-> **Changing the model's mathematics requires updating this contract *first*.**
-
-Concretely — adding/removing a stochastic site, changing a distribution family or
-plate, altering the ELBO or the surrogate, or changing what a prior is scaled by:
-
-1. **Update the contract first** — this file *and* `_model_contract.py`, citing the
-   note equation and stating what changes in the joint distribution.
-2. **Then change the code** so `test_model_contract_conformance` passes again.
-3. **If the note itself is superseded**, say so explicitly here (with the new
-   reference). The note is the source of truth; the contract tracks it.
-
-**Never** make a conformance failure disappear by loosening the manifest to match
-whatever the code now does. That silently rewrites the model the package claims to
-implement, which is exactly what this guardrail exists to prevent. A failure means
-*stop and decide*: is this an intended model change (update the contract) or a
-regression (fix the code)?
-
-This applies to human and AI contributors alike. If you are an agent and a model
-change seems necessary, surface the contract implication to the user rather than
-editing the manifest to fit.
+The policy is stated once, in `governance/RULES.md`. For this contract it reduces to: the
+generative mathematics is **published** and moves only through the lock; code moves toward the
+note freely. Changing the mathematics means adding or removing a stochastic site, changing a
+distribution family or plate, altering the ELBO or the surrogate, or changing what a prior is
+scaled by (α on eq 1, β on eq 2). If the note itself is superseded, say so here with the new
+reference; the note is the source of truth and this contract tracks it.
 
 ---
 

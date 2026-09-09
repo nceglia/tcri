@@ -1,7 +1,7 @@
 # Methods Conformance — code ↔ Supplementary Note 1
 
 > **This is the eq-by-eq map + deviation history.** The *enforced* contract is
-> `governance/MODEL_CONTRACT.md` (prose) + `tcri/model/_model_contract.py`
+> `governance/MODEL_CONTRACT.md` (prose) + `tests/contracts/model.py`
 > (manifest), checked by `tests/test_model_contract_conformance.py`. Model math
 > changes require updating that contract **first**.
 

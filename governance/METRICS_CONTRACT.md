@@ -5,9 +5,9 @@ information over a clone × phenotype joint.
 
 | | freezes | manifest | prose | test |
 |---|---|---|---|---|
-| API contract | the public *interface* | `tcri/_contract.pyi` | `API_CONTRACT.md` | `test_contract_conformance.py` |
-| Model contract | the *generative mathematics* | `tcri/model/_model_contract.py` | `MODEL_CONTRACT.md` | `test_model_contract_conformance.py` |
-| **Metrics contract** | **what the metrics compute** | `tcri/tools/_metrics_contract.py` | this file | `test_metrics_contract_conformance.py` |
+| API contract | the public *interface* | `tests/contracts/api.pyi` | `API_CONTRACT.md` | `test_contract_conformance.py` |
+| Model contract | the *generative mathematics* | `tests/contracts/model.py` | `MODEL_CONTRACT.md` | `test_model_contract_conformance.py` |
+| **Metrics contract** | **what the metrics compute** | `tests/contracts/metrics.py` | this file | `test_metrics_contract_conformance.py` |
 
 **Why separate from the model contract.** The two are verified by different means. The
 model contract *traces* `model()`/`guide()` and inspects sample sites, plates and
@@ -20,9 +20,9 @@ Source of truth: **Supplementary Note 1**, "Entropy" section (eqs 2–6). Each e
 is transcribed literally into the conformance test; the one deliberate divergence
 (`normalize_mode`) is documented below.
 
-**Governance: update this file and the manifest FIRST, then the code.** A failing
-conformance test means the *meaning of a published number* changed. Never relax an
-identity to make it pass.
+**Governance is stated once, in `governance/RULES.md`.** For this contract: the definitions
+below are **published** and move only through the lock, because a change to one changes the
+meaning of every published number. Code moves toward the document freely.
 
 ## Definitions (all in **bits**, log base 2)
 
