@@ -213,9 +213,15 @@ class TCRIModel(BaseModelClass):
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
+        label_error_rate: Optional[float] = 0.1,
         seed: Optional[int] = None,
         **kwargs,
     ):
+        """``label_error_rate``: ε of the noisy-label readout, the probability that an input
+        phenotype label is wrong. With it on (the default) each cell's label is an observation
+        of its latent phenotype with reliability 1-ε, which is what lets the clone x covariate
+        distributions learn from the cells. ``None`` switches the readout off and fits the
+        label-free surrogate alone (the pre-2026-09 model). Must be in ``[0, 1 - 1/P)``."""
         super().__init__(adata)
 
         # DE-19: network init and minibatch order were unseeded, so two fits with the same
@@ -329,6 +335,7 @@ class TCRIModel(BaseModelClass):
             guide_init_scale=guide_init_scale,
             classifier_temperature=classifier_temperature,
             phenotype_kl_weight=phenotype_kl_weight,
+            label_error_rate=label_error_rate,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(clone_phenotype_prior, dtype=torch.float32)

@@ -110,6 +110,15 @@ GENERATIVE_SITES = [
         "obs", "ZeroInflatedNegativeBinomial", "data", eq="5", observed=True, event_dim=1,
         note="x_i ~ ZINB(g'_i, r_i, μ_i) from the scVI decoder (+ library size).",
     ),
+    SiteSpec(
+        "phenotype_label", "Categorical", "data", eq="4 (noisy readout)", observed=True,
+        event_dim=0,
+        note=(
+            "y_i | z^ϕ_i ~ Cat(C[z^ϕ_i, ·]), C = (1-ε) diagonal, ε/(P-1) off-diagonal, with "
+            "z^ϕ_i summed out under eq 4: p(y_i) = (softmax(ℓ_i) @ C)[y_i]. ε = "
+            "label_error_rate; None removes the site (label-free model). Present by default."
+        ),
+    ),
 ]
 
 
