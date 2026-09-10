@@ -7,7 +7,26 @@ clonotype-level phenotype prior.
 import torch
 import pyro.distributions as dist
 
-__all__ = ["MixtureDirichlet", "VampPrior"]
+__all__ = ["MixtureDirichlet", "VampPrior", "encoder_posterior"]
+
+
+def encoder_posterior(encoder, x, *cat_list):
+    """``(μ, σ)`` of ``q(z | x)`` from an scvi ``Encoder`` -- the ONE place σ is defined.
+
+    scvi's ``Encoder.forward`` returns ``(q_m, q_v, sample)`` where ``q_v`` is the VARIANCE
+    (``exp(var_encoder(q)) + var_eps``; scvi builds its own ``Normal(q_m, q_v.sqrt())``). Eq 6
+    is ``N(μ_i, diag(σ_i²))`` and eq 3 is the mixture of exactly these posteriors at the
+    pseudo-inputs, so both must take ``σ = sqrt(q_v)``. Until 2026-09 the guide used ``q_v``
+    itself as the scale (a ``N(μ, σ⁴)`` posterior) and the VampPrior used ``sqrt(exp(q_v))``
+    (a scale that can never be below 1) -- three parameterisations of one σ, and a latent KL
+    taken between two of them.
+
+    The clamp is the guide's historical one, kept on σ: it bounds the posterior width, and
+    applying it here means the prior components are bounded identically.
+    """
+    loc, var, _ = encoder(x, *cat_list)
+    scale = torch.clamp(var.sqrt(), min=1e-3, max=10.0)
+    return loc, scale
 
 
 class VampPrior(torch.nn.Module):
@@ -27,13 +46,12 @@ class VampPrior(torch.nn.Module):
         """
         Constructs the VampPrior as a uniform mixture of q(z|u_k) for each pseudo-input u_k.
         """
-        # Compute the approximate posterior parameters for each pseudo-input.
-        # Expected output shapes: means and log_vars: (K, latent_dim)
+        # q(z | u_k) for each pseudo-input, through the SAME (μ, σ) map as the guide.
+        # Shapes: means and scales (K, latent_dim).
         K = self.pseudo_inputs.size(0)
         # Create a dummy categorical argument; unsqueeze to have shape (K, 1)
         dummy_batch = torch.zeros(K, dtype=torch.long, device=self.pseudo_inputs.device).unsqueeze(1)
-        means, log_vars, _ = self.encoder(self.pseudo_inputs, dummy_batch)
-        scales = torch.sqrt(torch.exp(log_vars))
+        means, scales = encoder_posterior(self.encoder, self.pseudo_inputs, dummy_batch)
         component_dist = dist.Independent(dist.Normal(means, scales), 1)
         mixture_weights = torch.ones(K, device=self.pseudo_inputs.device) / K
         mixture = dist.MixtureSameFamily(

@@ -13,7 +13,7 @@ from scvi.nn import Encoder, DecoderSCVI
 from scvi.module.base import PyroBaseModuleClass, auto_move_data
 
 from ._classifier import PhenotypeClassifier
-from ._priors import VampPrior, MixtureDirichlet
+from ._priors import VampPrior, MixtureDirichlet, encoder_posterior
 
 __all__ = ["TCRIModule"]
 
@@ -364,8 +364,10 @@ class TCRIModule(PyroBaseModuleClass):
             conc_ct_guide = torch.clamp(q_ct_mag * q_p_ct_sharp, min=1e-3)
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
-        z_loc, z_scale, _ = self.encoder(x, batch_idx)
-        z_scale = torch.clamp(z_scale, min=1e-3, max=10.0)
+        # eq 6: q(z_i|x_i) = N(μ_i, diag(σ_i²)). σ comes from `encoder_posterior`, the same
+        # map the eq-3 VampPrior uses, so prior and posterior share one parameterisation.
+        # This line used scvi's VARIANCE output directly as the scale.
+        z_loc, z_scale = encoder_posterior(self.encoder, x, batch_idx)
 
         with pyro.plate("data", batch_size) as idx:
             latent_posterior = dist.Normal(z_loc, z_scale)
