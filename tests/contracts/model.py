@@ -216,7 +216,11 @@ SANCTIONED_DEVIATIONS = {
     ),
     "optimizer_weight_decay": (
         "Training-only: the SVI optimizer applies Adam weight decay (default 1e-4) "
-        "to the network parameters. The note specifies the objective (eq 7 + the "
+        "to the network parameters ONLY. The two guide concentrations q_p_c_raw/"
+        "q_p_ct_raw are excluded via a per-parameter optim_args callable: their "
+        "param-store leaves are log theta, so decay there is a flat Dirichlet(1,...,1) "
+        "prior applied through the optimizer, which the model does not declare "
+        "(training contract B8). The note specifies the objective (eq 7 + the "
         "surrogate) but not the optimizer, so this is an L2 regularizer on top of "
         "it. Applied inside Pyro's optimizer, where it acts on the ELBO gradients. "
         "NOTE (history): this used to be applied by a second torch Adam installed "

@@ -266,8 +266,9 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
     A coverage bar is the wrong assertion here anyway: it compares an HDI of E_s[NMI(J_s)]
     against a truth, while the number most callers see is the plug-in NMI(E[J]). Those are
     different functionals — on seed 100 the old interval [0.248, 0.342] did not even contain
-    its own point estimate of 0.173. Which one a figure should report is an open question for
-    the authors (metrics contract, OPEN_QUESTIONS['posterior_summary_of_a_nonlinear_metric']).
+    its own point estimate of 0.173. The manuscript's Methods define the posterior summary as
+    E_s[F(J_s)] (metrics contract, SANCTIONED_EXTENSIONS['posterior_summary_of_a_nonlinear_metric']);
+    the plug-in at n_samples=0 is a distinct estimator, documented as such.
 
     So this now asserts what the path genuinely guarantees: the interval is well formed,
     ordered, finite, informative, and brackets its own posterior mean. Coverage against truth

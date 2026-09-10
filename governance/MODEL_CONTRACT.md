@@ -124,7 +124,7 @@ were unified to `1e-2`.
 | `kl_warmup_z_only` | `kl_weight` anneals only the `latent` KL; the Dirichlet KLs are unscaled | Standard annealing; training-only, not part of eq 7. |
 | `num_particles_enumeration_only` | `num_particles` applies only on the `TraceEnum_ELBO` path | Default `Trace_ELBO` uses 1 MC particle. |
 | `F_perturbation_not_implemented` | in-silico perturbation (eqs 8–12) absent | Additive feature; explicitly out of scope for this release. |
-| `optimizer_weight_decay` | the SVI optimizer applies Adam weight decay (default `1e-4`) to the network parameters | The note fixes the *objective* (eq 7 + the surrogate), not the optimizer. Applied inside Pyro's optimizer so it acts on the ELBO gradients. See the note below. |
+| `optimizer_weight_decay` | the SVI optimizer applies Adam weight decay (default `1e-4`) to the network parameters **only**; the two guide concentrations `q_p_c_raw`/`q_p_ct_raw` receive `weight_decay=0` through a per-parameter `optim_args` callable | The note fixes the *objective* (eq 7 + the surrogate), not the optimizer. Applied inside Pyro's optimizer so it acts on the ELBO gradients. Decay on the guide concentrations would be a flat `Dirichlet(1,…,1)` prior applied through the optimizer (training contract B8), so it is excluded. See the note below. |
 
 ### On the optimizer (history worth keeping)
 
