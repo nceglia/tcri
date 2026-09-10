@@ -236,7 +236,14 @@ class TCRIModule(PyroBaseModuleClass):
                 "for the clonotype x covariate lookup."
             )
             ct_idx = self.ct_array[indices]
-            cls_logits = self.classifier(z)  # l_i = f_cls(z_i)  (eq. 4)
+            # The head reads the posterior MEAN, as predict() and to_anndata() already do.
+            # Trained on the sample z it saw ~1% signal: the posterior scale (~2) is ~100x the
+            # spread of the mean across cells (~0.02), so the optimum is a constant and the
+            # hidden ReLUs die (all dead by epoch 350 on the example cohort; 44/64 alive and
+            # 4 argmax classes on the mean). The recompute is one extra encoder pass; the
+            # alignment gradient reaches the encoder through it.
+            z_mean, _ = encoder_posterior(self.encoder, x, batch_idx)
+            cls_logits = self.classifier(z_mean)  # l_i = f_cls(z_i)  (eq. 4)
 
             # Phenotype-alignment surrogate (Supplementary Note, "Inference Details"):
             #   ℓ_i = π·f_cls(z_i) + (1-π)·log φ_{g(i)},  probs_i = softmax(ℓ_i);

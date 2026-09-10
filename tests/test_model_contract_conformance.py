@@ -27,6 +27,7 @@ import torch
 from anndata import AnnData
 
 from tcri.model._model import TCRIModel
+from tcri.model._priors import encoder_posterior
 from tests.contracts import model as MC
 
 # pyro wrappers that carry no model semantics — unwrapped before comparing.
@@ -312,13 +313,20 @@ def test_alignment_target_uses_global_indices(traced):
     z = tr.nodes["latent"]["value"]
     p_ct = tr.nodes["p_ct"]["value"]
     live = torch.as_tensor(tr.nodes["phenotype_alignment"]["fn"].log_factor).detach()
+    # the head reads the posterior MEAN, not the sampled latent (see model()); the
+    # sample-based recompute is kept below as the mutation guard for that
+    with torch.no_grad():
+        mod.eval()
+        z_mean, _ = encoder_posterior(mod.encoder, args[0], args[1])
+        if was_training:
+            mod.train()
 
-    def _surrogate(ct_index):
+    def _surrogate(ct_index, z_in=z_mean):
         phi = p_ct[ct_index].detach()
         log_phi = torch.log(phi + 1e-8)
         with torch.no_grad():
             mod.eval()
-            logits = mod.classifier(z)
+            logits = mod.classifier(z_in)
             if was_training:
                 mod.train()
         ell = (
@@ -333,6 +341,12 @@ def test_alignment_target_uses_global_indices(traced):
     expected_global = _surrogate(mod.ct_array[global_idx])
     local_idx = torch.arange(global_idx.numel(), device=global_idx.device)
     expected_local = _surrogate(mod.ct_array[local_idx])
+    expected_from_sample = _surrogate(mod.ct_array[global_idx], z_in=z)
+    assert not torch.allclose(live, expected_from_sample, rtol=1e-4, atol=1e-5), (
+        "the phenotype_alignment factor was computed from the SAMPLED latent; the head must "
+        "read the posterior mean (encoder_posterior), as predict()/to_anndata() do -- on a "
+        "sample its input is ~1% signal and it collapses to a constant"
+    )
 
     # the local-index variant must be a genuinely different target, or this
     # fixture cannot discriminate and the test would be vacuous
