@@ -48,6 +48,7 @@ class TCRIModule(PyroBaseModuleClass):
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
+        label_error_rate: Optional[float] = 0.1,   # must match TCRIModel.__init__, which overrides it
     ):
         super().__init__()
         self.n_input = n_input
@@ -80,6 +81,19 @@ class TCRIModule(PyroBaseModuleClass):
         self.guide_init_scale = guide_init_scale
         self.classifier_temperature = classifier_temperature
         self.phenotype_kl_weight = phenotype_kl_weight  # γ (methods §Inference Details)
+        # ε of the noisy-label readout y_i | z^ϕ_i ~ Cat(C[z^ϕ_i, ·]), C = (1-ε) on the diagonal
+        # and ε/(P-1) off it. None switches the readout off: model() is then the label-free
+        # surrogate alone, exactly as shipped before 2026-09 (the hierarchy takes gradient from
+        # its prior only). See the readout block in model().
+        if label_error_rate is not None:
+            label_error_rate = float(label_error_rate)
+            limit = (P - 1) / P
+            if label_error_rate < 0.0 or label_error_rate >= limit - 1e-9:
+                raise ValueError(
+                    f"label_error_rate must be None or in [0, 1 - 1/P) = [0, {limit:.3f}); "
+                    f"got {label_error_rate}. At 1 - 1/P the readout is uninformative."
+                )
+        self.label_error_rate = label_error_rate
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
@@ -294,6 +308,38 @@ class TCRIModule(PyroBaseModuleClass):
             pheno_kl = (probs * (torch.log(probs + 1e-8) - log_phi)).sum(dim=-1)
             if self.phenotype_kl_weight != 0.0:
                 pyro.factor("phenotype_alignment", -self.phenotype_kl_weight * pheno_kl)
+
+            # Noisy-label readout of the latent phenotype: y_i | z^ϕ_i ~ Cat(C[z^ϕ_i, ·]) with
+            # C = (1-ε) on the diagonal and ε/(P-1) off it, and z^ϕ_i ~ Cat(softmax(ℓ_i)) as
+            # in eq 4. Summing z^ϕ_i out is closed-form: p(y_i) = (softmax(ℓ_i) @ C)[y_i].
+            #
+            # This is the one observation downstream of z^ϕ. Without it z^ϕ is a leaf latent
+            # with no likelihood, the surrogate above ties the head to ϕ and nothing ties either
+            # to the cells, and the pair drifts to one shared constant (measured 2026-09: a live
+            # surrogate target collapses the head by epoch 360 and pulls every group
+            # distribution together, at a LOWER objective). Here ϕ enters LIVE, so the readout
+            # is the hierarchy's data term: each group's distribution is pulled toward its
+            # cells' labels, tempered by the head's expression-based opinion through the gate,
+            # by the Dirichlet prior above, and by ε. The surrogate keeps its detached target.
+            #
+            # label_error_rate=None removes this block and restores the label-free model.
+            if self.label_error_rate is not None:
+                eps = max(self.label_error_rate, 1e-6)     # ε = 0 is the hard-label limit
+                log_phi_live = torch.log(p_ct[ct_idx] + 1e-8)
+                if self.gate_prob is not None:
+                    ell_live = self.gate_prob * cls_logits + (1.0 - self.gate_prob) * log_phi_live
+                else:
+                    ell_live = cls_logits + log_phi_live
+                q_pheno = torch.softmax(ell_live, dim=-1)
+                confusion = torch.full((self.P, self.P), eps / (self.P - 1),
+                                       device=q_pheno.device, dtype=q_pheno.dtype)
+                confusion.fill_diagonal_(1.0 - eps)
+                y = self._target_phenotypes[indices]
+                pyro.sample(
+                    "phenotype_label",
+                    dist.Categorical(probs=q_pheno @ confusion, validate_args=False),
+                    obs=y,
+                )
 
             px_scale, px_r_out, px_rate, px_dropout = self.decoder(
                 "gene", z, log_library, batch_idx
