@@ -17,7 +17,7 @@ it with a test, so that:
 
 **A failing conformance test means _stop and decide_** — is this an intended change, in which
 case the contract is updated first and deliberately, or a regression, in which case the code
-is fixed? It never means "loosen the manifest until it passes."
+is fixed? It never means "loosen the test until it passes."
 
 ## The four contracts
 
@@ -43,11 +43,9 @@ If you are **using** TCRi, the practical consequence is that the definitions on 
 [concepts page](../concepts/index.md) are the definitions, and they will not change under you
 without a version bump and a note.
 
-If you are **contributing**, the policy is `governance/RULES.md` in the repository, the
-contract prose sits beside it, the manifests are under `tests/contracts/`, and the conformance
-tests are in `tests/`. The published core, the generative model and the metric definitions, may
-only change with a maintainer's approval, enforced by code owners. Adding functions, modules,
-and analyses that are not published mathematics is ordinary contribution. The contributor-facing
-detail — the equation-by-equation code map, the recorded departures and their rationales, and
-the open questions — lives there rather than here, because it is a record for people changing
-the package, not for people using it.
+If you are **contributing**, the policy is `governance/RULES.md` in the repository. Each
+contract is one file beside it, and each is enforced by one test under `tests/`: the model
+contract by tracing the live model against the block in its file, the metrics contract by
+reference recomputation, identities and pinned values, the API contract by parsing the stub in
+its file, and the training contract by behavioural tests. Code and its contract change in the
+same pull request, and a contract change bumps the version.

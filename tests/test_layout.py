@@ -75,7 +75,7 @@ def test_no_contract_manifests_inside_the_package():
                  and ("contract" in p.name.lower() or p.suffix == ".pyi")]
     assert not offenders, (
         f"contract/enforcement files inside the installed package: {offenders}. They belong in "
-        f"tests/contracts/ — nothing in tcri imports them, and anything under tcri/ ships in the "
+        f"governance/ and tests/ — nothing in tcri imports them, and anything under tcri/ ships in the "
         f"wheel."
     )
 
@@ -166,7 +166,7 @@ def test_namespace_exposes_exactly_its_all(ns):
     undeclared = sorted(public - set(declared))
     assert not undeclared, (
         f"tcri.{ns} exposes names not in its __all__: {undeclared}. Either add them to __all__ "
-        f"(and to tests/contracts/api.pyi, since that is a contract change), or alias the import "
+        f"(and to the stub in governance/API_CONTRACT.md, since that is a contract change), or alias the import "
         f"private — `import numpy as _np`. Adding to __all__ without declaring it in the contract "
         f"will fail test_public_surface_equals_the_contract."
     )

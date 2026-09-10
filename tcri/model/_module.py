@@ -281,23 +281,12 @@ class TCRIModule(PyroBaseModuleClass):
             z_mean, _ = encoder_posterior(self.encoder, x, batch_idx)
             cls_logits = self.classifier(z_mean)  # l_i = f_cls(z_i)  (eq. 4)
 
-            # Phenotype-alignment surrogate (Supplementary Note, "Inference Details"):
-            #   ℓ_i = π·f_cls(z_i) + (1-π)·log φ_{g(i)},  probs_i = softmax(ℓ_i);
-            #   add -γ·KL(probs_i ‖ φ_{g(i)}) to the log-joint so the ELBO trains the
-            #   classifier f_cls (η_cls). φ (the covariate-level distribution) is the
-            #   DETACHED alignment target. Without this factor cls_logits never enters
-            #   the ELBO and f_cls receives no gradient.
-            # ϕ enters DETACHED. z^ϕ is a LATENT variable, not an observation: the note
-            # replaces it with this surrogate rather than conditioning on the input labels,
-            # and the surrogate's alignment target must stay constant or −γ·KL(probs‖ϕ) is
-            # self-referential — minimised by ϕ and probs agreeing with each other regardless
-            # of the data.
-            #
-            # DE-18 argued from "x ⊥ z^ϕ | z, so a latent z^ϕ marginalises out and ϕ_m is
-            # unidentifiable" to "therefore z^ϕ must be observed", and added a Categorical
-            # likelihood against `_target_phenotypes`. That inference does not follow, and the
-            # premise it was built on is not the model the note specifies. Reverted; see
-            # DEFECTS.md DE-18 (WITHDRAWN).
+            # Phenotype-alignment surrogate (MODEL_CONTRACT.md, the objective):
+            #   ℓ_i = π·f_cls(μ_i) + (1-π)·log φ_{g(i)},  probs_i = softmax(ℓ_i);
+            #   add -γ·KL(probs_i ‖ φ_{g(i)}) to the log-joint. It trains f_cls toward its
+            #   group's distribution. φ enters DETACHED: with the target live, the head and the
+            #   hierarchy converge to one shared vector at a lower objective (measured 2026-09).
+            #   The hierarchy's data term is the label readout below, not this penalty.
             phi = p_ct[ct_idx].detach()
             log_phi = torch.log(phi + 1e-8)
             if self.gate_prob is not None:

@@ -1,200 +1,84 @@
 # Training contract
 
-**Manifest:** `tests/contracts/training.py` · **Policy:** `governance/RULES.md` · **Tests:** `tests/test_training_contract_conformance.py` (manifest + structure), `tests/test_training_invariants.py` (behaviour)
+How the model is fit. Enforced by `tests/test_training_invariants.py`, behaviourally: every
+statement below names a test that exercises the behaviour, not the wiring. Nothing else binds
+the training plan.
 
-## Why this exists
+Two kinds of statement. **Invariants** follow from the objective in `MODEL_CONTRACT.md`; a
+violation is a defect. **Bounds** are ours, because the objective says nothing about
+schedules or stopping; they change with a recorded reason.
 
-The model *structure* is specified by Supplementary Note 1 and machine-checked by the model
-contract. The *training plan* was specified nowhere — no contract, no bounds — and it has large
-effect on every reported number.
+## Invariants
 
-That absence is the reason the same defects kept being rediscovered. DE-1 through DE-4 are not
-four bugs; they are four faces of one unspecified subsystem, each found from a different symptom
-(slow convergence, then a plateau, then degradation) and each diagnosed locally.
+- **I1 One objective.** The only quantity any optimizer descends is −L of `MODEL_CONTRACT.md`
+  eq 7: the ELBO with the label readout and the alignment surrogate. Enforced by the model
+  conformance test (site set, factor sign).
+- **I2 No optimizer update outside `training_step`.** Validation evaluates and never steps.
+  The best-weight restore at `on_fit_end` applies no gradient and consumes no validation batch.
+  `test_validation_does_not_update_parameters`, `test_validation_step_does_not_call_training_step`.
+- **I3 The monitored quantity is a fixed objective.** `objective_validation_percell` is the
+  per-cell block only, `latent` + `phenotype_alignment` + `phenotype_label` + `obs`, over the
+  validation split, divided by the plate size; evaluated at `kl_weight_max`, in eval mode,
+  with a fixed particle count, the same split every check, and a forked fixed RNG seed. The
+  global sites `p_c` and `p_ct` are excluded because their KL is identical whatever is held out.
+  It is not an ELBO and is not called one. `test_monitor_is_invariant_to_ramp_position`,
+  `test_monitor_excludes_the_global_block`, `test_validation_pin_restores_the_training_schedule`.
+- **I4 The reported model is the selected one.** A best-by-monitor snapshot at each gated
+  check, restored in place at `on_fit_end`, spanning `state_dict()` (BatchNorm running
+  statistics included) and the Pyro param store through `named_parameters()` in unconstrained
+  space. `test_restored_model_is_the_selected_one`.
+- **I5 Annealing is schedule-only.** The warmup counter lives on the module, so a resumed
+  `train()` continues the ramp rather than restarting it.
+  `test_kl_ramp_is_monotone_across_resumed_training`, `test_warmup_counter_is_owned_by_the_module_not_the_plan`.
+- **I7 A declared knob changes an observable.** `tests/test_model_knobs.py`; partial.
+- **I8 A minibatch is an unbiased estimate of eq 7.** The data plate is declared at the size
+  of the training split with the batch as its subsample, so the mean of the batch objectives
+  over a partition of the cells equals the full-batch objective.
+  `test_minibatch_objective_is_unbiased_for_the_full_batch`, `test_plate_size_tracks_the_training_split`,
+  and `test_data_plate_is_scaled_to_the_dataset` in the model conformance test.
 
-## The asymmetry, and why this contract has two halves
+## Bounds
 
-Note 1 gives the model (eqs 1–5), the variational family (eq 6), the ELBO (eq 7) and the
-surrogate. On optimization it says one sentence: SVI in Pyro, mini-batching, KL scaling for
-Dirichlet and discrete terms, Adam. No epochs, patience, warmup schedule or stopping criterion.
+- **B1** The `kl_weight` schedule is non-decreasing within and across `train()` calls and
+  reaches `kl_weight_max` in finite steps. `train()` has no reset knob; construct a new model
+  for a fresh schedule. `test_no_reset_knob_on_train`.
+- **B2** `n_steps_kl_warmup` counts optimizer steps; a run records its epoch equivalent.
+- **B3** Patience is in epochs: `check_val_every_n_epoch=1` and the knob is `patience_epochs`
+  (`patience` is a deprecated alias).
+- **B3a** `max_epochs` defaults to 2000. A fit that reaches the cap warns and records
+  `stopped_early: False`.
+- **B4** `min_delta` must exceed the monitor's noise; the fixed evaluation seed removes the
+  Monte-Carlo component.
+- **B5** Selection begins only after the ramp completes, read from one counter by both the
+  stopping and the snapshot callback. If the ramp never completes: warn, do not raise, and
+  record `selection_criterion = "last epoch (ramp incomplete)"`.
+  `test_selection_is_gated_until_the_ramp_completes`.
+- **B6** Every advertised knob has a behavioural test, never a wiring check.
+- **B7** A fit is a function of (seed, data, knobs) and of nothing that ran before `train()`.
+  `train()` forces train mode, because an earlier `predict()`, `to_anndata()`, session load,
+  or scvi's own end-of-fit `eval()` otherwise leaves dropout off and BatchNorm frozen for the
+  whole fit, reproducibly. `test_train_resets_module_mode`, `tests/test_model_determinism.py`.
+- **B8** Optimizer settings that act as priors are declared or removed. Weight decay reaches
+  the network parameters only; the two guide concentrations receive `weight_decay=0`, since
+  decay on their log-space leaves is a flat Dirichlet prior applied through the optimizer.
+  `test_weight_decay_does_not_reach_the_guide_concentrations`.
+- **B9** A fit records provenance in `training_record_`: epochs actually run, warmup steps and
+  their epoch equivalent, `ramp_completes_at_epoch`, `ramp_completed`, `selection_criterion`,
+  `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch.
 
-So unlike the model contract, this one cannot be wholly derived. It is split accordingly:
+## The stopping policy in one paragraph
 
-| | authority | changing it |
-|---|---|---|
-| **`DERIVED_INVARIANTS`** | follow from eq 7 | a violation is a **defect** |
-| **`AUTHORED_BOUNDS`** | ours, because the note is silent | changeable by @nceglia / @salehis **with a recorded reason** |
+Annealing is a continuation method: training descends a family of surrogates whose endpoint
+is the objective meant. A series of different functions has no argmin, so the selection
+criterion must be a fixed function of the parameters and the held-out data (I3), selection may
+only start once every check comes from the same endpoint (B5), and early stopping has two
+outputs, a stop time and the argmin weights, so the selected weights are restored (I4).
 
-Keeping them apart matters: collapsing the two would let a preference acquire the authority of
-the manuscript. A test asserts the key sets are disjoint.
+## Two ways to get the restore silently wrong
 
-## A bound must be behavioural
-
-The knob test verified that `patience` *arrives* at `EarlyStopping.patience` and marked it ✅.
-Its behavioural column held a dash. Meanwhile patience was counted in validation checks
-(300 × `check_val_every_n_epoch=5` = **1500 epochs**), `validation_step` was taking optimizer
-steps on the parameters every metric reads, and the KL ramp restarted on every `train()` call.
-
-Asserting that a value is connected is not asserting that the behaviour is right. That gap is
-this project's dominant defect class, and it is why the behavioural assertions live in a
-separate file from the manifest checks.
-
-## Current status
-
-| | statement | status |
-|---|---|---|
-| I1 | one objective: `−(L# + γ·Σ KL(probs‖φ))` | holds |
-| I2 | no **optimizer** update outside `training_step` | **holds** — DE-1 fixed |
-| I3 | the monitored quantity is a fixed objective | **holds** — `objective_validation_percell`, pinned + seeded; scope has its own test |
-| I4 | the reported model is the one the criterion selected | **holds** — snapshot spans `state_dict()` **and** the param store |
-| I5 | annealing is schedule-only and terminates | **holds** — DE-4 fixed |
-| I7 | a declared knob changes an observable | partial |
-| I8 | a minibatch is an unbiased estimate of eq 7 | **holds** — data plate `size = N_train` with the minibatch as explicit subsample; Q-B resolved |
-
-`SPECIFIED` — design settled, code not written — was used for I3/I4 in the contract-only PR
-that preceded the implementation. Both now read `holds`, and that claim is machine-checked:
-an invariant may only claim it if `enforced_by` names a test file that exists, and a function
-inside it that exists (`test_a_holds_claim_names_a_test_that_exists`).
-
-Every clause above is mutation-checked. Reverting the pin, dropping the evaluation seed,
-leaving the pin in place, re-including the global block, silently dropping the excluded
-series, snapshotting `named_parameters()` instead of `state_dict()`, restoring the param store
-through `items()`, skipping the restore, or removing the ramp gate — all nine fail a test.
-
-## The stopping policy (I3 + I4)
-
-### The principle
-
-Annealing is a **continuation method**. Training descends a family of surrogates `L_β` whose
-endpoint `L_β_max` is the objective actually meant. So the function you *descend* and the
-criterion you *select on* are different objects, and must be allowed to differ.
-
-Two consequences, and neither is a matter of taste:
-
-1. **A series of different functions has no argmin.** So the selection criterion must be a
-   fixed function of (parameters, held-out data). This follows from what "argmin" means.
-2. **Early stopping has two outputs**, a stop time *and* the argmin weights (Prechelt,
-   *Early Stopping — But When?*). A run that stops at the argmin and keeps the last weights has
-   implemented half of it, and is not doing early stopping.
-
-### What is monitored
-
-`objective_validation_percell` — the **per-cell block only**: `latent` + `phenotype_alignment`
-+ `obs`, over the validation split, divided by `N_val`.
-
-It is deliberately **not** the ELBO, and must never be called one: it excludes the global sites
-and contains an unnormalized `pyro.factor` and a ρ-tempered `obs`.
-
-Excluding `p_c`/`p_ct` is the one substantive judgement here. Both global plates are declared at
-full size with no subsampling, so their KL contributes the **same value regardless of which
-cells are held out**. Including them means selecting partly on how well the guide matches its
-prior on the *training* data — which a validation criterion must not contain. Their share is
-small at benchmark scale (tens of clones) and large at repertoire scale, since real repertoires
-are singleton-dominated.
-
-This is *not* a reconstruction-only criterion. `phenotype_alignment` scores held-out cells
-against `φ = p_ct[ct_idx]`, so the Dirichlet branch is still covered; what is dropped is only
-the prior-matching term that held-out data cannot speak to. The global block is logged as its
-own series and never monitored.
-
-### How it is evaluated
-
-Pinned `kl_weight = kl_weight_max` (try/finally, batch scope), eval mode, fixed particle count,
-same validation split, and a **forked, fixed RNG seed** — the same draws every check. The seed
-clause is load-bearing: a Monte-Carlo estimator redrawn each check is not a function of the
-parameters at all, so an argmin over it is an argmin over noise.
-
-### When selection begins
-
-Not until `module._kl_warmup_step >= n_steps_kl_warmup`. I3 makes each check well-posed; **B5**
-makes the *series* comparable, by ensuring every entry came from the same `L_β_max`. One gate,
-one predicate, one object, read by both the stopping and snapshot callbacks — do not also set
-scvi's `early_stopping_warmup_epochs`, as two counters in two units can disagree at the
-boundary. If the ramp never completes: warn loudly, do **not** raise, and record
-`selection_criterion = "last epoch (ramp incomplete)"`.
-
-### What is restored, and two ways to get it silently wrong
-
-Snapshot at each gated improving check; restore in place at `on_fit_end`. The snapshot must
-carry **both** sources or it restores a model no check ever evaluated:
-
-**`state_dict()`, not `named_parameters()`.** The encoder and VampPrior carry BatchNorm running
-statistics (`FCLayers` defaults `use_batch_norm=True`), which are buffers — absent from
-`named_parameters()`, absent from the param store, and read by `predict()` in eval mode.
-Measured on a minimal fixture: 6 running buffers, 21 `state_dict` keys absent from
-`named_parameters()`.
-
-**The param store, through `named_parameters()` in unconstrained space — never `items()`.**
-`q_p_c_raw`/`q_p_ct_raw` carry `constraints.positive`, so `store.items()` yields a *non-leaf*
-`ExpTransform` output. Verified directly: writing `5.0` via `.data.copy_()` on that tensor
-leaves the store reading **2.0**, with no error and no warning. A restore written the obvious
-way silently does nothing — the same failure class as DE-1. Snapshotting constrained and
-restoring unconstrained (or the reverse) inflates every clone row by `exp(·)`. Do not use
-`ParamStore.set_state()`: it rebinds `_params[name]` and desyncs the store from the `nn.Module`
-that registered it.
-
-### Why this was invisible
-
-At the old defaults early stopping **could never fire**: patience of 300 checks ×
-`check_val_every_n_epoch=5` = 1500 epochs, against `max_epochs=1000`. Every default run trained
-to the budget and stopped there. DE-2 and DE-3 were latent rather than active, which is why
-neither had ever produced a wrong number to notice.
-
-## Open questions
-
-**Q-B — minibatch weighting — RESOLVED (I8).** It did not. Both `model()` and `guide()`
-declared `pyro.plate("data", batch_size)` with no `size`, so nothing rescaled the per-cell
-terms and the two Dirichlet KLs, in unsubsampled plates, entered every step at full weight:
-over an epoch of `S = ceil(0.9N/B)` steps the prior pull on `ω_c` and `φ_m` was `S` times eq
-7's. The plate now carries `size = N_train` with the minibatch as its subsample, so Pyro
-scales the per-cell sites by `N_train/B` and the mean of the batch objectives over a
-partition of the cells equals the full-batch objective, which is what the test asserts with
-every stochastic site pinned. The note's "KL scaling for Dirichlet … terms" is this scaling.
-
-**Measured effect on fits: at the noise floor**, and the reason is structural. Three seeds,
-2000 cells, batch 256, 150 epochs: NMI moved by under 1e-3 and the guide concentration totals
-by about 0.1 on a total near 7. The alignment target `φ` is detached, so `q_p_c_raw` and
-`q_p_ct_raw` receive gradient from the global block only and every network parameter from
-the per-cell block only; no parameter mixes the two, and Adam's per-parameter normalisation
-absorbs a constant factor on either block. The fix corrects the objective and every logged
-ELBO, and would matter under an optimizer without that invariance or the moment anything
-couples the blocks. It does not move today's fits.
-
-**Q-D — weight decay as a prior — RESOLVED (removed).** Pyro's optimizer takes one
-`weight_decay` for every parameter in the store, so it reached `q_p_c_raw`/`q_p_ct_raw`, whose
-param-store leaves are `log θ`; L2 decay there pulls every row toward `Dirichlet(1, …, 1)`, a
-flat prior applied through an optimizer setting the model never declares. The two guide
-concentrations now receive `weight_decay=0` through a per-parameter `optim_args` callable
-(B8), and a test steps both a guide leaf and a network weight on a zero gradient: the leaf is
-bit-identical afterwards, the weight is not.
-
-## Notes on specific bounds
-
-**B1 — no reset knob.** `train()` deliberately has no `reset_schedule`. Restarting the ramp is
-the behaviour DE-4 removes, and adding the parameter would also be an API-contract change to
-`_contract.pyi`. Construct a new model for a fresh schedule.
-
-**B2 — warmup units.** `n_steps_kl_warmup` counts **optimizer steps**. At `batch_size=1024` on
-5000 cells that is ~5 steps/epoch, so 2000 steps ≈ 400 epochs — and ≈ 2000 epochs at 1000 cells.
-The unit was open as DUX-2 since July with no answer recorded; this is the answer.
-
-**B3 — patience units.** Resolved by setting `check_val_every_n_epoch=1` so the two units
-coincide by construction, and renaming `patience` → `patience_epochs`. Deliberately *not*
-resolved by dividing at the call site: two units with a silent conversion between them is the
-same trap in a new place. Costs a measured +7.6% wall clock on the worst-case fixture. Since
-`patience` is in `init_params_`, the rename needs a real deprecated alias or
-`load_tcri_session()` breaks on previously saved models.
-
-**B5 — selection begins after the ramp.** See "When selection begins" above.
-
-**B9 — provenance.** A fit records what actually happened, including epochs **actually run**
-rather than requested. `max_epochs=4000` silently trained 2964 epochs and `8000` trained 2774,
-and the resulting near-identical numbers were read as an estimator property for a full day
-because nothing recorded the real count.
-
-Extended with I3/I5: `kl_weight` must be **logged per epoch**. It is absent from `history`
-entirely today, which is exactly what makes I3 and I5 unfalsifiable once a run has finished.
-Also record `ramp_completes_at_epoch = n_steps_kl_warmup / steps_per_epoch` — one line, and it
-tells a reader which regime a run was in. A ramp that finishes early leaves most of the fit at a
-stationary objective; one that never finishes means the prior was substantially switched off
-throughout. The benchmark grid's 60-epoch default reaches roughly 15% of a 2000-step ramp.
+Restore `state_dict()`, not `named_parameters()`: the encoder and VampPrior carry BatchNorm
+running statistics, which are buffers that `predict()` reads in eval mode. Restore the Pyro
+store through `named_parameters()` in unconstrained space, never `items()`: the two guide
+concentrations are positive-constrained, so `items()` yields a non-leaf transform output and a
+`.data.copy_()` on it does nothing, without error. Do not use `ParamStore.set_state()`; it
+rebinds the store away from the module that registered the parameters.

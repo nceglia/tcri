@@ -1,6 +1,6 @@
-"""Contract conformance — the interface guardrail for the refactor.
+"""API-contract conformance.
 
-``tests/contracts/api.pyi`` freezes the public surface. Two things are checked:
+The stub inside ``governance/API_CONTRACT.md`` freezes the public surface. Two things are checked:
 
 1. **Set equality** — the set of public callables the package actually exposes equals
    the set the contract declares. Neither direction may drift.
@@ -29,12 +29,11 @@ import pytest
 
 import tcri
 
-#: The API manifest. It lives under ``tests/contracts/`` rather than inside the package because
-#: nothing in ``tcri`` imports it — it is contract enforcement, and shipping it in the wheel gave
-#: users a frozen declaration they could mistake for an API. Resolved relative to THIS file, not
-#: to ``tcri.__file__``, so it is found from any working directory and an installed-package copy
-#: can never shadow the repo one.
-PYI = Path(__file__).parent / "contracts" / "api.pyi"
+from tests._governance import contract_block
+
+#: The stub is the ```python contract``` block of the API contract file. Read from the repo, not
+#: from the installed package, so an installed copy can never shadow the contract.
+STUB = contract_block("API_CONTRACT.md")
 
 #: Contract namespace -> the live object whose public callables it declares.
 #: ``TCRIModel`` is the class itself; the rest are the ``tcri.*`` accessor modules.
@@ -124,7 +123,7 @@ def _contract_signatures():
     Namespace classes (tl/pp/pl/diag/ut) and the real TCRIModel class both hold
     their functions as method FunctionDefs; keys are ``ClassName.funcname``.
     """
-    tree = ast.parse(PYI.read_text())
+    tree = ast.parse(STUB)
     sigs = {}
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -139,9 +138,14 @@ def _contract_signatures():
 CONTRACT = _contract_signatures()
 
 
-def test_contract_pyi_parses():
+def _is_dunder(key: str) -> bool:
+    """``TCRIModel.__init__`` is declared for its signature only; dunders are not part of the
+    public-callable set (``_public_callables`` skips underscore names)."""
+    return key.rpartition(".")[2].startswith("__")
+
+
+def test_contract_stub_parses():
     """The frozen contract is present and declares a non-trivial surface."""
-    assert PYI.exists(), "tests/contracts/api.pyi missing"
     assert len(CONTRACT) >= 20, f"contract looks truncated: {len(CONTRACT)} entries"
     # every declared key is Namespace-qualified (no accidental bare defs)
     assert all("." in k for k in CONTRACT), "unexpected un-namespaced contract entry"
@@ -154,14 +158,13 @@ def test_public_surface_equals_the_contract():
     function absent from the allowlist was not merely unchecked; it was invisible, so
     "the contract passes" said nothing about it.
     """
-    live, declared = _live_surface(), set(CONTRACT)
+    live, declared = _live_surface(), {k for k in CONTRACT if not _is_dunder(k)}
 
     undeclared = sorted(live - declared)
     assert not undeclared, (
         f"public but NOT in the contract: {undeclared}\n"
-        f"Every public callable is part of the frozen surface. Declare it in "
-        f"tests/contracts/api.pyi (a contract change, so CODEOWNERS applies), make it private "
-        f"with a leading underscore, or delete it."
+        f"Every public callable is part of the frozen surface. Declare it in the stub in "
+        f"governance/API_CONTRACT.md, make it private with a leading underscore, or delete it."
     )
     missing = sorted(declared - live)
     assert not missing, (

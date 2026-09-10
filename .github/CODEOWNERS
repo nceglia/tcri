@@ -1,37 +1,16 @@
 # Contract ownership.
 #
-# The three contracts and the source documents they derive from may only be changed with
-# an approving review from an owner listed here. Everything else in the repo is open to
-# normal review.
+# The four contract files and the tests that enforce them need an approving review from an
+# owner listed here. Everything else is open to normal review.
 #
-# ENFORCEMENT: this file is ADVISORY on its own. GitHub only blocks a merge when the
-# branch protection rule for `main` has "Require review from Code Owners" enabled. That
-# is a repository setting and has to be turned on in the GitHub UI; a CODEOWNERS file
-# without it changes nothing except who gets auto-requested for review.
+# ENFORCEMENT: this file is advisory unless the branch protection rule for `main` has
+# "Require review from Code Owners" enabled.
 
-# --- source documents: upstream of every contract ---------------------------------
-/governance/source/                    @nceglia @salehis
-
-# --- machine-checked manifests ----------------------------------------------------
-/tests/contracts/api.pyi                     @nceglia @salehis
-/tests/contracts/model.py                    @nceglia @salehis
-/tests/contracts/training.py                 @nceglia @salehis
-/tests/contracts/metrics.py                  @nceglia @salehis
-
-# --- the conformance tests that give the manifests teeth --------------------------
-# Weakening a test is equivalent to weakening the contract, so these carry the same bar.
+/governance/                                  @nceglia @salehis
 /tests/test_contract_conformance.py           @nceglia @salehis
 /tests/test_model_contract_conformance.py     @nceglia @salehis
-/tests/test_training_contract_conformance.py  @nceglia @salehis
 /tests/test_metrics_contract_conformance.py   @nceglia @salehis
-
-# --- the prose twins --------------------------------------------------------------
-/governance/MODEL_CONTRACT.md          @nceglia @salehis
-/governance/TRAINING_CONTRACT.md       @nceglia @salehis
-/governance/METRICS_CONTRACT.md        @nceglia @salehis
-/governance/METHODS_CONFORMANCE.md     @nceglia @salehis
-/governance/API_CONTRACT.md            @nceglia @salehis
-
-# --- the governance rule itself ---------------------------------------------------
-/CLAUDE.md                                @nceglia @salehis
-/.github/CODEOWNERS                       @nceglia @salehis
+/tests/test_training_invariants.py            @nceglia @salehis
+/tests/_governance.py                         @nceglia @salehis
+/CLAUDE.md                                    @nceglia @salehis
+/.github/CODEOWNERS                           @nceglia @salehis
