@@ -1,90 +1,107 @@
-"""Conformance test for the METRICS contract (``tests/contracts/metrics.py``).
+"""Conformance test for the METRICS contract (``governance/METRICS_CONTRACT.md``).
 
-Companion to ``test_model_contract_conformance.py``. Where the model contract is
-verified by tracing ``model()``/``guide()``, metrics are pure functions of a joint
-table, so they are pinned by **numeric identities**: uniform -> log2(k),
-independent -> MI 0, and the entropy/MI decomposition.
+Metrics are pure functions of a joint table, so they are pinned four ways: each equation in
+the contract is recomputed from a hand-written reference on the contract's joint; the
+identities hold (uniform -> log2 k, independent -> MI 0, the entropy/MI decomposition); the
+defaults that change what a number means are read off the live signatures; and the values on
+the reference joint match the numbers pinned in the contract block.
 
-A failure here means the *meaning* of a published number changed. Update the manifest
-and ``governance/METRICS_CONTRACT.md`` first, deliberately — never relax an
-identity to make this pass.
+A failure here means the meaning of a published number changed. The contract file changes in
+the same PR, deliberately; never relax an identity or a pinned value to make this pass.
 """
 from __future__ import annotations
+
+import inspect
+import re
 
 import numpy as np
 import pytest
 
-from tests.contracts import metrics as MC
+from tests._governance import GOVERNANCE, contract_namespace
+from tcri._compute._distance import phenotype_distance
 from tcri.tools._entropy import _clonotypic_one, _phenotypic_one
 from tcri.tools._mutual_information import _mi_from_joint
 
-
-# ── manifest hygiene ────────────────────────────────────────────────────────
-def test_manifest_is_complete():
-    """Every public metric is specified, and every spec field is filled in."""
-    assert set(MC.METRIC_SPECS) == {
-        "clonotypic_entropy", "phenotypic_entropy", "mutual_information",
-        "phenotypic_flux",
-    }
-    for name, spec in MC.METRIC_SPECS.items():
-        for field in ("formula", "per", "support", "normalizer", "empty", "note_eq"):
-            assert getattr(spec, field), f"{name}.{field} is empty"
-    assert MC.LOG_BASE == 2
+MC = contract_namespace("METRICS_CONTRACT.md")
+LOG_BASE, METRICS, DEFAULTS, GOLDEN = MC["LOG_BASE"], MC["METRICS"], MC["DEFAULTS"], MC["GOLDEN"]
 
 
-def test_every_spec_names_its_source_document():
-    """Equation numbers COLLIDE between the two source documents — "eq 3" is the clonotypic
-    entropy in one and the VampPrior in the other — so a bare "eq 3" is ambiguous. This makes
-    that ambiguity un-shippable."""
-    for name, spec in MC.METRIC_SPECS.items():
-        assert any(src in spec.note_eq for src in MC.SOURCES), (
-            f"{name}.note_eq must name its source document (one of {sorted(MC.SOURCES)}); "
-            f"got {spec.note_eq!r}"
-        )
-    assert "NOTE_1" not in " ".join(s.note_eq for s in MC.METRIC_SPECS.values()), (
-        "Supplementary Note 1 carries no entropy/MI definitions — a metric citing it is "
-        "citing the wrong document."
+# ── the contract covers the surface, and pins what a number means ───────────
+def test_contract_covers_every_public_metric():
+    """Every public ``tl`` function is listed in the contract block and has a section in the
+    prose. A metric that is public but undescribed has no definition to be held to."""
+    import tcri
+
+    live = {n for n in dir(tcri.tl) if not n.startswith("_") and callable(getattr(tcri.tl, n))
+            and getattr(getattr(tcri.tl, n), "__module__", "").startswith("tcri")}
+    assert live == set(METRICS), (
+        f"tl surface {sorted(live)} != contract METRICS {sorted(METRICS)}; update "
+        f"governance/METRICS_CONTRACT.md"
     )
-
-
-def test_sources_are_archived_with_a_hash():
-    """The upstream documents live in the repo, not on someone's desktop, and the recorded
-    hash turns a silent revision into a failing build."""
-    import hashlib
-    import pathlib
-    root = pathlib.Path(__file__).resolve().parents[1]
-    for key, src in MC.SOURCES.items():
-        f = root / src["file"]
-        assert f.exists(), f"SOURCES[{key!r}] missing from the repo: {src['file']}"
-        got = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
-        assert got == src["sha256_16"], (
-            f"{src['file']} changed (hash {got}, manifest says {src['sha256_16']}). The "
-            f"source document is UPSTREAM of this contract — reconcile the manifest to the "
-            f"new document; do not edit the hash to silence this."
+    text = (GOVERNANCE / "METRICS_CONTRACT.md").read_text()
+    for name in METRICS:
+        if name == "joint_distribution":
+            continue  # the engine; its arguments are the API contract's
+        assert re.search(rf"^###[^\n]*`{re.escape(name)}`", text, re.M), (
+            f"{name} has no '### ... `{name}`' section in METRICS_CONTRACT.md"
         )
+    assert LOG_BASE == 2
 
 
-def test_open_questions_are_not_quietly_sanctioned():
-    """A live disagreement with the source document must not be filed as an 'extension'.
-    Extensions are things the document does not specify; open questions are things it does
-    and we have not yet reconciled. The two sets must stay disjoint, and an open question
-    must say enough to act on.
+def test_defaults_that_change_the_estimand_are_pinned():
+    """The signature defaults in the contract block are the live defaults. Flipping any of
+    them changes which quantity every caller gets (one vote per clone vs per cell, coefficient
+    of constraint vs mean denominator, KL vs L1, plug-in vs draws)."""
+    import tcri
 
-    Previously this named one key by hand, which meant it had to be edited the moment that
-    question was answered. It is now generic over whatever is open.
-    """
-    for key, text in MC.OPEN_QUESTIONS.items():
-        assert len(text) > 40, f"OPEN_QUESTIONS[{key!r}] is too thin to act on"
-        assert key not in MC.SANCTIONED_EXTENSIONS, (
-            f"{key!r} is filed as both an open question and a sanctioned extension"
-        )
+    seen = set()
+    for name in METRICS:
+        params = inspect.signature(getattr(tcri.tl, name)).parameters
+        for knob, expected in DEFAULTS.items():
+            if knob in params:
+                seen.add(knob)
+                assert params[knob].default == expected, (
+                    f"tl.{name}(..., {knob}={params[knob].default!r}) but the contract pins "
+                    f"{knob}={expected!r}. Changing a default is a contract change."
+                )
+    assert seen == set(DEFAULTS), f"contract pins defaults nothing exposes: {set(DEFAULTS) - seen}"
 
 
-# ── the manuscript equations, transcribed literally ─────────────────────────
-# These are the primary definitional tests: each transcribes an equation from
-# Supplementary Note 1 straight from the manuscript and asserts the code computes
-# exactly that. Stronger than the identity tests below, which pin *consequences* of
-# the formula (uniform -> log2 k, degenerate -> 0) rather than the formula itself.
+def test_pinned_values_on_the_reference_joint():
+    """The numbers in the contract block, to 1e-9. This is what makes the definitions frozen:
+    a redefinition that survives every identity still moves these."""
+    J = np.array(GOLDEN["joint"], dtype=float)
+    ids = [f"c{i}" for i in range(J.shape[0])]
+    cols = [f"p{j}" for j in range(J.shape[1])]
+    tol = dict(abs=1e-9)
+
+    g = GOLDEN["clonotypic_entropy"]
+    raw = _clonotypic_one(J, cols, normalized=False)
+    nrm = _clonotypic_one(J, cols, normalized=True)
+    assert [raw[c] for c in cols] == pytest.approx(g["raw"], **tol)
+    assert [nrm[c] for c in cols] == pytest.approx(g["normalized"], **tol)
+
+    g = GOLDEN["phenotypic_entropy"]
+    raw = _phenotypic_one(ids, J, cols, normalized=False)
+    nrm = _phenotypic_one(ids, J, cols, normalized=True)
+    assert [raw[c] for c in ids] == pytest.approx(g["raw"], **tol)
+    assert [nrm[c] for c in ids] == pytest.approx(g["normalized"], **tol)
+
+    g = GOLDEN["mutual_information"]
+    assert _mi_from_joint(J, normalized=False) == pytest.approx(g["raw"], **tol)
+    assert _mi_from_joint(J, normalized=True, mode="min") == pytest.approx(g["min"], **tol)
+    assert _mi_from_joint(J, normalized=True, mode="average") == pytest.approx(g["average"], **tol)
+
+    g = GOLDEN["phenotypic_flux"]
+    p, q = J[0] / J[0].sum(), J[2] / J[2].sum()
+    for metric, expected in g.items():
+        assert float(phenotype_distance(metric)(p, q)) == pytest.approx(expected, **tol), metric
+
+
+# ── the contract's equations, recomputed from a reference ──────────────────
+# The primary definitional tests: each writes the contract's equation out by hand on the
+# reference joint and asserts the code computes exactly that. Stronger than the identity tests
+# below, which pin consequences of a formula rather than the formula itself.
 
 def _joint():
     """A small, deliberately asymmetric clone x phenotype count table."""
@@ -105,7 +122,7 @@ def test_eq2_joint_entropy():
     assert eq2 == pytest.approx(h_c + h_ph - mi, abs=1e-12)
 
 
-def test_eq3_clonotypic_entropy_matches_the_manuscript():
+def test_eq3_clonotypic_entropy_matches_the_contract():
     """Eq 3: H(p(c|phi)) = -sum_{c in C} p(c|phi) log(p(c|phi)).
 
     Note the weight is the CONDITIONAL p(c|phi), matching the log — an earlier
@@ -122,7 +139,7 @@ def test_eq3_clonotypic_entropy_matches_the_manuscript():
         assert code[ph] == pytest.approx(eq3, abs=1e-12), f"eq 3 mismatch for {ph}"
 
 
-def test_eq4_phenotypic_entropy_matches_the_manuscript():
+def test_eq4_phenotypic_entropy_matches_the_contract():
     """Eq 4: H(p(phi|c)) = -sum_{phi in Phi} p(phi|c) log(p(phi|c))."""
     J = _joint()
     ids, cols = ["c0", "c1", "c2"], ["phen_A", "phen_B"]
@@ -134,7 +151,7 @@ def test_eq4_phenotypic_entropy_matches_the_manuscript():
         assert code[c] == pytest.approx(eq4, abs=1e-12), f"eq 4 mismatch for {c}"
 
 
-def test_eq5_mutual_information_matches_the_manuscript():
+def test_eq5_mutual_information_matches_the_contract():
     """Eq 5: I(c,phi) = sum_{c,phi} p(phi,c) log( p(c,phi) / (p(phi) p(c)) )."""
     J = _joint()
     P = J / J.sum()
@@ -146,12 +163,10 @@ def test_eq5_mutual_information_matches_the_manuscript():
 def test_eq6_nmi_is_the_average_denominator():
     """Eq 6: NMI = I / ( (1/2)(H(c) + H(phi)) ) — the MEAN denominator.
 
-    The package exposes this as ``normalize_mode="average"``. Its DEFAULT is
-    ``"min"``, which is a deliberate deviation (the mean denominator scales with
-    log2(C) and so is not comparable across groups with different clone counts) —
-    recorded in ``SANCTIONED_EXTENSIONS['normalize_mode_default']``. This test pins
-    both: that 'average' reproduces eq 6, and that the default does NOT, so the
-    divergence can never become silent.
+    The package exposes this as ``normalize_mode="average"``. Its DEFAULT is ``"min"``: the
+    mean denominator scales with log2(C) and so is not comparable across groups with different
+    clone counts. This test pins both: that 'average' reproduces eq 6, and that the default
+    does NOT, so the difference can never become silent.
     """
     J = _joint()
     P = J / J.sum()
@@ -289,14 +304,14 @@ def test_mi_normalize_modes_differ_as_specified():
         mi / (0.5 * (h_c + h_p)), rel=1e-6)
 
 
-# ── the cross-metric identity that caught the note's erratum ────────────────
+# ── the cross-metric identity ────────────────────────────────────────────────
 def test_mi_equals_marginal_minus_expected_conditional_entropy():
     """IDENTITIES['mi_entropy_decomposition'] — I(c;phi) = H(c) - E_phi[H(c|phi)].
 
-    This is the identity that proves the implemented conditional entropy is the right
-    one: weighting by the marginal (as the note's eqs 3-4 literally read) makes this
-    yield a NEGATIVE mutual information. It ties the entropy and MI families together,
-    so redefining either alone breaks it.
+    This is the identity that proves the implemented conditional entropy is the right one:
+    weighting by the marginal instead of the conditional makes this yield a NEGATIVE mutual
+    information. It ties the entropy and MI families together, so redefining either alone
+    breaks it.
     """
     rng = np.random.default_rng(7)
     for _ in range(20):
@@ -316,11 +331,10 @@ def test_mi_equals_marginal_minus_expected_conditional_entropy():
         assert mi == pytest.approx(H_c - expected_cond, abs=1e-9)
 
 
-def test_note_literal_formula_would_break_the_decomposition():
-    """Guards the erratum itself: the note's literal eq 3 gives a NEGATIVE MI.
+def test_marginal_weighted_formula_would_break_the_decomposition():
+    """The natural mis-transcription of eq 3 (weight by the marginal) gives a NEGATIVE MI.
 
-    If someone 'fixes' the code to match the mistranscribed equation, this test
-    documents exactly why that is wrong.
+    If someone 'fixes' the code toward that form, this test documents why it is wrong.
     """
     J = np.array([[4.0, 1.0], [1.0, 1.0], [1.0, 6.0]])
     pxy = J / J.sum()
@@ -328,7 +342,7 @@ def test_note_literal_formula_would_break_the_decomposition():
     H_c = -np.sum(p_c * np.log2(p_c))
     mi = _mi_from_joint(J, normalized=False)
 
-    # the note as literally written: weight by the MARGINAL p(c)
+    # weight by the MARGINAL p(c) instead of the conditional
     literal = sum(
         p_ph[j] * (-np.sum(p_c * np.log2(J[:, j] / J[:, j].sum())))
         for j in range(J.shape[1])
@@ -337,17 +351,7 @@ def test_note_literal_formula_would_break_the_decomposition():
     assert mi > 0
 
 
-# ── DE-7: `weighted` selects the clone marginal, and its default is pinned ────
-
-def test_weighted_is_declared_in_the_manifest():
-    """DE-7: `weighted` chooses P(c) and so chooses the estimand. It appeared nowhere in the
-    manifest, which meant the conformance suite could not see it change — a default flip would
-    have redefined every metric silently."""
-    assert "weighted_clone_marginal" in MC.SANCTIONED_EXTENSIONS
-    text = MC.SANCTIONED_EXTENSIONS["weighted_clone_marginal"]
-    for required in ("weighted=False", "weighted=True", "P(c) = 1/C"):
-        assert required in text, f"the entry does not state {required!r}"
-
+# ── `weighted` selects the clone marginal ───────────────────────────────────
 
 def test_weighted_default_is_false_and_the_knob_is_live():
     """Pins the CURRENT default and proves the argument is not inert.
@@ -370,7 +374,7 @@ def test_weighted_default_is_false_and_the_knob_is_live():
         assert default is False, (
             f"{fn.__name__} defaults to weighted={default!r}. Flipping this changes which "
             f"estimand every caller gets — one vote per clone vs one vote per cell — and is a "
-            f"contract change (SANCTIONED_EXTENSIONS['weighted_clone_marginal'])."
+            f"contract change (METRICS_CONTRACT.md, the weighted axis)."
         )
 
 

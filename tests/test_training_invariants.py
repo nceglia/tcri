@@ -597,3 +597,74 @@ def test_plate_size_tracks_the_training_split(adata):
                 enable_progress_bar=False, enable_model_summary=False)
     assert m.module.n_obs_training == len(m.train_indices) == m.module.plate_size()
     assert m.module.plate_size() < adata.n_obs
+
+
+# ── structural guards (formerly the training manifest's hygiene test) ─────────
+
+def test_no_reset_knob_on_train():
+    """B1: restarting the KL ramp is the behaviour DE-4 removed, and a reset on ``train()``
+    would also be a signature change to the API contract."""
+    import inspect
+
+    from tcri.model._model import TCRIModel
+
+    assert "reset_schedule" not in inspect.signature(TCRIModel.train).parameters, (
+        "a reset knob reappeared on train(); see TRAINING_CONTRACT.md B1"
+    )
+
+
+def test_warmup_counter_is_owned_by_the_module_not_the_plan():
+    """B1/I5: ``train()`` builds a fresh plan per call, so a plan-local counter restarts the
+    ramp on every resumed fit. The counter must live on the module, which survives."""
+    import inspect
+
+    from tcri.model._training import UnifiedTrainingPlan
+
+    assert not hasattr(UnifiedTrainingPlan, "_my_global_step"), (
+        "the plan owns a warmup counter again — a fresh plan per train() call means the ramp "
+        "restarts (DE-4)"
+    )
+    assert "self.module._kl_warmup_step" in inspect.getsource(UnifiedTrainingPlan.training_step)
+
+
+def _body_source(fn) -> str:
+    """Source with the docstring removed, so prose about a removed call cannot match."""
+    import ast
+    import inspect
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(fn))
+    node = ast.parse(src).body[0]
+    if (node.body and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)):
+        node.body = node.body[1:]
+    return ast.unparse(node)
+
+
+def test_validation_step_does_not_call_training_step():
+    """I2, structurally; the behavioural proof is above. Catches a reintroduction at review."""
+    from tcri.model._training import UnifiedTrainingPlan
+
+    src = _body_source(UnifiedTrainingPlan.validation_step)
+    assert "super().training_step" not in src, "validation_step reaches SVI.step() again (DE-1)"
+    assert "_objective_blocks" in src, "validation_step must evaluate through _objective_blocks"
+    assert "kl_weight_max" in src and "finally" in src, "the kl_weight pin and its restore (I3, B1)"
+    assert "fork_rng" in src and "manual_seed" in src, "the fixed evaluation seed (I3)"
+
+
+def test_every_test_the_contract_names_exists():
+    """TRAINING_CONTRACT.md names the test that enforces each statement. A name that no test
+    carries is a claim nothing checks."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "governance" / "TRAINING_CONTRACT.md").read_text()
+    named = set(re.findall(r"`(test_[a-z0-9_]+)`", text))
+    assert named, "the contract names no tests"
+    defined = set()
+    for py in (root / "tests").glob("test_*.py"):
+        defined |= set(re.findall(r"^def (test_[a-z0-9_]+)\(", py.read_text(), re.M))
+    missing = sorted(named - defined)
+    assert not missing, f"TRAINING_CONTRACT.md names tests that do not exist: {missing}"

@@ -1,169 +1,144 @@
-# Metrics Contract — what the numbers mean
+# Metrics contract
 
-Freezes the **information-theoretic metrics**: the two entropies and mutual
-information over a clone × phenotype joint.
+What the numbers mean. This file is the definition of every `tl` metric; the block at the end
+pins the constants, the defaults, and the values on a reference joint.
+`tests/test_metrics_contract_conformance.py` enforces it: each equation below is recomputed
+from a hand-written reference on that joint, the identities are asserted, the defaults are read
+off the live signatures, and the pinned values are compared to a tolerance. Nothing else binds
+the metrics.
 
-| | freezes | manifest | prose | test |
-|---|---|---|---|---|
-| API contract | the public *interface* | `tests/contracts/api.pyi` | `API_CONTRACT.md` | `test_contract_conformance.py` |
-| Model contract | the *generative mathematics* | `tests/contracts/model.py` | `MODEL_CONTRACT.md` | `test_model_contract_conformance.py` |
-| **Metrics contract** | **what the metrics compute** | `tests/contracts/metrics.py` | this file | `test_metrics_contract_conformance.py` |
+Equation numbers are this document's; 2 to 6 keep the numbering of the manuscript's metrics
+section, which is not kept in the repository.
 
-**Why separate from the model contract.** The two are verified by different means. The
-model contract *traces* `model()`/`guide()` and inspects sample sites, plates and
-distribution families. Metrics are pure functions of a joint table, so they are pinned
-by **numeric identities** — uniform → log₂(k), independent → MI 0, and the
-entropy/MI decomposition. Folding them together would force one mechanism to do a job
-it is bad at.
+## The substrate
 
-Source of truth: **Supplementary Note 1**, "Entropy" section (eqs 2–6). Each equation
-is transcribed literally into the conformance test; the one deliberate divergence
-(`normalize_mode`) is documented below.
+Every metric is a function of a clone × phenotype joint at one covariate level, produced by
+`joint_distribution` from the fitted clone × covariate distributions `p_ct` (see
+`API_CONTRACT.md` for the engine's arguments). All entropies and mutual information are in
+**bits**, log base 2.
 
-**Governance is stated once, in `governance/RULES.md`.** For this contract: the definitions
-below are **published** and move only through the lock, because a change to one changes the
-meaning of every published number. Code moves toward the document freely.
+## Definitions
 
-## Definitions (all in **bits**, log base 2)
-
-### `clonotypic_entropy` — one value per **phenotype**
+### `clonotypic_entropy`, one value per phenotype (eq 3)
 
 ```
 H[P(c|φ)] = − Σ_c P(c|φ) log₂ P(c|φ)
 ```
 
-How spread a phenotype is across clones. **Support-only**: clones with zero mass in
-that column are dropped *before* renormalizing — no epsilon clip, which would fabricate
-uniform mass on absent clones and inflate H toward 1. Normalizer `log₂(#supported
-clones)`, or `log₂(n_clones_ref)` when supplied. Empty column → **NaN**.
+How spread a phenotype is across clones. **Support-only:** clones with zero mass in that
+column are dropped before renormalising; there is no epsilon clip, which would fabricate
+uniform mass on absent clones. Normaliser `log₂(number of supported clones)`, or
+`log₂(n_clones_ref)` when given, so that groups with different clone counts are comparable.
+An empty column is **NaN**.
 
-### `phenotypic_entropy` — one value per **clone**
+### `phenotypic_entropy`, one value per clone (eq 4)
 
 ```
 H[P(φ|c)] = − Σ_φ P(φ|c) log₂ P(φ|c)
 ```
 
-Plasticity vs commitment of a clone. All P phenotypes are in the sum with `0·log0 := 0`.
-Normalizer `log₂(P)`. A clone with zero mass → **NaN**, never reindexed to zeros (which
-would report a spurious `H=1` for a clone that was never observed).
+Plasticity versus commitment of a clone. All P phenotypes are in the sum with `0·log 0 = 0`.
+Normaliser `log₂(P)`. A clone with zero mass is **NaN**, never reindexed to zeros (which would
+report H = 1 for a clone that was never observed).
 
-### `mutual_information` — one value per joint
+### `mutual_information`, one value per joint (eqs 5, 6)
 
 ```
-I(c;φ) = Σ_{c,φ} P(c,φ) log₂( P(c,φ) / (P(c)·P(φ)) )
+I(c;φ) = Σ_{c,φ} P(c,φ) log₂ ( P(c,φ) / (P(c) P(φ)) )
 ```
 
-Default `normalize_mode="min"` → `I / min(H(c), H(φ))`, the coefficient of constraint.
-`"average"` → `I / (½(H(c)+H(φ)))`. **`min` is the default because the `average`
-denominator scales with `log₂(C)` and is therefore not comparable across groups with
-different clone counts.**
+The joint is renormalised to sum to 1; a numerical floor of 1e-15 guards `log 0`.
+Normalised forms: `normalize_mode="min"` divides by `min(H(c), H(φ))` (the coefficient of
+constraint) and is the **default**; `"average"` divides by `½(H(c) + H(φ))`, which is eq 6 of
+the manuscript's numbering. `min` is the default because the mean denominator scales with
+`log₂(C)` and so is not comparable across groups with different clone counts. Anything
+reproducing the manuscript's benchmark passes `normalize_mode="average"` explicitly.
 
-## Enforced identities
+Joint entropy (eq 2, `H(c,φ) = −Σ P log₂ P`) is not exposed; the test reaches it through
+`H(c,φ) = H(c) + H(φ) − I(c;φ)`.
+
+### `phenotypic_flux`, one value per clone (eq 7)
+
+```
+D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
+```
+
+`distance_metric="kl"` (default) is `Σ_φ p log₂(p/q)` in bits with both rows floored at 1e-12
+and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]; `"jsd"` is the Jensen–Shannon divergence
+in [0, 1] bit. A clone absent from either level is **NaN**. Not normalised: a divergence has no
+maximum-entropy reference.
+
+### `delta_clonotypic_entropy`, `delta_phenotypic_entropy`
+
+`value(cov_to) − value(cov_from)` per item, computed **within a posterior draw** so the
+summary is of the difference's distribution, not a difference of summaries. Only the two
+metrics with an item axis have a delta; mutual information has none, so its difference is a
+subtraction the caller performs. The clone set is the intersection of clones present at both
+levels within each replicate, which for the clonotypic form makes the normaliser identical on
+both sides; the drop is warned about.
+
+## The `weighted` axis
+
+`weighted=False` (default): every clone contributes equally, `P(c) = 1/C`; the metric
+describes the repertoire, one vote per clone. `weighted=True`: `P(c) ∝ n_c`; the metric
+describes the cell population. These are different estimands. The manuscript's benchmark and
+the simulator oracle are abundance-weighted, so reproducing them passes `weighted=True`.
+
+## Posterior summaries
+
+At `n_samples=0` a metric is the plug-in at the posterior mean, `F(E[p_ct])`. At `n_samples>0`
+it is `E_s[F(p_ct^(s))]`, the metric evaluated on each draw of the joint and then summarised
+(mean, sd, highest-density interval). The two differ by a Jensen gap: plug-in entropy is ≥ the
+posterior mean, plug-in flux is ≤ it, and the sign is indeterminate for mutual information. No
+test may equate them. The return shape does not change with `n_samples`; `sd`, `hdi_low` and
+`hdi_high` are NaN at `n_samples ≤ 1`.
+
+## Identities the test enforces
 
 | identity | what it catches |
 |---|---|
-| uniform over k → `log₂(k)`, normalized `1.0` | a wrong log base or normalizer |
-| all mass on one outcome → `0` | sign/normalization errors |
-| zero-mass clone/phenotype → **NaN** | the spurious-`H=1` reindexing regression |
-| support-only normalization | an epsilon clip creeping back in |
-| independent joint → `I = 0` | a broken MI |
-| `I(c;φ) = I(φ;c)`, `I ≥ 0` | transpose/sign errors |
-| permutation joint → normalized `I = 1` | a wrong denominator |
-| **`I(c;φ) = H(c) − Σ_φ P(φ)·H[P(c|φ)]`** | **redefining either family alone** |
+| uniform over k → `log₂ k`, normalised 1 | a wrong base or normaliser |
+| all mass on one outcome → 0 | sign or normalisation errors |
+| zero-mass clone or phenotype → NaN | the spurious H = 1 reindexing regression |
+| support-only normalisation | an epsilon clip creeping back in |
+| independent joint → I = 0 | a broken MI |
+| `I(c;φ) = I(φ;c)`, `I ≥ 0` | transpose or sign errors |
+| permutation joint → normalised I = 1 (`min`) | a wrong denominator |
+| **`I(c;φ) = H(c) − Σ_φ P(φ) H[P(c\|φ)]`** | redefining either family alone |
+| weighting by the marginal instead of the conditional exceeds `log₂ C` and gives I < 0 | the natural mis-transcription of eqs 3 and 4 |
 
-That last one is the keystone: it ties entropy and MI together, so you cannot change
-one without breaking it.
+The decomposition is the keystone: it ties the entropy and MI families together so neither can
+change alone.
 
-## Conformance with the manuscript equations
+## The machine-checked part
 
-The manuscript's Entropy section (eqs 2–6) and the implementation agree. Each equation
-is transcribed **literally** from the note in
-`tests/test_metrics_contract_conformance.py` and asserted against the code — a stronger
-check than the identity tests below, which pin *consequences* of a formula
-(uniform → log₂ k, degenerate → 0) rather than the formula itself.
+```python contract
+LOG_BASE = 2
 
-| eq | manuscript | enforced by |
-|---|---|---|
-| 2 | `H(p(c,φ)) = −Σ p(c,φ) log p(c,φ)` | `test_eq2_joint_entropy` (via `H(c,φ) = H(c)+H(φ)−I`) |
-| 3 | `H(p(c\|φ)) = −Σ_c p(c\|φ) log p(c\|φ)` | `test_eq3_clonotypic_entropy_matches_the_manuscript` |
-| 4 | `H(p(φ\|c)) = −Σ_φ p(φ\|c) log p(φ\|c)` | `test_eq4_phenotypic_entropy_matches_the_manuscript` |
-| 5 | `I(c,φ) = Σ p(φ,c) log( p(c,φ)/(p(φ)p(c)) )` | `test_eq5_mutual_information_matches_the_manuscript` |
-| 6 | `NMI = I / (½(H(c)+H(φ)))` | `test_eq6_nmi_is_the_average_denominator` — **see the deviation below** |
+# every public tl function; each has a section above and a pinned default set below
+METRICS = [
+    "joint_distribution", "clonotypic_entropy", "phenotypic_entropy", "mutual_information",
+    "phenotypic_flux", "delta_clonotypic_entropy", "delta_phenotypic_entropy",
+]
 
-> **Historical note.** An earlier revision of the note mistranscribed eqs 3–4: both
-> weighted by the **marginal** while taking the log of the **conditional** (a
-> cross-entropy, not an entropy), and eq 4's left-hand side read `H(p(c))` while its
-> right-hand side summed over φ. The code was correct throughout and was left
-> unchanged; **the manuscript has since been corrected** and the erratum is retired.
-> `test_marginal_weighting_is_not_an_entropy` remains as a standing guard, because
-> marginal-weighting is the natural way to mis-transcribe these equations: it fails
-> two ways at once — the value can exceed `log₂|C|` (impossible for an entropy over
-> `|C|` outcomes), and substituting it into the MI decomposition yields a **negative**
-> mutual information, impossible for a KL divergence.
+# signature defaults that change what a number means; read off the live functions
+DEFAULTS = {
+    "weighted": False,
+    "normalized": True,
+    "normalize_mode": "min",
+    "distance_metric": "kl",
+    "n_samples": 0,
+    "temperature": 1.0,
+}
 
-### The one live deviation: `normalize_mode`
-
-Eq 6 specifies the **mean** denominator. tcri's default is **`min`**:
-
-| | denominator | value on the contract's test joint |
-|---|---|---|
-| eq 6 / `normalize_mode="average"` | `½(H(c)+H(φ))` | **0.238915** |
-| tcri default `normalize_mode="min"` | `min(H(c), H(φ))` | **0.293032** |
-
-`min` is the default because the mean denominator scales with `log₂(C)`, making it
-**not comparable across groups with different clone counts** — the blocking issue for
-any per-group or per-patient comparison. The two differ materially, so **anything
-reproducing the note's benchmark must pass `normalize_mode="average"` explicitly.**
-`test_eq6_nmi_is_the_average_denominator` asserts both halves — that `"average"`
-reproduces eq 6, and that the default does *not* — so the divergence can never become
-silent.
-
-## Sanctioned extensions (the note does not specify these)
-
-- **bits / log₂** — the note writes an unspecified `log`.
-- **`normalized=True`** — divide by the maximum-entropy value so results land in [0,1].
-- **`n_clones_ref`** — fix the clonotypic normalizer across groups; without it each
-  group normalizes by its own supported-clone count and the values are not comparable.
-- **`n_samples>0`** — report the metric over posterior draws: the metric is evaluated on each
-  draw of the joint and then summarised, `E_s[F(J_s)]`. This is the manuscript's definition
-  (Methods, "Computing Posterior Expectation": `E[F(p_ct)] ≈ M⁻¹ Σ_m F(p_ct^(m))`), not a
-  choice. The plug-in at `n_samples=0`, `F(E[J])`, is a distinct estimator: for entropy it is
-  ≥ the posterior mean (Jensen), so the two are distinct quantities. The return *shape*
-  does not change: `result` always carries `sd` / `hdi_low` / `hdi_high`, NaN at
-  `n_samples<=1` because one draw has no measured spread.
-- **the store-once payload** — every `tl` returns `{table, result, stats}` and stores the
-  same object under `uns[key_added or "tcri_<metric>"]` with a `params` provenance block.
-
-  | slot | one row per | reduced over |
-  |---|---|---|
-  | `table` | (covariate, group, item, draw) | nothing — this is the substrate |
-  | `result` | (covariate, group, item) | `draw` only |
-  | `stats` | (split_a, split_b) pair | items → groups, then contrast |
-
-  `result` is built *from* `table`, so they cannot drift. `stats` is `None` without
-  `splitby`, and its replicate unit is the **group**: item rows are averaged to one value
-  per group *before* the contrast, so 15 clones from 2 patients give n=2 (issue #66).
-
-  Two uncertainty families coexist and are named apart on purpose — `hdi_*` on `result` is
-  the within-group posterior interval over draws; `ci_*` / `sd_*` / `n_*` on `stats` is the
-  between-replicate spread of each arm, across groups.
-- **the delta family** — `delta_clonotypic_entropy` and `delta_phenotypic_entropy`:
-  `value(cov_to) − value(cov_from)`, computed **within a posterior draw**, so the summary is
-  of the difference's distribution rather than a difference of summaries. HDIs do not
-  subtract — the interval on a delta is not recoverable from the intervals on its endpoints.
-
-  Only metrics with an **item axis** get one. `mutual_information` has none, so its "delta" is
-  a subtraction of two cached scalars and belongs to the caller (see the scope principle in
-  the API contract).
-
-  The clone set is the **intersection** of clones present at both levels, within each
-  replicate. For `phenotypic_entropy` that decides which rows exist; for `clonotypic_entropy`
-  it constrains the clone set summed over inside H(c\|φ), which makes `log2(C)` identical on
-  both sides so the normalizer cancels. Without it a repertoire contracting 150 → 90 clones
-  reports +0.078 normalized entropy having not redistributed at all. The drop moves `n`, so it
-  warns.
-- **the contrast** — `stats` is a two-sided Mann–Whitney U on the per-group values, with
-  stars at 0.05 / 0.01 / 0.001 / 0.0001. Neither document specifies a test; the metrics
-  document defines quantities, not comparisons, so this one is ours. Rank-based because the
-  metrics are bounded and n is the patient count. **Uncorrected** across contrasts —
-  multiplicity is the analyst's to handle.
+# the reference joint (3 clones x 2 phenotypes, deliberately asymmetric) and the values the
+# kernels must return on it, to 1e-9. Changing a definition changes these numbers.
+GOLDEN = {
+    "joint": [[4.0, 1.0], [1.0, 1.0], [1.0, 6.0]],
+    "clonotypic_entropy": {"raw": [1.251629167388, 1.061278124459], "normalized": [0.789690082143, 0.669591945536]},
+    "phenotypic_entropy": {"raw": [0.721928094887, 1.0, 0.591672778582], "normalized": [0.721928094887, 1.0, 0.591672778582]},
+    "mutual_information": {"raw": 0.288703141426, "min": 0.293031766823, "average": 0.238914701013},
+    # flux between row 0 and row 2 of the joint, as P(phi|c) at two levels
+    "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286, "jsd": 0.340842859252},
+}
+```

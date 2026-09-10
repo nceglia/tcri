@@ -1,19 +1,14 @@
 """Model-contract conformance — the guardrail for the model's *mathematics*.
 
-``tests/contracts/model.py`` freezes the probabilistic structure of
-Supplementary Note 1 (prose: ``governance/MODEL_CONTRACT.md``). This test traces
-the live ``TCRIModule.model``/``.guide`` and asserts they match that manifest
-exactly — declared sites present with the right distribution family / plate /
-event-dim, **no undeclared sites**, the guide's variational family intact, and the
-semantic invariants (α and β scaling, the surrogate's sign, the gate rule, global
-alignment indices) holding.
+``governance/MODEL_CONTRACT.md`` is the definition; its ```python contract``` block lists every
+stochastic site with its family, plate, observed flag and event dim. This test traces the live
+``TCRIModule.model``/``.guide`` and asserts they match that block exactly — declared sites
+present, **no undeclared sites**, the guide's variational family intact — and then the
+invariants the structure alone cannot pin (α and β scaling, the surrogate's sign and detached
+target, the gate rule, global alignment indices, one σ, the plate scaling).
 
-If you changed the model and this test fails: **update the contract first**
-(``tests/contracts/model.py`` + ``MODEL_CONTRACT.md``, citing the note), then make the
-code agree. Do not loosen the manifest to match new code — that silently rewrites
-the model the package claims to implement.
-
-Sibling of ``test_contract_conformance.py`` (which does the same for the public API).
+If you changed the model and this test fails, the contract file changes in the same PR,
+deliberately. Do not loosen the block to match new code.
 """
 import contextlib
 import io
@@ -28,7 +23,15 @@ from anndata import AnnData
 
 from tcri.model._model import TCRIModel
 from tcri.model._priors import encoder_posterior
-from tests.contracts import model as MC
+from tests._governance import contract_namespace
+
+MC = contract_namespace("MODEL_CONTRACT.md")
+GENERATIVE_SITES = MC["GENERATIVE_SITES"]
+GUIDE_SITES = MC["GUIDE_SITES"]
+GUIDE_PARAMS = MC["GUIDE_PARAMS"]
+PLATES = MC["PLATES"]
+FORBIDDEN_GUIDE_SITES = MC["FORBIDDEN_GUIDE_SITES"]
+FORBIDDEN_MODEL_SITES = MC["FORBIDDEN_MODEL_SITES"]
 
 # pyro wrappers that carry no model semantics — unwrapped before comparing.
 _WRAPPERS = ("Independent", "ExpandedDistribution", "MaskedDistribution")
@@ -110,32 +113,31 @@ def test_generative_sites_match_contract(traced):
     _, m_trace, _, _, _ = traced
     live = _stochastic(m_trace)
 
-    for spec in MC.GENERATIVE_SITES:
-        assert spec.name in live, (
-            f"model() is missing the declared site '{spec.name}' (note eq {spec.eq}). "
-            "If you removed it, update tests/contracts/model.py + "
-            "governance/MODEL_CONTRACT.md first."
+    for spec in GENERATIVE_SITES:
+        name = spec["name"]
+        assert name in live, (
+            f"model() is missing the declared site '{name}' (contract eq {spec['eq']}). "
+            "If you removed it, change governance/MODEL_CONTRACT.md in the same PR."
         )
-        node = live[spec.name]
+        node = live[name]
         base = _unwrap(node["fn"])
-        assert base is not None and type(base).__name__ == spec.dist, (
-            f"site '{spec.name}' (eq {spec.eq}) is "
-            f"{type(base).__name__ if base is not None else None}, contract says "
-            f"{spec.dist}. {spec.note}"
+        assert base is not None and type(base).__name__ == spec["dist"], (
+            f"site '{name}' (eq {spec['eq']}) is "
+            f"{type(base).__name__ if base is not None else None}, contract says {spec['dist']}."
         )
-        if spec.plate is not None:
-            assert spec.plate in _plates(node), (
-                f"site '{spec.name}' must live in plate '{spec.plate}' "
-                f"({MC.PLATES.get(spec.plate, '')}); found {_plates(node)}."
+        if spec["plate"] is not None:
+            assert spec["plate"] in _plates(node), (
+                f"site '{name}' must live in plate '{spec['plate']}' "
+                f"({PLATES.get(spec['plate'], '')}); found {_plates(node)}."
             )
-        assert bool(node.get("is_observed")) == spec.observed, (
-            f"site '{spec.name}' observed={bool(node.get('is_observed'))}, "
-            f"contract says observed={spec.observed}."
+        assert bool(node.get("is_observed")) == spec["observed"], (
+            f"site '{name}' observed={bool(node.get('is_observed'))}, "
+            f"contract says observed={spec['observed']}."
         )
-        if spec.event_dim is not None:
-            assert len(node["fn"].event_shape) == spec.event_dim, (
-                f"site '{spec.name}' event_dim={len(node['fn'].event_shape)}, "
-                f"contract says {spec.event_dim}."
+        if spec["event_dim"] is not None:
+            assert len(node["fn"].event_shape) == spec["event_dim"], (
+                f"site '{name}' event_dim={len(node['fn'].event_shape)}, "
+                f"contract says {spec['event_dim']}."
             )
 
 
@@ -143,12 +145,12 @@ def test_no_undeclared_generative_sites(traced):
     """An EXTRA stochastic site changes the joint distribution — the contract must say so."""
     _, m_trace, _, _, _ = traced
     live = set(_stochastic(m_trace))
-    declared = {s.name for s in MC.GENERATIVE_SITES}
+    declared = {s["name"] for s in GENERATIVE_SITES}
     extra = live - declared
     assert not extra, (
         f"model() has undeclared stochastic site(s): {sorted(extra)}. Every site "
-        "changes the joint p(Ω,Φ,z,x). Declare it in tests/contracts/model.py "
-        "(with its note equation) and document it in governance/MODEL_CONTRACT.md."
+        "changes the joint. Declare it in the contract block of governance/MODEL_CONTRACT.md "
+        "and describe it in the prose."
     )
 
 
@@ -158,17 +160,16 @@ def test_guide_family_matches_contract(traced):
     _, _, g_trace, _, _ = traced
     live = _stochastic(g_trace)
 
-    for spec in MC.GUIDE_SITES:
-        assert spec.name in live, (
-            f"guide() is missing q({spec.name}) (eq 6). {spec.note}"
-        )
-        base = _unwrap(live[spec.name]["fn"])
-        assert base is not None and type(base).__name__ == spec.dist, (
-            f"q({spec.name}) is {type(base).__name__ if base is not None else None}, "
-            f"contract says {spec.dist}. {spec.note}"
+    for spec in GUIDE_SITES:
+        name = spec["name"]
+        assert name in live, f"guide() is missing q({name}) (eq 6)."
+        base = _unwrap(live[name]["fn"])
+        assert base is not None and type(base).__name__ == spec["dist"], (
+            f"q({name}) is {type(base).__name__ if base is not None else None}, "
+            f"contract says {spec['dist']}."
         )
 
-    declared = {s.name for s in MC.GUIDE_SITES}
+    declared = {s["name"] for s in GUIDE_SITES}
     extra = set(live) - declared
     assert not extra, (
         f"guide() has undeclared site(s): {sorted(extra)}. This changes the "
@@ -179,7 +180,7 @@ def test_guide_family_matches_contract(traced):
 def test_guide_registers_variational_params(traced):
     _, _, g_trace, _, _ = traced
     params = {n for n, nd in g_trace.nodes.items() if nd["type"] == "param"}
-    for p in MC.GUIDE_PARAMS:
+    for p in GUIDE_PARAMS:
         assert p in params, (
             f"guide() must register the learnable variational parameter '{p}' "
             "(λ_c / λ'_m of eq 6); without it the Dirichlet posteriors are not learned."
@@ -190,34 +191,34 @@ def test_discrete_phenotype_latent_is_not_sampled(traced):
     """z^ϕ is replaced by the surrogate; a q(z^ϕ) site would change the objective."""
     _, _, g_trace, _, _ = traced
     live = set(_stochastic(g_trace))
-    for forbidden in MC.FORBIDDEN_GUIDE_SITES:
+    for forbidden in FORBIDDEN_GUIDE_SITES:
         assert forbidden not in live, (
-            f"guide() samples '{forbidden}', but the note's Inference Details replace "
-            "the discrete z^ϕ with the phenotype_alignment surrogate. Re-introducing "
-            "it changes the optimized objective — update the contract first."
+            f"guide() samples '{forbidden}'. z^ϕ has no variational factor: it is summed out in "
+            "the label readout (eq 8) and stands behind the surrogate. A q(z^ϕ) site changes "
+            "the objective; change the contract in the same PR."
         )
 
 
-def test_discrete_phenotype_latent_is_not_observed_either(traced):
-    """z^ϕ is LATENT. Not sampled in the guide, and not conditioned on in the model.
+def test_discrete_phenotype_latent_is_not_observed_directly(traced):
+    """z^ϕ is LATENT: never sampled in the guide and never conditioned on directly.
 
-    The hierarchical branch (ω_c -> ϕ_m -> z^ϕ) is a prior over phenotype composition that
-    never sees x directly; data reaches it only through z. DE-18 read that absence as a
-    missing data term and conditioned the site on the input phenotype labels, which makes
-    the model supervised and every metric partly a readout of its own input. Withdrawn.
+    The input label enters as a noisy READOUT of z^ϕ (eq 8, site ``phenotype_label``), with
+    z^ϕ summed out. Observing z^ϕ itself would hard-wire every cell to its label; the readout
+    keeps the phenotype latent and lets ε say how far the model may move from the label.
     """
     _, m_trace, _, _, _ = traced
     observed = {
         name for name, site in m_trace.nodes.items()
         if site["type"] == "sample" and site.get("is_observed")
     }
-    for forbidden in MC.FORBIDDEN_MODEL_SITES:
+    for forbidden in FORBIDDEN_MODEL_SITES:
         assert forbidden not in observed, (
-            f"model() conditions on '{forbidden}'. z^ϕ is latent — the note replaces it "
-            f"with the phenotype_alignment surrogate rather than observing the input "
-            f"labels. See DE-18 (WITHDRAWN) in DEFECTS.md before re-adding this."
+            f"model() conditions on '{forbidden}' directly. z^ϕ is latent; the labels enter "
+            f"through the phenotype_label readout (eq 8) with error rate ε, not as z^ϕ itself."
         )
-    assert "obs" in observed, "the ZINB likelihood is the model's only observation (eq 5)"
+    assert {"obs", "phenotype_label"} <= observed, (
+        "the model observes expression (eq 5) and the label readout (eq 8); one is missing"
+    )
 
 
 # ── semantics: invariants the structure alone cannot pin ─────────────────────
@@ -232,7 +233,8 @@ def test_alpha_scales_the_clonotype_prior(traced):
     live_total = float(conc.sum(-1).mean())
     assert live_total == pytest.approx(expected_total, rel=1e-4), (
         f"p_c concentration totals {live_total:.4f}, expected ≈{expected_total:.4f} "
-        f"(α={alpha} × archetype). {MC.SEMANTIC_INVARIANTS['alpha_scales_clonotype_prior']}"
+        f"(α={alpha} × archetype). eq 1: the p_c prior concentration must scale with α; without "
+        f"it the prior is Dir(ψ_b), U-shaped with mass at the simplex corners."
     )
 
 
@@ -255,8 +257,8 @@ def test_beta_scales_the_covariate_prior(traced):
     assert torch.allclose(conc, expected, rtol=1e-5, atol=1e-6), (
         "p_ct concentration is not β·ω_h(m) built from the sampled p_c under "
         f"ct_to_c (max|diff|={float((conc - expected).abs().max()):.3e}). "
-        f"{MC.SEMANTIC_INVARIANTS['beta_scales_covariate_prior']} "
-        f"{MC.SEMANTIC_INVARIANTS['hierarchy_ct_depends_on_c']}"
+        "eq 2 is hierarchical: p_ct's concentration is β·ω_h(m) built from the SAMPLED ω_c under "
+        "ct_to_c, not from the static empirical prior and not under another index map."
     )
 
 
@@ -268,7 +270,7 @@ def test_alignment_factor_is_a_negative_kl(traced):
     val = torch.as_tensor(val)
     assert torch.all(val <= 1e-6), (
         f"phenotype_alignment carries a positive log-factor (max={float(val.max()):.4e}). "
-        f"{MC.SEMANTIC_INVARIANTS['factor_is_negative_kl']}"
+        "the surrogate is −γ·KL(probs‖ϕ) ≤ 0: SVI maximises the log-joint and the KL is a penalty."
     )
     # and it must be non-trivial (a zero factor trains nothing)
     assert float(val.abs().sum()) > 0, (
@@ -357,7 +359,8 @@ def test_alignment_target_uses_global_indices(traced):
         "the phenotype_alignment target does not match the GLOBAL-index mapping "
         f"(max|diff| vs global={float((live - expected_global).abs().max()):.3e}, "
         f"vs local={float((live - expected_local).abs().max()):.3e}). "
-        f"{MC.SEMANTIC_INVARIANTS['alignment_target_uses_global_indices']}"
+        "the target ϕ_g(i) must be indexed by GLOBAL cell indices, never the local plate index, "
+        "which scrambles targets across shuffled minibatches."
     )
 
 
@@ -416,7 +419,7 @@ def test_gate_rule_endpoints(gate, expect):
     target = cls if expect == "classifier" else prior
     np.testing.assert_allclose(probs, target, atol=1e-4, err_msg=(
         f"gate_prob={gate} must reduce predict() to the pure {expect}. "
-        f"{MC.SEMANTIC_INVARIANTS['gate_mixes_classifier_and_prior']}"
+        "eq 4: ℓ_i = π·f_cls + (1−π)·log ϕ; π=1 is the pure head, π=0 the pure group prior."
     ))
     pyro.clear_param_store()
 
@@ -468,24 +471,6 @@ def test_latent_scale_is_the_encoder_std(traced):
             mod.train()
 
 
-# ── the contract must stay in sync with its prose ────────────────────────────
-
-def test_sanctioned_deviations_are_documented():
-    """Every accepted departure from the note must be spelled out in the prose contract."""
-    from pathlib import Path
-
-    import tcri
-
-    doc = Path(tcri.__file__).parent.parent / "governance" / "MODEL_CONTRACT.md"
-    assert doc.exists(), f"missing prose model contract: {doc}"
-    text = doc.read_text()
-    for key in MC.SANCTIONED_DEVIATIONS:
-        assert key in text, (
-            f"sanctioned deviation '{key}' is declared in tests/contracts/model.py but not "
-            f"documented in {doc.name}. Keep the machine contract and the prose in sync."
-        )
-
-
 def test_data_plate_is_scaled_to_the_dataset(traced):
     """eq 7 sums the per-cell terms over N cells and the two Dirichlet KLs once, so a
     minibatch is an unbiased estimate only if the data plate carries ``size = N`` with the
@@ -515,7 +500,9 @@ def test_data_plate_is_scaled_to_the_dataset(traced):
         finally:
             mod.n_obs_training = prev
         expect = (size or n) / b
-        msg = MC.SEMANTIC_INVARIANTS["data_plate_is_scaled_to_the_dataset"]
+        msg = ("the data plate must carry size = N (the cells being fit) with the minibatch as "
+               "its subsample, so per-cell sites are scaled by N/B and p_c/p_ct keep scale 1; "
+               "otherwise the Dirichlet KLs are counted once per step instead of once per pass")
         assert float(mt.nodes["phenotype_alignment"]["scale"]) == pytest.approx(expect), msg
         assert float(mt.nodes["obs"]["scale"]) == pytest.approx(
             expect * mod.reconstruction_loss_scale), msg
