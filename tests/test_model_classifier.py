@@ -73,6 +73,54 @@ def _perfect_adata(n_clones=5, n_per=60, n_genes=6, seed=0):
     return ad
 
 
+def test_head_is_not_constant_after_a_short_fit():
+    """The head varies across cells after a short fit on a realistic (noisy) cohort.
+
+    Trained on a SAMPLE of z it does not: the posterior scale is ~100x the spread of the
+    posterior mean across cells, so its input is ~1% signal, the optimum is a constant, and
+    its hidden ReLUs die. On this fixture the sample-trained head has a logit sd across cells
+    of ~3e-3 and one argmax class; the mean-trained head ~7e-2 and three classes (measured
+    across three seeds: worst-case sample 7e-3, worst-case mean 3e-2). The perfect-recovery
+    test above cannot see this -- its marker gene at 100 counts puts the mean far outside the
+    posterior width. Fails on the parent commit.
+    """
+    from tcri.datasets import simulate_cohort
+    from tcri.model._priors import encoder_posterior
+
+    ad = simulate_cohort(
+        n_patients=4, conditions=("pre", "post"), disease_fraction=0.5, n_clones=(14, 24),
+        n_phenotypes=4, n_genes=40, n_cells_per_sample=200,
+        clone_size_distribution="powerlaw", clone_size_exponent=2.0,
+        disease_enrichment=12.0, control_enrichment=1.1, seed=0,
+    )
+    TCRIModel.setup_anndata(
+        ad, layer="counts", clonotype_key="clone_id", phenotype_key="phenotype",
+        covariate_key="condition", batch_key="patient",
+    )
+    model = TCRIModel(ad, n_latent=8, n_hidden=32, n_layers=1, classifier_n_layers=1,
+                      classifier_hidden=32, K=4, seed=0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.train(max_epochs=80, batch_size=256, accelerator="cpu",
+                    enable_progress_bar=False, enable_model_summary=False)
+
+    mod = model.module
+    mod.eval()
+    X = ad.layers["counts"]
+    x = torch.as_tensor(X.toarray() if hasattr(X, "toarray") else np.asarray(X), dtype=torch.float32)
+    b = torch.as_tensor(ad.obs["patient"].astype("category").cat.codes.values,
+                        dtype=torch.long).view(-1, 1)
+    with torch.no_grad():
+        z_mean, _ = encoder_posterior(mod.encoder, x, b)
+        logits = mod.classifier(z_mean)
+    logit_sd = float(logits.std(0).mean())
+    n_classes = int(len(torch.unique(logits.argmax(1))))
+    assert logit_sd > 0.02, (
+        f"the head is (near-)constant across cells: logit sd {logit_sd:.2e}, {n_classes} "
+        f"argmax class(es). It is being trained on a sample of z rather than the posterior "
+        f"mean, so its input is almost all posterior noise."
+    )
+
+
 @pytest.mark.parametrize("gate_prob", [1.0, 0.5])
 def test_classifier_perfect_recovery(gate_prob):
     """f_cls recovers the phenotype on a linearly-separable dataset.
