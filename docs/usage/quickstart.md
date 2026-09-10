@@ -134,6 +134,21 @@ which must be constant within each group. The contrast in `stats` is computed **
 groups**, not over rows, so a handful of patients cannot be inflated into significance by
 the number of clones they happen to contain.
 
+## 8. Which genes drive the calls
+
+`tcri.perturb` asks the fitted model a counterfactual: silence a gene and see how far the
+phenotype call moves, with every parameter held fixed. `gene_importance` scores each gene per
+patient and contrasts the arms per gene; `knockout` returns the per-cell probabilities for a
+gene program, the same frame as `predict()`.
+
+```python
+tcri.perturb.gene_importance(model, adata, splitby="disease_status")
+tcri.pl.gene_importance(adata)                 # the top genes, one dot per patient
+tcri.pl.gene_importance(adata, kind="shift")   # which phenotype each gene moves the call toward
+
+probs = tcri.perturb.knockout(model, adata, genes=["GZMB", "PRF1"])
+```
+
 ## Next steps
 
 - [Tutorials](../tutorials/index.md) — runnable, end-to-end examples for preprocessing,

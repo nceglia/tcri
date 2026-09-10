@@ -84,7 +84,10 @@ returns the `predict()` frame and stores nothing unless `key_added` names an `ob
 `gene_importance` returns and stores `{table, result, stats, shift}`, where `shift` is the
 signed per-phenotype decomposition of each importance, and its `stats` contrast is per gene.
 `adata` is required there because the result is stored into it. Definitions in
-`METRICS_CONTRACT.md`.
+`METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `kind="rank"` is the top
+`n_top` genes under the mark rule, with each gene's own contrast starred above it when a
+split was used; `kind="shift"` is the gene × phenotype `shift`, averaged over groups, on a
+diverging scale centred on zero.
 
 ## The stub
 
@@ -220,6 +223,11 @@ class pl:
         adata: AnnData, *, kind: str = ..., key: Optional[str] = ..., order: Any = ...,
         hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def gene_importance(
+        adata: AnnData, *, kind: str = ..., n_top: int = ..., key: Optional[str] = ...,
+        order: Any = ..., hue_order: Any = ..., palette: Any = ..., ax: Any = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def resolve_colors(
         adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,

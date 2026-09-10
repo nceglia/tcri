@@ -101,6 +101,10 @@ model.to_anndata(adata)
 mi = tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
 ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
 flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
+
+# 4. ask the fitted model which genes the phenotype calls rest on
+tcri.perturb.gene_importance(model, adata, splitby="disease_status")
+tcri.pl.gene_importance(adata)
 ```
 
 No paired data yet? `tcri.datasets.simulate_cohort()` returns a synthetic AnnData with

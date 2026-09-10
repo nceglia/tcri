@@ -25,6 +25,16 @@ helpers. Exposed as ``tcri.pl``.
    :members:
 ```
 
+## Gene importance
+
+The twin of {func}`tcri.perturbation.gene_importance`: a ranking of the most important genes,
+or the signed gene × phenotype shift behind it.
+
+```{eval-rst}
+.. automodule:: tcri.plotting._perturbation
+   :members:
+```
+
 ## Colors
 
 ```{eval-rst}
