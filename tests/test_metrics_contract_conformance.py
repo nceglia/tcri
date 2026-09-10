@@ -24,46 +24,61 @@ from tcri.tools._mutual_information import _mi_from_joint
 
 MC = contract_namespace("METRICS_CONTRACT.md")
 LOG_BASE, METRICS, DEFAULTS, GOLDEN = MC["LOG_BASE"], MC["METRICS"], MC["DEFAULTS"], MC["GOLDEN"]
+PERTURBATIONS = MC["PERTURBATIONS"]
+
+#: (namespace, the contract list that must equal its public surface). ``perturb`` queries are
+#: defined in the same file as the metrics because they say what a number means, even though
+#: they are functions of the fitted model rather than of the joint.
+SURFACES = [("tl", METRICS), ("perturb", PERTURBATIONS)]
+
+
+def _public(namespace):
+    return {n for n in dir(namespace) if not n.startswith("_")
+            and callable(getattr(namespace, n))
+            and getattr(getattr(namespace, n), "__module__", "").startswith("tcri")}
 
 
 # ── the contract covers the surface, and pins what a number means ───────────
 def test_contract_covers_every_public_metric():
-    """Every public ``tl`` function is listed in the contract block and has a section in the
-    prose. A metric that is public but undescribed has no definition to be held to."""
+    """Every public ``tl`` and ``perturb`` function is listed in the contract block and has a
+    section in the prose. A function that is public but undescribed has no definition to be
+    held to."""
     import tcri
 
-    live = {n for n in dir(tcri.tl) if not n.startswith("_") and callable(getattr(tcri.tl, n))
-            and getattr(getattr(tcri.tl, n), "__module__", "").startswith("tcri")}
-    assert live == set(METRICS), (
-        f"tl surface {sorted(live)} != contract METRICS {sorted(METRICS)}; update "
-        f"governance/METRICS_CONTRACT.md"
-    )
     text = (GOVERNANCE / "METRICS_CONTRACT.md").read_text()
-    for name in METRICS:
-        if name == "joint_distribution":
-            continue  # the engine; its arguments are the API contract's
-        assert re.search(rf"^###[^\n]*`{re.escape(name)}`", text, re.M), (
-            f"{name} has no '### ... `{name}`' section in METRICS_CONTRACT.md"
+    for ns, declared in SURFACES:
+        live = _public(getattr(tcri, ns))
+        assert live == set(declared), (
+            f"{ns} surface {sorted(live)} != contract list {sorted(declared)}; update "
+            f"governance/METRICS_CONTRACT.md"
         )
+        for name in declared:
+            if name == "joint_distribution":
+                continue  # the engine; its arguments are the API contract's
+            assert re.search(rf"^###[^\n]*`{re.escape(name)}`", text, re.M), (
+                f"{name} has no '### ... `{name}`' section in METRICS_CONTRACT.md"
+            )
     assert LOG_BASE == 2
 
 
 def test_defaults_that_change_the_estimand_are_pinned():
     """The signature defaults in the contract block are the live defaults. Flipping any of
     them changes which quantity every caller gets (one vote per clone vs per cell, coefficient
-    of constraint vs mean denominator, KL vs L1, plug-in vs draws)."""
+    of constraint vs mean denominator, KL vs L1, plug-in vs draws, the model's rule vs the
+    head alone)."""
     import tcri
 
     seen = set()
-    for name in METRICS:
-        params = inspect.signature(getattr(tcri.tl, name)).parameters
-        for knob, expected in DEFAULTS.items():
-            if knob in params:
-                seen.add(knob)
-                assert params[knob].default == expected, (
-                    f"tl.{name}(..., {knob}={params[knob].default!r}) but the contract pins "
-                    f"{knob}={expected!r}. Changing a default is a contract change."
-                )
+    for ns, declared in SURFACES:
+        for name in declared:
+            params = inspect.signature(getattr(getattr(tcri, ns), name)).parameters
+            for knob, expected in DEFAULTS.items():
+                if knob in params:
+                    seen.add(knob)
+                    assert params[knob].default == expected, (
+                        f"{ns}.{name}(..., {knob}={params[knob].default!r}) but the contract "
+                        f"pins {knob}={expected!r}. Changing a default is a contract change."
+                    )
     assert seen == set(DEFAULTS), f"contract pins defaults nothing exposes: {set(DEFAULTS) - seen}"
 
 

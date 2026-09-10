@@ -7,10 +7,10 @@ signature matches its declaration (parameter names, kinds, and which carry defau
 else binds the interface. Adding a public function is a contract change by construction: the
 test fails until it is declared here.
 
-Namespaces: `tcri.ml` (`TCRIModel`), `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.diag`, `tcri.ut`,
-`tcri.datasets`. `tl`, `pl`, `pp`, `diag`, `ut` and `datasets` are containers for namespacing
-only; `TCRIModel` is a real class. Private helpers (`_state`, `_stats`, `_compute`, and every
-underscore name) are outside the contract.
+Namespaces: `tcri.ml` (`TCRIModel`), `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.diag`,
+`tcri.perturb`, `tcri.ut`, `tcri.datasets`. `tl`, `pl`, `pp`, `diag`, `perturb`, `ut` and
+`datasets` are containers for namespacing only; `TCRIModel` is a real class. Private helpers
+(`_state`, `_stats`, `_compute`, and every underscore name) are outside the contract.
 
 ## The scope principle
 
@@ -28,7 +28,8 @@ know what a metric reduces to.
 temperature baked in), the index maps between cells, groups, clones and covariates, the
 per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob` and
 `classifier_temperature`. Every `tl` metric reads that substrate and takes no model; `diag`
-functions that need the live networks take a model as well. Session I/O (`ut`) restores the
+functions that need the live networks take a model as well, and every `perturb` function takes
+the model first. Session I/O (`ut`) restores the
 model, the AnnData and the Pyro parameter store together; the store is process-global, so one
 fitted model per process is the supported pattern.
 
@@ -74,6 +75,16 @@ sharing an identity across the compared levels.
 model-free and read the substrate; `reconstruction_ppc`, `loss` and `archetypes` take the
 model. `permutation_null` permutes labels within each covariate on the empirical crosstab and
 draws no Dirichlet samples.
+
+**Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
+intervene on the expression matrix, read the phenotype call back through the per-cell rule
+`predict()` uses (`use_gate=True`, the default) or through the head alone (`use_gate=False`).
+The pass is deterministic at `n_samples=0`; no encoder sample is ever drawn. `knockout`
+returns the `predict()` frame and stores nothing unless `key_added` names an `obsm` slot;
+`gene_importance` returns and stores `{table, result, stats, shift}`, where `shift` is the
+signed per-phenotype decomposition of each importance, and its `stats` contrast is per gene.
+`adata` is required there because the result is stored into it. Definitions in
+`METRICS_CONTRACT.md`.
 
 ## The stub
 
@@ -233,6 +244,20 @@ class diag:
     ) -> pd.DataFrame: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
+
+
+# ── perturbation (perturb): queries on the fitted model, parameters fixed ────
+class perturb:
+    def knockout(
+        model: Any, adata: Optional[AnnData] = ..., *, genes: Any, use_gate: bool = ...,
+        batch_size: int = ..., key_added: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
+    def gene_importance(
+        model: Any, adata: AnnData, *, genes: Any = ..., covariate: Optional[str] = ...,
+        groupby: Optional[str] = ..., splitby: Optional[str] = ..., n_samples: int = ...,
+        use_gate: bool = ..., batch_size: int = ..., random_state: Any = ...,
+        key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
 
 
 # ── utils / session (ut) ─────────────────────────────────────────────────────

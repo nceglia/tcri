@@ -77,6 +77,8 @@ L = ρ·E_q[log p(x | z)] + E_q[log p(y | z, φ)] − KL(q(z) ‖ p(z)) − KL(q
 
 `predict()` returns softmax ℓ_i computed with μ_i: the gate applied to the head and the group
 distribution. π = 1 is the pure head, π = 0 the pure group prior, π = None the additive rule.
+This per-cell rule is the object `tcri.perturb` intervenes on (`METRICS_CONTRACT.md`, "The
+perturbation"): the expression matrix changes, the parameters and the rule do not.
 
 ## The machine-checked part
 

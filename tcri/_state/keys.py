@@ -59,6 +59,9 @@ PHENOTYPIC_FLUX = "tcri_phenotypic_flux"
 #: scope principle: a delta of a repertoire-level scalar is a subtraction, not a metric.
 DELTA_CLONOTYPIC_ENTROPY = "tcri_delta_clonotypic_entropy"
 DELTA_PHENOTYPIC_ENTROPY = "tcri_delta_phenotypic_entropy"
+#: The in-silico perturbation (``tcri.perturb.gene_importance``): a query on the fitted model,
+#: stored with the same ``{table, result, stats}`` shape the metrics use plus a ``shift`` slot.
+GENE_IMPORTANCE = "tcri_gene_importance"
 
 #: The layer recorded by setup_anndata. Previously a bare literal in two places.
 LAYER = "tcri_layer"

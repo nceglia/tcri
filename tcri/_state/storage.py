@@ -228,7 +228,7 @@ def _check_schema(schema, result, fn_name: str) -> None:
         raise ValueError(f"{fn_name}: result missing required keys {sorted(missing)}")
 
 
-def tl_result(*, key: str, version: int = 1, schema=None):
+def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return it.
 
     ``functools.wraps`` keeps the wrapped signature, so the ``.pyi`` conformance check sees the
@@ -238,18 +238,31 @@ def tl_result(*, key: str, version: int = 1, schema=None):
     ``params`` captures every declared argument except :data:`_RESERVED`, **including defaults
     the caller never passed**, via ``bind`` + ``apply_defaults``. That is the point: provenance
     that only records explicit arguments cannot answer "what was this run with".
+
+    ``data_param`` names the AnnData argument when it is not the first parameter. A tool that
+    takes the fitted model first (``perturb.gene_importance(model, adata, ...)``) stores into
+    ``adata``; every parameter *before* the data argument is an object the tool operates on,
+    not a setting, and is excluded from ``params`` with it. Otherwise the model itself would be
+    recorded as provenance and the ``.h5ad`` write would fail on it.
     """
     def deco(fn):
         sig = inspect.signature(fn)
-        # the data argument, whatever it is called
-        data_param = next(iter(sig.parameters))
+        names = list(sig.parameters)
+        if data_param is None:
+            # the data argument, whatever it is called
+            _data_param, leading = names[0], set()
+        else:
+            if data_param not in names:
+                raise TypeError(f"{fn.__name__} has no parameter {data_param!r}")
+            _data_param = data_param
+            leading = set(names[: names.index(data_param)])
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = bound.arguments
-            adata = arguments[data_param]
+            adata = arguments[_data_param]
 
             result = fn(*args, **kwargs)
 
@@ -265,7 +278,7 @@ def tl_result(*, key: str, version: int = 1, schema=None):
                 if not isinstance(blob, dict):
                     blob = {"value": blob}
                 params = {k: v for k, v in arguments.items()
-                          if k not in _RESERVED and k != data_param}
+                          if k not in _RESERVED and k != _data_param and k not in leading}
                 if resolved:
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version)}
