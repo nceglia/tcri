@@ -66,10 +66,18 @@ def test_sources_are_archived_with_a_hash():
 
 def test_open_questions_are_not_quietly_sanctioned():
     """A live disagreement with the source document must not be filed as an 'extension'.
-    Extensions are things the document does not specify; these are things it does."""
-    for key in ("posterior_summary_of_a_nonlinear_metric",):
-        assert key in MC.OPEN_QUESTIONS and len(MC.OPEN_QUESTIONS[key]) > 40
-        assert key not in MC.SANCTIONED_EXTENSIONS
+    Extensions are things the document does not specify; open questions are things it does
+    and we have not yet reconciled. The two sets must stay disjoint, and an open question
+    must say enough to act on.
+
+    Previously this named one key by hand, which meant it had to be edited the moment that
+    question was answered. It is now generic over whatever is open.
+    """
+    for key, text in MC.OPEN_QUESTIONS.items():
+        assert len(text) > 40, f"OPEN_QUESTIONS[{key!r}] is too thin to act on"
+        assert key not in MC.SANCTIONED_EXTENSIONS, (
+            f"{key!r} is filed as both an open question and a sanctioned extension"
+        )
 
 
 # ── the manuscript equations, transcribed literally ─────────────────────────

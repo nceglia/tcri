@@ -145,9 +145,13 @@ neither had ever produced a wrong number to notice.
 C+M global terms in eq 7's ratio? Affects whether the ELBO is unbiased for eq 7 at any batch
 size below the full data.
 
-**Q-D — weight decay as a prior.** It reaches `q_p_c_raw`/`q_p_ct_raw`, whose param-store leaves
-are `log θ`, so it pulls every clone row toward the uniform simplex point. That is a prior
-acting through an optimizer setting. Declare it as one or remove it.
+**Q-D — weight decay as a prior — RESOLVED (removed).** Pyro's optimizer takes one
+`weight_decay` for every parameter in the store, so it reached `q_p_c_raw`/`q_p_ct_raw`, whose
+param-store leaves are `log θ`; L2 decay there pulls every row toward `Dirichlet(1, …, 1)`, a
+flat prior applied through an optimizer setting the model never declares. The two guide
+concentrations now receive `weight_decay=0` through a per-parameter `optim_args` callable
+(B8), and a test steps both a guide leaf and a network weight on a zero gradient: the leaf is
+bit-identical afterwards, the weight is not.
 
 ## Notes on specific bounds
 

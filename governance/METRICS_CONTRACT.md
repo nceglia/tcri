@@ -124,7 +124,10 @@ silent.
 - **`normalized=True`** — divide by the maximum-entropy value so results land in [0,1].
 - **`n_clones_ref`** — fix the clonotypic normalizer across groups; without it each
   group normalizes by its own supported-clone count and the values are not comparable.
-- **`n_samples>0`** — report the metric over posterior draws. The plug-in entropy is
+- **`n_samples>0`** — report the metric over posterior draws: the metric is evaluated on each
+  draw of the joint and then summarised, `E_s[F(J_s)]`. This is the manuscript's definition
+  (Methods, "Computing Posterior Expectation": `E[F(p_ct)] ≈ M⁻¹ Σ_m F(p_ct^(m))`), not a
+  choice. The plug-in at `n_samples=0`, `F(E[J])`, is a distinct estimator: for entropy it is
   ≥ the posterior mean (Jensen), so the two are distinct quantities. The return *shape*
   does not change: `result` always carries `sd` / `hdi_low` / `hdi_high`, NaN at
   `n_samples<=1` because one draw has no measured spread.

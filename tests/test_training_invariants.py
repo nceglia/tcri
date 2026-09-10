@@ -452,3 +452,55 @@ def test_train_still_accepts_genuine_lightning_kwargs(adata):
     assert "validation_size" not in accepted, (
         "train() fixes the split at 0.9; accepting validation_size would imply otherwise"
     )
+
+
+# ── B8: weight decay stops at the guide concentrations ───────────────────────
+
+def test_weight_decay_does_not_reach_the_guide_concentrations(adata):
+    """Training contract B8 (formerly Q-D), tested on the mechanism rather than the wiring.
+
+    Pyro's optimizer takes one ``weight_decay`` for every parameter in the store, so it
+    reached ``q_p_c_raw``/``q_p_ct_raw`` too. Their leaves are ``log θ``; L2 decay there is a
+    flat ``Dirichlet(1, …, 1)`` prior applied through the optimizer. The fix routes the guide
+    through a per-parameter ``optim_args`` with ``weight_decay=0``.
+
+    The discriminating step: give a guide leaf AND a network weight an all-zero gradient,
+    step each once through the plan's Pyro optimizer, and compare. With decay the only force
+    on the parameter, the leaf must be bit-identical and the weight must have moved. A test
+    that only read ``weight_decay`` back off the optimizer would pass with the callable
+    returning ``base`` for every name.
+    """
+    from tcri.model._training import GUIDE_CONCENTRATION_PARAMS, UnifiedTrainingPlan
+
+    m = _fresh(adata)
+    plan = UnifiedTrainingPlan(
+        module=m.module, n_steps_kl_warmup=10, reconstruction_loss_scale=1e-2,
+        optimizer_config={"lr": 1e-2, "betas": (0.9, 0.999), "eps": 1e-5,
+                          "weight_decay": 1e-4},
+    )
+    # one guide + model pass registers every parameter with the store
+    tensors = next(iter(m._make_data_loader(adata=adata, batch_size=64)))
+    args, kwargs = m.module._get_fn_args_from_batch(tensors)
+    with torch.no_grad():
+        m.module.guide(*args, **kwargs)
+        m.module.model(*args, **kwargs)
+
+    store = pyro.get_param_store()
+    assert GUIDE_CONCENTRATION_PARAMS <= set(store.keys())
+    leaves = [pyro.param(k).unconstrained() for k in sorted(GUIDE_CONCENTRATION_PARAMS)]
+    weight = next(p for n, p in m.module.encoder.named_parameters() if p.ndim == 2)
+
+    before_leaves = [t.detach().clone() for t in leaves]
+    before_weight = weight.detach().clone()
+    for t in (*leaves, weight):
+        t.grad = torch.zeros_like(t)
+    plan.optim([*leaves, weight])
+
+    for k, b, t in zip(sorted(GUIDE_CONCENTRATION_PARAMS), before_leaves, leaves):
+        assert torch.equal(b, t.detach()), (
+            f"{k} moved under a zero gradient: weight decay is still reaching the guide"
+        )
+    assert not torch.equal(before_weight, weight.detach()), (
+        "the network weight did not move under a zero gradient, so the test is not "
+        "exercising weight decay at all -- check the optimizer wiring"
+    )

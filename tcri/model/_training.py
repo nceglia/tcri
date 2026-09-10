@@ -6,6 +6,7 @@ criterion fixed by training-contract I3) on top of Pyro's ELBO step. `build_arch
 matrix to seed the Dirichlet mixture (returns centers AND labels).
 """
 import numpy as np
+import pyro
 import torch
 import torch.nn.functional as F
 
@@ -17,6 +18,35 @@ from sklearn.cluster import KMeans
 from ._module import TCRIModule
 
 __all__ = ["UnifiedTrainingPlan", "build_archetypes"]
+
+
+#: The two variational Dirichlet concentrations (λ_c, λ'_m of eq 6). They live only in
+#: Pyro's param store, under these bare names; every module parameter is registered under
+#: ``scvi.<path>`` instead.
+GUIDE_CONCENTRATION_PARAMS = frozenset({"q_p_c_raw", "q_p_ct_raw"})
+
+
+def _per_param_optim_args(base):
+    """Pyro optimizer settings resolved per parameter: ``base`` for the networks, the same
+    ``lr``/``betas``/``eps`` but **no weight decay** for the two guide concentrations.
+
+    Pyro's optimizer takes one ``weight_decay`` for every parameter in the store, so it
+    reached ``q_p_c_raw``/``q_p_ct_raw`` too. Those are positive-constrained, so the store's
+    leaf is ``log θ``; L2 decay there is a pull toward ``log θ = 0``, i.e. every entry toward
+    1 and every row toward ``Dirichlet(1, …, 1)`` -- a flat prior applied through an optimizer
+    setting that the model never declares (training contract B8, formerly Q-D). The objective
+    is eq 7 plus the surrogate and nothing in it asks for that prior, so the decay is removed
+    from the guide rather than declared as a prior.
+
+    Pyro calls the one-argument form with the normalised param-store name, which is what
+    ``normalize_param_name`` produces: ``"scvi.encoder..."`` for module parameters and the
+    bare ``"q_p_ct_raw"`` for the guide.
+    """
+    def optim_args(param_name):
+        if param_name in GUIDE_CONCENTRATION_PARAMS:
+            return {**base, "weight_decay": 0.0}
+        return dict(base)
+    return optim_args
 
 
 def build_archetypes(clone_phenotype_prior, K=4):
@@ -72,15 +102,17 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # — a scale-free shrink, not proportional L2. Measured effect: network weights
         # held at ~2.4x smaller than without it. It also meant `lr` never reached the
         # real optimizer (Pyro always used scvi's hard-coded 1e-3).
+        base_optim_args = {
+            "lr": optimizer_config["lr"],
+            "betas": optimizer_config["betas"],
+            "eps": optimizer_config["eps"],
+            "weight_decay": optimizer_config["weight_decay"],
+        }
         super().__init__(
             module,
             n_steps_kl_warmup=n_steps_kl_warmup,
-            optim_kwargs={
-                "lr": optimizer_config["lr"],
-                "betas": optimizer_config["betas"],
-                "eps": optimizer_config["eps"],
-                "weight_decay": optimizer_config["weight_decay"],
-            },
+            optim=pyro.optim.Adam(_per_param_optim_args(base_optim_args)),
+            optim_kwargs=base_optim_args,
             **kwargs,
         )
 
