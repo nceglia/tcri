@@ -117,6 +117,48 @@ def test_validation_does_not_update_parameters(adata):
     )
 
 
+def test_train_resets_module_mode(adata):
+    """A fit must not depend on the module mode an earlier inference call left behind.
+
+    scvi's ``TrainRunner`` calls ``module.eval()`` when a fit ends, and ``predict()``,
+    ``to_anndata()`` and a session load do the same. Lightning 2.x only captures and restores
+    per-submodule ``training`` flags around validation; it never forces train mode. So a
+    ``train()`` that followed any of those ran the ENTIRE fit in eval mode -- classifier dropout
+    off, encoder BatchNorm frozen at its running statistics -- and was bit-reproducible, so a
+    seed check could not see it. Found by an audit probe whose "before training" measurement
+    (an ``eval()`` + forward pass) changed the fit it was measuring: latent spread 0.0075 in that
+    state vs 0.045 in train mode, on the example cohort. Fails on the parent commit.
+    """
+    import lightning.pytorch as pl
+
+    m = _fresh(adata)
+    m.module.eval()
+    m.get_latent_representation(adata)      # the inference call that leaves eval mode behind
+    assert not m.module.training, "fixture did not leave the module in eval mode"
+
+    seen = []
+
+    class _Spy(pl.Callback):
+        def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+            mod = pl_module.module
+            bn = [s for s in mod.encoder.modules() if isinstance(s, torch.nn.BatchNorm1d)]
+            do = [s for s in mod.classifier.modules() if isinstance(s, torch.nn.Dropout)]
+            assert bn and do, "fixture has no BatchNorm/Dropout to observe"
+            seen.append((bool(mod.training), all(s.training for s in bn), all(s.training for s in do)))
+
+    m.train(max_epochs=2, batch_size=128, accelerator="cpu", callbacks=[_Spy()],
+            enable_progress_bar=False, enable_model_summary=False)
+
+    assert seen, "no training batch ran -- the test asserted nothing"
+    assert all(mode for mode, _, _ in seen), (
+        "train() ran the fit with the module in eval mode -- it must call module.train() "
+        "before fitting; an earlier predict()/to_anndata()/session load otherwise "
+        "silently disables dropout and freezes BatchNorm for the whole fit"
+    )
+    assert all(bn for _, bn, _ in seen), "encoder BatchNorm was frozen (eval mode) during training"
+    assert all(do for _, _, do in seen), "classifier Dropout was off (eval mode) during training"
+
+
 def test_kl_ramp_is_monotone_across_resumed_training(adata):
     """DE-4: the warmup counter belongs to the model, not to a per-call training plan.
 

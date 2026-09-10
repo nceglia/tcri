@@ -506,6 +506,14 @@ class TCRIModel(BaseModelClass):
             **kwargs,
         )
 
+        # Lightning only captures and restores the per-submodule train/eval flags around
+        # validation; it never forces train mode. scvi's TrainRunner calls module.eval() when a
+        # fit ENDS, and predict()/to_anndata()/get_latent_representation()/a session load do
+        # the same. So a train() that followed any of those used to run the ENTIRE fit in eval
+        # mode -- classifier dropout off, encoder BatchNorm frozen at its running statistics --
+        # silently and bit-reproducibly, which is why a seed check could not see it. Measured on
+        # the example cohort: latent spread 0.0075 in that state vs 0.045 in train mode.
+        self.module.train()
         with _slurm_autodetect_disabled():
             runner()
 

@@ -407,6 +407,53 @@ def test_gate_rule_endpoints(gate, expect):
     pyro.clear_param_store()
 
 
+def test_latent_scale_is_the_encoder_std(traced):
+    """eq 6 / eq 3: one σ. The guide's q(z|x) scale and every VampPrior component scale must be
+    the square root of the encoder's variance output, under the same clamp.
+
+    scvi's ``Encoder`` returns ``(mean, VARIANCE, sample)``. The guide used the variance as the
+    Normal scale (q(z|x) = N(μ, σ⁴)) and the VampPrior used ``sqrt(exp(variance))`` (never below
+    1), so eq 3's "mixture of encoder posteriors" was not built from the encoder posterior and
+    the latent KL compared two parameterisations. Both fail on the parent commit. Traced in
+    eval mode so encoder dropout does not make the comparison stochastic.
+    """
+    model, _, _, args, kwargs = traced
+    mod = model.module
+    x, batch_idx = args[0], args[1]
+    why = (
+        "q(z|x) = N(μ, diag(σ²)) and the VampPrior p(z) = (1/B) Σ_k q(z|u_k) share ONE σ. "
+        "scvi's Encoder returns (mean, VARIANCE, sample), so σ = sqrt(variance) in the guide "
+        "AND in every VampPrior component, through the same clamp (`encoder_posterior`). "
+        "Using the variance as the scale makes q(z|x) = N(μ, σ⁴); sqrt(exp(variance)) in the "
+        "prior makes a scale that can never fall below 1. Either way the prior is not the "
+        "mixture of encoder posteriors, and the latent KL compares two parameterisations."
+    )
+
+    was_training = mod.training
+    mod.eval()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), torch.no_grad():
+            g_trace = poutine.trace(mod.guide).get_trace(*args, **kwargs)
+            live = _unwrap(g_trace.nodes["latent"]["fn"])
+            loc, var, _ = mod.encoder(x, batch_idx)
+            expected = torch.clamp(var.sqrt(), min=1e-3, max=10.0)
+            torch.testing.assert_close(live.loc, loc, msg=f"guide latent loc is not the encoder mean. {why}")
+            torch.testing.assert_close(live.scale, expected, msg=f"guide latent scale is not sqrt(encoder variance). {why}")
+
+            u = mod.vamp_prior.pseudo_inputs
+            dummy = torch.zeros(u.shape[0], 1, dtype=torch.long, device=u.device)
+            p_loc, p_var, _ = mod.encoder(u, dummy)
+            comp = _unwrap(mod.vamp_prior.get_mixture().component_distribution)
+            torch.testing.assert_close(comp.loc, p_loc, msg=f"VampPrior component loc is not the encoder mean at the pseudo-inputs. {why}")
+            torch.testing.assert_close(
+                comp.scale, torch.clamp(p_var.sqrt(), min=1e-3, max=10.0),
+                msg=f"VampPrior component scale is not sqrt(encoder variance) under the guide's clamp. {why}",
+            )
+    finally:
+        if was_training:
+            mod.train()
+
+
 # ── the contract must stay in sync with its prose ────────────────────────────
 
 def test_sanctioned_deviations_are_documented():
