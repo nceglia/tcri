@@ -49,6 +49,22 @@ _SIM = dict(n_clones=20, n_phenotypes=4, n_genes=60, n_cells=1500, n_factors=8,
             omega_concentration=0.3)
 
 
+@pytest.fixture(autouse=True)
+def _give_the_param_store_back():
+    """These tests fit their own models, which clears the process-global Pyro store. The
+    session fixtures' models (``cohort``, ``trained_model``) read that store by name, so a
+    later test file that touches them would otherwise index another model's parameters --
+    exactly what happened in CI, where ``--runslow`` runs this file before ``test_plotting``.
+    ``get_state`` copies the dicts, so the saved tensors survive the ``clear``."""
+    import pyro
+
+    store = pyro.get_param_store()
+    saved = store.get_state()
+    yield
+    store.clear()
+    store.set_state(saved)
+
+
 def _true_discriminativeness(adata):
     """Relative spread across phenotypes of each gene's expected expression."""
     t = adata.uns["tcri_truth"]
