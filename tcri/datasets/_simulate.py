@@ -160,6 +160,10 @@ def simulate_tcri(
         ``batch``; ``uns['tcri_truth']`` holding ``omega``, ``pi``, the population
         oracle (``true_mi``, ``true_nmi_min``, ``true_nmi_average``, entropies) and
         the realized-sample oracle (``empirical_*``), plus the generating settings.
+        The expression programs are there too -- ``V`` (factors x genes) and
+        ``gamma_params`` (``alpha``, ``beta``: phenotypes x factors) -- so a gene's
+        true discriminativeness, the spread of ``E[x_j | phi] = sum_f alpha/beta V_fj``
+        across phenotypes, is known in closed form for the perturbation to be checked against.
     """
     if not 0.0 <= fuzziness <= 1.0:
         raise ValueError("fuzziness must be in [0, 1]")
@@ -230,6 +234,9 @@ def simulate_tcri(
     adata.uns["tcri_truth"] = {
         "omega": omega,
         "pi": pi,
+        # the expression programs: what makes a gene informative about phenotype
+        "V": V,
+        "gamma_params": {"alpha": alpha, "beta": beta},
         "true_mi": truth["mi"],
         "true_nmi_min": truth["nmi_min"],
         "true_nmi_average": truth["nmi_average"],
