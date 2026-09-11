@@ -29,7 +29,7 @@ def test_ensure_pyro_params_warns_on_empty_store(trained_model):
         assert runtime, "expected a RuntimeWarning on the uniform fallback"
         assert "q_p_ct_raw" in str(runtime[0].message)
         # fallback still populates the param so callers can proceed
-        assert "q_p_ct_raw" in store
+        assert model.module.pname("q_p_ct_raw") in store
     finally:
         store.set_state(saved)
 
@@ -41,7 +41,7 @@ def test_ensure_pyro_params_silent_when_present(trained_model):
     saved = store.get_state()
     try:
         _ensure_pyro_posterior_params(model, adata)  # guarantee it is present
-        assert "q_p_ct_raw" in store
+        assert model.module.pname("q_p_ct_raw") in store
 
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")

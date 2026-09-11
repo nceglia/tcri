@@ -44,6 +44,46 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_slow)
 
 
+#: Parameters of the session-scoped fitted fixtures, captured when each is built and keyed by
+#: the model name it owns. Restored after any test that clears the process-global store.
+_FIXTURE_PARAMS: dict[str, dict] = {}
+
+
+def _remember_fixture_params(name: str) -> None:
+    store = pyro.get_param_store()
+    _FIXTURE_PARAMS[name] = {
+        k: v.detach().clone() for k, v in store.items() if k.startswith(f"{name}.")
+    }
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_fixture_params_alive():
+    """Put the session fixtures' parameters back after a test that cleared the store.
+
+    Pyro's store is process-global and 22 test files call ``clear_param_store()``; the
+    session-scoped ``trained_model`` and ``cohort`` fixtures are built once and read their
+    guide concentrations out of that store for the rest of the run, so any of those files
+    running in between used to leave them reading another model's parameters or nothing at
+    all. The perturbation work hit this twice -- once as an ``IndexError`` when two fixtures
+    had different phenotype counts, once silently.
+
+    This is only writable because the fixtures are NAMED (0.12): the keys a fixture owns are
+    exactly those under ``f"{name}."``, so they can be restored without touching whatever the
+    test under way put in the store. It restores rather than prevents, so a test is still free
+    to clear the store for its own purposes.
+    """
+    yield
+    if not _FIXTURE_PARAMS:
+        return
+    store = pyro.get_param_store()
+    live = set(store.keys())
+    with torch.no_grad():
+        for name, saved in _FIXTURE_PARAMS.items():
+            for key, value in saved.items():
+                if key not in live:
+                    store[key] = value.clone()
+
+
 def _seed_all(seed: int = 0) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -152,9 +192,6 @@ def trained_model(synthetic_adata):
     """TCRIModel fit for 50 epochs on synthetic_adata, with to_anndata applied."""
     _seed_all(0)
 
-    import pyro
-    pyro.clear_param_store()  # own the process-global store (§5.2 cross-test contamination)
-
     from tcri.model._model import TCRIModel
 
     adata = synthetic_adata.copy()
@@ -165,6 +202,9 @@ def trained_model(synthetic_adata):
         covariate_key="timepoint",
         batch_key="patient",
     )
+    # NAMED (0.12): this fixture owns the store keys under "trained." and nothing else, so it
+    # coexists with `cohort` and with any model a test builds. It no longer clears the store on
+    # the way in -- that is what used to wipe whichever fixture was built first.
     model = TCRIModel(
         adata,
         n_latent=8,
@@ -174,6 +214,7 @@ def trained_model(synthetic_adata):
         classifier_hidden=16,
         K=3,
         n_pseudo_obs=3,
+        name="trained",
     )
 
     buf = io.StringIO()
@@ -185,6 +226,7 @@ def trained_model(synthetic_adata):
             enable_model_summary=False,
         )
         model.to_anndata(adata)
+    _remember_fixture_params("trained")
     return model, adata
 
 
@@ -228,15 +270,15 @@ def cohort():
         adata.obs[col] = adata.obs[col].astype("category")
     adata.layers["counts"] = adata.X.copy()
 
-    pyro.clear_param_store()
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
                             phenotype_key="phenotype", covariate_key="covariate",
                             batch_key="patient", replicate="patient")
     model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
-                      classifier_hidden=16, K=4, seed=0)
+                      classifier_hidden=16, K=4, seed=0, name="cohort")
     with contextlib.redirect_stdout(io.StringIO()):
         model.train(max_epochs=10, batch_size=128, n_steps_kl_warmup=8, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
+    _remember_fixture_params("cohort")
     logging.disable(logging.NOTSET)
     return model, adata

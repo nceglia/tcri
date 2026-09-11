@@ -31,6 +31,7 @@ __all__ = [
     "phenotypic_flux",
     "delta_clonotypic_entropy",
     "delta_phenotypic_entropy",
+    "gene_importance",
     "table",
 ]
 
@@ -43,6 +44,13 @@ _RESULTS = {
     "phenotypic_flux": _K.PHENOTYPIC_FLUX,
     "delta_clonotypic_entropy": _K.DELTA_CLONOTYPIC_ENTROPY,
     "delta_phenotypic_entropy": _K.DELTA_PHENOTYPIC_ENTROPY,
+    "gene_importance": _K.GENE_IMPORTANCE,
+}
+
+#: The call that fills a key, for results that are not ``tcri.tl.<name>(adata, ...)``.
+#: ``perturb`` queries take the fitted model first.
+_CALLS = {
+    "gene_importance": "tcri.perturb.gene_importance(model, adata, ...)",
 }
 
 _PROVENANCE = ("params", "version")
@@ -71,7 +79,12 @@ def _require(adata, name, key):
     """
     resolved = _resolve_key(name, key)
     if resolved not in adata.uns:
-        call = f"tcri.tl.{name}(adata, ...)" if name in _RESULTS else f"the tool writing {resolved!r}"
+        if name in _CALLS:
+            call = _CALLS[name]
+        elif name in _RESULTS:
+            call = f"tcri.tl.{name}(adata, ...)"
+        else:
+            call = f"the tool writing {resolved!r}"
         suffix = f", key_added={key!r}" if key is not None else ""
         raise KeyError(
             f"adata.uns[{resolved!r}] not found. Run {call}{suffix} first — "
@@ -140,3 +153,8 @@ def delta_clonotypic_entropy(adata, *, key=None, which: str = "result"):
 
 def delta_phenotypic_entropy(adata, *, key=None, which: str = "result"):
     return table(adata, "delta_phenotypic_entropy", key=key, which=which)
+
+
+def gene_importance(adata, *, key=None, which: str = "result"):
+    """``which`` may also be ``"shift"``: the per-phenotype decomposition of each importance."""
+    return table(adata, "gene_importance", key=key, which=which)

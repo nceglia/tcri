@@ -30,6 +30,7 @@ __all__ = [
     "PhenotypicFlux",
     "DeltaClonotypicEntropy",
     "DeltaPhenotypicEntropy",
+    "GeneImportance",
     "validate",
 ]
 
@@ -98,6 +99,22 @@ class DeltaPhenotypicEntropy(TypedDict):
                             #       value, value_from, value_to
     result: pd.DataFrame
     stats: object
+
+
+class GeneImportance(TypedDict):
+    """``perturb.gene_importance`` — how far silencing a gene moves the mean phenotype call.
+
+    The item is a gene. ``table``/``result``/``stats`` have the metric shape so the shared
+    reducers apply unchanged; the signed per-phenotype decomposition of each importance lives
+    in ``shift``, averaged over draws, because putting the phenotype axis inside ``table``
+    would make ``result`` per phenotype rather than per gene.
+    """
+
+    table: pd.DataFrame     # cols: gene, [covariate], [groupby], [splitby], draw, value
+    result: pd.DataFrame    # one row per (gene[, covariate][, group]); value + sd/hdi_*
+    stats: object           # per-gene contrast over groups when splitby is set, else None
+    shift: pd.DataFrame     # cols: gene, phenotype, [covariate], [groupby], [splitby],
+                            #       baseline, perturbed, shift
 
 
 def validate(schema, result, *, name: str = "result") -> None:

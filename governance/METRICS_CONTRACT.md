@@ -1,11 +1,12 @@
 # Metrics contract
 
-What the numbers mean. This file is the definition of every `tl` metric; the block at the end
-pins the constants, the defaults, and the values on a reference joint.
-`tests/test_metrics_contract_conformance.py` enforces it: each equation below is recomputed
-from a hand-written reference on that joint, the identities are asserted, the defaults are read
-off the live signatures, and the pinned values are compared to a tolerance. Nothing else binds
-the metrics.
+What the numbers mean. This file is the definition of every `tl` metric and of every `perturb`
+query; the block at the end pins the constants, the defaults, and the values on a reference
+joint. `tests/test_metrics_contract_conformance.py` enforces it: each equation below is
+recomputed from a hand-written reference on that joint, the identities are asserted, the
+defaults are read off the live signatures, and the pinned values are compared to a tolerance.
+The perturbation is not a function of the joint, so it has no pinned value; its identities are
+enforced by `tests/test_perturbation.py`. Nothing else binds the metrics.
 
 Equation numbers are this document's; 2 to 6 keep the numbering of the manuscript's metrics
 section, which is not kept in the repository.
@@ -77,6 +78,44 @@ subtraction the caller performs. The clone set is the intersection of clones pre
 levels within each replicate, which for the clonotypic form makes the normaliser identical on
 both sides; the drop is warned about.
 
+## The perturbation (`tcri.perturb`)
+
+A query on the fitted model with its parameters held fixed. Both functions score cells with
+the per-cell rule of `predict()` (`MODEL_CONTRACT.md`, "Prediction"): `μ_i` is the encoder's
+posterior mean and no encoder sample is drawn, so the pass is deterministic given the
+expression matrix. `use_gate=True` (default) is the model's own rule, the gate when the model
+has one and the additive rule when it has none; `use_gate=False` is the head alone,
+`softmax(f_cls(μ_i))`, which does not depend on the clone × covariate prior at all.
+
+### `knockout`, one probability vector per cell
+
+```
+X^(J)       = X with the columns in J set to zero
+φ_i(X^(J))  = softmax( π·f_cls(μ_i(X^(J))) + (1−π)·log p_ct[g(i)] )
+```
+
+Every gene in `J` is silenced together, so a gene program is one call. `knockout(genes=[])`
+is `predict()` exactly, and `knockout(genes=[j])` equals `predict()` on the matrix with column
+`j` zeroed.
+
+### `gene_importance`, one value per gene
+
+```
+φ̄_C(X)     = (1/|C|) Σ_{i∈C} φ_i(X)
+shift_j,p   = φ̄_C(X)_p − φ̄_C(X^(j))_p
+I_j         = Σ_p | shift_j,p |                                in [0, 2]
+```
+
+`C` is every cell, or the cells at one `covariate` level, partitioned by `groupby` (one `I_j`
+per group, the replicate unit of the `splitby` contrast, which is **per gene**). `shift` sums
+to zero over phenotypes; a positive entry means silencing the gene removed mass from that
+phenotype. A gene whose column is already zero has `I_j = 0` exactly. At `n_samples > 0` the
+prior `p_ct` is drawn from the guide's Dirichlet posterior once, shared by every gene, and
+enters only through the gate; `I_j` is computed per draw and summarised as in "Posterior
+summaries". With `use_gate=False` there is nothing to draw, and `n_samples` is ignored with a
+warning. The reduction is over cells, so `covariate=None` is allowed and clones need not be
+disjoint across groups.
+
 ## The `weighted` axis
 
 `weighted=False` (default): every clone contributes equally, `P(c) = 1/C`; the metric
@@ -121,6 +160,10 @@ METRICS = [
     "phenotypic_flux", "delta_clonotypic_entropy", "delta_phenotypic_entropy",
 ]
 
+# every public perturb function; each has a section above. Not functions of the joint, so
+# nothing is pinned on the reference joint; tests/test_perturbation.py holds the identities
+PERTURBATIONS = ["knockout", "gene_importance"]
+
 # signature defaults that change what a number means; read off the live functions
 DEFAULTS = {
     "weighted": False,
@@ -129,6 +172,7 @@ DEFAULTS = {
     "distance_metric": "kl",
     "n_samples": 0,
     "temperature": 1.0,
+    "use_gate": True,
 }
 
 # the reference joint (3 clones x 2 phenotypes, deliberately asymmetric) and the values the

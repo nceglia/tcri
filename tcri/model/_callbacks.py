@@ -25,6 +25,26 @@ from lightning.pytorch.callbacks import Callback, EarlyStopping
 __all__ = ["RampGatedEarlyStopping", "BestObjectiveSnapshot", "ramp_is_complete"]
 
 
+def _is_own_guide_param(module, store_name: str) -> bool:
+    """Is ``store_name`` one of THIS module's two guide concentrations?
+
+    The snapshot used to take every store key not starting with ``scvi$$$``, which was the
+    whole store minus the networks -- correct while one model existed per process. With a
+    namespace per model that set includes other models' concentrations, so a restore would
+    write another fit's parameters over this one's. Two conditions, both needed: the key is
+    in this module's namespace, and its tail is a guide concentration rather than a network
+    parameter (whose normalised name also lives under the namespace).
+    """
+    from ._training import GUIDE_CONCENTRATION_PARAMS
+
+    name = getattr(module, "name", "")
+    if name:
+        if not store_name.startswith(f"{name}."):
+            return False
+        store_name = store_name[len(name) + 1:]
+    return store_name in GUIDE_CONCENTRATION_PARAMS
+
+
 def ramp_is_complete(pl_module) -> bool:
     """The single predicate. One counter, one unit (optimizer steps), read by both callbacks.
 
@@ -118,7 +138,7 @@ class BestObjectiveSnapshot(Callback):
         self._store_state = {
             name: leaf.detach().cpu().clone()
             for name, leaf in pyro.get_param_store().named_parameters()
-            if not name.startswith("scvi$$$")
+            if _is_own_guide_param(pl_module.module, name)
         }
 
     # ── restore ──────────────────────────────────────────────────────────────
@@ -133,7 +153,8 @@ class BestObjectiveSnapshot(Callback):
         pl_module.module.load_state_dict(self._module_state, strict=False)
 
         store = pyro.get_param_store()
-        live = {n for n, _ in store.named_parameters() if not n.startswith("scvi$$$")}
+        live = {n for n, _ in store.named_parameters()
+                if _is_own_guide_param(pl_module.module, n)}
         missing = live - set(self._store_state)
         if missing:
             raise RuntimeError(

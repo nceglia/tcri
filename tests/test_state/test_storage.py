@@ -60,6 +60,27 @@ def test_dataframe_result_keeps_payload_and_params_separate(adata):
     assert adata.uns["tcri_x"]["version"] == 7
 
 
+def test_data_param_names_the_store_target_and_drops_the_objects_before_it(adata):
+    """A tool that takes the fitted model first stores into ``adata`` and records neither.
+
+    Everything before the data argument is an object the tool operates on, not a setting.
+    Without the exclusion the model itself would be provenance -- unserialisable, and the
+    ``.h5ad`` write would fail on it.
+    """
+    class _Model:
+        pass
+
+    @tl_result(key="tcri_q", data_param="adata")
+    def _query(model, adata, *, genes=None, key_added=None, inplace=True):
+        return pd.DataFrame({"value": [1.0]})
+
+    _query(_Model(), adata, genes=["a"])
+    assert load_result_params(adata, "tcri_q") == {"genes": ["a"]}
+
+    with pytest.raises(TypeError, match="no parameter"):
+        tl_result(key="tcri_q", data_param="nope")(_query)
+
+
 def test_params_capture_includes_untouched_defaults(adata):
     """Provenance that records only explicitly-passed arguments cannot answer "what was this
     run with" — which is the entire point of storing it."""

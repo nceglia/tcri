@@ -9,6 +9,7 @@ from ._mutual_information import mutual_information
 from ._flux import phenotypic_flux
 from ._delta import (delta_clonotypic_entropy,
                      delta_phenotypic_entropy)
+from ._perturbation import gene_importance
 from ._colors import NA_COLOR, resolve_colors, tcri_colors
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "phenotypic_flux",
     "delta_clonotypic_entropy",
     "delta_phenotypic_entropy",
+    "gene_importance",
     "resolve_colors",
     "tcri_colors",
     "NA_COLOR",

@@ -43,6 +43,7 @@ api/preprocessing
 api/metrics
 api/plotting
 api/diagnostics
+api/perturbation
 api/datasets
 api/utils
 ```

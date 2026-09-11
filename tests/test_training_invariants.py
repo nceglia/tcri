@@ -27,11 +27,19 @@ warnings.filterwarnings("ignore")
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
 
-def _snapshot():
+def _store_keys(model=None):
+    """The two guide tensors under the model's namespace (0.12). ``None`` is the unnamed
+    layout, which is what every fixture in this file builds."""
+    if model is None:
+        return STORE_KEYS
+    return tuple(model.module.pname(k) for k in STORE_KEYS)
+
+
+def _snapshot(model=None):
     """The two guide tensors every metric reads. They live only in Pyro's param store —
     they are NOT in ``module.state_dict()`` and not reachable from ``parameters()``."""
     store = pyro.get_param_store()
-    return {k: store[k].detach().clone() for k in STORE_KEYS if k in store}
+    return {k: store[k].detach().clone() for k in _store_keys(model) if k in store}
 
 
 @pytest.fixture
@@ -314,7 +322,7 @@ def test_restored_model_is_the_selected_one(adata):
             sd = pl_module.module.state_dict()
             seen.append((
                 float(score),
-                pyro.get_param_store()["q_p_ct_raw"].detach().clone(),
+                pyro.get_param_store()[m.module.pname("q_p_ct_raw")].detach().clone(),
                 sd[NET].detach().clone(),
                 sd[BN].detach().clone(),
             ))
@@ -335,7 +343,8 @@ def test_restored_model_is_the_selected_one(adata):
     )
 
     sd = m.module.state_dict()
-    assert torch.equal(pyro.get_param_store()["q_p_ct_raw"].detach(), best_ct), (
+    assert torch.equal(
+        pyro.get_param_store()[m.module.pname("q_p_ct_raw")].detach(), best_ct), (
         "q_p_ct_raw is not the selected checkpoint's. Every metric reads this tensor, and it "
         "lives only in the Pyro param store -- note that writing it through store.items() is a "
         "silent no-op, because the positive constraint makes that a non-leaf view (I4)."

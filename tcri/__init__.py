@@ -11,6 +11,7 @@ from . import plotting as pl
 from . import utils as ut
 from . import model as ml
 from . import diagnostics as diag  # PR8
+from . import perturbation as perturb  # in-silico perturbation of a fitted model
 from . import datasets        # synthetic cohorts, incl. one with a known-MI oracle
 from . import get             # accessors for cached tl results
 
@@ -19,7 +20,8 @@ from .tools import joint_distribution
 
 import sys as _sys
 
-_sys.modules.update({f'{__name__}.{m}': globals()[m] for m in ['tl', 'pp', 'pl', 'ut', 'ml', 'diag']})
+_sys.modules.update({f'{__name__}.{m}': globals()[m]
+                     for m in ['tl', 'pp', 'pl', 'ut', 'ml', 'diag', 'perturb']})
 
 #: The top-level surface. Without this, ``dir(tcri)`` also advertised ``sys`` and
 #: ``PackageNotFoundError`` -- module-machinery names that leaked purely because they were
@@ -27,7 +29,7 @@ _sys.modules.update({f'{__name__}.{m}': globals()[m] for m in ['tl', 'pp', 'pl',
 #: private aliases (``_sys``, ``_PackageNotFoundError``) keep them out of ``dir`` regardless;
 #: this makes the intended surface explicit rather than incidental.
 __all__ = [
-    "tl", "pp", "pl", "ut", "ml", "diag", "datasets", "get",
-    "tools", "preprocessing", "plotting", "utils", "model", "diagnostics",
+    "tl", "pp", "pl", "ut", "ml", "diag", "perturb", "datasets", "get",
+    "tools", "preprocessing", "plotting", "utils", "model", "diagnostics", "perturbation",
     "joint_distribution", "__version__",
 ]

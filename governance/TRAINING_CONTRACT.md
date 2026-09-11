@@ -26,7 +26,9 @@ schedules or stopping; they change with a recorded reason.
 - **I4 The reported model is the selected one.** A best-by-monitor snapshot at each gated
   check, restored in place at `on_fit_end`, spanning `state_dict()` (BatchNorm running
   statistics included) and the Pyro param store through `named_parameters()` in unconstrained
-  space. `test_restored_model_is_the_selected_one`.
+  space, restricted to the module's OWN namespace: with a namespace per model the store holds
+  other fits' concentrations too, and restoring those would write another fit's parameters over
+  this one's. `test_restored_model_is_the_selected_one`.
 - **I5 Annealing is schedule-only.** The warmup counter lives on the module, so a resumed
   `train()` continues the ramp rather than restarting it.
   `test_kl_ramp_is_monotone_across_resumed_training`, `test_warmup_counter_is_owned_by_the_module_not_the_plan`.
@@ -60,7 +62,9 @@ schedules or stopping; they change with a recorded reason.
   whole fit, reproducibly. `test_train_resets_module_mode`, `tests/test_model_determinism.py`.
 - **B8** Optimizer settings that act as priors are declared or removed. Weight decay reaches
   the network parameters only; the two guide concentrations receive `weight_decay=0`, since
-  decay on their log-space leaves is a flat Dirichlet prior applied through the optimizer.
+  decay on their log-space leaves is a flat Dirichlet prior applied through the optimizer. The
+  exemption matches the parameter's TAIL under any namespace (`x.q_p_ct_raw` as well as
+  `q_p_ct_raw`); an exact match would silently reinstate that prior for every named model.
   `test_weight_decay_does_not_reach_the_guide_concentrations`.
 - **B9** A fit records provenance in `training_record_`: epochs actually run, warmup steps and
   their epoch equivalent, `ramp_completes_at_epoch`, `ramp_completed`, `selection_criterion`,

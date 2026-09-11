@@ -202,7 +202,38 @@ There is deliberately **no `delta_mutual_information`**. MI has no item axis, so
 the repertoire-level number and its "delta" is a subtraction of two cached scalars. That one
 belongs to you, not the package.
 
-## 7. Saving and resuming
+## 7. `perturb` — which genes the calls rest on
+
+`tcri.perturb` is a query on the fitted model with its parameters held fixed: zero a gene's
+column, run the cells through the encoder again, and read the phenotype call back with the
+same rule `predict()` uses. {func}`gene_importance <tcri.perturbation.gene_importance>`
+does that one gene at a time and reports how far the mean call moved, per patient, with the
+same `groupby`/`splitby` machinery and the same cache as every metric.
+
+```python
+tcri.perturb.gene_importance(model, adata, splitby="disease_status")
+tcri.pl.gene_importance(adata)                 # the top genes; one dot per patient, starred per gene
+tcri.pl.gene_importance(adata, kind="shift")   # gene x phenotype: which way each gene moves the call
+```
+
+Two things to know before reading the ranking:
+
+- **It is about the calls you see.** By default the head is combined with the clone ×
+  covariate prior exactly as `predict()` does, so a gene can score low simply because the
+  cells expressing it sit in clones with confident priors. `use_gate=False` scores the
+  expression pathway alone, invariant to the clone structure.
+- **The contrast is per gene**, over patients: `stats` has one row per gene, uncorrected
+  across genes.
+
+{func}`knockout <tcri.perturbation.knockout>` is the primitive underneath: the per-cell
+probabilities with a gene, or a whole program, silenced — the `predict()` frame, so it goes
+straight into `obsm` or into any metric.
+
+```python
+tcri.perturb.knockout(model, adata, genes=["gene_3", "gene_7"], key_added="X_ko_program")
+```
+
+## 8. Saving and resuming
 
 {func}`tcri.ut.save_tcri_session` writes the fitted model, its Pyro parameter store and the
 `AnnData` together, so a later session picks up exactly where this one stopped — including

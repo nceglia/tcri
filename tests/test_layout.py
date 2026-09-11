@@ -38,7 +38,8 @@ ALLOWED_TOP_LEVEL = {"__init__.py", "get.py"}
 #: Lower layers, in dependency order. Nothing here may import UP into a view package at module
 #: scope. (Lazy in-function imports are allowed and used deliberately, with a note at the site.)
 LOWER_LAYERS = ["_compute", "_stats", "_state"]
-VIEW_PACKAGES = ["tools", "plotting", "preprocessing", "diagnostics", "model", "utils", "datasets"]
+VIEW_PACKAGES = ["tools", "plotting", "preprocessing", "diagnostics", "perturbation", "model",
+                 "utils", "datasets"]
 
 
 def _module_level_imports(path: Path):
@@ -129,7 +130,7 @@ def test_the_wheel_ships_only_the_package():
 
 
 #: The public view namespaces. Each must expose exactly what it declares.
-VIEW_NAMESPACES = ["tl", "pl", "pp", "ut", "ml", "diag", "datasets", "get"]
+VIEW_NAMESPACES = ["tl", "pl", "pp", "ut", "ml", "diag", "perturb", "datasets", "get"]
 
 #: `from __future__ import annotations` binds a module-scope `_Feature` object literally named
 #: `annotations`. It is a language artifact present in every module using the import, not

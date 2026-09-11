@@ -178,13 +178,56 @@ def test_guide_family_matches_contract(traced):
 
 
 def test_guide_registers_variational_params(traced):
+    """Both variational parameters are registered, under whatever namespace the module has.
+
+    Since 0.12 a module registers under ``f"{name}."`` so two models can share the process, so
+    the contract names the PARAMETERS and the test compares the tail of each traced site. The
+    fixture here is unnamed, and the second half asserts the tail match is doing real work
+    rather than passing because the tail happens to be the whole name.
+    """
     _, _, g_trace, _, _ = traced
     params = {n for n, nd in g_trace.nodes.items() if nd["type"] == "param"}
+    tails = {n.rsplit(".", 1)[-1] for n in params}
     for p in GUIDE_PARAMS:
-        assert p in params, (
+        assert p in tails, (
             f"guide() must register the learnable variational parameter '{p}' "
-            "(λ_c / λ'_m of eq 6); without it the Dirichlet posteriors are not learned."
+            f"(λ_c / λ'_m of eq 6); without it the Dirichlet posteriors are not learned. "
+            f"Traced param sites: {sorted(params)}"
         )
+
+
+def test_guide_params_live_under_the_module_namespace():
+    """A named module registers the same two parameters under its own prefix.
+
+    The contract's `GUIDE_PARAMS` is a list of parameter names, not of store keys; this is
+    what makes that distinction real rather than a wording choice.
+    """
+    import pyro
+
+    from tcri.datasets import simulate_tcri
+    from tcri.model._model import TCRIModel
+
+    store = pyro.get_param_store()
+    saved = store.get_state()
+    try:
+        store.clear()
+        adata = simulate_tcri(n_clones=5, n_phenotypes=3, n_genes=15, n_cells=60, seed=0)
+        adata.layers["counts"] = adata.X.copy()
+        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                                phenotype_key="phenotype", covariate_key="covariate",
+                                batch_key="batch")
+        model = TCRIModel(adata, n_latent=6, n_hidden=12, n_layers=1, classifier_n_layers=1,
+                          classifier_hidden=12, K=3, name="ns")
+        args, kwargs = model.module._get_fn_args_from_batch(
+            next(iter(model._make_data_loader(adata=adata, batch_size=16)))
+        )
+        model.module.guide(*args, **kwargs)
+        for p in GUIDE_PARAMS:
+            assert f"ns.{p}" in store, f"named module did not register ns.{p}: {sorted(store.keys())[:6]}"
+            assert p not in store, f"named module also registered the bare {p}"
+    finally:
+        store.clear()
+        store.set_state(saved)
 
 
 def test_discrete_phenotype_latent_is_not_sampled(traced):

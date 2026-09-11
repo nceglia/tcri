@@ -43,6 +43,7 @@ NAMESPACES: dict[str, str] = {
     "tl": "tcri:tl",
     "pl": "tcri:pl",
     "diag": "tcri:diag",
+    "perturb": "tcri:perturb",
     "ut": "tcri:ut",
     "datasets": "tcri:datasets",
 }

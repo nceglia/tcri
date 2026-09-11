@@ -261,6 +261,20 @@ other, and it is enforced by test. The same tests pin the sanity limits: uniform
 gives $\log_2 k$ (normalized $1.0$), all mass on one outcome gives $0$, an independent joint
 gives $I=0$, and $I(c;\phi) = I(\phi;c) \ge 0$.
 
+## The perturbation
+
+The metrics read the joint; `tcri.perturb` reads the **model**. With every parameter held
+fixed, silence gene $j$ by zeroing its column, and score the cells again with the rule
+`predict()` uses:
+
+$$\text{shift}_{j,\phi} = \bar\varphi_C(X)_\phi - \bar\varphi_C(X^{(j)})_\phi,
+\qquad I_j = \sum_\phi \lvert \text{shift}_{j,\phi} \rvert \in [0, 2],$$
+
+where $\bar\varphi_C$ is the mean per-cell phenotype probability over the cells $C$ (all of
+them, or one covariate level, partitioned by the replicate). The pass is deterministic — the
+head reads the encoder's posterior mean — and `n_samples` draws only the clone × covariate
+prior, which enters through the gate. A gene that is never expressed has $I_j = 0$ exactly.
+
 ## Where to go next
 
 The [walkthrough](../tutorials/index.md) runs this end to end on a simulated cohort, in the
