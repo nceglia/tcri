@@ -23,6 +23,12 @@ know what a metric reduces to.
 
 ## Semantics that are not in a signature
 
+**Parameter namespaces.** Pyro's parameter store is process-global, so the names a model
+registers are the only thing separating it from another model in the same session. `name`
+namespaces them: a model called `x` owns exactly the store keys under `x.`, and `""` (the
+default) owns the unnamed layout every session saved before 0.12 uses. Two named models can be
+fitted in one process without overwriting each other. `TCRIModel.name` reads it back.
+
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
@@ -108,7 +114,7 @@ class TCRIModel:
         gate_prob: Optional[float] = ..., kl_weight_max: float = ...,
         guide_init_scale: float = ..., classifier_temperature: float = ...,
         phenotype_kl_weight: float = ..., label_error_rate: Optional[float] = ...,
-        seed: Optional[int] = ..., **kwargs: Any,
+        seed: Optional[int] = ..., name: str = ..., **kwargs: Any,
     ) -> None: ...
     @classmethod
     def setup_anndata(

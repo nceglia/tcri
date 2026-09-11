@@ -38,6 +38,24 @@ from ._module import TCRIModule
 from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
 
+#: Prefixes of the parameter names an UNNAMED model registers: the two guide concentrations
+#: and everything `pyro.module("scvi", ...)` puts in the store. A named model owns `f"{name}."`
+#: instead, and nothing else may.
+_LEGACY_PARAM_PREFIXES = ("q_p_c", "q_p_ct", "scvi$$$")
+
+
+def _owns_param(name: str, key: str) -> bool:
+    """Does the model called ``name`` own the store entry ``key``?
+
+    Ownership is what the constructor warning and the best-weight snapshot both key on, and
+    ``""`` is the case that gets it wrong if written as a bare prefix test: every named model's
+    keys start with ``""``. An unnamed model owns exactly the legacy bare names.
+    """
+    if name:
+        return key.startswith(f"{name}.")
+    return key.startswith(_LEGACY_PARAM_PREFIXES)
+
+
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
 #: per-cell block only, at a pinned kl_weight_max under a fixed evaluation seed. The name
 #: says so on purpose; calling it an ELBO is what let the old monitor look well-posed.
@@ -215,14 +233,21 @@ class TCRIModel(BaseModelClass):
         phenotype_kl_weight: float = 1.0,
         label_error_rate: Optional[float] = 0.1,
         seed: Optional[int] = None,
+        name: str = "",
         **kwargs,
     ):
         """``label_error_rate``: ε of the noisy-label readout, the probability that an input
         phenotype label is wrong. With it on (the default) each cell's label is an observation
         of its latent phenotype with reliability 1-ε, which is what lets the clone x covariate
         distributions learn from the cells. ``None`` switches the readout off and fits the
-        label-free surrogate alone (the pre-2026-09 model). Must be in ``[0, 1 - 1/P)``."""
+        label-free surrogate alone (the pre-2026-09 model). Must be in ``[0, 1 - 1/P)``.
+
+        ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
+        two models can be fitted in one session without overwriting each other. ``""`` is the
+        historical unnamed layout, which every session saved before 0.12 uses and which stays
+        byte-identical."""
         super().__init__(adata)
+        self._name = str(name)
 
         # DE-19: network init and minibatch order were unseeded, so two fits with the same
         # nominal seed differed by ~1.8e-3 in reported NMI -- larger than the effect of several
@@ -241,13 +266,18 @@ class TCRIModel(BaseModelClass):
         # rather than clearing, because clearing here would destroy the params of a
         # model loaded earlier in the session (load_tcri_session restores the store
         # after construction). Proper per-instance namespacing is a design change.
-        _tcri_params = [k for k in pyro.get_param_store().keys() if k.startswith(("q_p_c", "q_p_ct", "scvi$$$"))]
+        # Scoped to THIS model's namespace. An unnamed model owns exactly the legacy bare
+        # names; a named one owns exactly the keys under "<name>.". Without the scoping the
+        # warning fires for every other model's parameters -- which, now that two models can
+        # coexist, is the normal state rather than the problem it is meant to flag.
+        _tcri_params = [k for k in pyro.get_param_store().keys()
+                        if _owns_param(self._name, k)]
         if _tcri_params:
             warnings.warn(
-                "The global Pyro param store already holds TCRI parameters "
-                f"({len(_tcri_params)} entries). This model will CONTINUE that fit "
-                "rather than start fresh. Call `pyro.clear_param_store()` before "
-                "constructing a new model (note this invalidates any model already "
+                f"The global Pyro param store already holds TCRI parameters for "
+                f"name={self._name!r} ({len(_tcri_params)} entries). This model will CONTINUE "
+                "that fit rather than start fresh. Construct it with a different `name=`, or "
+                "call `pyro.clear_param_store()` (note this invalidates any model already "
                 "loaded in this session).",
                 UserWarning,
                 stacklevel=2,
@@ -336,6 +366,7 @@ class TCRIModel(BaseModelClass):
             classifier_temperature=classifier_temperature,
             phenotype_kl_weight=phenotype_kl_weight,
             label_error_rate=label_error_rate,
+            name=self._name,
         )
         self.init_params_ = self._get_init_params(locals())
         c2p_torch = torch.tensor(clone_phenotype_prior, dtype=torch.float32)
@@ -601,6 +632,11 @@ class TCRIModel(BaseModelClass):
         )
         latents = [self.module.get_latent(tensors) for tensors in scdl]
         return torch.cat(latents, dim=0).cpu().numpy()
+
+    @property
+    def name(self) -> str:
+        """The parameter-store namespace this model owns. ``""`` is the unnamed layout."""
+        return self.module.name
 
     @property
     def use_gate(self) -> bool:

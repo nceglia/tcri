@@ -49,7 +49,10 @@ def _ensure_pyro_posterior_params(model, adata) -> None:
     from torch import nn
 
     store = pyro.get_param_store()
-    if "q_p_ct_raw" in store:
+    # BOTH the test and the fallback write below must use the model's own namespace. Repairing
+    # a namespaced model under the bare name would leave it looking for a key nothing wrote.
+    pname = model.module.pname("q_p_ct_raw")
+    if pname in store:
         return
 
     device = next(model.module.parameters()).device
@@ -91,7 +94,7 @@ def _ensure_pyro_posterior_params(model, adata) -> None:
         stacklevel=2,
     )
     init = torch.full((ct_count, P), 1.0 / P, device=device)
-    pyro.param("q_p_ct_raw", init, constraint=constraints.simplex)
+    pyro.param(pname, init, constraint=constraints.simplex)
 
 
 def _resolve_TCRIModel():

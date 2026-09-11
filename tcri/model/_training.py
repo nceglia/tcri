@@ -41,9 +41,14 @@ def _per_param_optim_args(base):
     Pyro calls the one-argument form with the normalised param-store name, which is what
     ``normalize_param_name`` produces: ``"scvi.encoder..."`` for module parameters and the
     bare ``"q_p_ct_raw"`` for the guide.
+
+    The match is on the name's TAIL, not the whole name, because a namespaced module registers
+    ``"<name>.q_p_ct_raw"``. An exact match would silently drop the exemption for every named
+    model -- reinstating the flat-Dirichlet prior B8 exists to remove, with no error and no
+    change to any test that only ever builds unnamed models.
     """
     def optim_args(param_name):
-        if param_name in GUIDE_CONCENTRATION_PARAMS:
+        if param_name.rsplit(".", 1)[-1] in GUIDE_CONCENTRATION_PARAMS:
             return {**base, "weight_decay": 0.0}
         return dict(base)
     return optim_args

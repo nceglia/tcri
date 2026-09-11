@@ -49,8 +49,16 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
         label_error_rate: Optional[float] = 0.1,   # must match TCRIModel.__init__, which overrides it
+        name: str = "",
     ):
         super().__init__()
+        # Pyro's param store is PROCESS-GLOBAL and its names are the only thing separating one
+        # model's parameters from another's. `name` is that separation: every parameter this
+        # module registers goes through `pname`, so two models -- a fit and its null, or two
+        # fits -- coexist instead of overwriting each other. "" is the historical unnamed
+        # layout and is what every 0.10/0.11 session on disk was saved under, so it must stay
+        # byte-identical.
+        self.name = str(name)
         self.n_input = n_input
         self.n_latent = n_latent
         self.P = P
@@ -189,6 +197,16 @@ class TCRIModule(PyroBaseModuleClass):
         if ct_to_cov_array is not None:
             self.register_buffer("ct_to_cov", ct_to_cov_array)
 
+    def pname(self, base: str) -> str:
+        """Param-store name of a parameter this module owns.
+
+        ``""`` returns the bare name, which is what keeps every saved 0.10/0.11 session
+        loading. A named module owns exactly the keys under ``f"{name}."``; nothing else
+        may match that prefix, which is what the constructor warning and the best-weight
+        snapshot both rely on.
+        """
+        return f"{self.name}.{base}" if self.name else base
+
     @property
     def use_gate(self) -> bool:
         return self.gate_prob is not None
@@ -226,7 +244,7 @@ class TCRIModule(PyroBaseModuleClass):
         log_library: torch.Tensor,
         indices: torch.Tensor = None,
     ):
-        pyro.module("scvi", self)
+        pyro.module(self.pname("scvi"), self)
 
         kl_weight = self.kl_weight
         # Global cell indices for this minibatch. They are BOTH the plate's subsample (so the
@@ -359,7 +377,7 @@ class TCRIModule(PyroBaseModuleClass):
         log_library: torch.Tensor,
         indices: torch.Tensor = None,
     ):
-        pyro.module("scvi", self)
+        pyro.module(self.pname("scvi"), self)
         assert indices is not None, (
             "guide() requires global cell indices: they are the data plate's subsample, "
             "and the guide's plate must match the model's."
@@ -371,14 +389,14 @@ class TCRIModule(PyroBaseModuleClass):
             init_mat_c = init_mat_c.to(x.device)
             
             # Learnable raw parameters for q(p_c)
-            if "q_p_c_raw" not in pyro.get_param_store():
+            if self.pname("q_p_c_raw") not in pyro.get_param_store():
                 q_p_c_raw = pyro.param(
-                    "q_p_c_raw",
+                    self.pname("q_p_c_raw"),
                     init_mat_c.clone().detach(),
                     constraint=dist.constraints.positive
                 )
             else:
-                q_p_c_raw = pyro.param("q_p_c_raw")
+                q_p_c_raw = pyro.param(self.pname("q_p_c_raw"))
 
             bad_c = ~torch.isfinite(q_p_c_raw)
             if bad_c.any():
@@ -400,14 +418,14 @@ class TCRIModule(PyroBaseModuleClass):
             init_mat = self.clone_phen_prior[self.ct_to_c, :]
             init_mat = init_mat * self.guide_init_scale + 1e-3
             init_mat = init_mat.to(x.device)
-            if "q_p_ct_raw" not in pyro.get_param_store():
+            if self.pname("q_p_ct_raw") not in pyro.get_param_store():
                 q_p_ct_raw = pyro.param(
-                    "q_p_ct_raw",
+                    self.pname("q_p_ct_raw"),
                     init_mat.clone().detach(),  # Make sure it's not a leaf
                     constraint=dist.constraints.positive,
                 )
             else:
-                q_p_ct_raw = pyro.param("q_p_ct_raw")
+                q_p_ct_raw = pyro.param(self.pname("q_p_ct_raw"))
 
             bad_ct = ~torch.isfinite(q_p_ct_raw)
             if bad_ct.any():
@@ -465,7 +483,7 @@ class TCRIModule(PyroBaseModuleClass):
         """
         from pyro import get_param_store
 
-        q_p_ct_raw = get_param_store()["q_p_ct_raw"]
+        q_p_ct_raw = get_param_store()[self.pname("q_p_ct_raw")]
         bad = ~torch.isfinite(q_p_ct_raw)
         if bad.any():
             q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / q_p_ct_raw.shape[1],
@@ -480,7 +498,7 @@ class TCRIModule(PyroBaseModuleClass):
         from pyro import get_param_store
 
         param_store = get_param_store()
-        q_p_ct_raw = param_store["q_p_ct_raw"]
+        q_p_ct_raw = param_store[self.pname("q_p_ct_raw")]
         bad = ~torch.isfinite(q_p_ct_raw)
         if bad.any():
             n_phen = q_p_ct_raw.shape[1]

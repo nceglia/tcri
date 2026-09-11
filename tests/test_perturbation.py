@@ -14,10 +14,12 @@ position instead of global id (the cell-order test alone); dropping the draw pat
 test alone); zeroing the neighbouring column in either kernel path (the knockout-vs-predict or
 the unexpressed-gene test, plus every hand comparison, because the two paths then disagree).
 
-Every model call here goes through the ``cohort`` fixture, deliberately. The Pyro parameter
-store is process-global and each session fixture clears it when it is built, so a model method
-on ``trained_model`` after ``cohort`` exists reads the wrong ``q_p_ct_raw`` (P=4 against a P=3
-head). The no-replicate case is a copy of the cohort with the registered replicate removed.
+Every model call here goes through the ``cohort`` fixture. That used to be forced: the Pyro
+parameter store is process-global and each session fixture cleared it when built, so a model
+method on ``trained_model`` after ``cohort`` existed read the wrong ``q_p_ct_raw`` (P=4 against
+a P=3 head). Since 0.12 the fixtures are namespaced and coexist, so this is now one fixture for
+consistency rather than a constraint. The no-replicate case is a copy of the cohort with the
+registered replicate removed.
 """
 from __future__ import annotations
 

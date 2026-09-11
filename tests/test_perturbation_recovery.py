@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import itertools
 
 import anndata as ad
 import numpy as np
@@ -47,22 +48,6 @@ from tcri.datasets import simulate_tcri
 
 _SIM = dict(n_clones=20, n_phenotypes=4, n_genes=60, n_cells=1500, n_factors=8,
             omega_concentration=0.3)
-
-
-@pytest.fixture(autouse=True)
-def _give_the_param_store_back():
-    """These tests fit their own models, which clears the process-global Pyro store. The
-    session fixtures' models (``cohort``, ``trained_model``) read that store by name, so a
-    later test file that touches them would otherwise index another model's parameters --
-    exactly what happened in CI, where ``--runslow`` runs this file before ``test_plotting``.
-    ``get_state`` copies the dicts, so the saved tensors survive the ``clear``."""
-    import pyro
-
-    store = pyro.get_param_store()
-    saved = store.get_state()
-    yield
-    store.clear()
-    store.set_state(saved)
 
 
 def _true_discriminativeness(adata):
@@ -123,17 +108,26 @@ def test_the_oracle_is_visible_in_the_realised_counts():
 
 # ── the fitted model ─────────────────────────────────────────────────────────
 
-def _fit(adata, *, seed=0, max_epochs=60):
-    import pyro
+#: One namespace per FIT, not per seed. These tests fit several models with the same `seed`
+#: (it seeds the network init, not the identity of the fit), and two fits sharing a namespace
+#: means the second continues the first -- which is what `clear_param_store` used to prevent
+#: here, and what made the flat-vs-sharp separation collapse from 25x to 1.8x when the clear
+#: was removed without this.
+_FIT_COUNTER = itertools.count()
 
+
+def _fit(adata, *, seed=0, max_epochs=60):
     from tcri.model._model import TCRIModel
 
-    pyro.clear_param_store()
+    # NAMED (0.12), and no longer clearing the store: these fits used to wipe the session
+    # fixtures' parameters, which is why this module carried an autouse save/restore fixture.
+    # A namespace per fit makes that unnecessary -- the fits simply do not collide.
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
                             phenotype_key="phenotype", covariate_key="covariate",
                             batch_key="batch")
     model = TCRIModel(adata, n_latent=16, n_hidden=32, n_layers=1, classifier_n_layers=1,
-                      classifier_hidden=32, K=4, seed=seed)
+                      classifier_hidden=32, K=4, seed=seed,
+                      name=f"recovery{next(_FIT_COUNTER)}")
     with contextlib.redirect_stdout(io.StringIO()):
         model.train(max_epochs=max_epochs, batch_size=256, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
