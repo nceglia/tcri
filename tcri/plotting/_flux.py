@@ -10,7 +10,7 @@ from ._base import render_metric
 __all__ = ["phenotypic_flux"]
 
 
-def phenotypic_flux(adata, *, key=None, order=None, hue_order=None, palette=None, ax=None,
+def phenotypic_flux(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None, ax=None,
                     figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-clone flux from ``cov_from`` to ``cov_to``, from the cached ``tl.phenotypic_flux``.
 
@@ -23,6 +23,6 @@ def phenotypic_flux(adata, *, key=None, order=None, hue_order=None, palette=None
 
     metric = _get.params(adata, "phenotypic_flux", key=key).get("distance_metric", "kl")
     return render_metric(adata, "phenotypic_flux", ylabel=f"phenotypic flux ({metric})",
-                         item_col="clonotype", key=key, order=order, hue_order=hue_order,
+                         item_col="clonotype", quantity=quantity, key=key, order=order, hue_order=hue_order,
                          palette=palette, ax=ax, figsize=figsize, save=save, show=show,
                          return_df=return_df)

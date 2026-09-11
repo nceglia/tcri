@@ -235,8 +235,11 @@ def test_model_mi_tracks_the_true_mi_across_difficulty():
             model.train(max_epochs=60, batch_size=256,
                         enable_progress_bar=False, enable_model_summary=False)
             model.to_anndata(adata)
+        # `null_model=None` throughout this file: it scores the fitted MI against a
+        # closed-form oracle across a difficulty sweep, so the quantity compared has to be the
+        # metric itself and not a difference.
         est = tcri.tl.mutual_information(
-            adata, covariate="cov_0", weighted=True, normalize_mode="average",
+            adata, null_model=None, covariate="cov_0", weighted=True, normalize_mode="average",
         )["result"]
         got.append((_truth(adata)["true_nmi_average"], float(est["value"].iloc[0])))
 
@@ -297,7 +300,7 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
             model.to_anndata(adata)
 
         summary = tcri.tl.mutual_information(
-            adata, covariate="cov_0", n_samples=100, weighted=True,
+            adata, null_model=None, covariate="cov_0", n_samples=100, weighted=True,
             normalize_mode="average", random_state=seed,
         )["result"].iloc[0]
         lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["value"]

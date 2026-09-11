@@ -5,6 +5,8 @@ import logging
 import pytest
 import numpy as np
 import pandas as pd
+import warnings
+
 import pyro
 import torch
 from anndata import AnnData
@@ -82,6 +84,26 @@ def _keep_the_fixture_params_alive():
             for key, value in saved.items():
                 if key not in live:
                     store[key] = value.clone()
+
+
+def _fit_the_nulls(model, adata):
+    """Give a fitted fixture the permutation references every scored metric defaults to.
+
+    Carried by the FIXTURE rather than passed as `null_model=None` at ~200 call sites, so the
+    default path is the tested path: a metric called the way a user calls it computes a
+    reference, writes a second `uns` key and returns the `excess` columns, and the suite sees
+    all of that. The four tests that deliberately measure something else -- device parity,
+    recovery accuracy, the delta intersection rule, real-data timing -- pass `null_model=None`
+    and say why.
+
+    Three more fits per fixture, on models this small, and they are the only place in the suite
+    where a null is exercised through the ordinary reader surface.
+    """
+    import tcri
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
 
 
 def _seed_all(seed: int = 0) -> None:
@@ -226,6 +248,7 @@ def trained_model(synthetic_adata):
             enable_model_summary=False,
         )
         model.to_anndata(adata)
+        _fit_the_nulls(model, adata)
     _remember_fixture_params("trained")
     return model, adata
 
@@ -279,6 +302,7 @@ def cohort():
         model.train(max_epochs=10, batch_size=128, n_steps_kl_warmup=8, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
+        _fit_the_nulls(model, adata)
     _remember_fixture_params("cohort")
     logging.disable(logging.NOTSET)
     return model, adata

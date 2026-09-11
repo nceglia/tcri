@@ -148,7 +148,10 @@ def test_informative_genes_outrank_matched_noise_genes_on_average():
         a = simulate_tcri(fuzziness=0.0, seed=seed, **_SIM)
         b, is_info = _with_noise_genes(a, 20, seed)
         model = _fit(b)
-        imp = tcri.perturb.gene_importance(model, b, use_gate=False,
+        # `null_model=None` throughout this file: it scores the importance against a
+        # CLOSED-FORM oracle, so a permutation reference would answer a different question and
+        # triple the fitting cost of an already-slow test.
+        imp = tcri.perturb.gene_importance(model, b, use_gate=False, null_model=None,
                                            inplace=False)["result"]["value"].to_numpy()
         aurocs.append(roc_auc_score(is_info, imp))
         noise_in_top.append(int((~is_info[np.argsort(-imp)[:10]]).sum()))
@@ -164,9 +167,9 @@ def test_importance_is_flat_when_expression_carries_no_phenotype():
     substantially larger. Difficulty moved, not the truth."""
     flat = simulate_tcri(fuzziness=1.0, seed=12, **_SIM)
     sharp = simulate_tcri(fuzziness=0.0, seed=12, **_SIM)
-    i_flat = tcri.perturb.gene_importance(_fit(flat), flat, use_gate=False,
+    i_flat = tcri.perturb.gene_importance(_fit(flat), flat, use_gate=False, null_model=None,
                                           inplace=False)["result"]["value"].to_numpy()
-    i_sharp = tcri.perturb.gene_importance(_fit(sharp), sharp, use_gate=False,
+    i_sharp = tcri.perturb.gene_importance(_fit(sharp), sharp, use_gate=False, null_model=None,
                                            inplace=False)["result"]["value"].to_numpy()
     assert i_sharp.max() > 3 * i_flat.max(), (
         f"no separation between informative and uninformative expression: "

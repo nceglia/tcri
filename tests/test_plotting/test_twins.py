@@ -33,9 +33,29 @@ def _cov(adata):
     return list(adata.uns[K.COVARIATE_CATEGORIES])[0]
 
 
-def _n_points(ax):
-    """Markers drawn by the point mark — the floor of the mark rule."""
-    return sum(len(c.get_offsets()) for c in ax.collections)
+def _n_points(ax, *, reference=False):
+    """Markers drawn by the VALUE mark — the floor of the mark rule.
+
+    The permutation reference is a second collection at the same x positions, labelled
+    :data:`tcri.plotting._base.REFERENCE_LABEL`. Counting both would make every "one dot per
+    replicate" assertion in this file read double the moment a result carries a reference,
+    which is the normal case now. ``reference=True`` counts the reference collection instead.
+    """
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    want = REFERENCE_LABEL if reference else None
+    return sum(len(c.get_offsets()) for c in ax.collections
+               if (c.get_label() == REFERENCE_LABEL) == reference
+               or (want is None and c.get_label() != REFERENCE_LABEL))
+
+
+def _reference_points(ax):
+    """The grey reference markers, as an (n, 2) array of (x, y)."""
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    import numpy as _np
+    offs = [c.get_offsets() for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+    return _np.concatenate(offs) if offs else _np.empty((0, 2))
 
 
 def _n_violins(ax):
@@ -167,10 +187,19 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     assert split_ax.get_xlabel() == "disease_status"
 
     stats = tcri.get.result(adata, "mutual_information")["stats"]
-    assert stats is not None and len(stats) == 1
-    row = stats.iloc[0]
+    # One row per (contrast, quantity) since the result carries a reference. The star drawn is
+    # the one for the quantity ON THE AXIS: the default panel draws `value`, so it must carry
+    # the value's star, and the excess panel the excess's. On this fixture the two differ.
+    assert stats is not None and set(stats["quantity"]) == {"value", "excess"}
+    row = stats.query("quantity == 'value'").iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3, "the contrast is not over the 3 patients per arm"
     assert [t.get_text() for t in split_ax.texts] == [row["stars"] or "ns"]
+
+    excess_row = stats.query("quantity == 'excess'").iloc[0]
+    excess_ax = tcri.pl.mutual_information(adata, quantity="excess")
+    assert [t.get_text() for t in excess_ax.texts] == [excess_row["stars"] or "ns"]
+    assert row["n_a"] == excess_row["n_a"] and row["n_b"] == excess_row["n_b"], (
+        "the two quantities were collapsed over different replicate sets")
 
     tcri.tl.mutual_information(adata, covariate=cov, groupby="patient")
     plain_ax = tcri.pl.mutual_information(adata)
@@ -401,10 +430,19 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
     res = tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient",
                                      splitby="disease_status")
 
-    expected = collapse_to_replicates(res["result"], groupby="patient", splitby="disease_status")
+    # the SAME collapse call the plot makes: over the quantity and its reference together, so
+    # the grey mark and the value mark rest on one replicate set
+    expected = collapse_to_replicates(res["result"], groupby="patient",
+                                      splitby="disease_status",
+                                      value=["value", "null_value"])
     ax = tcri.pl.phenotypic_entropy(adata)
-    drawn = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections]))
+    from tcri.plotting._base import REFERENCE_LABEL
+    drawn = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
+                                    if c.get_label() != REFERENCE_LABEL]))
     assert np.allclose(drawn, np.sort(expected["value"].to_numpy()))
+    grey = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
+                                   if c.get_label() == REFERENCE_LABEL]))
+    assert np.allclose(grey, np.sort(expected["null_value"].to_numpy()))
 
 
 def test_nothing_connects_two_x_positions(cohort):
@@ -595,7 +633,11 @@ def test_dot_area_is_the_matched_clone_count(cohort):
     counts = res.groupby("patient", observed=True)["clonotype"].nunique()
 
     ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    per_patient = [c.get_sizes() for c in ax.collections if len(c.get_offsets()) == 2]
+    # the grey reference pair is excluded: its size is FIXED by design, because the null's
+    # matched clone count is provably the parent's and sizing it would repeat one number
+    from tcri.plotting._base import REFERENCE_LABEL
+    per_patient = [c.get_sizes() for c in ax.collections
+                   if len(c.get_offsets()) == 2 and c.get_label() != REFERENCE_LABEL]
     assert len(per_patient) == len(counts)
     for sizes in per_patient:
         assert len(set(np.round(sizes, 9))) == 1, "a patient's two endpoints differ in size"
@@ -623,5 +665,14 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
 
     unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
     assert unsized.get_legend() is None, "a phenotype count was labelled as clones matched"
-    areas = {round(float(s), 6) for c in unsized.collections for s in c.get_sizes()}
+    from tcri.plotting._base import REFERENCE_LABEL
+    areas = {round(float(s), 6) for c in unsized.collections
+             if c.get_label() != REFERENCE_LABEL for s in c.get_sizes()}
     assert len(areas) == 1, "the phenotype panel encoded a count in the dot area"
+
+    # ...and the reference's own dots are all one size too, for the same reason stated the
+    # other way round: the null's matched clone count IS the parent's, so encoding it would
+    # repeat one number in a channel that means "this varies".
+    grey = {round(float(s), 6) for c in sized.collections
+            if c.get_label() == REFERENCE_LABEL for s in c.get_sizes()}
+    assert len(grey) <= 1, f"the reference dots were sized by a count: {sorted(grey)}"

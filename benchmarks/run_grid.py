@@ -154,7 +154,7 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
 
     t0 = time.time()
     est = tcri.tl.mutual_information(
-        adata, covariate="cov_0", n_samples=n_samples, weighted=True,
+        adata, null_model=None, covariate="cov_0", n_samples=n_samples, weighted=True,
         normalize_mode=normalize_mode, device=device, random_state=seed,
     )
     t_metric = time.time() - t0

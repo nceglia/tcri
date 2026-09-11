@@ -97,8 +97,41 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     res = tcri.perturb.gene_importance(model, a, splitby="disease_status")
     ax = tcri.pl.gene_importance(a, n_top=6)
     genes = [t.get_text() for t in ax.get_xticklabels()]
-    stars = res["stats"].set_index("gene")["stars"]
+    # filtered by quantity: `stats` carries one row per (gene, quantity), and a dict keyed by
+    # gene alone would take the last row -- the excess's star over the value's marks
+    stars = res["stats"].query("quantity == 'value'").set_index("gene")["stars"]
     assert [t.get_text() for t in ax.texts] == [stars[g] or "ns" for g in genes]
+
+    excess_stars = res["stats"].query("quantity == 'excess'").set_index("gene")["stars"]
+    excess_ax = tcri.pl.gene_importance(a, n_top=6, quantity="excess")
+    excess_genes = [t.get_text() for t in excess_ax.get_xticklabels()]
+    assert [t.get_text() for t in excess_ax.texts] == [excess_stars[g] or "ns"
+                                                       for g in excess_genes]
+
+    # a doubled frame with no `quantity` column to filter on is refused rather than silently
+    # choosing between the value's contrast and the excess's
+    from tcri.plotting._perturbation import _star_labels
+    doubled = res["stats"].drop(columns=["quantity"])
+    with pytest.raises(ValueError, match="no\n?\s*`quantity` column|`quantity` column"):
+        _star_labels(ax, doubled, genes, groupby="patient")
+
+    # ...while THREE split levels are a pre-existing limitation of a one-star-per-gene panel,
+    # not an error: three contrasts per gene and one position to draw them in. Warn and draw
+    # nothing, rather than starring one pair as if it were the whole comparison.
+    import warnings as _warnings
+    three = a.copy()
+    patients = sorted(three.obs["patient"].astype(str).unique())
+    lut = {p: "abc"[i % 3] for i, p in enumerate(patients)}
+    three.obs["arm3"] = three.obs["patient"].astype(str).map(lut).astype("category")
+    res3 = tcri.perturb.gene_importance(model, three, genes=list(three.var_names[:3]),
+                                        splitby="arm3")
+    assert res3["stats"]["gene"].duplicated().any(), "the fixture has no multi-contrast gene"
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        ax3 = tcri.pl.gene_importance(three, n_top=3)
+    assert not ax3.texts, "a single pair was starred as if it were the whole contrast"
+    assert any("more than two levels" in str(w.message) for w in caught), [
+        str(w.message) for w in caught]
     assert ax.get_legend() is not None, "the split levels need a legend"
     assert not [l for l in ax.lines if len(set(np.round(l.get_xdata(), 6))) > 1
                 and np.ptp(l.get_xdata()) >= 1.0], "a line spans two genes"

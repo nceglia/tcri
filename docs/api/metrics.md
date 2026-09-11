@@ -43,6 +43,7 @@ contrast lands in `stats` — you do not call a second function.
 | column | meaning |
 |---|---|
 | *`<splitby>`* | the contrast as a label, e.g. `disease_status` → `"disease vs control"` |
+| `quantity` | which column was contrasted: `"value"`, or `"excess"` when a reference was computed |
 | `level_a`, `level_b` | the two levels contrasted |
 | `replicate_unit` | the column `groupby` resolved to |
 | `mean_a`, `sd_a`, `n_a` | first level's mean over replicates, its spread, and how many |
@@ -61,3 +62,39 @@ so 18 clones from 4 patients give n=4. Handing the row-level frame to a rank tes
 what produces a starred p-value off a handful of patients.
 
 With more than two levels every pair is reported; multiplicity is yours to handle.
+
+**Both quantities are contrasted, and nothing switches on its own.** With a reference present
+the frame carries one row per (contrast, `quantity`), and the plot selects which one to star, so
+the marks and the star above them are always the same quantity. The two rows describe the same
+replicates: the collapse runs once over both columns, so a replicate missing a reference is
+dropped from both rather than from one.
+
+## References
+
+No model-based number here is reported bare. Every quantity above is positive for data with no
+structure in it, so each is read against a **permutation reference**: the same model, refit on
+one permuted label vector (see {doc}`tcri.null <null>`).
+
+```python
+mi = tcri.tl.mutual_information(adata, covariate="post")
+mi["result"][["value", "null_value", "excess"]]
+```
+
+`null_model` defaults to `"auto"`: the phenotype null for the entropies, mutual information and
+gene importance, the condition null for flux and the two deltas. `None` computes no reference
+and creates no column; any fit on the object can be named instead. `result` and `table` gain
+`null_v` and `excess` beside every native value column `v`, and `excess = value - null_value` on
+the metric's own scale. There is no ratio: a ratio explodes on a near-zero reference and hides
+effect size, and dividing two stored columns is yours.
+
+The reference is **the caller's own call with the fit changed** — every other argument forwarded
+verbatim, because `groupby`, `clones`, `weighted`, `normalized`, `normalize_mode`,
+`n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change what is being
+measured.
+
+The `excess` carries no `sd` and no interval. It is a difference of two summaries, and there is
+no correspondence between the parent's draw 7 and the null's, so nothing pairs them.
+
+**Mutual information stores both denominators.** A normalised MI divides by a normaliser taken
+from the same joint it normalises, and a null does not share it, so `result` carries `denom` and
+`null_denom`. `value * denom` and `null_value * null_denom` recover both numbers in bits.

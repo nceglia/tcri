@@ -97,14 +97,18 @@ model = tcri.ml.TCRIModel(adata)
 model.train(max_epochs=200, batch_size=512)
 model.to_anndata(adata)
 
-# 3. read out information-theoretic metrics (bits)
+# 3. fit the permutation references, once: every metric is read against one
+tcri.null.all(model, adata)
+
+# 4. read out information-theoretic metrics (bits), each with its own floor
+#    -> value, null_value, excess = value - null_value
 mi = tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
 ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
 flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 
-# 4. ask the fitted model which genes the phenotype calls rest on
+# 5. ask the fitted model which genes the phenotype calls rest on
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")
-tcri.pl.gene_importance(adata)
+tcri.pl.gene_importance(adata, quantity="excess")
 ```
 
 No paired data yet? `tcri.datasets.simulate_cohort()` returns a synthetic AnnData with

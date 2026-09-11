@@ -27,7 +27,7 @@ def rebuild(model, adata, fit):
     on fresh parameters would return a randomly initialised model that answers every question
     without complaint.
     """
-    from ..model._model import TCRIModel, expect_params
+    from ..model._model import TCRIModel, adopt, expect_params
     from ._nulls import _init_params
 
     fit = K.resolve_fit(adata, fit)
@@ -41,8 +41,13 @@ def rebuild(model, adata, fit):
             f"no permutation record for fit {fit!r} in this AnnData. Only a fit built by "
             f"tcri.null.* can be rebuilt; a hand-written fit has to be passed as a model object."
         )
-    namespace = str(settings.get("namespace") or fit)
-    axis = str(settings.get("axis") or settings.get("kind"))
+    # `.get(x) or y` is deliberately avoided on anything that has been through h5ad: a stored
+    # list comes back as a numpy array and its truth value raises. These two are scalars today,
+    # so the explicit form is about keeping one rule in this file rather than two.
+    namespace = settings.get("namespace")
+    namespace = fit if namespace is None else str(namespace)
+    axis = settings.get("axis")
+    axis = str(settings.get("kind")) if axis is None else str(axis)
 
     held = [k for k in pyro.get_param_store().keys() if k.startswith(f"{namespace}.")]
     if not held:
@@ -51,6 +56,12 @@ def rebuild(model, adata, fit):
             f"with tcri.utils.load_tcri_session, or refit with tcri.null.{settings.get('kind')}"
             f"(model, adata)."
         )
+
+    # Register the parent's setup on THIS object first. Without it a rebuild on a derived
+    # AnnData -- a copy, a slice, a zeroed matrix, which is the ordinary way
+    # `perturb.gene_importance` is called -- fails in scvi's constructor with "setup with a
+    # different model", naming a cause that has nothing to do with the request.
+    adata = adopt(model, adata)
 
     with expect_params(namespace):
         null = TCRIModel(adata, name=namespace,

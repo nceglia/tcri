@@ -75,10 +75,11 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
     return base, pert, counts
 
 
-@tl_result(key=K.GENE_IMPORTANCE, version=1, schema=schemas.GeneImportance, data_param="adata")
+@tl_result(key=K.GENE_IMPORTANCE, version=1, schema=schemas.GeneImportance, data_param="adata",
+           default_null="phenotype", reference_arg="model", per_gene_stats=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     n_samples=0, use_gate=True, batch_size=4096, random_state=None,
-                    key_added=None, inplace=True) -> dict:
+                    null_model="auto", key_added=None, inplace=True) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
     distribution moves when the gene is silenced. Computed once, cached, returned.
 
@@ -106,6 +107,12 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         users see. ``False``: the head alone, invariant to the gate and the clone structure.
     batch_size, random_state
         Cells per encoder pass; the seed for the Dirichlet draws.
+    null_model
+        The permutation reference. ``"auto"`` is the phenotype null, rebuilt from the store and
+        this object and run on the same genes, cells and rule; ``None`` reports the bare
+        importance; a fit name selects another; a fitted ``TCRIModel`` is used directly and
+        skips the rebuild. There is no ``fit=``: this is a query on a MODEL rather than on a
+        stored substrate, so a different fit is reached by handing it a different model.
 
     Returns
     -------

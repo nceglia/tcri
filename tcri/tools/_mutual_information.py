@@ -26,30 +26,43 @@ __all__ = ["mutual_information"]
 _EPS = 1e-15
 
 
-def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min") -> float:
-    """MI (bits) of a clone×phenotype table ``J`` (any scale — renormalized here)."""
+def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
+                   return_denom: bool = False):
+    """MI (bits) of a clone×phenotype table ``J`` (any scale — renormalized here).
+
+    ``return_denom`` also returns the normaliser, which a REFERENCE needs and cannot be given
+    from outside. The normaliser comes from the same joint it normalises, so a null does not
+    share it: at the default ``weighted=False`` the engine row-normalises, making ``h_c``
+    exactly ``log2(C)``, and ``normalize_mode="min"`` therefore selects ``h_p``, the FITTED
+    phenotype marginal entropy. Measured on a realistic pair, a 2.3% denominator mismatch moves
+    the excess by 4.1%, and on a parent whose head uses two of four phenotypes the denominator
+    alone flips its sign. Both denominators are stored so a reader recovers both bit values
+    exactly, as ``value*denom`` and ``null_value*null_denom``.
+    """
     J = np.asarray(J, dtype=np.float64)
     total = J.sum()
     if total <= 0:
-        return np.nan
+        return (np.nan, np.nan) if return_denom else np.nan
     pxy = J / total
     px = pxy.sum(1, keepdims=True)   # P(clone)
     py = pxy.sum(0, keepdims=True)   # P(phenotype)
     mi = float(np.sum(pxy * np.log2((pxy + _EPS) / (px @ py + _EPS))))
     if not normalized:
-        return mi
+        return (mi, 1.0) if return_denom else mi
     h_c = float(-np.sum(px * np.log2(px + _EPS)))
     h_p = float(-np.sum(py * np.log2(py + _EPS)))
     denom = min(h_c, h_p) if mode == "min" else 0.5 * (h_c + h_p)
-    return mi / denom if denom > 0 else 0.0
+    value = mi / denom if denom > 0 else 0.0
+    return (value, denom) if return_denom else value
 
 
-@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation)
+@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation,
+           values=("value", "denom"), denominators=("denom",), default_null="phenotype")
 def mutual_information(
     adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
     temperature=1.0, clones=None, weighted=False, normalized=True,
     normalize_mode="min", random_state=None, device=None,
-    key_added=None, inplace=True,
+    null_model="auto", fit=None, key_added=None, inplace=True,
 ):
     """I(c;φ|covariate) in bits — computed once, cached, and returned.
 
@@ -61,6 +74,11 @@ def mutual_information(
     ``replicate`` at ``setup_anndata``, and the effective value is recorded in provenance.
     ``splitby`` requires ``groupby`` and must be constant within group; when set, the
     between-split contrast lands in ``stats`` with ``n`` counting GROUPS.
+
+    ``null_model`` names the permutation reference (``"auto"`` is the phenotype null, ``None``
+    the bare value); ``fit`` selects which fit the number is computed on. The result carries
+    ``denom``, the normaliser this MI was divided by, so the reference's own normaliser can be
+    stored beside it and both bit values recovered exactly.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -68,14 +86,18 @@ def mutual_information(
     def _compute(clone_subset):
         draws, _cols = joint_draws(
             adata, covariate, n_samples=n_samples, weighted=weighted, device=device,
-            temperature=temperature, clones=clone_subset, random_state=random_state,
+            temperature=temperature, clones=clone_subset, random_state=random_state, fit=fit,
         )
-        return [_mi_from_joint(J, normalized=normalized, mode=normalize_mode)
-                for _ids, J in draws]
+        out = []
+        for _ids, J in draws:
+            value, denom = _mi_from_joint(J, normalized=normalized, mode=normalize_mode,
+                                          return_denom=True)
+            out.append({"value": value, "denom": denom})
+        return out
 
     table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
-                         clones=clones, item_col=None, compute=_compute)
-    result = build_result(table)
+                         clones=clones, item_col=None, compute=_compute, fit=fit)
+    result = build_result(table, extra_values=("denom",))
     stats = build_stats(result, groupby=gkey, splitby=splitby)
 
     payload = {"table": table, "result": result, "stats": stats}

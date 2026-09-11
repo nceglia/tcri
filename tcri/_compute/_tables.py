@@ -31,7 +31,7 @@ from .._stats import hdi
 
 
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
-                use_logits=True, device=None):
+                use_logits=True, device=None, fit=None):
     """Return ``(draws, phenotype_cols)`` where ``draws`` is a list of ``(clone_ids, [C, P])``
     per posterior draw (length 1 for ``n_samples=0``).
 
@@ -89,6 +89,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
         temperature=temperature,
         random_state=random_state,
         device=device,
+        fit=fit,
     )
 
     # Row labels in DataFrame-concat order (per covariate block, per clone). When
@@ -205,8 +206,15 @@ def _refit_hint(adata, fit, groupby):
     """
     if fit is None:
         return ""
-    settings = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
-    strata = [str(c) for c in (settings.get("strata") or [])]
+    settings = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit))
+    if settings is None:
+        return ""
+    # h5ad stores a list of strings as a numpy ARRAY, so the idiomatic `or []` raises "the truth
+    # value of an array with more than one element is ambiguous" on any object that has been to
+    # disk -- which is every object a reference is read from in practice. The same spelling bit
+    # `keys.fits()` in 0.12; written against the round-tripped shape both times.
+    raw = settings.get("strata")
+    strata = [] if raw is None else [str(c) for c in raw]
     if not strata:
         return f" This is fit {fit!r}."
     if str(settings.get("kind")) == "condition":
@@ -331,7 +339,11 @@ def build_result(table, *, value="value", extra_values=()):
     # treatment arm rather than a within-patient axis). The metric is right to find nothing;
     # crashing on it hides why.
     if table is None or not len(table):
-        return pd.DataFrame(columns=[value])
+        # The columns the non-empty shape would have had, not just `value`. An empty frame
+        # that is missing its declared extras is indistinguishable from a frame computed
+        # without them, which is how an empty `phenotypic_flux` -- a real and documented
+        # outcome -- would read as "no reference was computed" rather than "no rows".
+        return pd.DataFrame(columns=list(val_cols))
 
     keys = [c for c in table.columns if c not in ("draw", *val_cols)]
 
@@ -373,17 +385,39 @@ def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep
     ``keep`` names further label columns to preserve -- the plotting layer passes whatever it
     is about to put on x and hue, since collapsing away an axis it is drawing would silently
     drop the split (measured: the ``response`` hue vanished from the clonotypic-entropy panel).
+
+    ``value`` may be a LIST, and when it is, every listed column is collapsed under ONE mask:
+    a row is dropped if ANY of them is non-finite. Averaging each column over its own mask
+    means the value and its reference rest on different replicate sets, and then
+    ``mean(excess)`` stops equalling ``mean(value) - mean(null_value)`` -- measured 0.4500
+    against 0.3000 on a two-replicate frame with one NaN reference. The single-column call is
+    unchanged and still returns a frame with that one value column.
     """
     if result is None or not len(result) or groupby is None or groupby not in result.columns:
         return result
+    values = [value] if isinstance(value, str) else list(value)
+    values = [v for v in values if v in result.columns]
+    if not values:
+        return result
     keys = [c for c in (groupby, splitby, *keep) if c and c in result.columns]
     keys = list(dict.fromkeys(keys))
-    return (result.groupby(keys, observed=True, dropna=False)[value]
+    if len(values) > 1:
+        finite = np.isfinite(result[values].to_numpy(dtype=float)).all(axis=1)
+        result = result.loc[finite]
+        if not len(result):
+            return result.loc[:, keys + values]
+    return (result.groupby(keys, observed=True, dropna=False)[values]
             .mean().reset_index())
 
 
 def build_stats(result, *, groupby, splitby, value="value"):
     """The between-split contrast, or ``None`` when ``splitby`` is not set.
+
+    ``value`` may be a LIST of quantities -- ``("value", "excess")`` once a reference has been
+    computed. The frame then carries one row per (contrast, quantity) and a ``quantity``
+    column saying which is which. Nothing switches automatically on the presence of a
+    reference: the plot selects, so the marks and the star it carries are always the same
+    quantity.
 
     The replicate unit is the GROUP. When the metric has an item axis, ``result`` holds one row
     per (group, item) -- so the item rows are averaged to one value per group FIRST, and the
@@ -400,30 +434,43 @@ def build_stats(result, *, groupby, splitby, value="value"):
         return None
     from .._stats import compare_groups
 
-    # THE pseudoreplication step. Everything after this sees one number per group. Shared with
-    # the plotting layer so the marks cannot describe a different unit from the p-value.
-    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
-
-    contrasts = compare_groups(per_group, value=value, splitby=splitby)
-    if contrasts is None or not len(contrasts):
+    quantities = [value] if isinstance(value, str) else list(value)
+    quantities = [q for q in quantities if q in result.columns]
+    if not quantities:
         return None
 
+    # THE pseudoreplication step. Everything after this sees one number per group. Shared with
+    # the plotting layer so the marks cannot describe a different unit from the p-value.
+    #
+    # ONE collapse over EVERY quantity, not one per quantity: a per-column mask would drop a
+    # different non-finite set for `value` than for `excess`, so `n_a`/`n_b` would differ
+    # between the two rows of one stats frame and each row would describe a different set of
+    # replicates. The rows are then directly comparable, which is what lets a plot switch
+    # quantity and keep its own star honest.
+    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby,
+                                       value=quantities)
+
     rows = []
-    for _, c in contrasts.iterrows():
-        a, b = c["group_a"], c["group_b"]
-        row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b, "replicate_unit": groupby}
-        for suffix, level in (("a", a), ("b", b)):
-            arm = across_groups(per_group.loc[per_group[splitby] == level, value])
-            row[f"mean_{suffix}"] = arm["value"]
-            row[f"sd_{suffix}"] = arm["sd"]
-            row[f"ci_low_{suffix}"] = arm["ci_low"]
-            row[f"ci_high_{suffix}"] = arm["ci_high"]
-            row[f"n_{suffix}"] = arm["n_groups"]
-        row["delta"] = float(c["delta"])
-        row["stat"] = float(c["U"])
-        row["p"] = float(c["p"])
-        row["stars"] = c["stars"]
-        rows.append(row)
+    for quantity in quantities:
+        contrasts = compare_groups(per_group, value=quantity, splitby=splitby)
+        if contrasts is None or not len(contrasts):
+            continue
+        for _, c in contrasts.iterrows():
+            a, b = c["group_a"], c["group_b"]
+            row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
+                   "replicate_unit": groupby, "quantity": quantity}
+            for suffix, level in (("a", a), ("b", b)):
+                arm = across_groups(per_group.loc[per_group[splitby] == level, quantity])
+                row[f"mean_{suffix}"] = arm["value"]
+                row[f"sd_{suffix}"] = arm["sd"]
+                row[f"ci_low_{suffix}"] = arm["ci_low"]
+                row[f"ci_high_{suffix}"] = arm["ci_high"]
+                row[f"n_{suffix}"] = arm["n_groups"]
+            row["delta"] = float(c["delta"])
+            row["stat"] = float(c["U"])
+            row["p"] = float(c["p"])
+            row["stars"] = c["stars"]
+            rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
@@ -450,7 +497,12 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     def _emit(rows, label_row, per_draw):
         for draw, payload in enumerate(per_draw):
             if item_col is None:
-                rows.append({**label_row, "draw": draw, "value": payload})
+                # a draw's payload is a scalar, or a mapping of value columns when the metric
+                # carries more than one. Mutual information is the only metric with no item
+                # axis, so it is the only one that reaches this branch with a mapping -- but
+                # the two branches now handle a payload the same way, which is the point.
+                rows.append({**label_row, "draw": draw,
+                             **(payload if isinstance(payload, dict) else {"value": payload})})
             else:
                 for item, value in payload.items():
                     row = {**label_row, item_col: item, "draw": draw}

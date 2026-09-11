@@ -120,7 +120,7 @@ def shift_table(baseline, perturbed, *, names, phenotypes, labels, present, cova
     return pd.DataFrame(frame)
 
 
-def stats_per_gene(result, *, groupby, splitby):
+def stats_per_gene(result, *, groupby, splitby, value="value"):
     """The between-split contrast, once per gene.
 
     ``build_stats`` averages items to one value per group before contrasting, which for a
@@ -128,12 +128,16 @@ def stats_per_gene(result, *, groupby, splitby):
     ranking asks is per gene, so the contrast runs per gene and the rows carry a ``gene``
     column. Uncorrected across genes, as every contrast in the package is uncorrected across
     pairs; multiplicity is the caller's.
+
+    ``value`` may be a LIST of quantities, which reaches ``build_stats`` unchanged: the frame
+    then carries one row per (gene, contrast, quantity) and the collapse happens once over all
+    of them, so a panel can switch quantity and keep its own star honest.
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
     frames = []
     for gene, sub in result.groupby("gene", sort=False, observed=True):
-        st = build_stats(sub, groupby=groupby, splitby=splitby)
+        st = build_stats(sub, groupby=groupby, splitby=splitby, value=value)
         if st is not None and len(st):
             frames.append(st.assign(gene=gene))
     if not frames:

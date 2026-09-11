@@ -6,7 +6,7 @@ from ._base import render_metric
 __all__ = ["mutual_information"]
 
 
-def mutual_information(adata, *, key=None, order=None, hue_order=None, palette=None,
+def mutual_information(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None,
                        ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
     """Clone<->phenotype MI (bits, normalized) from the cached ``tl.mutual_information``.
 
@@ -15,5 +15,5 @@ def mutual_information(adata, *, key=None, order=None, hue_order=None, palette=N
     the contrast from ``stats``.
     """
     return render_metric(adata, "mutual_information", ylabel="mutual information (bits)",
-                         key=key, order=order, hue_order=hue_order, palette=palette, ax=ax,
+                         quantity=quantity, key=key, order=order, hue_order=hue_order, palette=palette, ax=ax,
                          figsize=figsize, save=save, show=show, return_df=return_df)

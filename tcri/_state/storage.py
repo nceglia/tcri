@@ -46,6 +46,9 @@ import inspect
 import numpy as np
 import pandas as pd
 
+from . import _reference
+from . import keys as _keys
+
 __all__ = [
     "tl_result",
     "decode_blob",
@@ -228,7 +231,9 @@ def _check_schema(schema, result, fn_name: str) -> None:
         raise ValueError(f"{fn_name}: result missing required keys {sorted(missing)}")
 
 
-def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None):
+def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
+              values=("value",), denominators=(), default_null=None, reference_arg="fit",
+              per_gene_stats=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return it.
 
     ``functools.wraps`` keeps the wrapped signature, so the ``.pyi`` conformance check sees the
@@ -244,10 +249,29 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     ``adata``; every parameter *before* the data argument is an object the tool operates on,
     not a setting, and is excluded from ``params`` with it. Otherwise the model itself would be
     recorded as provenance and the ``.h5ad`` write would fail on it.
+
+    **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
+    a second time against a permutation null and adds the ``null_*``/``excess*`` columns
+    (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
+    is not tidiness: the reference has to be *the caller's own call with two arguments changed*,
+    and only the decorator holds the caller's bound arguments. A body re-invoking itself would
+    have to re-list what to forward, and that list would drift from the signature the first time
+    a knob was added.
+
+    ``values`` names the metric's NATIVE value columns, before any reference column exists --
+    ``("value",)`` for the scalar metrics, ``("value", "value_from", "value_to")`` for the two
+    deltas, ``("value", "denom")`` for mutual information. ``denominators`` names those that get
+    a reference but no excess. ``default_null`` is the metric's entry in the contract's
+    ``DEFAULT_NULL`` table, read back off the live function by the conformance test so the two
+    cannot drift. ``reference_arg`` is the parameter the reference run substitutes: ``"fit"``
+    for a metric that reads a substrate, or the name of the model parameter for a query on a
+    fitted model, which needs the null's networks rather than its arrays.
     """
     def deco(fn):
         sig = inspect.signature(fn)
         names = list(sig.parameters)
+        takes_null = "null_model" in names
+        takes_fit = "fit" in names
         if data_param is None:
             # the data argument, whatever it is called
             _data_param, leading = names[0], set()
@@ -264,14 +288,45 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             arguments = bound.arguments
             adata = arguments[_data_param]
 
-            result = fn(*args, **kwargs)
+            # The fit is CANONICALISED before anything reads it, so `fit="phenotype"` and
+            # `fit="null.phenotype"` are one call rather than two `uns` keys and two params
+            # blocks. `resolve_fit` is idempotent on the canonical name, which is what makes
+            # doing it here safe.
+            if takes_fit and arguments.get("fit") is not None:
+                arguments["fit"] = _keys.resolve_fit(adata, arguments["fit"])
+                result = fn(**dict(arguments))
+            else:
+                result = fn(*args, **kwargs)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
             # and never leaks into the returned object
             resolved = (result.pop(_RESOLVED_PARAMS, None)
                         if isinstance(result, dict) else None)
+            if resolved:
+                # the effective groupby/splitby, needed by the reference restat below
+                arguments.update({k: v for k, v in resolved.items() if k in arguments})
             if schema is not None and isinstance(result, dict):
                 _check_schema(schema, result, fn.__name__)
+
+            # ── the reference ────────────────────────────────────────────────
+            reference_of = None
+            if takes_null and isinstance(result, dict):
+                reference_of = _reference.resolve_reference(
+                    adata, null_model=arguments.get("null_model"),
+                    fit=arguments.get("fit") if takes_fit else None,
+                    default_null=default_null, metric=fn.__name__,
+                )
+                if reference_of is not None:
+                    if isinstance(reference_of, str):
+                        _reference.check_joinable(
+                            adata, reference_of,
+                            against=arguments.get("fit") if takes_fit else None)
+                    reference = wrapper(**_reference_call(arguments, reference_of))
+                    _reference.attach(result, reference, values=values,
+                                      denominators=denominators)
+                    _reference.restat(result, groupby=arguments.get("groupby"),
+                                      splitby=arguments.get("splitby"), values=values,
+                                      denominators=denominators, per_gene=per_gene_stats)
 
             if arguments.get("inplace", True):
                 blob = _encode(result)
@@ -279,12 +334,61 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     blob = {"value": blob}
                 params = {k: v for k, v in arguments.items()
                           if k not in _RESERVED and k != _data_param and k not in leading}
+                if takes_null:
+                    # the RESOLVED reference, never the caller's "auto" and never a model
+                    # object: the params block goes into `uns` and has to be readable and
+                    # h5ad-writable. An unresolved model here breaks the .h5ad write.
+                    params["null_model"] = _reference.name_of(reference_of)
                 if resolved:
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version)}
-                adata.uns[arguments.get("key_added") or key] = blob
+                dest = arguments.get("key_added") or key
+                adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
 
+        def _reference_call(arguments, reference_of):
+            """The caller's own arguments, with the two the reference changes.
+
+            Every other argument is forwarded VERBATIM -- `groupby`, `splitby`, `clones`,
+            `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`,
+            `temperature`, `n_samples`, `random_state` and `device` each change the estimand,
+            and a reference computed at defaults is a different quantity subtracted from a
+            different quantity. `inplace` is honoured as the caller gave it, so the reference's
+            own frame is cached under its fit key: plottable by `key=`, available to the
+            identity test, and not computed twice.
+            """
+            call = {k: v for k, v in arguments.items() if k != "key_added"}
+            call["null_model"] = None          # terminates the recursion
+            if reference_arg == "fit":
+                if not isinstance(reference_of, str):
+                    raise TypeError(
+                        f"{fn.__name__} reads a stored substrate, so its null_model names a "
+                        f"FIT on this AnnData, not a model object. Write the other model's "
+                        f"substrate first with other.to_anndata(adata, fit='myalt'), then pass "
+                        f"null_model='myalt'."
+                    )
+                call["fit"] = reference_of
+            else:
+                # A query on a fitted model needs the null's NETWORKS, not its arrays, so the
+                # reference run substitutes the model itself. `key_added` then has to be set
+                # explicitly: with no `fit` parameter there is nothing for the destination to
+                # be suffixed by, and the reference would land on the caller's own key.
+                # The FIT name, captured before `reference_of` is rebound to a model: a rebuilt
+                # null's `name` is its parameter-store namespace (`<parent>.null.phenotype`),
+                # which is not what `params["null_model"]` records and not what `fit=` resolves.
+                # Keying the blob by it would put the reference somewhere no reader looks.
+                fit_name = _reference.name_of(reference_of)
+                if isinstance(reference_of, str):
+                    from ..null._rebuild import rebuild   # a view package: lazy, by the layout rule
+                    reference_of = rebuild(arguments[reference_arg],
+                                           arguments[_data_param], reference_of)
+                call[reference_arg] = reference_of
+                call["key_added"] = _keys.fit_key(key, fit_name)
+            return call
+
+        wrapper.tcri_default_null = default_null
+        wrapper.tcri_values = tuple(values)
+        wrapper.tcri_denominators = tuple(denominators)
         return wrapper
 
     return deco

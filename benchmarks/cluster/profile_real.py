@@ -144,28 +144,28 @@ def main():
         tcri.tl.joint_distribution(adata, covariate=cov, n_samples=args.n_samples,
                                    random_state=0, device=dev)
     with s("mutual_information"):
-        tcri.tl.mutual_information(adata, covariate=cov, groupby=args.replicate,
+        tcri.tl.mutual_information(adata, null_model=None, covariate=cov, groupby=args.replicate,
                                    n_samples=args.n_samples, random_state=0, device=dev)
     with s("clonotypic_entropy"):
-        tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby=args.replicate,
+        tcri.tl.clonotypic_entropy(adata, null_model=None, covariate=cov, groupby=args.replicate,
                                    n_samples=args.n_samples, random_state=0, device=dev)
     with s("phenotypic_entropy"):
-        tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby=args.replicate,
+        tcri.tl.phenotypic_entropy(adata, null_model=None, covariate=cov, groupby=args.replicate,
                                    n_samples=args.n_samples, random_state=0, device=dev)
 
     # flux and the deltas need two covariate levels; skipping is a result, not a failure
     if len(covs) >= 2:
         a, b = str(covs[0]), str(covs[1])
         with s("phenotypic_flux"):
-            tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b, groupby=args.replicate,
+            tcri.tl.phenotypic_flux(adata, null_model=None, cov_from=a, cov_to=b, groupby=args.replicate,
                                     n_samples=args.n_samples, random_state=0, device=dev)
         with s("delta_phenotypic_entropy"):
-            tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b,
+            tcri.tl.delta_phenotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
                                              groupby=args.replicate,
                                              n_samples=args.n_samples, random_state=0,
                                              device=dev)
         with s("delta_clonotypic_entropy"):
-            tcri.tl.delta_clonotypic_entropy(adata, cov_from=a, cov_to=b,
+            tcri.tl.delta_clonotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
                                              groupby=args.replicate,
                                              n_samples=args.n_samples, random_state=0,
                                              device=dev)

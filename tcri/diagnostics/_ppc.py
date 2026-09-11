@@ -12,9 +12,13 @@ __all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_pp
 
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", temperature=1.0,
-                           clones=None, random_state=None):
+                           clones=None, random_state=None, fit=None):
     """Model vs empirical per-clone phenotype frequencies (the fixed
-    ``compare_joint_distribution``). Per-clone distance + per-covariate aggregate. adata-only."""
+    ``compare_joint_distribution``). Per-clone distance + per-covariate aggregate. adata-only.
+
+    ``fit`` selects which fit's predictions are checked against the data. A null's predictions
+    are compared against the SAME empirical crosstab, which is the point: a phenotype null
+    should reconstruct expression as well as its parent and the phenotype calls far worse."""
     from .._compute._distance import phenotype_distance
     from ..tools import joint_distribution
 
@@ -27,7 +31,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", tempe
     rows = []
     for m in covs:
         # inplace=False: a diagnostic must not overwrite the joint the user computed
-        Jm = joint_distribution(adata, covariate=m, use_logits=True, n_samples=0,
+        Jm = joint_distribution(adata, covariate=m, use_logits=True, n_samples=0, fit=fit,
                                 temperature=temperature, clones=clones,
                                 inplace=False)["result"]
         cmask = adata.obs[cov_col].astype(str) == str(m)
@@ -48,10 +52,15 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", tempe
     return df
 
 
-def phenotype_calibration(adata, *, n_bins=10):
+def phenotype_calibration(adata, *, n_bins=10, fit=None):
     """Reliability of predict() probabilities: bin by predicted max-prob, compare mean
-    predicted prob to empirical accuracy per bin; scalar ECE in ``df.attrs['ECE']``. adata-only."""
-    probs = np.asarray(adata.obsm[K.X_PROBABILITIES], dtype=float)
+    predicted prob to empirical accuracy per bin; scalar ECE in ``df.attrs['ECE']``. adata-only.
+
+    ``fit`` selects whose probabilities are read; the TRUE labels are always the registered
+    ones, so a phenotype null scores at chance here and a clonotype null scores like its
+    parent. That contrast is how a null is evaluated (see :mod:`tcri.null`)."""
+    fit = K.resolve_fit(adata, fit)
+    probs = np.asarray(adata.obsm[K.fit_key(K.X_PROBABILITIES, fit)], dtype=float)
     phenos = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     conf = probs.max(axis=1)
     pred = np.asarray(phenos)[probs.argmax(axis=1)]

@@ -75,9 +75,26 @@ phenotype distributions under the canonical `tcri_*` keys.
 model.to_anndata(adata)
 ```
 
+Then build the permutation references once. Every scored metric reads its own against them, and
+raises rather than reporting a bare number if they are not there.
+
+```python
+tcri.null.all(model, adata)
+```
+
+```{important}
+**Upgrading from 0.11.** Every scored metric now computes a permutation reference by default, so
+a script that recomputes a metric on a loaded 0.11 session raises until `tcri.null.all(model,
+adata)` has run, or until it passes `null_model=None`. Rendering a cached 0.11 result is
+unaffected: it draws with a "no reference" label. One phenotype fit serves both entropies,
+mutual information and gene importance, so this is one prerequisite rather than four.
+```
+
 ## 5. Compute metrics
 
-All entropies and mutual information are in **bits**.
+All entropies and mutual information are in **bits**. Each carries its reference: `value` is the
+number, `null_value` is what the same model gives on permuted labels, and
+`excess = value - null_value` is the part the structure accounts for.
 
 ```python
 # mutual information between clonotype and phenotype at one covariate

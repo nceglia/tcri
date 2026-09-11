@@ -161,6 +161,17 @@ function can read them:
 | `.obsm` | `X_tcri_probabilities` | per-cell phenotype posterior (**gate-aware**) | `(n_cells, P)` |
 | `.obs` | `tcri_phenotype` | hard phenotype label (argmax of the posterior) | `(n_cells,)` |
 
+Everything in that table except `tcri_metadata` and the three `*_categories` lists is **per
+fit**: written under the fit's own prefix when `to_anndata` is given a `fit=` name, so a
+reference sits beside the fit it references rather than over it. A fit built by
+{doc}`tcri.null <../api/null>` carries three more keys, all prefixed the same way:
+
+| Key | Meaning |
+|---|---|
+| `tcri_<fit>_permutation` | the integer permutation the null was built from, so a reload reproduces it |
+| `tcri_<fit>_fit_settings` | the kind, the resolved strata and their cell counts, the seed, the training arguments, the parent, and the joinability record |
+| `tcri_<fit>_buffers` | the module's non-parameter state (BatchNorm running statistics, the archetypes), so the fit can be rebuilt for inference |
+
 ```{important}
 The per-cell `.uns` arrays are stored in the **original full-cell space**. Slicing the
 `AnnData` to a view or subset shifts `.obs`/`.obsm` but **not** `.uns`, so the indices
