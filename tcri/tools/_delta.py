@@ -41,7 +41,7 @@ from .._state.storage import tl_result, with_resolved_params
 from .._compute._tables import (
     build_result,
     build_stats,
-    clone_col,
+    clones_at,
     joint_draws,
     metric_table,
     resolve_groupby,
@@ -50,18 +50,6 @@ from .._compute._tables import (
 from ._entropy import _clonotypic_one, _phenotypic_one
 
 __all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
-
-
-def _clones_at(adata, covariate, group_clones=None):
-    """Clone ids with cells at ``covariate`` (optionally restricted to a group's clones)."""
-    meta = adata.uns[K.METADATA]
-    obs = adata.obs
-    at = obs.loc[obs[meta[K.Config.COVARIATE_COL]].astype(str) == str(covariate),
-                 clone_col(adata)].dropna().unique().tolist()
-    if group_clones is None:
-        return at
-    allowed = set(group_clones)
-    return [c for c in at if c in allowed]
 
 
 def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples, temperature,
@@ -88,8 +76,8 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     dropped = []
 
     def _compute(clone_subset):
-        at_from = _clones_at(adata, cov_from, clone_subset)
-        at_to = _clones_at(adata, cov_to, clone_subset)
+        at_from = clones_at(adata, cov_from, group_clones=clone_subset)
+        at_to = clones_at(adata, cov_to, group_clones=clone_subset)
         shared = [c for c in at_from if c in set(at_to)]
         n_union = len(set(at_from) | set(at_to))
         if n_union > len(shared):

@@ -144,6 +144,15 @@ def test_ownership_is_not_a_bare_prefix_test():
     assert not _owns_param("a", "q_p_ct_raw")
     assert not _owns_param("a", "ab.q_p_ct_raw"), "prefix match without the separator"
 
+    # ...and it must not claim DOWNWARD either. A null's namespace is `f"{parent}.null.{kind}"`,
+    # so `key.startswith(f"{name}.")` -- the fix for the unnamed case above, and correct for
+    # every test written before nulls existed -- makes a parent own its own nulls' parameters
+    # and warn that it is about to continue its own fit.
+    assert not _owns_param("a", "a.null.phenotype.q_p_ct_raw"), "a parent claimed its null"
+    assert not _owns_param("", "null.phenotype.q_p_ct_raw"), "an unnamed parent claimed its null"
+    assert _owns_param("a.null.phenotype", "a.null.phenotype.q_p_ct_raw")
+    assert _owns_param("null.phenotype", "null.phenotype.scvi$$$px_r")
+
 
 def test_session_round_trip_keeps_the_namespace(tmp_path):
     """Save and load a named model: its keys come back under its own namespace, and the

@@ -138,3 +138,13 @@ Each of these is a test in `tests/test_model_contract_conformance.py` or
   gradient.
 - The data plate scales per-cell sites by N/B and the Dirichlet sites by 1.
 - π = 1 and π = 0 reduce `predict()` to the head and to the group prior.
+
+## A null is this model
+
+A permutation reference is not a second model and not a different generative story. `permutation`
+reorders ONE of the three label vectors -- phenotype, clonotype, covariate -- at the point
+`TCRIModel.__init__` reads it from `obs`, before anything is derived from it. Everything
+downstream is then built as a fresh fit on permuted data would build it: the clone x phenotype
+prior, the archetypes, `ct_array`, the target labels. Nothing in the generative model, the guide,
+the site names, the plates or the objective changes, which is why the contract block above is the
+same block for a null and for its parent, and why the same conformance test covers both.

@@ -41,19 +41,77 @@ from ._training import UnifiedTrainingPlan, build_archetypes
 #: Prefixes of the parameter names an UNNAMED model registers: the two guide concentrations
 #: and everything `pyro.module("scvi", ...)` puts in the store. A named model owns `f"{name}."`
 #: instead, and nothing else may.
-_LEGACY_PARAM_PREFIXES = ("q_p_c", "q_p_ct", "scvi$$$")
+#: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
+#: concentrations and the networks `pyro.module` normalises as ``scvi$$$<param>``. This is the
+#: whole of a model's store footprint, which is what makes ownership decidable by name alone.
+_PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
+
+
+#: Namespaces whose pre-existing store parameters are EXPECTED rather than a collision.
+#: ``tcri.null._rebuild`` holds a name in here while it reconstructs a fitted null: finding that
+#: null's parameters already in the store is the entire point of a rebuild, so the constructor's
+#: "will CONTINUE that fit" warning would fire on every reference run and mean nothing.
+_EXPECTED_PARAMS: set = set()
+
+
+@contextlib.contextmanager
+def expect_params(name: str):
+    """Silence the store-collision warning for ``name`` inside the block."""
+    _EXPECTED_PARAMS.add(str(name))
+    try:
+        yield
+    finally:
+        _EXPECTED_PARAMS.discard(str(name))
 
 
 def _owns_param(name: str, key: str) -> bool:
     """Does the model called ``name`` own the store entry ``key``?
 
-    Ownership is what the constructor warning and the best-weight snapshot both key on, and
-    ``""`` is the case that gets it wrong if written as a bare prefix test: every named model's
-    keys start with ``""``. An unnamed model owns exactly the legacy bare names.
+    Ownership is what the constructor warning keys on, and it has two ways to go wrong, both
+    of which the obvious implementations hit. ``key.startswith(name)`` is correct for every
+    named model and wrong for the unnamed one, whose keys every named model's start with.
+    ``key.startswith(f"{name}.")`` fixes that and is still wrong DOWNWARD: a null's namespace is
+    ``f"{parent}.null.{kind}"`` (plan §3.2), so a parent would claim its own nulls' parameters
+    and warn about a collision with itself. So the namespace has to match exactly, which means
+    stripping it and requiring what remains to be one of this model's own entries.
     """
     if name:
-        return key.startswith(f"{name}.")
-    return key.startswith(_LEGACY_PARAM_PREFIXES)
+        if not key.startswith(f"{name}."):
+            return False
+        key = key[len(name) + 1:]
+    return key.startswith(_PARAM_BASES)
+
+
+#: The three label axes a null may permute. Each names one code vector read from ``obs`` in
+#: ``TCRIModel.__init__``; everything else the model derives -- the clone x phenotype prior, the
+#: archetypes, ``ct_array``, ``_target_phenotypes`` -- follows from those three, so permuting a
+#: vector at the point it is read is the whole intervention.
+PERMUTABLE = ("phenotype", "clonotype", "condition")
+
+
+def _apply_permutation(codes, axis: str, permutation):
+    """``codes`` reordered by ``permutation`` when it targets ``axis``, else unchanged.
+
+    A null is this model on permuted labels: nothing about the architecture, the split, the
+    seed or the data changes, so the permutation is applied to one code vector and every
+    derived quantity simply follows. ``permutation`` is ``(axis, perm)`` with ``perm`` a
+    permutation of ``range(n_obs)``, stored as the VECTOR rather than as a seed so a reload
+    reproduces the null across numpy versions.
+    """
+    if permutation is None:
+        return codes
+    target, perm = permutation
+    if target not in PERMUTABLE:
+        raise ValueError(f"permutation axis must be one of {PERMUTABLE}, got {target!r}")
+    if target != axis:
+        return codes
+    perm = np.asarray(perm, dtype=np.int64)
+    if perm.shape != (len(codes),):
+        raise ValueError(
+            f"permutation for {target!r} has length {perm.shape} against {len(codes)} cells; "
+            f"it must be a permutation of range(n_obs) for THIS object"
+        )
+    return np.asarray(codes)[perm]
 
 
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
@@ -234,6 +292,7 @@ class TCRIModel(BaseModelClass):
         label_error_rate: Optional[float] = 0.1,
         seed: Optional[int] = None,
         name: str = "",
+        permutation=None,
         **kwargs,
     ):
         """``label_error_rate``: ε of the noisy-label readout, the probability that an input
@@ -245,9 +304,20 @@ class TCRIModel(BaseModelClass):
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
         two models can be fitted in one session without overwriting each other. ``""`` is the
         historical unnamed layout, which every session saved before 0.12 uses and which stays
-        byte-identical."""
+        byte-identical.
+
+        ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
+        vector is reordered by ``perm`` before anything is derived from it, and nothing else
+        changes. Built by ``tcri.null.*``; passing it by hand is legal but the strata are then
+        yours to get right."""
         super().__init__(adata)
         self._name = str(name)
+        self._permutation = permutation
+        #: The arguments the last ``train()`` actually ran with. ``tcri.null.*`` replays them so
+        #: a null is fitted the way its parent was; ``save_tcri_session`` persists them, because
+        #: an in-memory attribute would not survive a reload and the null would silently fall
+        #: back to ``train()``'s defaults.
+        self._train_kwargs: dict = {}
 
         # DE-19: network init and minibatch order were unseeded, so two fits with the same
         # nominal seed differed by ~1.8e-3 in reported NMI -- larger than the effect of several
@@ -272,7 +342,7 @@ class TCRIModel(BaseModelClass):
         # coexist, is the normal state rather than the problem it is meant to flag.
         _tcri_params = [k for k in pyro.get_param_store().keys()
                         if _owns_param(self._name, k)]
-        if _tcri_params:
+        if _tcri_params and self._name not in _EXPECTED_PARAMS:
             warnings.warn(
                 f"The global Pyro param store already holds TCRI parameters for "
                 f"name={self._name!r} ({len(_tcri_params)} entries). This model will CONTINUE "
@@ -290,15 +360,18 @@ class TCRIModel(BaseModelClass):
         batch_col = self.adata_manager.registry["batch_col"]
         ph_series = self.adata.obs[phenotype_col].astype("category")
         P = len(ph_series.cat.categories)
-        target_codes = torch.tensor(ph_series.cat.codes.values, dtype=torch.long)
+        # The three code vectors, each permuted if this model is a null of that axis. The
+        # categories are never touched, so P, the label space and every downstream index are
+        # the parent's; only which cell carries which label moves.
+        pvals_np = _apply_permutation(ph_series.cat.codes.values, "phenotype", permutation)
+        target_codes = torch.tensor(pvals_np, dtype=torch.long)
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
             raise ValueError("gate_prob must be in [0,1] or None")
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
-        c_array_np = cvals.cat.codes.values
-        pvals_np = ph_series.cat.codes.values
+        c_array_np = _apply_permutation(cvals.cat.codes.values, "clonotype", permutation)
         clone_phenotype_prior = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
             clone_phenotype_prior[c_array_np[i], pvals_np[i]] += 1
@@ -319,7 +392,7 @@ class TCRIModel(BaseModelClass):
             K = c_count
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
-        cov_array_np = cov_series.cat.codes.values
+        cov_array_np = _apply_permutation(cov_series.cat.codes.values, "condition", permutation)
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
         combos = df_ct.drop_duplicates().sort_values(["c", "t"])
         ct_list = combos.values.tolist()
@@ -543,6 +616,17 @@ class TCRIModel(BaseModelClass):
         ]
         kwargs["callbacks"] = callbacks
 
+        # What this fit actually ran with. `tcri.null.*` replays it so a null is fitted the
+        # way its parent was -- a null trained at train()'s defaults would not be "the same
+        # model on permuted labels", which is the one thing a reference has to be.
+        self._train_kwargs = {
+            "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
+            "reconstruction_loss_scale": reconstruction_loss_scale,
+            "n_steps_kl_warmup": n_steps_kl_warmup,
+            "accelerator": kwargs.get("accelerator", "auto"),
+            "devices": kwargs.get("devices", "auto"),
+        }
+
         runner = TrainRunner(
             self,
             training_plan=plan,
@@ -704,10 +788,17 @@ class TCRIModel(BaseModelClass):
         return pd.DataFrame(probs, index=adata.obs_names, columns=pheno_cats)
 
     @torch.no_grad()
-    def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False) -> AnnData:
+    def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False,
+                   fit: Optional[str] = None) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
         ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it. Replaces the old
         ``preprocessing.register_model``; writes no manager stash.
+
+        ``fit`` names a SECOND fit on the same object: every per-fit key is written under that
+        prefix (``tcri_null.phenotype_p_ct`` and so on), the shared keys are left alone, and the
+        name is appended to ``uns[METADATA]["fits"]``. ``None`` is the main fit and behaves
+        exactly as it did in 0.11. One object holds one main fit and as many named fits as you
+        like; a second model calling this with ``fit=None`` overwrites the first.
 
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
@@ -721,8 +812,11 @@ class TCRIModel(BaseModelClass):
         self.module.eval()
         device = next(self.module.parameters()).device
         reg = self.adata_manager.registry
+        _key = lambda base: K.fit_key(base, fit)   # noqa: E731 -- one name, used ~15 times
 
         # 1) metadata + category orders (order = training) --------------------
+        # SHARED between every fit of one object, so a named fit leaves them alone rather than
+        # rewriting them with identical values.
         meta = {
             K.COVARIATE_COL: reg["covariate_col"],
             K.CLONE_COL: reg["clonotype_col"],
@@ -735,31 +829,61 @@ class TCRIModel(BaseModelClass):
             K.Config.REPLICATE: reg.get(K.Config.REPLICATE),
             K.Config.LAYER: reg.get(K.Config.LAYER),
         }
-        adata.uns[K.METADATA] = meta
-        for col_key, cat_key in (
-            (K.COVARIATE_COL, K.COVARIATE_CATEGORIES),
-            (K.CLONE_COL, K.CLONOTYPE_CATEGORIES),
-            (K.PHENOTYPE_COL, K.PHENOTYPE_CATEGORIES),
-        ):
-            adata.uns[cat_key] = adata.obs[meta[col_key]].astype("category").cat.categories.tolist()
+        categories = {
+            cat_key: adata.obs[meta[col_key]].astype("category").cat.categories.tolist()
+            for col_key, cat_key in (
+                (K.COVARIATE_COL, K.COVARIATE_CATEGORIES),
+                (K.CLONE_COL, K.CLONOTYPE_CATEGORIES),
+                (K.PHENOTYPE_COL, K.PHENOTYPE_CATEGORIES),
+            )
+        }
+        known = list((adata.uns.get(K.METADATA) or {}).get(K.FITS) or [])
+        if fit is None or K.METADATA not in adata.uns:
+            # The main fit owns the shared keys. It also CARRIES THE FITS LIST FORWARD: rewriting
+            # the main substrate (re-running to_anndata for a UMAP, say) must not orphan the
+            # named fits beside it, whose prefixed keys are all still there. A genuinely
+            # different model overwriting the main fit leaves them stale, which is what each
+            # fit's `parent` in FIT_SETTINGS is for -- joinability is checked, names are not.
+            adata.uns[K.METADATA] = {**meta, **({K.FITS: known} if known else {})}
+            adata.uns.update(categories)
+        if fit is not None:
+            adata.uns[K.METADATA] = {
+                **adata.uns[K.METADATA],
+                K.FITS: [n for n in known if n != fit] + [fit],
+            }
 
         # 2) learned priors + per-cell index arrays --------------------------
         ct_arr = self.module.ct_array.cpu().numpy()
-        adata.uns[K.P_CT] = self.module.get_p_ct().cpu().numpy()
-        adata.uns[K.CT_TO_COV] = self.module.ct_to_cov.cpu().numpy()
-        adata.uns[K.CT_TO_C] = self.module.ct_to_c.cpu().numpy()
-        adata.uns[K.CT_ARRAY] = ct_arr
-        adata.uns[K.COV_ARRAY] = self.module.ct_to_cov.cpu().numpy()[ct_arr]
-        adata.uns[K.LOCAL_SCALE] = float(self.module.local_scale)
+        adata.uns[_key(K.P_CT)] = self.module.get_p_ct().cpu().numpy()
+        adata.uns[_key(K.CT_TO_COV)] = self.module.ct_to_cov.cpu().numpy()
+        adata.uns[_key(K.CT_TO_C)] = self.module.ct_to_c.cpu().numpy()
+        adata.uns[_key(K.CT_ARRAY)] = ct_arr
+        adata.uns[_key(K.COV_ARRAY)] = self.module.ct_to_cov.cpu().numpy()[ct_arr]
+        adata.uns[_key(K.LOCAL_SCALE)] = float(self.module.local_scale)
+
+        # The joinability record. A reference is only comparable to the main fit if the two
+        # describe the same cells and the same label spaces -- which holds by construction for a
+        # permutation null and for nothing else automatically. The three category lists are
+        # SHARED keys, so comparing them between two fits of one object compares an object with
+        # itself and always passes; each fit therefore records what IT saw, and the reference run
+        # compares records rather than keys.
+        adata.uns[_key(K.FIT_SETTINGS)] = {
+            **(adata.uns.get(_key(K.FIT_SETTINGS)) or {}),
+            "n_obs": int(adata.n_obs),
+            "n_ct": int(self.module.ct_count),
+            "name": self._name,
+            "train": dict(self._train_kwargs),
+            **categories,
+        }
         # DE-5b: the guide's actual concentration, so credible intervals come from the
         # fitted posterior rather than from a reconstructed local_scale * mean.
-        adata.uns[K.CONC_CT] = self.module.get_conc_ct().detach().cpu().numpy()
+        adata.uns[_key(K.CONC_CT)] = self.module.get_conc_ct().detach().cpu().numpy()
         gp = self.module.gate_prob
-        adata.uns[K.GATE_PROB] = float(gp) if gp is not None else float("nan")
-        adata.uns[K.CLASSIFIER_TEMPERATURE] = float(self.module.classifier_temperature)
+        adata.uns[_key(K.GATE_PROB)] = float(gp) if gp is not None else float("nan")
+        adata.uns[_key(K.CLASSIFIER_TEMPERATURE)] = float(self.module.classifier_temperature)
 
         # 3) latent mean -----------------------------------------------------
-        adata.obsm[K.X_TCRI] = self.get_latent_representation(
+        adata.obsm[_key(K.X_TCRI)] = self.get_latent_representation(
             adata=adata, batch_size=batch_size
         ).astype("float32")
 
@@ -778,19 +902,23 @@ class TCRIModel(BaseModelClass):
             prior_buf.append(torch.log(p_ct_t[ct_arr_t[idx]] + 1e-8).cpu())
         cls_logits = torch.cat(logits_buf).numpy().astype("float32")
         prior_log = torch.cat(prior_buf).numpy().astype("float32")
-        adata.obsm[K.X_LOGITS] = cls_logits
-        adata.obsm[K.X_LOGPOSTERIOR] = cls_logits + prior_log
+        adata.obsm[_key(K.X_LOGITS)] = cls_logits
+        adata.obsm[_key(K.X_LOGPOSTERIOR)] = cls_logits + prior_log
 
         # 5) probabilities (gate-aware, canonical) + argmax hard labels ------
         probs_df = self.predict(adata, batch_size=batch_size)
-        adata.obsm[K.X_PROBABILITIES] = probs_df.values.astype("float32")
-        adata.obs[K.PHENOTYPE] = pd.Categorical.from_codes(
+        adata.obsm[_key(K.X_PROBABILITIES)] = probs_df.values.astype("float32")
+        adata.obs[_key(K.PHENOTYPE)] = pd.Categorical.from_codes(
             probs_df.values.argmax(1), categories=list(probs_df.columns)
         )
 
         if compute_umap:
+            # Per fit, like every other derived array: unprefixed, a null would overwrite the
+            # parent's embedding, which is the one obsm slot a reader is most likely to plot.
             import umap
-            adata.obsm[K.X_UMAP] = umap.UMAP(random_state=42).fit_transform(adata.obsm[K.X_TCRI])
+            adata.obsm[_key(K.X_UMAP)] = umap.UMAP(random_state=42).fit_transform(
+                adata.obsm[_key(K.X_TCRI)]
+            )
 
         return adata
 

@@ -244,6 +244,20 @@ def load_tcri_session(
             _warnings.warn(f"Could not load Pyro param store: {e}")
     
     _ensure_pyro_posterior_params(model, adata)
+
+    # 5) The arguments the parent was actually fitted with. `tcri.null.*` replays them, and an
+    # in-memory attribute does not survive a reload: without this a null built after a reload
+    # would silently fall back to `train()`'s defaults and stop being the parent's model on
+    # permuted labels. An older session has no record; `_train_kwargs` stays empty and
+    # `tcri.null.*` raises rather than guessing.
+    meta_file = _os.path.join(run_dir, META_FILE)
+    if _os.path.exists(meta_file):
+        try:
+            with open(meta_file, "r") as f:
+                model._train_kwargs = dict(_json.load(f).get("train_kwargs") or {})
+        except Exception as e:
+            _warnings.warn(f"Could not read {META_FILE}: {e}")
+
     return model, adata
 
 
@@ -389,6 +403,10 @@ def save_tcri_session(
         "n_obs": int(adata.n_obs),
         "n_vars": int(adata.n_vars),
         "var_names_hash": str(_pd.util.hash_pandas_object(_pd.Index(adata.var_names)).sum()),
+        # What `train()` actually ran with, so `tcri.null.*` can replay it after a reload.
+        # Empty for a model that was loaded-and-never-trained or saved before 0.12.
+        "train_kwargs": dict(getattr(model, "_train_kwargs", {}) or {}),
+        "name": str(getattr(model, "name", "")),
         "versions": {
             "python": f"{_os.sys.version_info.major}.{_os.sys.version_info.minor}.{_os.sys.version_info.micro}",
             "anndata": getattr(_ad, "__version__", "unknown"),

@@ -169,6 +169,36 @@ the `clones=` argument. The metric functions guard against this and raise rather
 silently-wrong numbers.
 ```
 
+### One main fit, and as many named fits beside it
+
+The keys above are a single slot. A second model calling `to_anndata(adata)` overwrites the
+first, which has always been true and has not changed. What is new is `fit=`: passing a name
+writes the same quantities under that name instead, leaving the main fit and the shared keys
+alone.
+
+```python
+model.to_anndata(adata)                     # tcri_p_ct, X_tcri, ...
+other.to_anndata(adata, fit="myalt")        # tcri_myalt_p_ct, X_tcri_myalt, ...
+```
+
+`adata.uns["tcri_metadata"]["fits"]` lists what is present. This is how
+{doc}`tcri.null <../api/null>` puts a permutation reference beside the fit it references, and it
+works for any second model, not only a null.
+
+"One AnnData, one model" is the natural reading of that scheme and it is the wrong one. Two
+shapes are supported, and which you want depends on what the second fit is *for*. When two fits
+are peers -- two clonotype definitions, say -- give each a copy of the AnnData, so neither has to
+be addressed by name. When the other fits are references for the main one, keep them on one
+object under their own names, so a metric can read both and report the difference.
+
+```{important}
+A named fit is checked for **joinability**, never for its name. `to_anndata(fit=...)` records
+the cell count, the `ct` count and the three category lists as that model saw them, and a
+reference run compares that record against the main fit's own. The category lists cannot do
+this job on their own: they are shared keys, so comparing them between two fits of one object
+compares the object with itself and always passes.
+```
+
 ### Indexing, concretely
 
 The `ct_to_c` / `ct_to_cov` arrays are the join keys connecting a cell to its clone, its
