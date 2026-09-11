@@ -711,6 +711,38 @@ def test_the_reference_dodges_with_the_value(ref):
         f"value marks' {value_offsets.mean():.3f}")
 
 
+def test_the_perturbation_reference_dodges_too(ref):
+    """The same assertion for `pl.gene_importance`, because it is a SECOND implementation.
+
+    The twin and `render_metric` are parallel code paths, and this defect appeared in both --
+    fixed in one and missed in the other, so the perturbation panel showed a single grey box
+    against two coloured ones and a gene whose null differs between arms read as if it did not.
+    The violin-of-a-constant defect did the same thing. Asserting the property on both paths
+    is what stops the pair drifting again.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    model, adata = ref
+    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:6]),
+                                 groupby="patient", splitby="disease_status")
+    ax = tcri.pl.gene_importance(adata, n_top=4, quantity="value")
+
+    grey = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+                           if c.get_label() == REFERENCE_LABEL and len(c.get_offsets())])
+    value = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+                            if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
+    assert len(grey), "no reference was drawn"
+    assert np.abs(grey - np.round(grey)).mean() > 0.5 * np.abs(value - np.round(value)).mean(), (
+        "the perturbation reference pooled both arms into one box at the category centre")
+
+    # one grey box per arm per gene, matching the value marks
+    grey_boxes = sum(1 for p in ax.patches if p.get_label() == REFERENCE_LABEL)
+    value_boxes = sum(1 for p in ax.patches if p.get_label() != REFERENCE_LABEL)
+    assert grey_boxes == value_boxes, f"{grey_boxes} grey boxes against {value_boxes} value"
+
+
 def test_the_draw_path_carries_the_reference_and_refuses_a_constant_violin(ref):
     """`excess` is a per-group constant on `table`, so a violin of it is a spike.
 

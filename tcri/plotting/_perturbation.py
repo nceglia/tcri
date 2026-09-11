@@ -106,7 +106,11 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, ax, fi
     if has_groups:
         hue = splitby if (splitby and splitby in d.columns) else None
         if ref is not None:
-            _boxstrip(adata, d, x="gene", y=ref, hue=None, order=genes, hue_order=None,
+            # the SAME hue and hue_order as the value pass. With hue=None the grey box pools
+            # both arms into one distribution that belongs to neither, and the panel shows a
+            # single reference where the value has two -- so a gene whose null differs between
+            # arms reads as if it did not.
+            _boxstrip(adata, d, x="gene", y=ref, hue=hue, order=genes, hue_order=hue_order,
                       palette=palette, ax=ax, ylabel=ylabel, rotation=90, reference=True)
         _boxstrip(adata, d, x="gene", y=quantity, hue=hue, order=genes, hue_order=hue_order,
                   palette=palette, ax=ax, ylabel=ylabel, rotation=90)
