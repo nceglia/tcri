@@ -664,7 +664,15 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
     assert sized.get_legend() is not None
 
     unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
-    assert unsized.get_legend() is None, "a phenotype count was labelled as clones matched"
+    # a legend may exist to name the grey reference; what must NOT be there is a SIZE legend,
+    # whose title is the claim being guarded against
+    from tcri.plotting._base import REFERENCE_LEGEND
+    lg = unsized.get_legend()
+    if lg is not None:
+        assert lg.get_title().get_text() != "clones matched", (
+            "a phenotype count was labelled as clones matched")
+        assert [t.get_text() for t in lg.get_texts()] == [REFERENCE_LEGEND], [
+            t.get_text() for t in lg.get_texts()]
     from tcri.plotting._base import REFERENCE_LABEL
     areas = {round(float(s), 6) for c in unsized.collections
              if c.get_label() != REFERENCE_LABEL for s in c.get_sizes()}

@@ -528,10 +528,18 @@ def test_both_gene_panels_rank_alike(ref):
 
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:8]))
-    rank = tcri.pl.gene_importance(adata, n_top=5)
-    shift = tcri.pl.gene_importance(adata, kind="shift", n_top=5)
-    assert [t.get_text() for t in rank.get_xticklabels()] == \
-           [t.get_text() for t in shift.get_yticklabels()]
+    # at BOTH quantities: which genes are shown and which quantity is drawn are separate
+    # decisions, and the heatmap can only draw one of the two quantities. Tying its gene set to
+    # what it draws would make the two panels of one figure disagree by default.
+    for kw in ({}, {"quantity": "value"}):
+        rank = tcri.pl.gene_importance(adata, n_top=5, **kw)
+        shift = tcri.pl.gene_importance(adata, kind="shift", n_top=5, **kw)
+        assert [t.get_text() for t in rank.get_xticklabels()] == \
+               [t.get_text() for t in shift.get_yticklabels()], kw
+    # ...and the corrected set is not the bare one, which is the whole reason for the default
+    assert [t.get_text() for t in tcri.pl.gene_importance(adata, n_top=5).get_xticklabels()] != \
+           [t.get_text() for t in
+            tcri.pl.gene_importance(adata, n_top=5, quantity="value").get_xticklabels()]
 
 
 # ── the shape of a real run ──────────────────────────────────────────────────
@@ -766,3 +774,87 @@ def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
         assert len(res) and np.isfinite(res["value"]).any(), fit
     # ...and a rebuild off the reloaded object reads the same settings
     assert K.fits(back) == K.fits(adata)
+
+
+def test_the_grey_marks_are_named_in_the_legend(ref):
+    """The reference artists are underscore-labelled, which is what keeps matplotlib from
+    listing each one; so without an explicit handle a panel shows grey boxes beside the
+    coloured ones and nothing says what they are. A reader can take them for a third arm.
+
+    The entry is APPENDED, never replacing what the panel already had: the box-and-strip
+    legend carries the split levels and the endpoints view carries the matched-clone sizes.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    from tcri.plotting._base import REFERENCE_LEGEND
+
+    _, adata = ref
+    a, b = _cov(adata)[:2]
+
+    def entries(ax):
+        legend = ax.get_legend()
+        return [t.get_text() for t in legend.get_texts()] if legend is not None else []
+
+    # no hue: the reference is the only thing to name
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
+    assert entries(tcri.pl.mutual_information(adata)) == [REFERENCE_LEGEND]
+
+    # with a split: the arms keep their entries and the reference joins them, once
+    tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="patient",
+                               splitby="disease_status")
+    got = entries(tcri.pl.clonotypic_entropy(adata))
+    assert got[-1] == REFERENCE_LEGEND and len(got) > 1, got
+    assert got.count(REFERENCE_LEGEND) == 1
+
+    # the endpoints view keeps its size legend AND its title
+    tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
+    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
+    assert ax.get_legend().get_title().get_text() == "clones matched"
+    assert entries(ax)[-1] == REFERENCE_LEGEND
+
+    # ...and nothing is named when nothing grey was drawn
+    assert not entries(tcri.pl.mutual_information(adata, quantity="excess"))
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
+    assert REFERENCE_LEGEND not in entries(tcri.pl.mutual_information(adata))
+
+
+def test_the_gene_ranking_is_corrected_by_default(ref):
+    """`pl.gene_importance` defaults to the EXCESS, alone among the twins.
+
+    The bare ranking is not merely incomplete, it is dominated by something the question is not
+    about: silencing a gene is an intervention whose size scales with the gene's counts.
+    Measured on the OE fit, the bare importance and its null are 0.901 rank-correlated and the
+    bare top ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal proteins. A reader shown
+    that list concludes the perturbation is broken.
+
+    `"auto"` still means the bare value when there is no reference, and it means the bare value
+    for `kind="shift"` whatever else is present -- otherwise the default call would raise
+    against its own default.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+
+    model, adata = ref
+    genes = list(adata.var_names[:8])
+    tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient")
+
+    auto = tcri.pl.gene_importance(adata, n_top=5)
+    assert auto.get_ylabel().endswith("- null"), auto.get_ylabel()
+    bare = tcri.pl.gene_importance(adata, n_top=5, quantity="value")
+    assert not bare.get_ylabel().endswith("- null")
+
+    # the two rankings are allowed to differ, and that difference is the point
+    auto_genes = [t.get_text() for t in auto.get_xticklabels()]
+    bare_genes = [t.get_text() for t in bare.get_xticklabels()]
+    assert set(auto_genes) <= set(genes) and set(bare_genes) <= set(genes)
+
+    # the heatmap still works at the default rather than raising against it
+    assert tcri.pl.gene_importance(adata, kind="shift", n_top=5) is not None
+    with pytest.raises(ValueError, match="kind='rank'"):
+        tcri.pl.gene_importance(adata, kind="shift", quantity="excess")
+
+    # ...and with no reference, "auto" is the bare value
+    tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient",
+                                 null_model=None)
+    plain = tcri.pl.gene_importance(adata, n_top=5)
+    assert not plain.get_ylabel().endswith("- null")

@@ -74,15 +74,25 @@ def test_kind_is_validated(cohort):
 
 def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
     """The x axis is the ``n_top`` most important genes in descending order, and every dot is a
-    patient -- the replicate unit -- never a draw or a cell."""
+    patient -- the replicate unit -- never a draw or a cell.
+
+    Ranked by the EXCESS at the default, because that is what this twin defaults to: the bare
+    importance scales with a gene's counts, so the bare ranking answers a different question.
+    `quantity="value"` gives the bare ranking back, and the two are asserted to be built the
+    same way off whichever column was asked for.
+    """
     model, adata = cohort
     a = adata.copy()
     res = tcri.perturb.gene_importance(model, a)
     ax = tcri.pl.gene_importance(a, n_top=5)
 
-    ranked = (res["result"].groupby("gene", observed=True)["value"].mean()
-              .sort_values(ascending=False).index.tolist()[:5])
-    assert [t.get_text() for t in ax.get_xticklabels()] == ranked
+    def ranked(col):
+        return (res["result"].groupby("gene", observed=True)[col].mean()
+                .sort_values(ascending=False).index.tolist()[:5])
+
+    assert [t.get_text() for t in ax.get_xticklabels()] == ranked("excess")
+    bare = tcri.pl.gene_importance(a, n_top=5, quantity="value")
+    assert [t.get_text() for t in bare.get_xticklabels()] == ranked("value")
     assert ax.get_xlabel() == "gene"
     n_patients = a.obs["patient"].nunique()
     assert _n_points(ax) == 5 * n_patients, "the dots are not one per patient per gene"
@@ -133,7 +143,12 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     assert any("more than two levels" in str(w.message) for w in caught), [
         str(w.message) for w in caught]
     assert ax.get_legend() is not None, "the split levels need a legend"
-    assert not [l for l in ax.lines if len(set(np.round(l.get_xdata(), 6))) > 1
+    # the zero rule of an excess panel spans the axis by design and carries BRACKET_LABEL,
+    # which is what that label exists to distinguish from a claim about two genes
+    from tcri.plotting._base import BRACKET_LABEL
+    assert not [l for l in ax.lines
+                if l.get_label() != BRACKET_LABEL
+                and len(set(np.round(l.get_xdata(), 6))) > 1
                 and np.ptp(l.get_xdata()) >= 1.0], "a line spans two genes"
 
     tcri.perturb.gene_importance(model, a)
@@ -148,8 +163,14 @@ def test_rank_view_without_groups_falls_back_to_points_then_violins(cohort):
     assert _n_points(pts) == 4 and _n_violins(pts) == 0
 
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], n_samples=6, random_state=0)
-    vio = tcri.pl.gene_importance(a)
+    # `quantity="value"`, because the draws are a distribution of the VALUE. The excess is a
+    # difference of two summaries broadcast to every draw, so a violin of it would be a spike,
+    # which is why the draw path refuses a non-value quantity and falls back to the group mark.
+    vio = tcri.pl.gene_importance(a, quantity="value")
     assert _n_violins(vio) == 4, "with only draws varying, each gene is a violin of its draws"
+    from matplotlib.collections import PolyCollection
+    assert not [c for c in tcri.pl.gene_importance(a).collections
+                if isinstance(c, PolyCollection)], "the excess was drawn as a violin"
 
 
 def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
@@ -166,7 +187,9 @@ def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
     assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
 
     genes = [t.get_text() for t in ax.get_yticklabels()]
-    ranked = (res["result"].groupby("gene", observed=True)["value"].mean()
+    # the corrected ranking, which is what both panels use at the default (see
+    # tests/test_references.py::test_both_gene_panels_rank_alike)
+    ranked = (res["result"].groupby("gene", observed=True)["excess"].mean()
               .sort_values(ascending=False).index.tolist()[:7])
     assert genes == ranked
     want = (res["shift"][res["shift"]["gene"] == genes[0]]

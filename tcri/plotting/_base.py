@@ -54,6 +54,38 @@ BRACKET_LABEL = "_tcri_bracket"
 #: spans two x positions" guard can tell it from a matched-identity line.
 REFERENCE_LABEL = "_tcri_reference"
 
+#: What the grey marks are called in the legend. REFERENCE_LABEL is underscore-prefixed, which
+#: is exactly what keeps matplotlib from listing every reference artist individually -- so
+#: without one explicit handle a panel shows grey boxes beside the coloured ones and nothing
+#: says what they are. A reader can reasonably take them for a third arm.
+REFERENCE_LEGEND = "permutation null"
+
+
+def _reference_legend(ax, drawn):
+    """Name the grey marks, keeping whatever legend the panel already has.
+
+    Appends rather than replaces: the box-and-strip legend carries the split levels and the
+    endpoints view carries the matched-clone sizes, and both are still wanted. Re-creating the
+    legend is the only way matplotlib lets a handle be added, so the existing entries and the
+    title are read back off it first.
+    """
+    if not drawn:
+        return
+    from matplotlib.lines import Line2D
+
+    existing = ax.get_legend()
+    handles = list(getattr(existing, "legend_handles", [])) if existing is not None else []
+    labels = [t.get_text() for t in existing.get_texts()] if existing is not None else []
+    if REFERENCE_LEGEND in labels:
+        return
+    title = existing.get_title().get_text() if existing is not None else None
+    handles.append(Line2D([], [], marker="o", linestyle="none", markerfacecolor="none",
+                          markeredgecolor="0.55", markeredgewidth=1.1, markersize=7))
+    labels.append(REFERENCE_LEGEND)
+    ax.legend(handles=handles, labels=labels, title=title or None,
+              bbox_to_anchor=(1.02, 1.0), loc="upper left", frameon=False,
+              fontsize=8, title_fontsize=8)
+
 
 def _finish(fig, ax, *, save=None, show=None):
     if save:
@@ -464,6 +496,7 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
 
     if decorate is not None:
         decorate(ax)
+    _reference_legend(ax, ref is not None)
     if single or x == "_all":
         ax.set_xlabel("")
     if annotate and x == splitby:
@@ -621,4 +654,5 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value
     ax.set_xlabel(params.get("groupby") and "")
     if counts is not None:
         _size_legend(ax, counts)
+    _reference_legend(ax, len(reference) == 2)
     return _finish(fig, ax, save=save, show=show)
