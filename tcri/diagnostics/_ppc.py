@@ -219,7 +219,9 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
         if groupby not in adata.obs.columns:
             raise ValueError(f"groupby={groupby!r} is not a column of adata.obs")
         from .._compute._tables import _validate_group_clones
-        _validate_group_clones(adata.obs, groupby, clone_col)
+        # `obs[clone_col]`, not `fit_clone_labels`: `permutation_null` is model-free (it reads
+        # only the three shared keys) and keeps today's behaviour by design.
+        _validate_group_clones(adata.obs[clone_col], adata.obs[groupby], groupby)
         groups = adata.obs[groupby].dropna().unique().tolist()
     else:
         groups = [None]

@@ -12,6 +12,7 @@ from . import utils as ut
 from . import model as ml
 from . import diagnostics as diag  # PR8
 from . import perturbation as perturb  # in-silico perturbation of a fitted model
+from . import null            # permutation references, fitted as ordinary fits
 from . import datasets        # synthetic cohorts, incl. one with a known-MI oracle
 from . import get             # accessors for cached tl results
 
@@ -29,7 +30,7 @@ _sys.modules.update({f'{__name__}.{m}': globals()[m]
 #: private aliases (``_sys``, ``_PackageNotFoundError``) keep them out of ``dir`` regardless;
 #: this makes the intended surface explicit rather than incidental.
 __all__ = [
-    "tl", "pp", "pl", "ut", "ml", "diag", "perturb", "datasets", "get",
+    "tl", "pp", "pl", "ut", "ml", "diag", "perturb", "null", "datasets", "get",
     "tools", "preprocessing", "plotting", "utils", "model", "diagnostics", "perturbation",
     "joint_distribution", "__version__",
 ]

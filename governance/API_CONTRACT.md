@@ -114,7 +114,7 @@ class TCRIModel:
         gate_prob: Optional[float] = ..., kl_weight_max: float = ...,
         guide_init_scale: float = ..., classifier_temperature: float = ...,
         phenotype_kl_weight: float = ..., label_error_rate: Optional[float] = ...,
-        seed: Optional[int] = ..., name: str = ..., **kwargs: Any,
+        seed: Optional[int] = ..., name: str = ..., permutation: Any = ..., **kwargs: Any,
     ) -> None: ...
     @classmethod
     def setup_anndata(
@@ -137,6 +137,7 @@ class TCRIModel:
     def get_p_ct(self) -> Any: ...
     def to_anndata(
         self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., compute_umap: bool = ...,
+        fit: Optional[str] = ...,
     ) -> AnnData: ...
 
 
@@ -271,6 +272,26 @@ class perturb:
         groupby: Optional[str] = ..., splitby: Optional[str] = ..., n_samples: int = ...,
         use_gate: bool = ..., batch_size: int = ..., random_state: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> dict: ...
+
+
+# ── permutation references (null) ────────────────────────────────────────────
+class null:
+    def phenotype(
+        model: Any, adata: AnnData, *, within: Any = ..., seed: Optional[int] = ...,
+        key_added: Optional[str] = ..., **train_kwargs: Any,
+    ) -> Any: ...
+    def clonotype(
+        model: Any, adata: AnnData, *, within: Any = ..., seed: Optional[int] = ...,
+        key_added: Optional[str] = ..., **train_kwargs: Any,
+    ) -> Any: ...
+    def condition(
+        model: Any, adata: AnnData, *, seed: Optional[int] = ...,
+        key_added: Optional[str] = ..., **train_kwargs: Any,
+    ) -> Any: ...
+    def all(
+        model: Any, adata: AnnData, *, kinds: Any = ..., within: Any = ...,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> dict: ...
 
 

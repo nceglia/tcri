@@ -69,6 +69,13 @@ schedules or stopping; they change with a recorded reason.
 - **B9** A fit records provenance in `training_record_`: epochs actually run, warmup steps and
   their epoch equivalent, `ramp_completes_at_epoch`, `ramp_completed`, `selection_criterion`,
   `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch.
+- **B10** A permutation null is fitted with the parent's knobs, the parent's seed and the
+  parent's train/validation split; only the permutation draws from a stream of its own, keyed by
+  the kind so that two kinds never share one. `train()` records the arguments it actually ran
+  with and a null replays them, because a null fitted at `train()`'s defaults is not the parent's
+  model on permuted labels. The permutation is stored beside the fit it produced. A null's
+  parameter namespace is its own, so I4 and B8 apply per namespace and neither the parent nor
+  any other null is touched by its fit. `tests/test_nulls.py`.
 
 ## The stopping policy in one paragraph
 

@@ -144,20 +144,99 @@ def clone_col(adata):
     return adata.uns[K.METADATA]["clone_col"]
 
 
-def _validate_group_clones(obs, groupby, cc):
+def fit_clone_labels(adata, fit=None):
+    """Per-cell clone id **as the fit saw it**, indexed by ``obs_names``.
+
+    ``CLONOTYPE_CATEGORIES[ct_to_c[ct_array]]``, with ``pd.NA`` wherever ``ct_to_c < 0`` (the
+    unassigned rows today's callers drop). On the main fit this equals ``obs[clone_col]`` cell
+    for cell; under a clonotype null it does not, and THAT is the point. `metric_table` restricts
+    the engine by clone id while the engine's rows come from the permuted codes, so a clone list
+    built from ``obs`` selects the wrong null rows whenever a permutation stratum spans more than
+    one group -- silently, because the parent's ``obs`` passes every disjointness check.
+    """
+    ct_array = np.asarray(adata.uns[K.fit_key(K.CT_ARRAY, fit)])
+    if len(ct_array) != adata.n_obs:
+        raise ValueError(
+            f"fit_clone_labels received an AnnData whose per-cell registration array "
+            f"(uns[{K.fit_key(K.CT_ARRAY, fit)!r}], len {len(ct_array)}) does not match "
+            f"adata.n_obs ({adata.n_obs}). This happens on a filtered/sliced AnnData: the "
+            f"full-space uns arrays misalign against the subset obsm/obs. Re-run "
+            f"model.to_anndata(...) on the filtered object."
+        )
+    ct_to_c = np.asarray(adata.uns[K.fit_key(K.CT_TO_C, fit)])
+    cats = np.asarray(adata.uns[K.CLONOTYPE_CATEGORIES], dtype=object)
+    codes = ct_to_c[ct_array]
+    labels = np.where(codes >= 0, cats[np.clip(codes, 0, len(cats) - 1)], None)
+    return pd.Series(labels, index=adata.obs_names, dtype=object).where(pd.notna(labels), pd.NA)
+
+
+def clones_at(adata, covariate, *, fit=None, group_clones=None):
+    """Clone ids with cells at ``covariate`` **in the fit's own substrate**.
+
+    Returned in ascending clone-code order, which is the substrate's order and not ``obs``
+    first-appearance order. No metric value depends on it -- the entropies sum a column,
+    `joint_draws` reorders its ids by the requested ``clones=`` list, and `build_result` groups.
+    """
+    meta = adata.uns[K.METADATA]
+    cov_cats = [str(c) for c in adata.uns[K.COVARIATE_CATEGORIES]]
+    if str(covariate) not in cov_cats:
+        return []
+    m = cov_cats.index(str(covariate))
+    ct_to_c = np.asarray(adata.uns[K.fit_key(K.CT_TO_C, fit)])
+    ct_to_cov = np.asarray(adata.uns[K.fit_key(K.CT_TO_COV, fit)])
+    codes = ct_to_c[ct_to_cov == m]
+    codes = np.unique(codes[codes >= 0])
+    cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
+    at = [cats[c] for c in codes]
+    if group_clones is None:
+        return at
+    allowed = set(group_clones)
+    return [c for c in at if c in allowed]
+
+
+def _refit_hint(adata, fit, groupby):
+    """The sentence that tells a caller how to make a null's strata match their ``groupby``.
+
+    Strata are fixed at fit time while ``groupby`` is chosen at metric time, so a caller passing
+    a ``groupby`` finer than the strata gets a legal fit and an illegal comparison: the clone
+    list comes from the permuted map while the group mask comes from ``obs``, and a clone that
+    the shuffle spread across two groups now belongs to both. The fix is a refit, not a re-plot,
+    so the message names the refit.
+    """
+    if fit is None:
+        return ""
+    settings = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
+    strata = [str(c) for c in (settings.get("strata") or [])]
+    if not strata:
+        return f" This is fit {fit!r}."
+    if str(settings.get("kind")) == "condition":
+        return (f" This is fit {fit!r}, a condition null, whose strata are fixed at {strata} and "
+                f"are not yours to choose. Use a groupby no finer than they are.")
+    extended = strata + ([str(groupby)] if str(groupby) not in strata else [])
+    return (f" This is fit {fit!r}, permuted within {strata}, which is coarser than "
+            f"groupby={groupby!r}. Refit it with within={extended!r}, or use a coarser groupby.")
+
+
+def _validate_group_clones(labels, groups, groupby, hint=""):
     """The metric ``groupby`` restricts the engine by clone id (``clones=``), which is only
     correct when clones are **disjoint across groups** (a clone's cells all live in one group).
     Raise loudly if a clone id spans groups — otherwise a group's estimate would silently
-    absorb that clone's cells from other groups (§7.1 groupby↔covariate semantics)."""
+    absorb that clone's cells from other groups (§7.1 groupby↔covariate semantics).
+
+    Takes the two RESOLVED Series — clone labels (from :func:`fit_clone_labels` on the fit being
+    measured, or ``obs[clone_col]`` for a caller that means the raw column) and the group labels
+    — rather than an ``obs`` and two column names, because a fit's clone labels are not a column
+    of ``obs`` at all.
+    """
     seen = {}
-    for g in obs[groupby].dropna().unique().tolist():
-        for c in obs.loc[obs[groupby] == g, cc].dropna().unique():
+    for g in groups.dropna().unique().tolist():
+        for c in labels[(groups == g).to_numpy()].dropna().unique():
             if c in seen and seen[c] != g:
                 raise ValueError(
                     f"groupby={groupby!r}: clonotype {c!r} spans groups {seen[c]!r} and {g!r}. "
                     f"The metric groupby restricts by clone id (clones=), which requires clones "
                     f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
-                    f"clone-disjoint groupby, or pre-filter with `clones=`."
+                    f"clone-disjoint groupby, or pre-filter with `clones=`.{hint}"
                 )
             seen[c] = g
 
@@ -349,7 +428,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
 
 
 def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, compute,
-                 extra_labels=None):
+                 extra_labels=None, fit=None):
     """Build the long ``table`` every metric shares: one row per (covariate, group, item, draw).
 
     ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
@@ -361,7 +440,7 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     return a frame identical to the unrestricted call.
     """
     obs = adata.obs
-    clone_col_name = adata.uns[K.METADATA][K.Config.CLONE_COL]
+    clone_labels = fit_clone_labels(adata, fit)
     # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
     # `covariate=None` through added an all-NaN column to every row of its result
     base = {"covariate": covariate} if covariate is not None else {}
@@ -385,7 +464,8 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
         _emit(rows, dict(base), compute(clones))
         return pd.DataFrame(rows)
 
-    _validate_group_clones(obs, groupby, clone_col_name)
+    _validate_group_clones(clone_labels, obs[groupby], groupby,
+                           hint=_refit_hint(adata, fit, groupby))
     n_missing = int(obs[groupby].isna().sum())
     if n_missing:
         warnings.warn(
@@ -397,7 +477,7 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
 
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
-        group_clones = obs.loc[gmask, clone_col_name].dropna().unique().tolist()
+        group_clones = clone_labels[gmask.to_numpy()].dropna().unique().tolist()
         if clones is not None:
             allowed = set(group_clones)
             group_clones = [c for c in clones if c in allowed]
