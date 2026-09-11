@@ -108,20 +108,20 @@ def run_cell(label, n_patients, n_clones, n_cells, *, device, epochs, n_samples,
                                    random_state=seed, device=device)
 
     with t("metrics"):
-        for fn, kw in ((tcri.tl.mutual_information, {}),
-                       (tcri.tl.clonotypic_entropy, {}),
-                       (tcri.tl.phenotypic_entropy, {})):
+        for fn, kw in ((tcri.tl.mutual_information, {'null_model': None}),
+                       (tcri.tl.clonotypic_entropy, {'null_model': None}),
+                       (tcri.tl.phenotypic_entropy, {'null_model': None})):
             fn(adata, covariate="post", groupby="patient", splitby="response",
                n_samples=n_samples, random_state=seed, device=device, **kw)
-        tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient",
+        tcri.tl.phenotypic_flux(adata, null_model=None, cov_from="pre", cov_to="post", groupby="patient",
                                 splitby="response", n_samples=n_samples,
                                 random_state=seed, device=device)
 
     with t("deltas"):
-        tcri.tl.delta_phenotypic_entropy(adata, cov_from="pre", cov_to="post",
+        tcri.tl.delta_phenotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
                                          groupby="patient", splitby="response",
                                          n_samples=n_samples, random_state=seed, device=device)
-        tcri.tl.delta_clonotypic_entropy(adata, cov_from="pre", cov_to="post",
+        tcri.tl.delta_clonotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
                                          groupby="patient", splitby="response",
                                          n_samples=n_samples, random_state=seed, device=device)
 

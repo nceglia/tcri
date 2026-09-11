@@ -84,11 +84,20 @@ def blocks():
                             phenotype_key="phenotype", covariate_key="covariate",
                             batch_key="patient")
     model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
-                      classifier_hidden=16, K=4, seed=0)
-    with contextlib.redirect_stdout(io.StringIO()):
+                      classifier_hidden=16, K=4, seed=0, name="axes")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
         model.train(max_epochs=10, batch_size=128, n_steps_kl_warmup=8, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
+        # The references every scored metric defaults to, built ONCE here rather than passed
+        # as `null_model=None` at the thirty-odd call sites below. This file is about the
+        # AXES -- covariate, groupby, splitby, clones, weighted, temperature, n_samples -- and
+        # each of those assertions is now also an assertion that the reference run forwards
+        # that axis, since a reference computed at defaults would move the excess but not the
+        # value and nothing here would notice.
+        import tcri
+        tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
     logging.disable(logging.NOTSET)
     return model, adata, truth
 

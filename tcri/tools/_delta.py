@@ -53,7 +53,8 @@ __all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
 
 
 def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples, temperature,
-                  clones, weighted, normalized, random_state, n_clones_ref=None, device=None):
+                  clones, weighted, normalized, random_state, n_clones_ref=None, device=None,
+                  fit=None):
     """Shared body. Mirrors ``_entropy_metric`` with the covariate axis contracted."""
     item_col = "phenotype" if kind == "clonotypic" else "clonotype"
 
@@ -76,8 +77,8 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     dropped = []
 
     def _compute(clone_subset):
-        at_from = clones_at(adata, cov_from, group_clones=clone_subset)
-        at_to = clones_at(adata, cov_to, group_clones=clone_subset)
+        at_from = clones_at(adata, cov_from, fit=fit, group_clones=clone_subset)
+        at_to = clones_at(adata, cov_to, fit=fit, group_clones=clone_subset)
         shared = [c for c in at_from if c in set(at_to)]
         n_union = len(set(at_from) | set(at_to))
         if n_union > len(shared):
@@ -85,7 +86,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
         if not shared:
             return []
 
-        kw = dict(n_samples=n_samples, weighted=weighted, device=device,
+        kw = dict(n_samples=n_samples, weighted=weighted, device=device, fit=fit,
                   temperature=temperature, clones=shared, random_state=random_state)
         draws_from, cols = joint_draws(adata, cov_from, **kw)
         draws_to, _ = joint_draws(adata, cov_to, **kw)
@@ -102,7 +103,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
         return per
 
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
-                         item_col=item_col, compute=_compute,
+                         item_col=item_col, compute=_compute, fit=fit,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
 
     if dropped:
@@ -123,11 +124,13 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
-@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=1, schema=schemas.DeltaClonotypicEntropy)
+@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=1, schema=schemas.DeltaClonotypicEntropy,
+           values=("value", "value_from", "value_to"), default_null="condition")
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, weighted=False,
                              normalized=True, n_clones_ref=None, random_state=None,
-                             device=None, key_added=None, inplace=True):
+                             device=None, null_model="auto", fit=None,
+                             key_added=None, inplace=True):
     """ΔH[P(c|φ)] per phenotype: ``cov_to`` minus ``cov_from``, in bits.
 
     "Did this phenotype draw on a wider or narrower clone pool?" The item is a phenotype — a
@@ -138,14 +141,15 @@ def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
                          groupby=groupby, splitby=splitby, n_samples=n_samples,
                          temperature=temperature, clones=clones, weighted=weighted,
                          normalized=normalized, random_state=random_state,
-                         n_clones_ref=n_clones_ref, device=device)
+                         n_clones_ref=n_clones_ref, device=device, fit=fit)
 
 
-@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=1, schema=schemas.DeltaPhenotypicEntropy)
+@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=1, schema=schemas.DeltaPhenotypicEntropy,
+           values=("value", "value_from", "value_to"), default_null="condition")
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, weighted=False,
                              normalized=True, random_state=None, device=None,
-                             key_added=None, inplace=True):
+                             null_model="auto", fit=None, key_added=None, inplace=True):
     """ΔH[P(φ|c)] per clone: ``cov_to`` minus ``cov_from``, in bits.
 
     "Did this clone become more or less plastic?" The item is a clonotype, so each row is the
@@ -156,4 +160,5 @@ def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
     return _delta_metric(adata, kind="phenotypic", cov_from=cov_from, cov_to=cov_to,
                          groupby=groupby, splitby=splitby, n_samples=n_samples,
                          temperature=temperature, clones=clones, weighted=weighted,
-                         normalized=normalized, random_state=random_state, device=device)
+                         normalized=normalized, random_state=random_state, device=device,
+                         fit=fit)

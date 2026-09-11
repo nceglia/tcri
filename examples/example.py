@@ -155,6 +155,10 @@ with contextlib.redirect_stdout(io.StringIO()):
     model.train(max_epochs=150, batch_size=256, accelerator="cpu",
                 enable_progress_bar=False, enable_model_summary=False)
     model.to_anndata(adata)
+    # The permutation references, fitted once. Every scored metric below is read against one:
+    # the same model, the same knobs, the same seed, on one permuted label vector. Without
+    # them a metric raises rather than reporting a bare number.
+    tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
 
 # what actually happened, not what was requested -- early stopping can end a run short
 record = model.training_record_

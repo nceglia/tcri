@@ -136,13 +136,20 @@ def test_a_self_delta_is_exactly_zero(name, cohort):
 
 @pytest.mark.parametrize("name", DELTAS)
 def test_the_support_is_the_intersection_and_the_drop_is_reported(name, ragged):
-    """A delta needs both endpoints, and dropping clones moves the n a contrast is built on."""
+    """A delta needs both endpoints, and dropping clones moves the n a contrast is built on.
+
+    ``null_model=None``: these assertions are the INTERSECTION RULE, not an effect size, and a
+    reference would double the warning traffic this test reads. The fixture would in fact
+    support a condition null -- 25 of 29 clones sit at both levels and the ct index is
+    preserved -- so this is a choice about what the test is about, not a limitation.
+    """
     adata, a, b, at = ragged
     one_sided = at[a] ^ at[b]
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, inplace=False)
+        res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, null_model=None,
+                                     inplace=False)
     messages = [str(w.message) for w in caught]
     assert any("absent from" in m and "both endpoints" in m for m in messages), (
         f"the {len(one_sided)} dropped clones were not reported: {messages}"
@@ -156,6 +163,9 @@ def test_the_support_is_the_intersection_and_the_drop_is_reported(name, ragged):
 def test_the_intersection_changes_the_clonotypic_answer(ragged):
     """It is not cosmetic: intersecting fixes ``log2(C)`` on both sides so it cancels.
 
+    ``null_model=None`` throughout: the comparison is between two ways of computing the SAME
+    quantity, and a reference subtracted from both would not change which of them is right.
+
     Computing H(c|phi) at each level over that level's OWN clones and subtracting is a
     different quantity — the normalizer moves with the clone count, so a repertoire that
     contracts reports an entropy change it did not have. This asserts the two disagree, which
@@ -166,9 +176,11 @@ def test_the_intersection_changes_the_clonotypic_answer(ragged):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         matched = tcri.tl.delta_clonotypic_entropy(adata, cov_from=a, cov_to=b,
-                                                   inplace=False)["result"]
-    naive_a = tcri.tl.clonotypic_entropy(adata, covariate=a, inplace=False)["result"]
-    naive_b = tcri.tl.clonotypic_entropy(adata, covariate=b, inplace=False)["result"]
+                                                   null_model=None, inplace=False)["result"]
+    naive_a = tcri.tl.clonotypic_entropy(adata, covariate=a, null_model=None,
+                                         inplace=False)["result"]
+    naive_b = tcri.tl.clonotypic_entropy(adata, covariate=b, null_model=None,
+                                         inplace=False)["result"]
     naive = (naive_b.set_index("phenotype")["value"] - naive_a.set_index("phenotype")["value"])
 
     got = matched.set_index("phenotype")["value"]

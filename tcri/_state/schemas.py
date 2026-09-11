@@ -15,6 +15,20 @@ Every metric returns the same two payload keys:
     groupby). This is what the box/swarm plots and the comparison consume. Statistics live here
     as **columns**, following grafiti: there is no separate ``stats`` slot, and ``pl`` dispatches
     on column presence (``"p" in result.columns``) rather than re-reading params.
+
+**Reference columns (0.12).** When the metric ran with a reference — ``null_model`` not ``None``,
+which is the default — ``result`` and ``table`` each gain, beside every native value column
+``v``, a ``null_v`` (the same functional on the permutation null, at the same arguments) and an
+``excess`` (``value - null_value``; ``excess_from``/``excess_to`` for the delta endpoints). A
+DENOMINATOR gets ``null_denom`` and no excess. At ``null_model=None`` none of them exist, on
+either frame. The ``excess`` carries no ``sd`` and no interval: it is a difference of two
+summaries, and draws are never paired across two fits.
+
+**The ``stats`` slot.** Three metrics declare it below and four do not, which is a pre-existing
+inconsistency (issue-tracked) rather than a statement about which return it — every metric does.
+It carries one row per (contrast, ``quantity``), the quantity being ``"value"`` or ``"excess"``;
+without a reference it carries only ``"value"``. Nothing switches automatically on the presence
+of a reference: the plot selects, so the star and the marks are always the same quantity.
 """
 from __future__ import annotations
 
@@ -45,23 +59,26 @@ class JointDistribution(TypedDict):
 class MutualInformation(TypedDict):
     """I(c; phi) — the one metric with no item axis, so ``table`` has ``item=None``."""
 
-    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value
+    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value, denom
     result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
-                            # (across groups) + p/stat/stars when splitby is set
+                            # (across groups) + p/stat/stars when splitby is set;
+                            # + denom, and null_value/null_denom/excess with a reference.
+                            # `denom` is the normaliser this MI was divided by: the null does
+                            # not share it, so both are stored and value*denom recovers bits
 
 
 class ClonotypicEntropy(TypedDict):
     """H(c | phi) — one value per PHENOTYPE, not per clone."""
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], phenotype, draw, value
-    result: pd.DataFrame
+    result: pd.DataFrame    # + null_value/excess with a reference
 
 
 class PhenotypicEntropy(TypedDict):
     """H(phi | c) — one value per clone."""
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame
+    result: pd.DataFrame    # + null_value/excess with a reference
 
 
 class PhenotypicFlux(TypedDict):
@@ -71,7 +88,7 @@ class PhenotypicFlux(TypedDict):
     """
 
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame
+    result: pd.DataFrame    # + null_value/excess with a reference
 
 
 class DeltaClonotypicEntropy(TypedDict):
@@ -84,8 +101,9 @@ class DeltaClonotypicEntropy(TypedDict):
 
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], phenotype, draw,
                             #       value, value_from, value_to
-    result: pd.DataFrame
-    stats: object
+    result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
+                            #   excess/excess_from/excess_to with a reference
+    stats: object           # one row per (contrast, quantity)
 
 
 class DeltaPhenotypicEntropy(TypedDict):
@@ -97,8 +115,9 @@ class DeltaPhenotypicEntropy(TypedDict):
 
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw,
                             #       value, value_from, value_to
-    result: pd.DataFrame
-    stats: object
+    result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
+                            #   excess/excess_from/excess_to with a reference
+    stats: object           # one row per (contrast, quantity)
 
 
 class GeneImportance(TypedDict):
@@ -111,8 +130,10 @@ class GeneImportance(TypedDict):
     """
 
     table: pd.DataFrame     # cols: gene, [covariate], [groupby], [splitby], draw, value
-    result: pd.DataFrame    # one row per (gene[, covariate][, group]); value + sd/hdi_*
-    stats: object           # per-gene contrast over groups when splitby is set, else None
+    result: pd.DataFrame    # one row per (gene[, covariate][, group]); value + sd/hdi_*,
+                            #   + null_value/excess with a reference
+    stats: object           # per-gene contrast over groups when splitby is set, else None;
+                            #   one row per (gene, contrast, quantity)
     shift: pd.DataFrame     # cols: gene, phenotype, [covariate], [groupby], [splitby],
                             #       baseline, perturbed, shift
 

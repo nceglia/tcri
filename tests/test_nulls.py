@@ -370,3 +370,153 @@ def test_rebuild_names_the_missing_namespace(fitted):
         rebuild(model, adata, "phenotype")
     with pytest.raises(KeyError, match="no fit named"):
         rebuild(model, adata, "not_a_fit")
+
+
+# ── a null is a fit, so everything that takes a fit takes a null (PR C) ──────
+
+def test_a_null_is_a_fit_for_every_reader(fitted):
+    """The evaluation table, row by row. A null whose row does not look like this is a wrong
+    null, and there is nowhere else in the package where that is checked.
+
+    Measured 2026-09-11 on this fixture at 30 epochs, seeds 0/1/2 (majority-class rate of the
+    true labels in brackets):
+
+    | quantity | parent | phenotype null | clonotype null | condition null |
+    |---|---|---|---|---|
+    | head accuracy [0.405] seed 0 | 0.630 | 0.545 | 0.460 | 0.630 |
+    | head accuracy [0.535] seed 1 | 0.820 | 0.535 | 0.545 | 0.820 |
+    | head accuracy [0.480] seed 2 | 0.865 | 0.480 | 0.480 | 0.865 |
+    | mutual information seed 0 | 0.2075 | 0.0075 | 0.0130 | 0.2069 |
+    | mutual information seed 1 | 0.4744 | 0.0223 | 0.0331 | 0.4749 |
+    | mutual information seed 2 | 0.4522 | 0.0386 | 0.0076 | 0.4520 |
+
+    Two things in that table are worth stating because they are NOT what one would predict.
+
+    A label null's head does not fall to chance (1/P); it falls to the MAJORITY-CLASS RATE. The
+    permutation preserves each stratum's label multiset, so the marginal survives it and a head
+    with nothing else to learn predicts the marginal. On seeds 1 and 2 the accuracy equals that
+    rate to three decimals. Asserting "at chance" would be asserting something false.
+
+    And the CLONOTYPE null's head falls too, rather than staying at its parent's. The hard label
+    is the argmax of the GATED posterior, which mixes the head with ``log p_ct``, and a
+    clonotype permutation destroys exactly that prior; the noisy-label readout also ties the
+    head to the hierarchy. So "the head is intact" is true of ``f_cls`` and not of the call.
+
+    What IS clean is the mutual information row and the condition null's column: the condition
+    null reproduces its parent's accuracy exactly on all three seeds, because neither the
+    phenotype nor the clone of any cell moved.
+    """
+    import tcri
+
+    model, adata, nulls = fitted
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    pheno_col = adata.uns[K.METADATA][K.Config.PHENOTYPE_COL]
+    truth = adata.obs[pheno_col].astype(str).to_numpy()
+    majority = float(adata.obs[pheno_col].value_counts(normalize=True).max())
+
+    def accuracy(fit):
+        pred = adata.obs[K.fit_key(K.PHENOTYPE, fit)].astype(str).to_numpy()
+        return float((pred == truth).mean())
+
+    # 1) expression is untouched by every permutation, so reconstruction cannot move
+    for kind, null in nulls.items():
+        with contextlib.redirect_stdout(io.StringIO()):
+            ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0)
+        assert ppc is not None and len(ppc), kind
+
+    # 2) the substrate readers take fit=, and read that fit's own probabilities
+    for kind in nulls:
+        cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}")
+        assert cal is not None and len(cal), kind
+    assert not np.allclose(
+        adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype")],
+        adata.obsm[K.X_PROBABILITIES]), "calibration read the main fit's probabilities"
+
+    # 3) the head: both label nulls collapse toward the marginal, the condition null does not
+    parent_accuracy = accuracy(None)
+    for kind in ("phenotype", "clonotype"):
+        assert accuracy(f"null.{kind}") < parent_accuracy, kind
+        assert accuracy(f"null.{kind}") <= majority + 0.15, (
+            f"the {kind} null still reads the true labels: {accuracy(f'null.{kind}'):.3f} "
+            f"against a majority-class rate of {majority:.3f}")
+    assert accuracy("null.condition") == pytest.approx(parent_accuracy, abs=0.05), (
+        "the condition null moved the phenotype call, and it moves neither phenotype nor clone")
+
+    # 4) mutual information: only the two label nulls destroy the coupling it measures
+    mi = {k: float(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}",
+                                              null_model=None,
+                                              inplace=False)["result"]["value"].iloc[0])
+          for k in nulls}
+    parent_mi = float(tcri.tl.mutual_information(adata, covariate=cov, null_model=None,
+                                                 inplace=False)["result"]["value"].iloc[0])
+    assert mi["phenotype"] < 0.25 * parent_mi and mi["clonotype"] < 0.25 * parent_mi, mi
+    assert mi["condition"] == pytest.approx(parent_mi, rel=0.1), (
+        f"the condition null destroyed clone-phenotype coupling, which is not its axis: {mi}")
+
+
+def test_a_metric_never_trains(fitted, monkeypatch):
+    """With the substrate absent the metric raises, and no fit runs.
+
+    `train` is monkeypatched to fail, so a metric that quietly built its own null would error
+    here with a different message rather than passing. The raise is the whole opt-in: fitting is
+    a decision with a cost and it is the caller's.
+    """
+    import tcri
+    from tcri.model._model import TCRIModel
+
+    _, adata, _ = fitted
+    adata = adata.copy()
+    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    for key in list(adata.uns):
+        if "null.phenotype" in key:
+            del adata.uns[key]
+    adata.uns[K.METADATA] = {**adata.uns[K.METADATA],
+                             K.FITS: [f for f in K.fits(adata) if f != "null.phenotype"]}
+
+    def _explode(*a, **k):
+        raise AssertionError("a metric trained a model")
+
+    monkeypatch.setattr(TCRIModel, "train", _explode)
+    with pytest.raises(KeyError, match=r"tcri\.null\.all"):
+        tcri.tl.mutual_information(adata, covariate=cov, inplace=False)
+
+
+def test_a_groupby_finer_than_the_strata_raises():
+    """The silently wrong group metric, made loud.
+
+    On a fixture where a (batch, covariate) stratum spans two replicates, the clonotype null's
+    shuffle moves clones between those replicates while the group mask still comes from obs. A
+    group's clone list then selects the other group's null rows -- measured on one patient with
+    two replicates, 20 of 20 clones span both and about half of R1's selected rows are R2's
+    cells. The parent's obs passes every disjointness check, so nothing else catches it.
+
+    The strata alone cannot close this: they are fixed at fit time while `groupby` is chosen at
+    metric time. Only the substrate-derived clone map is evaluated against the groupby actually
+    used.
+    """
+    import tcri
+
+    a = _adata()
+    # two replicates inside one (batch, covariate) stratum, and clone ids that span them
+    a.obs["replicate"] = pd.Categorical(["R1", "R2"] * (a.n_obs // 2))
+    _setup(a)
+    model = _parent(a, "finegroupby")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.clonotype(model, a)
+
+    spans = a.obs.groupby([a.uns[K.METADATA][K.Config.BATCH_COL],
+                           a.uns[K.METADATA][K.Config.COVARIATE_COL]],
+                          observed=True)["replicate"].nunique().max()
+    assert spans > 1, "the fixture cannot reach the defect"
+
+    cov = list(a.uns[K.COVARIATE_CATEGORIES])[0]
+    with pytest.raises(ValueError, match="spans groups"):
+        tcri.tl.mutual_information(a, covariate=cov, groupby="replicate",
+                                    fit="null.clonotype", null_model=None, inplace=False)
+    # the message names the fit, its strata and the refit that fixes it
+    try:
+        tcri.tl.mutual_information(a, covariate=cov, groupby="replicate",
+                                    fit="null.clonotype", null_model=None, inplace=False)
+    except ValueError as exc:
+        assert "null.clonotype" in str(exc) and "within=" in str(exc), str(exc)

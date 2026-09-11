@@ -12,19 +12,19 @@ from ._base import render_metric
 __all__ = ["clonotypic_entropy", "phenotypic_entropy"]
 
 
-def clonotypic_entropy(adata, *, key=None, order=None, hue_order=None, palette=None,
+def clonotypic_entropy(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None,
                        ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-phenotype clonotypic entropy (bits) from the cached ``tl.clonotypic_entropy``."""
     return render_metric(adata, "clonotypic_entropy", ylabel="clonotypic entropy (bits)",
-                         item_col="phenotype", item_as_x=True, key=key, order=order,
+                         item_col="phenotype", item_as_x=True, quantity=quantity, key=key, order=order,
                          hue_order=hue_order, palette=palette, ax=ax, figsize=figsize,
                          save=save, show=show, return_df=return_df)
 
 
-def phenotypic_entropy(adata, *, key=None, order=None, hue_order=None, palette=None,
+def phenotypic_entropy(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None,
                        ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-clone phenotypic entropy — plasticity — from the cached ``tl.phenotypic_entropy``."""
     return render_metric(adata, "phenotypic_entropy", ylabel="phenotypic entropy (bits)",
-                         item_col="clonotype", key=key, order=order, hue_order=hue_order,
+                         item_col="clonotype", quantity=quantity, key=key, order=order, hue_order=hue_order,
                          palette=palette, ax=ax, figsize=figsize, save=save, show=show,
                          return_df=return_df)

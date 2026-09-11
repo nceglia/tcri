@@ -149,6 +149,43 @@ test may equate them. The return shape does not change with `n_samples`; `sd`, `
 The decomposition is the keystone: it ties the entropy and MI families together so neither can
 change alone.
 
+## References
+
+Every quantity here is positive for data with no structure in it. Mutual information is positive
+for any clone x phenotype table, an entropy is a number whatever the table says, a flux between
+two fits is non-zero whenever the two differ at all, and an in-silico knockout moves the
+phenotype call for every gene. **So no model-based number is reported bare.** Each scored metric
+is read against a permutation reference: the same model, the same knobs, the same seed, the same
+training arguments, fitted on one permuted label vector, and `excess = value - null_value` is the
+part of the observed number the permuted structure accounts for.
+
+| quantity | read against | what the reference destroys |
+|---|---|---|
+| clonotypic entropy, phenotypic entropy, mutual information, gene importance | the phenotype null | which cell carries which phenotype |
+| phenotypic flux, both deltas | the condition null | which condition a cell sits at |
+
+The reference is **the caller's own call with two arguments changed** -- the fit and
+`null_model=None` -- and every other argument forwarded verbatim. `groupby`, `splitby`, `clones`,
+`weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`, `temperature` and
+`n_samples` each change the estimand, so a reference computed at defaults is a different quantity
+subtracted from a different quantity.
+
+**Both denominators are stored.** A normalised MI divides by a normaliser taken from the same
+joint it normalises: at `weighted=False` the engine row-normalises, so `h_c` is exactly
+`log2(C)` and `normalize_mode="min"` selects `h_p`, the fitted phenotype marginal entropy, which
+a null does not share. `result` therefore carries `denom` and `null_denom`, so a reader can
+recover both numbers in bits as `value*denom` and `null_value*null_denom`. At `n_samples=0` that
+recovery is exact. At `n_samples>0` it is not: `build_result` reduces each column over draws
+independently, so the product is `E[I/D]·E[D]` rather than `E[I]` -- measured, 0.4429194 against
+a per-draw mean of 0.4429281. Take the bits per draw from `table` when the difference matters.
+The null's MI is never computed with the parent's denominator: that would break the one thing
+`null_value` means, which is the metric OF the null.
+
+**A delta's excess is closed within its own result.** `excess - (excess_to - excess_from)` equals
+`value - (value_to - value_from)`: the reference introduces no gap that was not already there.
+It is not zero, because `value == value_to - value_from` already fails when a draw has a
+non-finite endpoint, and the two sides use different masks.
+
 ## The machine-checked part
 
 ```python contract
@@ -173,6 +210,26 @@ DEFAULTS = {
     "n_samples": 0,
     "temperature": 1.0,
     "use_gate": True,
+    "null_model": "auto",
+}
+
+# the permutation axes, and the random stream each one's permutation is drawn from. Keyed by
+# NAME, never positional: a reordering here must not silently change every recorded permutation
+NULLS = ["phenotype", "clonotype", "condition"]
+OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
+
+# which null each scored quantity is read against at null_model="auto". joint_distribution has
+# no entry (it returns a matrix, not a scored quantity); knockout has none (it returns the
+# per-cell frame). The conformance test asserts the KEY SET, so a metric added later cannot
+# quietly acquire no default
+DEFAULT_NULL = {
+    "clonotypic_entropy":       "phenotype",
+    "phenotypic_entropy":       "phenotype",
+    "mutual_information":       "phenotype",
+    "phenotypic_flux":          "condition",
+    "delta_clonotypic_entropy": "condition",
+    "delta_phenotypic_entropy": "condition",
+    "gene_importance":          "phenotype",
 }
 
 # the reference joint (3 clones x 2 phenotypes, deliberately asymmetric) and the values the

@@ -99,10 +99,15 @@ model = TCRIModel(adata, n_latent=10, n_hidden=64, n_layers=2,
                   classifier_n_layers=1, classifier_hidden=64, K=4, seed=0)
 model.train(max_epochs=150, batch_size=256)
 model.to_anndata(adata)
+tcri.null.all(model, adata)
 ```
 
 `to_anndata` materializes everything the rest of the package reads — see
-[Concepts](../concepts/index.md) for the full table of what it writes.
+[Concepts](../concepts/index.md) for the full table of what it writes. `tcri.null.all` fits the
+three permutation references beside it: the same model on permuted labels, which is what every
+metric below is read against. One phenotype fit serves both entropies, mutual information and
+gene importance, so this is one prerequisite and not four. Pass `null_model=None` to a metric to
+report the bare number instead.
 
 ## 3. Diagnostics — before trusting any metric
 

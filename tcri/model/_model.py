@@ -88,6 +88,30 @@ def _owns_param(name: str, key: str) -> bool:
 #: vector at the point it is read is the whole intervention.
 PERMUTABLE = ("phenotype", "clonotype", "condition")
 
+#: Registry entries tcri adds AFTER scvi's `register_fields`. `AnnDataManager.transfer_fields`
+#: rebuilds a registry from the fields alone, so these do not survive a transfer to a second
+#: AnnData and have to be copied across explicitly -- see :func:`adopt`.
+CUSTOM_REGISTRY_KEYS = ("clonotype_col", "phenotype_col", "covariate_col", "batch_col",
+                        K.Config.REPLICATE, K.Config.LAYER)
+
+
+def adopt(model, adata):
+    """Register ``model``'s setup on ``adata`` so a SECOND model can be constructed on it.
+
+    ``_validate_anndata`` transfers the fields into the model's PER-INSTANCE manager store,
+    which is enough to score a derived AnnData through the model that owns it and not enough to
+    build another model on it: a constructor looks in the CLASS-level store, and the transferred
+    registry has lost tcri's own entries. This is the path ``tcri.null._rebuild`` takes whenever
+    ``perturb.gene_importance`` is handed a copy, a slice or a zeroed matrix -- the ordinary way
+    it is called.
+    """
+    adata = model._validate_anndata(adata)
+    manager = model.get_anndata_manager(adata, required=True)
+    for name in CUSTOM_REGISTRY_KEYS:
+        manager.registry[name] = model.adata_manager.registry.get(name)
+    type(model).register_manager(manager)
+    return adata
+
 
 def _apply_permutation(codes, axis: str, permutation):
     """``codes`` reordered by ``permutation`` when it targets ``axis``, else unchanged.
@@ -255,12 +279,10 @@ class TCRIModel(BaseModelClass):
             fields=anndata_fields, setup_method_args=setup_method_args
         )
         adata_manager.register_fields(adata, **kwargs)
-        adata_manager.registry["clonotype_col"] = clonotype_key
-        adata_manager.registry["phenotype_col"] = phenotype_key
-        adata_manager.registry["covariate_col"] = covariate_key
-        adata_manager.registry["batch_col"] = batch_key
-        adata_manager.registry[K.Config.REPLICATE] = replicate
-        adata_manager.registry[K.Config.LAYER] = layer
+        for name, value in zip(CUSTOM_REGISTRY_KEYS,
+                               (clonotype_key, phenotype_key, covariate_key, batch_key,
+                                replicate, layer)):
+            adata_manager.registry[name] = value
         cls.register_manager(adata_manager)
         if layer is None:
             adata.uns.pop("tcri_layer", None)

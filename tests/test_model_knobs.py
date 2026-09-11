@@ -375,11 +375,17 @@ def test_device_reaches_the_engine_from_every_metric(adata):
     TJ._joint_draws = spy
     try:
         for call in (
-            lambda: tcri.tl.mutual_information(adata, covariate=covs[0], device="cpu"),
-            lambda: tcri.tl.clonotypic_entropy(adata, covariate=covs[0], device="cpu"),
-            lambda: tcri.tl.phenotypic_entropy(adata, covariate=covs[0], device="cpu"),
+            # `null_model=None` throughout this file: what is being measured is where the
+            # device argument lands, and a reference run would double every engine call this
+            # spy counts while telling it nothing new.
+            lambda: tcri.tl.mutual_information(adata, covariate=covs[0], device="cpu",
+                                               null_model=None),
+            lambda: tcri.tl.clonotypic_entropy(adata, covariate=covs[0], device="cpu",
+                                               null_model=None),
+            lambda: tcri.tl.phenotypic_entropy(adata, covariate=covs[0], device="cpu",
+                                               null_model=None),
             lambda: tcri.tl.phenotypic_flux(
-                adata, cov_from=covs[0], cov_to=covs[1], device="cpu"),
+                adata, cov_from=covs[0], cov_to=covs[1], device="cpu", null_model=None),
         ):
             seen.clear()
             call()
@@ -398,6 +404,6 @@ def test_device_does_not_change_results(adata):
     _train(m)
     m.to_anndata(adata)
     cov = list(adata.uns["tcri_covariate_categories"])[0]
-    a = tcri.tl.mutual_information(adata, covariate=cov, device=None)["result"]
-    b = tcri.tl.mutual_information(adata, covariate=cov, device="cpu")["result"]
+    a = tcri.tl.mutual_information(adata, covariate=cov, device=None, null_model=None)["result"]
+    b = tcri.tl.mutual_information(adata, covariate=cov, device="cpu", null_model=None)["result"]
     assert float(a["value"].iloc[0]) == pytest.approx(float(b["value"].iloc[0]), rel=1e-12)

@@ -25,6 +25,7 @@ from tcri.tools._mutual_information import _mi_from_joint
 MC = contract_namespace("METRICS_CONTRACT.md")
 LOG_BASE, METRICS, DEFAULTS, GOLDEN = MC["LOG_BASE"], MC["METRICS"], MC["DEFAULTS"], MC["GOLDEN"]
 PERTURBATIONS = MC["PERTURBATIONS"]
+NULLS, OFFSET, DEFAULT_NULL = MC["NULLS"], MC["OFFSET"], MC["DEFAULT_NULL"]
 
 #: (namespace, the contract list that must equal its public surface). ``perturb`` queries are
 #: defined in the same file as the metrics because they say what a number means, even though
@@ -80,6 +81,56 @@ def test_defaults_that_change_the_estimand_are_pinned():
                         f"pins {knob}={expected!r}. Changing a default is a contract change."
                     )
     assert seen == set(DEFAULTS), f"contract pins defaults nothing exposes: {set(DEFAULTS) - seen}"
+
+
+def test_the_reference_table_is_the_contracts(): 
+    """Which null each scored quantity is read against, and that every scored quantity has one.
+
+    The KEY SET is asserted, not only the values. Without it a metric added later silently gets
+    no default -- it would just never compute a reference -- and a test comparing values only
+    would stay green while the rule in §References quietly stopped applying to it.
+
+    The live side is read off the decorators rather than from a second table in the package, so
+    there is no copy of this mapping that can drift from the contract.
+    """
+    import tcri
+
+    expected = (set(METRICS) - {"joint_distribution"}) | (set(PERTURBATIONS) - {"knockout"})
+    assert set(DEFAULT_NULL) == expected, (
+        f"the contract's DEFAULT_NULL covers {sorted(set(DEFAULT_NULL))}, the scored surface is "
+        f"{sorted(expected)}"
+    )
+    live = {}
+    for ns, declared in SURFACES:
+        for name in declared:
+            fn = getattr(getattr(tcri, ns), name)
+            default = getattr(fn, "tcri_default_null", None)
+            if default is not None:
+                live[name] = default
+    assert live == DEFAULT_NULL, f"live defaults {live} != contract {DEFAULT_NULL}"
+
+    for name in expected:
+        assert "null_model" in inspect.signature(
+            _resolve_metric(name)).parameters, f"{name} is scored but takes no null_model"
+    assert "null_model" not in inspect.signature(tcri.tl.joint_distribution).parameters
+    assert "null_model" not in inspect.signature(tcri.perturb.knockout).parameters
+
+
+def test_the_permutation_axes_and_their_streams_are_the_contracts():
+    """`NULLS` and `OFFSET` are what `tcri.null` builds. A reordering of `OFFSET` that turned it
+    positional would change every recorded permutation without changing a single value here,
+    which is why it is keyed by name and pinned by name."""
+    from tcri.null import _permute
+
+    assert list(_permute.KINDS) == list(NULLS)
+    assert dict(_permute.OFFSET) == dict(OFFSET)
+    assert len(set(OFFSET.values())) == len(OFFSET), "two kinds share a permutation stream"
+
+
+def _resolve_metric(name):
+    import tcri
+
+    return getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
 
 
 def test_pinned_values_on_the_reference_joint():

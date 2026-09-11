@@ -27,7 +27,7 @@ __all__ = ["phenotypic_flux"]
 
 
 def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clones,
-               distance_metric, random_state, device=None):
+               distance_metric, random_state, device=None, fit=None):
     dist_fn = phenotype_distance(distance_metric)
     # Both sides MUST come from one shared draw. The engine samples over every ct row and then
     # selects a covariate's block, so two calls carrying the SAME seed realise the same
@@ -44,9 +44,11 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
         random_state = int(np.random.SeedSequence().generate_state(1)[0])
 
     draws_from, _ = joint_draws(adata, cov_from, n_samples=n_samples, weighted=weighted, device=device,
-                                temperature=temperature, clones=clones, random_state=random_state)
+                                temperature=temperature, clones=clones, random_state=random_state,
+                                fit=fit)
     draws_to, _ = joint_draws(adata, cov_to, n_samples=n_samples, weighted=weighted, device=device,
-                              temperature=temperature, clones=clones, random_state=random_state)
+                              temperature=temperature, clones=clones, random_state=random_state,
+                              fit=fit)
     per = []
     for (ids_f, Jf), (ids_t, Jt) in zip(draws_from, draws_to):
         idx_t = {c: i for i, c in enumerate(ids_t)}
@@ -68,10 +70,12 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
     return point, drawsd
 
 
-@tl_result(key=K.PHENOTYPIC_FLUX, version=1, schema=schemas.PhenotypicFlux)
+@tl_result(key=K.PHENOTYPIC_FLUX, version=1, schema=schemas.PhenotypicFlux,
+           default_null="condition")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, weighted=False, distance_metric="kl",
-                    random_state=None, device=None, key_added=None, inplace=True):
+                    random_state=None, device=None, null_model="auto", fit=None,
+                    key_added=None, inplace=True):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
     kl/jsd) — computed once, cached, returned.
 
@@ -81,6 +85,10 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
 
     A clone present at ``cov_from`` but absent at ``cov_to`` is DROPPED, not NaN-filled — a
     flux needs both endpoints to exist.
+
+    ``null_model`` names the permutation reference; ``"auto"`` is the CONDITION null, because
+    what a flux measures is movement between conditions and the reference has to be a fit in
+    which that movement is absent. ``fit`` selects which fit the number is computed on.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -89,7 +97,7 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
         point, drawsd = _flux_once(
             adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples, weighted=weighted,
             temperature=temperature, clones=clone_subset, distance_metric=distance_metric,
-            random_state=random_state, device=device,
+            random_state=random_state, device=device, fit=fit,
         )
         if drawsd is None:
             return [point]
@@ -97,7 +105,7 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
         return [{c: vals[d] for c, vals in drawsd.items()} for d in range(n_draws)]
 
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
-                         item_col="clonotype", compute=_compute,
+                         item_col="clonotype", compute=_compute, fit=fit,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
     if not len(table):
         # Say WHY rather than returning a silently empty frame. The overwhelmingly likely cause

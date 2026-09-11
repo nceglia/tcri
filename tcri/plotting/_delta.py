@@ -20,7 +20,7 @@ from ._base import render_delta
 __all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
 
 
-def delta_clonotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_order=None,
+def delta_clonotypic_entropy(adata, *, kind="delta", quantity="value", key=None, order=None, hue_order=None,
                              palette=None, ax=None, figsize=(8, 4), save=None, show=None,
                              return_df=False):
     """ΔH[P(c|φ)] per phenotype, from the cached ``tl.delta_clonotypic_entropy``.
@@ -32,13 +32,13 @@ def delta_clonotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_o
     """
     return render_delta(adata, "delta_clonotypic_entropy",
                         ylabel="Δ clonotypic entropy (bits)", item_col="phenotype",
-                        item_as_x=True, entity_matched=False, kind=kind, key=key,
+                        item_as_x=True, entity_matched=False, kind=kind, quantity=quantity, key=key,
                         order=order,
                         hue_order=hue_order, palette=palette, ax=ax, figsize=figsize,
                         save=save, show=show, return_df=return_df)
 
 
-def delta_phenotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_order=None,
+def delta_phenotypic_entropy(adata, *, kind="delta", quantity="value", key=None, order=None, hue_order=None,
                              palette=None, ax=None, figsize=(8, 4), save=None, show=None,
                              return_df=False):
     """ΔH[P(φ|c)] per clone, from the cached ``tl.delta_phenotypic_entropy``.
@@ -50,7 +50,7 @@ def delta_phenotypic_entropy(adata, *, kind="delta", key=None, order=None, hue_o
     """
     return render_delta(adata, "delta_phenotypic_entropy",
                         ylabel="Δ phenotypic entropy (bits)", item_col="clonotype",
-                        entity_matched=True, kind=kind, key=key, order=order,
+                        entity_matched=True, kind=kind, quantity=quantity, key=key, order=order,
                         hue_order=hue_order,
                         palette=palette, ax=ax, figsize=figsize, save=save, show=show,
                         return_df=return_df)

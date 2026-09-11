@@ -29,6 +29,7 @@ def _engine_blocks(
     temperature,
     random_state,
     device,
+    fit=None,
 ):
     """Validate, then run the numeric core; return the raw per-covariate blocks.
 
@@ -39,18 +40,26 @@ def _engine_blocks(
     Returns ``(blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats)``
     where ``blocks`` is a list of ``(covariate_index, clone_idx, J)`` and ``J`` has
     shape ``[S, n_rows, P]``.
+
+    ``fit`` selects WHICH FIT the number is computed on. This is the one place in the package
+    where every per-fit substrate key is read, so it is the one place the selection has to be
+    made; the three category lists and the metadata are shared between every fit of an object
+    and are read unprefixed whatever ``fit`` says.
     """
+    _key = lambda base: K.fit_key(base, fit)   # noqa: E731 -- one name, used ten times
     phenotype_cats = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     clonotype_cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
     covariate_cats = list(adata.uns[K.COVARIATE_CATEGORIES])
 
     logits = None
     if use_logits:
-        if K.X_LOGITS not in adata.obsm:
+        if _key(K.X_LOGITS) not in adata.obsm:
             raise RuntimeError(
-                f"obsm[{K.X_LOGITS!r}] missing — run model.to_anndata(...) or pass use_logits=False."
+                f"obsm[{_key(K.X_LOGITS)!r}] missing — run "
+                f"model.to_anndata(...{', fit=' + repr(fit) if fit else ''}) or pass "
+                f"use_logits=False."
             )
-        logits = adata.obsm[K.X_LOGITS]
+        logits = adata.obsm[_key(K.X_LOGITS)]
 
     cov_idx = None
     if covariate is not None:
@@ -63,34 +72,40 @@ def _engine_blocks(
     # are NOT sliced when adata is subset, whereas obsm/obs ARE — so a slice silently
     # misaligns cells. Fail loudly (mirrors the legacy joint_distribution_posterior guard).
     n_obs = adata.n_obs
-    n_reg = len(np.asarray(adata.uns[K.CT_ARRAY]))
-    if n_reg != n_obs or len(np.asarray(adata.uns[K.COV_ARRAY])) != n_obs:
+    if _key(K.CT_ARRAY) not in adata.uns:
+        raise KeyError(
+            f"no substrate for fit {fit!r} in this AnnData (uns[{_key(K.CT_ARRAY)!r}] is "
+            f"missing). Build it with tcri.null.all(model, adata), or write another model's "
+            f"with other.to_anndata(adata, fit=...), or pass fit=None for the main fit."
+        )
+    n_reg = len(np.asarray(adata.uns[_key(K.CT_ARRAY)]))
+    if n_reg != n_obs or len(np.asarray(adata.uns[_key(K.COV_ARRAY)])) != n_obs:
         raise ValueError(
             f"joint_distribution received an AnnData whose per-cell registration arrays "
-            f"(uns[{K.CT_ARRAY!r}], len {n_reg}) do not match adata.n_obs ({n_obs}). This "
+            f"(uns[{_key(K.CT_ARRAY)!r}], len {n_reg}) do not match adata.n_obs ({n_obs}). This "
             f"happens on a filtered/sliced AnnData: the full-space uns arrays misalign against "
             f"the subset obsm/obs. Re-run model.to_anndata(...) on the filtered object, or pass "
             f"the full object and filter with `clones=`."
         )
 
     # local_scale is required for the Dirichlet draw; refuse to silently fall back at n>0.
-    local_scale = adata.uns.get(K.LOCAL_SCALE, None)
+    local_scale = adata.uns.get(_key(K.LOCAL_SCALE), None)
     if n_samples and int(n_samples) > 0 and local_scale is None:
         raise RuntimeError(
-            f"n_samples>0 needs uns[{K.LOCAL_SCALE!r}] for the clamped-Dirichlet draw, but it "
+            f"n_samples>0 needs uns[{_key(K.LOCAL_SCALE)!r}] for the clamped-Dirichlet draw, but it "
             f"is missing; run model.to_anndata(...)."
         )
     local_scale = float(local_scale) if local_scale is not None else 1.0
     # DE-5b: present on anything written by a current to_anndata; absent on older objects,
     # which fall back to the local_scale reconstruction rather than failing.
-    conc_ct = adata.uns.get(K.CONC_CT, None)
+    conc_ct = adata.uns.get(_key(K.CONC_CT), None)
 
     blocks, n_draws = _joint_draws(
-        adata.uns[K.P_CT],
-        adata.uns[K.CT_TO_COV],
-        adata.uns[K.CT_TO_C],
-        adata.uns[K.CT_ARRAY],
-        adata.uns[K.COV_ARRAY],
+        adata.uns[_key(K.P_CT)],
+        adata.uns[_key(K.CT_TO_COV)],
+        adata.uns[_key(K.CT_TO_C)],
+        adata.uns[_key(K.CT_ARRAY)],
+        adata.uns[_key(K.COV_ARRAY)],
         local_scale=local_scale,
         conc_ct=conc_ct,
         n_samples=n_samples,
@@ -98,7 +113,7 @@ def _engine_blocks(
         use_logits=use_logits,
         covariate_idx=cov_idx,
         logits=logits,
-        gate_prob=adata.uns.get(K.GATE_PROB, None),
+        gate_prob=adata.uns.get(_key(K.GATE_PROB), None),
         weighted=weighted,
         random_state=random_state,
         device=device,
@@ -118,6 +133,7 @@ def joint_distribution(
     temperature=1.0,
     random_state=None,
     device=None,
+    fit=None,
     key_added=None,
     inplace=True,
 ) -> dict:
@@ -146,6 +162,11 @@ def joint_distribution(
     device : str | None
         Routes the numeric core through ``_compute/_xp`` (CPU / torch-CUDA). Result is
         always a host DataFrame.
+    fit : str | None
+        Which fit to compute on; ``None`` is the main one. A bare kind (``"phenotype"``)
+        resolves to the fit that carries it. This is the engine and returns a matrix rather
+        than a scored quantity, so it takes no ``null_model``: there is nothing to subtract a
+        reference from.
 
     Returns
     -------
@@ -156,6 +177,7 @@ def joint_distribution(
     """
     blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
         adata,
+        fit=fit,
         covariate=covariate,
         n_samples=n_samples,
         use_logits=use_logits,

@@ -101,12 +101,15 @@ def test_metrics_run_and_are_in_range(fitted):
     import tcri
 
     _m, a = fitted
-    mi = float(tcri.tl.mutual_information(a, covariate=COV, n_samples=0, weighted=True,
+    # `null_model=None` throughout this file: the yost fixture fits real counts for 120
+    # epochs, so the "small models, seconds" cost note does not hold here, and what is being
+    # asserted is that the metrics run and land in range on real data.
+    mi = float(tcri.tl.mutual_information(a, covariate=COV, null_model=None, n_samples=0, weighted=True,
                                           normalize_mode="average")["result"]["value"].iloc[0])
     assert np.isfinite(mi) and 0.0 <= mi <= 1.0, f"NMI out of range: {mi}"
 
-    ce = tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0)["result"]
-    pe = tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0)["result"]
+    ce = tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0, null_model=None)["result"]
+    pe = tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0, null_model=None)["result"]
     for name, s in (("clonotypic", ce), ("phenotypic", pe)):
         v = s["value"].to_numpy(dtype=float)
         v = v[np.isfinite(v)]
@@ -121,6 +124,7 @@ def test_grouped_comparison_runs_over_patients(fitted):
 
     _m, a = fitted
     res = tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT,
+                                     null_model=None,
                                      n_samples=0, weighted=True, normalize_mode="average")
     df = res["result"]
     assert isinstance(df, pd.DataFrame) and len(df) == a.obs[GROUP].nunique()

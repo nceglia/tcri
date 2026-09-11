@@ -54,3 +54,25 @@ The payload has the three slots every metric has plus a fourth:
 
 `shift` sums to zero over phenotypes: a positive entry is mass the phenotype **loses** when
 the gene is silenced. Read any slot back with `tcri.get.gene_importance(adata, which=...)`.
+
+## The reference
+
+Silencing a gene moves the phenotype call for every gene, so the importance is read against a
+permutation reference like every scored metric. `null_model` defaults to `"auto"`: the phenotype
+null, rebuilt from the parameter store and this object and run on the same genes, the same cells
+and the same rule, so `excess = value - null_value` is the part of a gene's importance that its
+relationship to phenotype accounts for rather than its expression level.
+
+```python
+tcri.null.all(model, adata)                       # once, after to_anndata
+gi = tcri.perturb.gene_importance(model, adata)   # value, null_value, excess
+tcri.pl.gene_importance(adata, quantity="excess") # the ranking, against the floor
+```
+
+There is no `fit=` here. This is a query on a MODEL rather than on a stored substrate, so a
+different fit is reached by handing it a different model — and a fitted `TCRIModel` passed as
+`null_model` is used directly, skipping the rebuild.
+
+`kind="shift"` accepts only `quantity="value"`. The heatmap decomposes an importance across
+phenotypes and the reference has no such decomposition stored, so an "excess shift" would have
+to be invented rather than read.

@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
+from .._state import _reference
 from ._colors import resolve_colors
 
 __all__: list[str] = []  # private module
@@ -46,6 +48,11 @@ _UNIT_ORDER = ("replicate", "item", "draw")
 #: Significance brackets span x positions by design. Leading underscore keeps them out of
 #: legends; the name lets the connector guard tell them apart from a matched-identity line.
 BRACKET_LABEL = "_tcri_bracket"
+
+#: The permutation reference, drawn grey and hollow behind the value. Labelled so a test can
+#: find the collection and check it sits at the value's own x positions, and so the "nothing
+#: spans two x positions" guard can tell it from a matched-identity line.
+REFERENCE_LABEL = "_tcri_reference"
 
 
 def _finish(fig, ax, *, save=None, show=None):
@@ -75,21 +82,45 @@ def _colors_for(adata, key, levels, palette):
     return resolve_colors(adata, key or "tcri_level", levels, palette=palette, persist=persist)
 
 
-def _stat_label(stats, a, b):
+def filter_quantity(stats, quantity):
+    """The rows of ``stats`` for one quantity, or ``stats`` unchanged when it carries none.
+
+    A ``stats`` frame holds one row per (contrast, quantity) once a reference has been
+    computed. Every reader of it selects a single row per contrast, so a reader that does not
+    filter makes a SILENT choice between the value's contrast and the excess's -- the first row
+    for ``_stat_label``, the last for ``_star_labels``. On a six-patient fixture the two put
+    the arms in opposite orders, so the star can contradict the marks it sits over.
+    """
+    if stats is None or not len(stats) or "quantity" not in stats.columns:
+        return stats
+    return stats.loc[stats["quantity"] == quantity]
+
+
+def _stat_label(stats, a, b, *, quantity="value"):
     """The stars for the (a, b) contrast, in either order, or ``None``."""
+    stats = filter_quantity(stats, quantity)
     if stats is None or not len(stats):
         return None
-    for _, row in stats.iterrows():
-        if {row.get("level_a"), row.get("level_b")} == {a, b}:
-            stars = row.get("stars") or ""
-            p = row.get("p")
-            if stars in ("", "ns") and (p is None or not np.isfinite(p)):
-                return None
-            return f"{stars or 'ns'}", float(p) if p is not None else np.nan
-    return None
+    hits = [row for _, row in stats.iterrows()
+            if {row.get("level_a"), row.get("level_b")} == {a, b}]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        raise ValueError(
+            f"{len(hits)} stats rows match the contrast ({a!r}, {b!r}) at "
+            f"quantity={quantity!r}. Every reader of this frame picks one row per contrast, so "
+            f"a duplicate makes a silent choice. Quantities present: "
+            f"{sorted(set(stats.get('quantity', ['value'])))}."
+        )
+    row = hits[0]
+    stars = row.get("stars") or ""
+    p = row.get("p")
+    if stars in ("", "ns") and (p is None or not np.isfinite(p)):
+        return None
+    return f"{stars or 'ns'}", float(p) if p is not None else np.nan
 
 
-def _annotate_contrasts(ax, stats, levels):
+def _annotate_contrasts(ax, stats, levels, *, quantity="value"):
     """Bracket + stars over each significant pair, drawn above the data.
 
     A bracket is drawn only where ``stats`` has a row for that exact pair of x levels. That
@@ -109,7 +140,7 @@ def _annotate_contrasts(ax, stats, levels):
     drawn = 0
     for i, a in enumerate(levels):
         for b in levels[i + 1:]:
-            label = _stat_label(stats, a, b)
+            label = _stat_label(stats, a, b, quantity=quantity)
             if label is None:
                 continue
             text, _p = label
@@ -147,6 +178,18 @@ def _sample_unit(frame, table, *, x, groupby, item_col):
     return None
 
 
+def order_from(d, x, y):
+    """The x order a mark would have chosen for itself: descending median of ``y``.
+
+    Computed ONCE by the caller and handed to every mark, because a reference is a SECOND pass
+    over the same axes: a mark that re-derives the order from its own y re-sorts the axis and
+    rewrites the tick labels under marks already drawn. Measured on three categories, the value
+    pass labels them A, B, C and the reference pass rewrites them to B, C, A, so every dot sits
+    under the wrong name. It is order-dependent, so a monotone fixture passes.
+    """
+    return d.groupby(x, observed=True)[y].median().sort_values(ascending=False).index.tolist()
+
+
 def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None):
     """One violin per x position over the DRAW distribution.
 
@@ -155,7 +198,7 @@ def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None):
     import seaborn as sns
 
     if order is None:
-        order = d.groupby(x, observed=True)[y].median().sort_values(ascending=False).index.tolist()
+        order = order_from(d, x, y)
     colours = _colors_for(adata, x, order, palette)
     sns.violinplot(data=d, x=x, y=y, order=order, ax=ax, palette=colours,
                    inner="quartile", cut=0, density_norm="width", linewidth=0.8)
@@ -166,12 +209,39 @@ def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None):
     return order
 
 
-def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rotation, s=20):
-    """Box + strip of a tidy frame, coloured through the shared palette."""
+def _mark_reference(ax, first_collection, first_patch, first_line):
+    """Label everything drawn since the given offsets as the reference, and push it behind.
+
+    Seaborn draws a box-and-strip as several unlabelled artists, so the reference pass cannot
+    be found afterwards by colour. Labelling it is what lets a test assert that the grey marks
+    sit at the value's own x positions, and what keeps the "one dot per replicate" counts in
+    this package's own tests counting one thing.
+    """
+    for c in ax.collections[first_collection:]:
+        c.set_label(REFERENCE_LABEL)
+        c.set_zorder(1.5)
+    for pch in ax.patches[first_patch:]:
+        pch.set_label(REFERENCE_LABEL)
+        pch.set_zorder(1.4)
+    # ...and the LINES. Seaborn draws a box's whiskers, caps and median as Line2D at zorder 2
+    # and 2.1, above the value boxes, so a reference drawn "behind" still had ten grey lines
+    # crossing the marks in front of it.
+    for ln in ax.lines[first_line:]:
+        ln.set_label(REFERENCE_LABEL)
+        ln.set_zorder(1.45)
+
+
+def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rotation, s=20,
+              reference=False):
+    """Box + strip of a tidy frame, coloured through the shared palette.
+
+    ``reference`` draws the same marks grey, hollow and behind: the permutation reference is a
+    second pass over the same axes, never a second axis and never a second figure.
+    """
     import seaborn as sns
 
     if order is None:
-        order = d.groupby(x, observed=True)[y].median().sort_values(ascending=False).index.tolist()
+        order = order_from(d, x, y)
     colour_key = hue if hue is not None else x
     levels = hue_order if (hue is not None and hue_order is not None) else (
         sorted(d[hue].dropna().unique().tolist(), key=str) if hue is not None else order
@@ -181,9 +251,15 @@ def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rot
     common = dict(data=d, x=x, y=y, order=order, ax=ax)
     if hue is not None:
         common.update(hue=hue, hue_order=levels)
+    first_collection, first_patch, first_line = (len(ax.collections), len(ax.patches),
+                                                 len(ax.lines))
+    if reference:
+        colours = {lv: "0.85" for lv in levels}
     sns.boxplot(**common, palette=colours, showfliers=False, boxprops=dict(alpha=0.5))
     sns.stripplot(**common, palette=colours, dodge=hue is not None, size=s / 3,
                   edgecolor="black", linewidth=0.3, legend=False)
+    if reference:
+        _mark_reference(ax, first_collection, first_patch, first_line)
     ax.set_ylabel(ylabel)
     ax.set_xlabel(x)
     for label in ax.get_xticklabels():
@@ -193,21 +269,31 @@ def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rot
     return order, levels
 
 
-def _points(adata, d, *, x, y, palette, ax, ylabel, rotation):
+def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=None):
     """One point per x position, with the posterior HDI as an error bar.
 
     The floor of the mark rule: nothing varies within an x position, so there is no
     distribution to draw. This is the only place a summary interval stands in for a sample,
     and it is drawn as a point-with-interval rather than a bar because a bar's area encodes a
     magnitude from zero that these metrics do not have.
+
+    ``ref`` names a reference column, drawn grey and hollow at the SAME x positions in the same
+    pass rather than by calling this twice -- two passes would re-sort the axis under the first.
+
+    The interval is drawn only for ``y == "value"``. An HDI is the posterior spread of the
+    value: the reference has none to show here, and an excess cannot have one at all, because
+    an interval on a difference needs paired draws and draws are never paired across two fits.
+    Drawn anyway, it either raises ("yerr must not contain negative values") or, for a small
+    shift, puts the value's full-width interval around the excess marker.
     """
-    d = d.sort_values(y, ascending=False)
+    d = d.sort_values(y, ascending=False) if order is None else \
+        d.set_index(d[x].astype(str)).reindex([str(o) for o in order]).dropna(subset=[y])
     labels = d[x].astype(str).tolist()
     values = d[y].to_numpy(dtype=float)
     colours = _colors_for(adata, x, labels, palette)
 
     yerr = None
-    if {"hdi_low", "hdi_high"} <= set(d.columns):
+    if y == "value" and {"hdi_low", "hdi_high"} <= set(d.columns):
         lo = d["hdi_low"].to_numpy(dtype=float)
         hi = d["hdi_high"].to_numpy(dtype=float)
         if np.isfinite(lo).any():
@@ -218,6 +304,9 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation):
     if yerr is not None:
         ax.errorbar(pos, values, yerr=yerr, fmt="none", ecolor="0.3", elinewidth=0.9,
                     capsize=3)
+    if ref is not None and ref in d.columns:
+        ax.scatter(pos, d[ref].to_numpy(dtype=float), s=45, facecolors="none",
+                   edgecolors="0.55", linewidths=1.1, zorder=2, label=REFERENCE_LABEL)
     ax.scatter(pos, values, s=45, c=[colours[l] for l in labels], zorder=3)
     ax.set_xticks(range(len(d)))
     ax.set_xticklabels(labels, rotation=rotation)
@@ -229,12 +318,18 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation):
 def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None,
                   order=None, hue_order=None, palette=None, ax=None, figsize=(8, 4),
                   save=None, show=None, return_df=False, annotate=True, rotation=90,
-                  decorate=None):
+                  decorate=None, quantity="value"):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
     items are a handful of phenotypes, wrong for phenotypic entropy, whose items are every
     clone in the repertoire.
+
+    ``quantity`` selects what goes on y. ``"value"`` draws the metric with its permutation
+    reference behind it, grey and hollow, when the result carries one. ``"excess"`` draws
+    ``value - null_value`` against a zero rule and no interval. Nothing switches on its own:
+    the ``stats`` frame carries both, and the star drawn is always the one for the quantity on
+    the axis.
     """
     from .. import get as _get
     from .._compute._tables import collapse_to_replicates
@@ -252,10 +347,29 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
     fig, ax = _axes(ax, figsize)
 
     if result is None or not len(result) or "value" not in result.columns:
+        ylabel = _reference.label_for(result, quantity, ylabel)
         return _finish(fig, _empty(ax, f"no data for {name}", ylabel), save=save, show=show)
-    d = result.dropna(subset=["value"])
+    if quantity not in result.columns:
+        raise ValueError(
+            f"this {name} result has no {quantity!r} column: it was computed with "
+            f"null_model=None, so there is nothing to compare against. Re-run the metric with "
+            f"a reference (tcri.null.all(model, adata) first), or plot quantity='value'."
+        )
+    d = result.dropna(subset=[quantity])
     if not len(d):
         return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show)
+    #: The reference column for this quantity: drawn behind the value, and meaningless on an
+    #: excess panel, where zero is the reference and the zero rule already says so. A column
+    #: with nothing finite in it is NOT a reference: seaborn raises on an all-NaN y, and the
+    #: honest panel is the value with "no reference" on the label rather than a blank axes.
+    ref = "null_value" if (quantity == "value" and "null_value" in d.columns) else None
+    if ref is not None and not np.isfinite(
+            pd.to_numeric(d[ref], errors="coerce").to_numpy(dtype=float)).any():
+        ref = None
+        result = result.drop(columns=["null_value"])
+    ylabel = _reference.label_for(result, quantity, ylabel)
+    if quantity != "value":
+        decorate = decorate or _zero_rule
 
     has_groups = groupby is not None and groupby in d.columns
     single = False
@@ -280,40 +394,80 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
 
     unit = _sample_unit(d, table, x=x, groupby=groupby if has_groups else None,
                         item_col=item_col)
+    if unit == "draw" and quantity != "value":
+        # `excess` is a difference of two SUMMARIES, so `attach` broadcasts one number per row
+        # group onto every draw: a violin of it is a spike at that number, and five of six
+        # groups collapse to a degenerate KDE seaborn declines to draw. The quantity exists per
+        # group, so the group-level mark is the honest one.
+        unit = "item" if (item_col is not None and item_col in d.columns) else None
 
     if unit == "replicate":
         # collapse items -> replicates with the SAME function build_stats uses, so the dots
         # and the p-value beneath them cannot describe different units. Everything about to be
         # drawn is preserved -- collapsing away the hue would silently drop the split.
+        #
+        # ONE call over the quantity AND its reference: the single-column collapse drops
+        # `null_value` outright on this path, so the grey mark would die here whatever the rest
+        # of the threading did, and averaging the two under different masks would leave the
+        # grey mark and the value mark resting on different replicate sets.
         d = collapse_to_replicates(d, groupby=groupby,
+                                   value=[c for c in (quantity, ref) if c],
                                    keep=[c for c in (x, hue) if c and c in d.columns])
         hue = hue if (hue and hue in d.columns) else None
+        ref = ref if (ref and ref in d.columns) else None
+        if d is None or not len(d):
+            # the shared mask can empty the frame even though `value` was finite everywhere,
+            # when the reference is non-finite on every row. Say so rather than drawing an
+            # axes with no marks on it.
+            return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show)
+
+    # ONE order, computed here from the quantity on the axis and handed to every mark. A mark
+    # that derives it from its own y re-sorts the axis on the reference pass.
+    _order = order if order is not None else order_from(d, x, quantity)
 
     if unit in ("replicate", "item"):
-        _order, _levels = _boxstrip(adata, d, x=x, y="value", hue=hue, order=order,
+        if ref is not None:
+            # the SAME hue and hue_order as the value pass. Drawn with hue=None the grey marks
+            # land at the category centre while the value marks dodge either side of it, so the
+            # reference sits between its own two arms instead of behind them -- and the grey box
+            # pools both arms into one distribution that belongs to neither.
+            _boxstrip(adata, d, x=x, y=ref, hue=hue, order=_order, hue_order=hue_order,
+                      palette=palette, ax=ax, ylabel=ylabel, reference=True,
+                      rotation=0 if single else rotation)
+        _order, _levels = _boxstrip(adata, d, x=x, y=quantity, hue=hue, order=_order,
                                     hue_order=hue_order, palette=palette, ax=ax,
                                     ylabel=ylabel, rotation=0 if single else rotation)
     elif unit == "draw":
-        keys = [c for c in table.columns if c not in ("draw", "value")]
-        t = table.dropna(subset=["value"])
+        t = table.dropna(subset=[quantity]) if quantity in table.columns else table
+        if quantity not in t.columns:
+            return _finish(fig, _empty(ax, f"no {quantity} in the draws", ylabel),
+                           save=save, show=show)
         if x in ("_all", "_one"):
             t = t.assign(**{x: d[x].iloc[0]})
         elif x not in t.columns:
             return _finish(fig, _empty(ax, f"no {x} axis in the draws", ylabel),
                            save=save, show=show)
-        _order = _violins(adata, t, x=x, y="value", palette=palette, ax=ax, ylabel=ylabel,
-                          rotation=0 if single else rotation, order=order)
+        _order = _violins(adata, t, x=x, y=quantity, palette=palette, ax=ax, ylabel=ylabel,
+                          rotation=0 if single else rotation, order=_order)
+        if ref is not None:
+            # the reference has no draw distribution of its own to show here -- its own draws
+            # belong to a different fit and are not paired with these -- so it is drawn as the
+            # one number it is, a grey marker per x position behind the violin
+            per = d.drop_duplicates(x).set_index(d.drop_duplicates(x)[x].astype(str))
+            ys = [per[ref].get(str(o), np.nan) for o in _order]
+            ax.scatter(np.arange(len(_order)), ys, s=45, facecolors="none", edgecolors="0.55",
+                       linewidths=1.1, zorder=2, label=REFERENCE_LABEL)
     else:
-        _points(adata, d, x=x, y="value", palette=palette, ax=ax, ylabel=ylabel,
-                rotation=0 if single else rotation)
-        _order = d[x].astype(str).tolist()
+        _points(adata, d, x=x, y=quantity, palette=palette, ax=ax, ylabel=ylabel,
+                rotation=0 if single else rotation, order=_order, ref=ref)
+        _order = [str(o) for o in _order]
 
     if decorate is not None:
         decorate(ax)
     if single or x == "_all":
         ax.set_xlabel("")
     if annotate and x == splitby:
-        _annotate_contrasts(ax, stats, _order)
+        _annotate_contrasts(ax, stats, _order, quantity=quantity)
     return _finish(fig, ax, save=save, show=show)
 
 
@@ -370,9 +524,10 @@ def _size_legend(ax, counts):
               loc="upper left", frameon=False, fontsize=8, title_fontsize=8, labelspacing=1.1)
 
 
-def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False,
-                 entity_matched=False, key=None, order=None, hue_order=None, palette=None,
-                 ax=None, figsize=(8, 4), save=None, show=None, return_df=False, rotation=90):
+def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value",
+                 item_as_x=False, entity_matched=False, key=None, order=None, hue_order=None,
+                 palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+                 return_df=False, rotation=90):
     """Render a cached delta result — the change, or its two endpoints.
 
     ``entity_matched`` says the ITEM is an entity that persists across the two levels (a
@@ -393,6 +548,13 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
 
     if kind not in ("delta", "endpoints"):
         raise ValueError(f"kind must be 'delta' or 'endpoints', got {kind!r}")
+    if kind == "endpoints" and quantity != "value":
+        raise ValueError(
+            f"kind='endpoints' has no {quantity!r}: the view draws the two levels a delta is "
+            f"taken between, and it draws the reference's own two endpoints beside them. A "
+            f"single excess axis would have to pick one of the two. Use kind='delta', "
+            f"quantity={quantity!r}, or kind='endpoints', quantity='value'."
+        )
 
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)
@@ -404,7 +566,7 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
         return render_metric(adata, name, ylabel=ylabel, item_col=item_col,
                              item_as_x=item_as_x, key=key, order=order, hue_order=hue_order,
                              palette=palette, ax=ax, figsize=figsize, save=save, show=show,
-                             annotate=True, rotation=rotation,
+                             annotate=True, rotation=rotation, quantity=quantity,
                              decorate=_zero_rule)
 
     # ── the endpoints view ──────────────────────────────────────────────────
@@ -417,10 +579,16 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
 
     counts = _matched_counts(result, groupby=groupby,
                              item_col=item_col) if entity_matched else None
-    per = collapse_to_replicates(result, groupby=groupby, value="value_from",
-                                 keep=[params.get("splitby")] if params.get("splitby") else [])
-    per_to = collapse_to_replicates(result, groupby=groupby, value="value_to")
-    per = per.merge(per_to, on=groupby)
+
+    # ONE collapse over every endpoint column present, selected by presence rather than
+    # hard-coded so the branch works at null_model=None. Two calls and a merge -- what this
+    # replaces -- gave each endpoint its own non-finite mask, so a replicate could contribute
+    # one endpoint and not the other and the pair drawn would not be a pair.
+    endpoints = [c for c in ("value_from", "value_to") if c in result.columns]
+    reference = [c for c in ("null_value_from", "null_value_to") if c in result.columns]
+    per = collapse_to_replicates(
+        result, groupby=groupby, value=endpoints + reference,
+        keep=[params.get("splitby")] if params.get("splitby") else [])
 
     levels = [str(params["cov_from"]), str(params["cov_to"])]
     reps = per[groupby].astype(str).tolist()
@@ -428,6 +596,15 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", item_as_x=False
     sizes, _n = _sizes_from(counts, reps) if counts is not None else (None, None)
 
     for i, rep in enumerate(reps):
+        if len(reference) == 2:
+            # NO connector between the grey points: a line asserts matched identity across a
+            # PERMUTED fit, which is the claim CONNECTOR_LABEL exists to prevent. And a FIXED
+            # size, not `_sizes_from`: the null's matched clone count is provably the parent's,
+            # so sizing these would repeat one number and make the legend ambiguous about which
+            # collection it describes.
+            ax.scatter([0, 1], [per[reference[0]].iloc[i], per[reference[1]].iloc[i]],
+                       s=[55, 55], facecolors="none", edgecolors="0.55", linewidths=1.1,
+                       zorder=2, label=REFERENCE_LABEL)
         y = [per["value_from"].iloc[i], per["value_to"].iloc[i]]
         if entity_matched:
             ax.plot([0, 1], y, lw=0.9, c=colours[rep], alpha=0.7, zorder=1,
