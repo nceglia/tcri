@@ -21,6 +21,12 @@ def _tiny_adata():
     return AnnData(X=X, obs=obs)
 
 
+def _tiny_adata_clone_id_only():
+    adata = _tiny_adata()
+    adata.obs["clone_id"] = adata.obs.pop("unique_clone_id")
+    return adata
+
+
 def test_setup_anndata_defaults_to_x_matrix():
     adata = _tiny_adata()
 
@@ -129,3 +135,23 @@ def test_setup_anndata_rejects_missing_explicit_layer():
 
     with pytest.raises(ValueError, match="other is not a valid key in adata.layers"):
         TCRIModel.setup_anndata(adata, layer="other")
+
+
+def test_setup_anndata_auto_resolves_clone_id():
+    adata = _tiny_adata_clone_id_only()
+
+    TCRIModel.setup_anndata(adata, clonotype_key="auto")
+
+    manager = TCRIModel._get_most_recent_anndata_manager(adata)
+    assert manager.registry["clonotype_col"] == "clone_id"
+    assert manager.registry["setup_args"]["clonotype_key"] == "clone_id"
+
+
+def test_setup_anndata_auto_rejects_ambiguous_cc_family():
+    adata = _tiny_adata_clone_id_only()
+    adata.obs = adata.obs.drop(columns=["clone_id"])
+    adata.obs["cc_aa_identity"] = ["c1", "c1", "c2", "c2"]
+    adata.obs["cc_nt_identity"] = ["n1", "n1", "n2", "n2"]
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        TCRIModel.setup_anndata(adata, clonotype_key="auto")

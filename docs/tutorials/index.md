@@ -76,6 +76,9 @@ it runs *after* fitting rather than here.
 `setup_anndata` names the columns the model needs. Two of them are easy to confuse and mean
 entirely different things, even when they are the same column:
 
+For clonotypes, `clonotype_key="auto"` will resolve common Scirpy-style columns
+(`clone_id`, `cc_*`, or `<name>` with `<name>_size`) if you do not want to name one explicitly.
+
 - **`batch_key`** is a *modelling* choice — one-hot encoded into every hidden layer of the
   encoder and decoder, so the network can absorb batch structure.
 - **`replicate`** is a *statistical* choice — the independent unit. Registering it once lets
