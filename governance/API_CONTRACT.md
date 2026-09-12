@@ -173,6 +173,11 @@ class pp:
         target_col: str = ..., min_clone_size: int = ...,
     ) -> None: ...
     def clone_size(adata: AnnData, *, key_added: str = ..., return_counts: bool = ...) -> Any: ...
+    def from_mudata(
+        mdata: Any, *, key_profile: str = ..., keys: Any = ..., clonotype_key: str = ...,
+        covariate_cols: Any = ..., drop_missing_clonotype: bool = ..., counts_layer: str = ...,
+        fill_counts_from_X: bool = ..., strict: bool = ..., copy: bool = ...,
+    ) -> AnnData: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────

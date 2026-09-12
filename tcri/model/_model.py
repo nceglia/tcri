@@ -34,6 +34,7 @@ from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
 from .._state import keys as K
+from .._state._resolution import resolve_clonotype_source
 from ._module import TCRIModule
 from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
@@ -245,6 +246,14 @@ class TCRIModel(BaseModelClass):
         stash the ``AnnDataManager`` in ``uns`` (the retired ``tcri_manager`` hack) —
         learned outputs are written solely by :meth:`to_anndata`.
         """
+        if clonotype_key == "auto":
+            _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
+                {"adata": adata.obs},
+                clonotype_key="auto",
+                source_prefix="airr",
+            )
+            clonotype_key = resolved_clone_key
+
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
                 raise ValueError(f"{col} not in adata.obs!")
@@ -943,4 +952,3 @@ class TCRIModel(BaseModelClass):
             )
 
         return adata
-

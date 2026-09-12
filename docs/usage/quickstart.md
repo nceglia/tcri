@@ -41,6 +41,9 @@ group-comparison steps below do not apply to it.
 `setup_anndata` records which columns hold the clonotype, phenotype, covariate, and batch,
 and which layer holds counts.
 
+If your clonotype column is Scirpy-style (`clone_id`, `cc_*`, or `<name>` paired with
+`<name>_size`), you can pass `clonotype_key="auto"` to detect it instead of naming it.
+
 ```python
 tcri.ml.TCRIModel.setup_anndata(
     adata,
