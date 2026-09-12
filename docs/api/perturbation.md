@@ -66,8 +66,25 @@ relationship to phenotype accounts for rather than its expression level.
 ```python
 tcri.null.all(model, adata)                       # once, after to_anndata
 gi = tcri.perturb.gene_importance(model, adata)   # value, null_value, excess
-tcri.pl.gene_importance(adata, quantity="excess") # the ranking, against the floor
+tcri.pl.gene_importance(adata)                    # ranked by excess, by default
+tcri.pl.gene_importance(adata, quantity="value")  # the bare ranking, for comparison
 ```
+
+**This is the one twin whose default is the corrected quantity.** Everywhere else `quantity`
+defaults to the value with its reference drawn behind it; here it defaults to the excess,
+because the bare ranking is not merely incomplete. Silencing a gene is an intervention whose
+size scales with the gene's counts, and the encoder responds to that whatever the gene says
+about phenotype.
+
+Measured on a real fit of 2,000 genes: the bare importance and its null are 0.901
+rank-correlated, and the bare top ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal
+proteins. Ranked by excess the same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2 and KLRC4, and
+only 17 of the top 50 genes are shared. A reader shown the first list reasonably concludes the
+perturbation is broken.
+
+Which genes are SHOWN and which quantity is DRAWN are separate decisions. The gene set is
+ranked by the excess whenever the result carries one, unless you explicitly ask for
+`quantity="value"`, so `kind="rank"` and `kind="shift"` always describe the same genes.
 
 There is no `fit=` here. This is a query on a MODEL rather than on a stored substrate, so a
 different fit is reached by handing it a different model — and a fitted `TCRIModel` passed as

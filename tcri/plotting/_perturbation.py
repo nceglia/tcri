@@ -23,8 +23,8 @@ import warnings
 import numpy as np
 
 from .._state import _reference
-from ._base import (_axes, _boxstrip, _colors_for, _empty, _finish, _points, _violins,
-                    _zero_rule, filter_quantity, order_from)
+from ._base import (_axes, _boxstrip, _colors_for, _empty, _finish, _points,
+                    _reference_legend, _violins, _zero_rule, filter_quantity, order_from)
 
 __all__ = ["gene_importance"]
 
@@ -106,13 +106,21 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, ax, fi
     if has_groups:
         hue = splitby if (splitby and splitby in d.columns) else None
         if ref is not None:
-            _boxstrip(adata, d, x="gene", y=ref, hue=None, order=genes, hue_order=None,
+            # the SAME hue and hue_order as the value pass. With hue=None the grey box pools
+            # both arms into one distribution that belongs to neither, and the panel shows a
+            # single reference where the value has two -- so a gene whose null differs between
+            # arms reads as if it did not.
+            _boxstrip(adata, d, x="gene", y=ref, hue=hue, order=genes, hue_order=hue_order,
                       palette=palette, ax=ax, ylabel=ylabel, rotation=90, reference=True)
         _boxstrip(adata, d, x="gene", y=quantity, hue=hue, order=genes, hue_order=hue_order,
                   palette=palette, ax=ax, ylabel=ylabel, rotation=90)
         if hue is not None:
             _star_labels(ax, stats, genes, groupby=groupby, quantity=quantity)
-    elif table is not None and "draw" in table.columns and table["draw"].nunique() > 1:
+    elif (table is not None and "draw" in table.columns and table["draw"].nunique() > 1
+          and quantity == "value"):
+        # `quantity == "value"` only. The draws are a distribution of the VALUE; `excess` is a
+        # difference of two summaries broadcast to every draw, so a violin of it is a spike at
+        # one number. `render_metric` makes the same refusal for the same reason.
         t = table[table["gene"].isin(genes)].dropna(subset=[quantity])
         _violins(adata, t, x="gene", y=quantity, palette=palette, ax=ax, ylabel=ylabel,
                  rotation=90, order=genes)
@@ -121,6 +129,7 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, ax, fi
                 rotation=90, order=genes, ref=ref)
     if quantity != "value":
         _zero_rule(ax)
+    _reference_legend(ax, ref is not None)
     ax.set_xlabel("gene")
     return _finish(fig, ax, save=save, show=show)
 
@@ -155,7 +164,7 @@ def _shift(adata, payload, params, *, genes, ax, figsize, save, show):
     return _finish(fig, ax, save=save, show=show)
 
 
-def gene_importance(adata, *, kind="rank", quantity="value", n_top=25, key=None, order=None,
+def gene_importance(adata, *, kind="rank", quantity="auto", n_top=25, key=None, order=None,
                     hue_order=None, palette=None, ax=None, figsize=(8, 4), save=None,
                     show=None, return_df=False):
     """The cached ``perturb.gene_importance``: a ranking (``kind="rank"``) or the signed
@@ -164,15 +173,47 @@ def gene_importance(adata, *, kind="rank", quantity="value", n_top=25, key=None,
     ``order`` restricts and orders the genes shown; ``hue_order`` orders the split levels;
     ``return_df`` hands back the cached ``result`` frame instead of drawing.
 
-    ``quantity="excess"`` puts ``value - null_value`` on y against a zero rule. It is refused
-    for ``kind="shift"``: the heatmap is the per-phenotype decomposition of the importance, and
-    the reference has no such decomposition stored, so an "excess shift" would have to be
-    invented from a sum that does not decompose the same way.
+``quantity`` defaults to ``"auto"``, which is the EXCESS whenever the cached result carries a
+    reference, and the bare value otherwise. This is the one twin where the corrected quantity
+    is the default, and the reason is that the bare ranking is not merely incomplete, it is
+    dominated by something the question is not about.
+
+    Silencing a gene is an intervention whose size scales with the gene's counts, and the
+    encoder responds to that whatever the gene says about phenotype. Measured on the OE fit,
+    2,000 genes: the bare importance and its null are 0.901 rank-correlated, and the bare top
+    ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal proteins. Ranked by excess the
+    same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2 and KLRC4, and only 17 of the top 50 genes
+    are shared. A reader shown the first list reasonably concludes the perturbation is not
+    working; the second is the question actually asked.
+
+    ``quantity="value"`` still draws the bare ranking, and is worth looking at once: the gap
+    between the two panels IS the abundance confound, and it is a property of this estimand
+    rather than of a fit.
+
+    ``"excess"`` is refused for ``kind="shift"``: the heatmap is the per-phenotype
+    decomposition of the importance, and the reference has no such decomposition stored, so an
+    "excess shift" would have to be invented from a sum that does not decompose the same way.
     """
     from .. import get as _get
 
     if kind not in ("rank", "shift"):
         raise ValueError(f"kind must be 'rank' or 'shift', got {kind!r}")
+    payload = _get.result(adata, "gene_importance", key=key)
+    params = _get.params(adata, "gene_importance", key=key)
+    result = payload["result"]
+    corrected = (result is not None and len(result) and "excess" in result.columns)
+    # Which genes are SHOWN and which quantity is PLOTTED are separate decisions, and keeping
+    # them separate is what lets the two panels of one figure stay about the same genes: the
+    # heatmap has only one quantity it can draw, so tying its gene set to that quantity would
+    # make `kind="rank"` and `kind="shift"` disagree by default.
+    #
+    # The rule, in one sentence: the gene set is ranked by the EXCESS whenever the result
+    # carries one, unless the caller explicitly asked for `quantity="value"`.
+    rank_by = "value" if quantity == "value" else ("excess" if corrected else "value")
+    if quantity == "auto":
+        # the heatmap has only one quantity, so "auto" is "value" there -- otherwise the
+        # default call would raise against its own default, which is not a choice anyone made
+        quantity = "value" if kind == "shift" else rank_by
     if kind == "shift" and quantity != "value":
         raise ValueError(
             f"kind='shift' has no {quantity!r}: the heatmap decomposes the importance across "
@@ -180,19 +221,16 @@ def gene_importance(adata, *, kind="rank", quantity="value", n_top=25, key=None,
             f"a shift. Use kind='rank', quantity={quantity!r} for the excess, or "
             f"kind='shift', quantity='value' for the decomposition."
         )
-    payload = _get.result(adata, "gene_importance", key=key)
-    params = _get.params(adata, "gene_importance", key=key)
     if return_df:
-        return payload["result"]
+        return result
     # Resolved ONCE and handed to both views, so a half-threaded quantity cannot make the two
     # panels of one figure rank a different set of genes.
-    result = payload["result"]
     if result is not None and len(result) and quantity not in result.columns:
         raise ValueError(
             f"this gene_importance result has no {quantity!r} column: it was computed with "
             f"null_model=None. Re-run with a reference, or plot quantity='value'."
         )
-    genes = _top_genes(result, n_top, order, quantity) if (
+    genes = _top_genes(result, n_top, order, rank_by) if (
         result is not None and len(result)) else []
     if kind == "rank":
         return _rank(adata, payload, params, genes=genes, quantity=quantity,
