@@ -42,6 +42,7 @@ loosen a test to make it pass.
   and sets the milestone it ships in, or carries `no issue` / `no milestone`.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md`, or carries
   `no release note`.
+- `check-pr` reports what a PR is missing; read its output after pushing.
 - New functions and methods stay private until the last PR of their sub-issue.
 - Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
 

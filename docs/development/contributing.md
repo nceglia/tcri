@@ -63,6 +63,17 @@ pip install -e ".[dev]"
 towncrier build --draft --version <next version>
 ```
 
+## Pull request check
+
+Every pull request runs `check-pr`, which reports a missing linked issue, milestone or release note,
+and release-note files that are misnamed, named for another pull request, or longer than one line.
+It runs again when the description, labels or milestone change. For now it reports and does not
+block merging.
+
+A first-time contributor's pull request runs its checks after a maintainer approves the run. A pull
+request that changes the check itself is checked by its own new version, so review those changes by
+eye.
+
 ## Labels
 
 - `tracking` marks a tracking issue.
