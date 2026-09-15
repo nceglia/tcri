@@ -34,10 +34,20 @@ loosen a test to make it pass.
   inputs to it.
 - PRs are compact summaries of what was done. Follow-up work goes to GitHub issues.
 
+## Workflow
+
+- A goal is an issue labeled `goal`; its subtargets are sub-issues.
+- Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack)
+  and sets the milestone it ships in, or carries `no issue` / `no milestone`.
+- New functions and methods stay private until the last PR of their subtarget.
+- Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
+
 ## Branching
 
-- **Branch from a fresh `main`.** `git checkout main && git pull` first. Never branch off a
-  branch with an open PR.
-- **After a PR merges, return to `main` and pull** before the next piece of work.
+- **Branch from a fresh `main`** (`git checkout main && git pull`), or, in a stack, from the
+  branch of the PR below. Stacks merge into `main` one PR at a time from the bottom.
+- **After a PR merges, return to `main` and pull** before work that is not the next PR of the
+  same stack.
 - **Before pushing to a branch with an open PR**, `git fetch && git rev-list --count
-  <branch>..origin/main` must be `0`. If not, rebase, and read what landed first.
+  <branch>..origin/<base>` must be `0`, where `<base>` is the PR's base branch. If not,
+  rebase, and read what landed first.

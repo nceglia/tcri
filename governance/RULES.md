@@ -25,6 +25,15 @@ provenance, not a specification, and are not kept in the repository.
   and say why in the PR.
 - The version bumps with any contract change.
 
+## Workflow
+
+- A goal is a GitHub issue labeled `goal`; its subtargets are sub-issues. An issue has one parent.
+- Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack) and
+  sets the milestone of the release it ships in. Labels `no issue` and `no milestone` are the
+  exemptions. The procedure is in the contributing guide in the docs.
+- `main` is releasable at every merge: a new function or method stays private until the last PR of
+  its subtarget, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
+
 ## Working rules
 
 - **Removal is a test.** When asked to remove a public symbol, add it to
@@ -33,8 +42,10 @@ provenance, not a specification, and are not kept in the repository.
 - **After moving or renaming anything, grep the whole repository** with no filters, then run
   what consumes the path: build the wheel, build the docs.
 - **If a change affects a figure, render it and look.**
-- **Branch from a fresh `main`.** Never branch off a branch with an open PR. Before pushing to
-  a branch with an open PR, confirm it is not behind `main`; if it is, rebase.
+- **Branch from a fresh `main`**, or, in a stack, from the branch of the pull request below. Stacks
+  are GitHub stacked pull requests; they merge into `main` one pull request at a time from the
+  bottom, with a merge commit. Update a stacked branch by rebasing. Before pushing, confirm the
+  branch is not behind its base; if it is, rebase.
 - Run tests with the pinned venv: `MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q`.
 - `dev/` is gitignored scratch. `example/` and `examples/` are outputs of the package.
 - PRs describe what was done, compactly. Follow-up work goes to GitHub issues.

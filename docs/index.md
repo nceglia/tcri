@@ -51,6 +51,13 @@ api/utils
 
 ```{toctree}
 :maxdepth: 1
+:caption: Development
+
+development/contributing
+```
+
+```{toctree}
+:maxdepth: 1
 :caption: Governance
 
 contracts/index

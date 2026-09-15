@@ -1,0 +1,28 @@
+name: Goal
+description: An outcome delivered through sub-issues
+title: "Goal: "
+labels: [goal]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true for users when this is done.
+    validations:
+      required: true
+  - type: textarea
+    id: subtargets
+    attributes:
+      label: Subtargets
+      description: One reviewable outcome each, delivered by one pull request or a stack. Attach each as a sub-issue.
+    validations:
+      required: true
+  - type: textarea
+    id: footprint
+    attributes:
+      label: Footprint
+      description: Files, modules, public symbols and stored results this goal touches.
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
