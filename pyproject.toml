@@ -58,6 +58,10 @@ notebook = [
     "nbformat>=5.10",
     "ipykernel>=6",
 ]
+# Assembling release notes from docs/release-notes/ at release time. Not needed to use tcri.
+dev = [
+    "towncrier>=24",
+]
 
 [project.urls]
 Homepage = "https://github.com/nceglia/tcri"
@@ -67,6 +71,18 @@ Documentation = "https://tcri.readthedocs.io"
 
 [tool.setuptools.packages.find]
 include = ["tcri*"]
+
+[tool.towncrier]
+name = "tcri"
+directory = "docs/release-notes"
+filename = "docs/release-notes/{version}.md"
+title_format = "## {version} ({project_date})"
+issue_format = "[#{issue}](https://github.com/nceglia/tcri/pull/{issue})"
+single_file = false
+fragment.breaking.name = "Breaking changes"
+fragment.feat.name = "Features"
+fragment.fix.name = "Bug fixes"
+fragment.perf.name = "Performance"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
