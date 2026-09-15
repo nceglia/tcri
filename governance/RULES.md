@@ -32,6 +32,8 @@ provenance, not a specification, and are not kept in the repository.
 - Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack) and
   sets the milestone of the release it ships in. Labels `no issue` and `no milestone` are the
   exemptions. The procedure is in the contributing guide in the docs.
+- Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md` (`breaking`, `feat`,
+  `fix` or `perf`), or carries the `no release note` label.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
   its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 

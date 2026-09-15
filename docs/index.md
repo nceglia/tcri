@@ -54,6 +54,7 @@ api/utils
 :caption: Development
 
 development/contributing
+release-notes/index
 ```
 
 ```{toctree}

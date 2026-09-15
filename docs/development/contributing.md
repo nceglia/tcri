@@ -41,11 +41,33 @@ below it, using GitHub's stacked pull requests.
 Milestones are named after releases (`0.13.0`). Every pull request sets the milestone of the release
 it ships in.
 
+## Release notes
+
+Every pull request with a change users will notice adds one line of release notes, in a file named
+after the pull request number and the kind of change:
+
+```
+docs/release-notes/<PR number>.<type>.md
+```
+
+`<type>` is `breaking`, `feat`, `fix` or `perf`. Write one line of at most 200 characters, for
+users: what changed, not how. The file name needs the pull request number, so open the pull request
+first, then add the file. A pull request with nothing user-facing (CI, refactoring, internal docs)
+carries the `no release note` label instead.
+
+At release, the lines are collected into a page for that version under
+[Release notes](../release-notes/index.md). To preview the page:
+
+```bash
+pip install -e ".[dev]"
+towncrier build --draft --version <next version>
+```
+
 ## Labels
 
 - `tracking` marks a tracking issue.
 - `no milestone` marks a pull request that is not part of a release; `no issue` marks one that links
-  no issue.
+  no issue; `no release note` marks one with nothing user-facing.
 - Area labels are optional and say which part of the package an issue or pull request touches:
   `area: pp`, `area: tl`, `area: pl`, `area: model`, `area: infra` (packaging, CI, docs build). They
   make it easier to spot two tracking issues working on the same part of the package.
