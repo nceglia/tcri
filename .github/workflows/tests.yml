@@ -7,6 +7,16 @@ on:
   # already landed. That is exactly backwards: the whole point of a stack is that each
   # piece is reviewable and verifiable on its own.
   pull_request:
+  # On push as well, so main and the release branches are known-good at the commit a release
+  # is cut from, not only at the tip of the branch a PR was merged from.
+  push:
+    branches: [main, "[0-9]+.[0-9]+.x"]
+  # Twice a month, to catch a dependency release breaking tcri between pull requests.
+  schedule:
+    - cron: "0 5 1,15 * *"
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -14,21 +24,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        include:
+          # The oldest supported Python and the newest, plus that newest against pre-release
+          # dependencies: an upstream release that breaks tcri shows up here first, and the job
+          # is allowed to fail so it warns without blocking.
+          - python: "3.12"
+            deps: stable
+          - python: "3.14"
+            deps: stable
+          - python: "3.14"
+            deps: pre
+    name: test (${{ matrix.python }}, ${{ matrix.deps }})
+    continue-on-error: ${{ matrix.deps == 'pre' }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # the version comes from git tags
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
           cache: pip
       - name: Install package + test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[test]" ${{ matrix.deps == 'pre' && '--pre' || '' }}
       - name: Run tests
         run: pytest tests/ -v --runslow
+
+  build:
+    # The artifact a release uploads, built and checked on every change.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the version comes from git tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build "twine>=7"
+          python -m build
+      - name: Check distributions
+        run: python -m twine check dist/*
 
   docs:
     # Builds the docs the way Read the Docs does and FAILS ON WARNING.

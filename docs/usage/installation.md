@@ -4,7 +4,7 @@ We recommend a virtual environment to avoid dependency conflicts.
 
 ## Prerequisites
 
-- Python **3.10 or higher**
+- Python **3.12 or higher**
 - pip (Python package installer)
 
 A CUDA-capable GPU is optional but speeds up model fitting; TCRi runs on CPU otherwise.
