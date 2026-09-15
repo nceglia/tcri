@@ -10,7 +10,7 @@ integration. It is a GitHub issue labeled `goal`. Its **subtargets** are sub-iss
 one reviewable outcome each, delivered by one pull request or a stack. An issue has one parent, so
 a sub-issue belongs to exactly one goal.
 
-Work outside a goal links an ordinary issue.
+Work outside a goal links an ordinary issue. Bugs and feature requests have their own issue forms.
 
 ## Opening a goal
 
@@ -38,8 +38,16 @@ below it, using GitHub's stacked pull requests.
 ## Milestones
 
 Milestones are named after releases (`0.13.0`). Every pull request sets the milestone of the release
-it ships in. A pull request that is not part of a release carries the `no milestone` label; one that
-links no issue carries `no issue`.
+it ships in.
+
+## Labels
+
+- `goal` marks a goal issue.
+- `no milestone` marks a pull request that is not part of a release; `no issue` marks one that links
+  no issue.
+- Area labels are optional and say which part of the package an issue or pull request touches:
+  `area: pp`, `area: tl`, `area: pl`, `area: model`, `area: infra` (packaging, CI, docs build). They
+  make it easier to spot two goals working on the same part of the package.
 
 ## Keeping `main` releasable
 
