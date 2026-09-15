@@ -1,23 +1,32 @@
 name: release
 
+# Publishes to PyPI when a GitHub Release is published. The tag is created with the Release.
+# A manual run is a dry run: it tests, builds and checks, and never publishes.
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional tag to exercise the guard, e.g. v0.13.0"
+        type: string
+        required: false
+      prerelease:
+        description: "Treat the tag as a pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  release-test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
       - name: Install package + test dependencies
         run: |
@@ -26,32 +35,60 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --runslow
 
-  build:
-    needs: test
+  release-build:
+    needs: release-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # all branches and tags: the guard checks where the commit lives
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Build sdist + wheel
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --upgrade pip build "twine>=7"
           python -m build
       - name: Check distributions
+        run: python -m twine check dist/*
+      - name: Guard branch, tag, version and pre-release flag
+        if: github.event_name == 'release' || inputs.tag != ''
+        env:
+          EVENT_PRE: ${{ github.event.release.prerelease }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRE: ${{ inputs.prerelease }}
         run: |
-          python -m pip install --upgrade twine
-          python -m twine check dist/*
+          if [ "$GITHUB_EVENT_NAME" = release ]; then V="${GITHUB_REF_NAME#v}"; PRE="$EVENT_PRE"
+          else V="${INPUT_TAG#v}"; PRE="$INPUT_PRE"; fi
+
+          # Only commits on main or a release branch (X.Y.x) are released.
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || git branch -r --contains "$GITHUB_SHA" | grep -Eq 'origin/[0-9]+\.[0-9]+\.x$' \
+            || { echo "::error::$GITHUB_SHA is not on main or an X.Y.x branch"; exit 1; }
+
+          # The built version must be the tag (a dry run has no tag on its commit).
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            BUILT=$(ls dist/*.whl | sed -E 's#.*/tcri-([^-]+)-.*#\1#')
+            [ "$BUILT" = "$V" ] || { echo "::error::built $BUILT, but the tag says $V"; exit 1; }
+          fi
+
+          # a/b/rc versions are pre-releases on GitHub, everything else is not.
+          if [[ "$V" =~ (a|b|rc)[0-9]+$ ]]; then
+            [ "$PRE" = true ] || { echo "::error::$V is a pre-release: tick 'Set as a pre-release'"; exit 1; }
+          else
+            [ "$PRE" = false ] || { echo "::error::$V is not a pre-release: untick 'Set as a pre-release'"; exit 1; }
+          fi
+          echo "Guard passed for $V (pre-release: $PRE)"
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
   publish:
-    needs: build
+    needs: release-build
     runs-on: ubuntu-latest
-    # Only publish on an actual version tag push, never on a manual dry-run.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Only a published GitHub Release uploads; a manual run never does.
+    if: github.event_name == 'release'
     environment:
       name: pypi
       url: https://pypi.org/p/tcri
@@ -63,11 +100,9 @@ jobs:
           name: dist
           path: dist/
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        # Uses Trusted Publishing via the OIDC token above. One-time setup on PyPI:
-        # https://docs.pypi.org/trusted-publishers/  ->  project "tcri"  ->  Publishing
-        #   owner: nceglia | repo: tcri | workflow: release.yml | environment: pypi
-        #
-        # Prefer an API token instead? Drop the `permissions:` block above and add:
-        #   with:
-        #     password: ${{ secrets.PYPI_TOKEN }}
+        # v1.14.2 or newer: older releases bundle twine 6, which rejects the metadata newer build
+        # backends write.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        # Trusted Publishing on PyPI is configured for: owner nceglia | repo tcri |
+        # workflow release.yml | environment pypi. Renaming this file, the environment or the
+        # repository needs a new trusted publisher on PyPI first.
