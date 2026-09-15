@@ -17,6 +17,8 @@ jobs:
         python-version: ["3.10", "3.11"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the version comes from git tags
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -38,13 +40,15 @@ jobs:
     # 4303 characters to 140 while the full test suite stayed green. No pytest run can see
     # this class of defect; only a docs build can.
     #
-    # The setup deliberately MIRRORS .readthedocs.yaml — python 3.12, docs/requirements.txt
-    # only, package NOT installed, heavy deps mocked via autodoc_mock_imports in conf.py. A
-    # job that installed the real package would pass in environments where RTD fails, which
-    # is worse than no job at all.
+    # The setup deliberately MIRRORS .readthedocs.yaml — python 3.12, docs/requirements.txt,
+    # tcri installed with --no-deps (only for its version, which comes from git tags), heavy
+    # deps mocked via autodoc_mock_imports in conf.py. A job that installed the real
+    # dependencies would pass in environments where RTD fails, which is worse than no job at all.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the version comes from git tags
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -53,5 +57,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r docs/requirements.txt
+          pip install --no-deps .
       - name: Build docs, failing on warning
         run: sphinx-build -b html docs _build/html -W --keep-going

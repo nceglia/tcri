@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the version comes from git tags
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # all branches and tags: the guard checks where the commit lives
+          fetch-depth: 0   # all branches and tags: the version and the guard both need them
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

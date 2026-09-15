@@ -11,24 +11,18 @@ description = 'Information Theoretic Framework for Paired Single Cell Gene Expre
 copyright = '2022-2025'
 author = 'Nicholas Ceglia'
 
-# The full version, including alpha/beta/rc tags.
-# Single source of truth is pyproject.toml. Prefer installed metadata; fall back
-# to parsing pyproject.toml directly so the version is correct even when the
-# package is not installed in the docs environment (e.g. on ReadTheDocs, where
-# the heavy runtime deps are mocked rather than installed).
+# The full version, including dev/alpha/rc parts. It comes from git tags at install time
+# (hatch-vcs), so the docs environment installs tcri itself with `pip install --no-deps .`:
+# the heavy runtime dependencies stay mocked via autodoc_mock_imports.
 def _get_release():
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
     try:
-        from importlib.metadata import version as _pkg_version
         return _pkg_version("tcri")
-    except Exception:
-        pass
-    try:
-        import tomllib  # Python 3.11+
-        _pp = os.path.join(os.path.dirname(__file__), os.pardir, "pyproject.toml")
-        with open(_pp, "rb") as _f:
-            return tomllib.load(_f)["project"]["version"]
-    except Exception:
-        return "0.0.0"
+    except PackageNotFoundError as e:
+        raise RuntimeError(
+            "tcri is not installed in the docs environment; run `pip install --no-deps .` "
+            "from the repository root (the heavy dependencies stay mocked)."
+        ) from e
 
 
 release = _get_release()
