@@ -36,10 +36,11 @@ loosen a test to make it pass.
 
 ## Workflow
 
-- A goal is an issue labeled `goal`; its subtargets are sub-issues.
+- Work that takes more than one PR has a tracking issue (label `tracking`); its pieces are
+  sub-issues.
 - Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack)
   and sets the milestone it ships in, or carries `no issue` / `no milestone`.
-- New functions and methods stay private until the last PR of their subtarget.
+- New functions and methods stay private until the last PR of their sub-issue.
 - Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
 
 ## Branching

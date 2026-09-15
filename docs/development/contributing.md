@@ -3,28 +3,29 @@
 How work on tcri is planned, split into pull requests and merged. The rules themselves are stated
 once, in [`governance/RULES.md`](https://github.com/nceglia/tcri/blob/main/governance/RULES.md).
 
-## Goals and sub-issues
+## Tracking issues and sub-issues
 
-A **goal** is an outcome that takes more than one pull request, such as better Scirpy
-integration. It is a GitHub issue labeled `goal`. Its **subtargets** are sub-issues of that issue:
-one reviewable outcome each, delivered by one pull request or a stack. An issue has one parent, so
-a sub-issue belongs to exactly one goal.
+Work that takes more than one pull request, such as better Scirpy integration, has a **tracking
+issue**: a GitHub issue labeled `tracking` that states the outcome. Its pieces are **sub-issues** of
+that issue: one reviewable outcome each, delivered by one pull request or a stack. An issue has one
+parent, so a sub-issue belongs to exactly one tracking issue.
 
-Work outside a goal links an ordinary issue. Bugs and feature requests have their own issue forms.
+Work outside a tracking issue links an ordinary issue. Bugs and feature requests have their own
+issue forms.
 
-## Opening a goal
+## Opening a tracking issue
 
-Open an issue with the **Goal** form (Issues → New issue → Goal). It asks for the outcome, the
-subtargets, the footprint (files, modules, public symbols and stored results the goal touches) and
-what is out of scope. Then create one issue per subtarget and attach it as a sub-issue. The goal
-issue shows progress as sub-issues close.
+Open an issue with the **Tracking issue** form (Issues → New issue → Tracking issue). It asks for the
+outcome, the sub-issues, the footprint (files, modules, public symbols and stored results the work
+touches) and what is out of scope. Then create one issue per piece and attach it as a sub-issue. The
+tracking issue shows progress as sub-issues close.
 
-Before starting a goal, compare its footprint with the open `goal` issues. Where two goals touch
-the same file or public symbol, agree which lands first and note it on both issues.
+Before starting, compare the footprint with the open `tracking` issues. Where two touch the same
+file or public symbol, agree which lands first and note it on both issues.
 
 ## Stacks
 
-A subtarget that needs several pull requests is a stack: each pull request branches from the one
+A sub-issue that needs several pull requests is a stack: each pull request branches from the one
 below it, using GitHub's stacked pull requests.
 
 - Every pull request in the stack says `Part of #N`, where `#N` is the sub-issue.
@@ -42,17 +43,17 @@ it ships in.
 
 ## Labels
 
-- `goal` marks a goal issue.
+- `tracking` marks a tracking issue.
 - `no milestone` marks a pull request that is not part of a release; `no issue` marks one that links
   no issue.
 - Area labels are optional and say which part of the package an issue or pull request touches:
   `area: pp`, `area: tl`, `area: pl`, `area: model`, `area: infra` (packaging, CI, docs build). They
-  make it easier to spot two goals working on the same part of the package.
+  make it easier to spot two tracking issues working on the same part of the package.
 
 ## Keeping `main` releasable
 
 Any commit on `main` could become a release, so unfinished public API never lands there. A new
-function or method stays private until the last pull request of its subtarget: give it an
+function or method stays private until the last pull request of its sub-issue: give it an
 underscore name, or do not import it into its `tcri.*` namespace. Methods on `TCRIModel` stay
 underscore-named, because the API conformance test sees every public method. The last pull request
 makes it public, adds it to `__all__`, declares it in `governance/API_CONTRACT.md`, and greps for the

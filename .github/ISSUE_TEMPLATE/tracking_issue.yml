@@ -1,7 +1,7 @@
-name: Goal
+name: Tracking issue
 description: An outcome delivered through sub-issues
-title: "Goal: "
-labels: [goal]
+title: "Tracking: "
+labels: [tracking]
 body:
   - type: textarea
     id: outcome
@@ -11,9 +11,9 @@ body:
     validations:
       required: true
   - type: textarea
-    id: subtargets
+    id: sub-issues
     attributes:
-      label: Subtargets
+      label: Sub-issues
       description: One reviewable outcome each, delivered by one pull request or a stack. Attach each as a sub-issue.
     validations:
       required: true
@@ -21,7 +21,7 @@ body:
     id: footprint
     attributes:
       label: Footprint
-      description: Files, modules, public symbols and stored results this goal touches.
+      description: Files, modules, public symbols and stored results this work touches.
   - type: textarea
     id: out-of-scope
     attributes:

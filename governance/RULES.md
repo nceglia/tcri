@@ -27,12 +27,13 @@ provenance, not a specification, and are not kept in the repository.
 
 ## Workflow
 
-- A goal is a GitHub issue labeled `goal`; its subtargets are sub-issues. An issue has one parent.
+- Work that takes more than one PR has a tracking issue, labeled `tracking`; its pieces are
+  sub-issues. An issue has one parent.
 - Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack) and
   sets the milestone of the release it ships in. Labels `no issue` and `no milestone` are the
   exemptions. The procedure is in the contributing guide in the docs.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
-  its subtarget, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
+  its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 
 ## Working rules
 
