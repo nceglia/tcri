@@ -56,7 +56,8 @@ first, then add the file. A pull request with nothing user-facing (CI, refactori
 carries the `no release note` label instead.
 
 At release, the lines are collected into a page for that version under
-[Release notes](../release-notes/index.md). To preview the page:
+[Release notes](../release-notes/index.md), following [Releasing](release.md). To preview the
+page:
 
 ```bash
 pip install -e ".[dev]"
