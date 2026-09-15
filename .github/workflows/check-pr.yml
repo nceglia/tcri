@@ -1,0 +1,29 @@
+name: check-pr
+
+# Reports what a pull request is missing: a linked issue, a milestone, a release note.
+# Non-blocking until it is added to the required checks on main.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled, milestoned, demilestoned]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# Label, milestone and description edits arrive as separate events; only the latest run matters.
+concurrency:
+  group: check-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-pr:
+    runs-on: ubuntu-latest
+    steps:
+      # The merge ref, so release-note files are read as they would land.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check link, milestone and release note
+        run: python3 .github/scripts/check_pr.py
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -34,6 +34,7 @@ provenance, not a specification, and are not kept in the repository.
   exemptions. The procedure is in the contributing guide in the docs.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md` (`breaking`, `feat`,
   `fix` or `perf`), or carries the `no release note` label.
+- The `check-pr` workflow reports a missing link, milestone or release note on every PR.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
   its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 
