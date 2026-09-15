@@ -48,4 +48,4 @@ contract is one file beside it, and each is enforced by one test under `tests/`:
 contract by tracing the live model against the block in its file, the metrics contract by
 reference recomputation, identities and pinned values, the API contract by parsing the stub in
 its file, and the training contract by behavioural tests. Code and its contract change in the
-same pull request, and a contract change bumps the version.
+same pull request, and a contract change carries a release note.

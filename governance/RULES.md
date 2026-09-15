@@ -23,7 +23,6 @@ provenance, not a specification, and are not kept in the repository.
   fails on the parent commit for the behaviour that changed.
 - Changing what a metric computes: update `METRICS_CONTRACT.md` including the pinned values,
   and say why in the PR.
-- The version bumps with any contract change.
 
 ## Workflow
 
@@ -35,6 +34,7 @@ provenance, not a specification, and are not kept in the repository.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md` (`breaking`, `feat`,
   `fix` or `perf`), or carries the `no release note` label.
 - The `check-pr` workflow reports a missing link, milestone or release note on every PR.
+- Versions come from git tags; no file holds a version.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
   its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 
