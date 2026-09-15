@@ -12,7 +12,8 @@
   <a href="https://tcri.readthedocs.io">Documentation</a> ·
   <a href="https://tcri.readthedocs.io/en/latest/tutorials/index.html">Tutorials</a> ·
   <a href="https://www.biorxiv.org/content/10.1101/2022.10.01.510457v1">Paper</a> ·
-  <a href="https://github.com/nceglia/tcri/issues">Issues</a>
+  <a href="https://github.com/nceglia/tcri/issues">Issues</a> ·
+  <a href="https://tcri.readthedocs.io/en/latest/development/contributing.html">Contributing</a>
 </p>
 
 <p align="center">
