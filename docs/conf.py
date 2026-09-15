@@ -68,7 +68,9 @@ templates_path = ['_templates']
 # source dir entirely, so no exclusion is needed — and the old entry was one letter from
 # excluding docs/contracts/, the published reader-facing page, which is precisely the
 # collision that motivated the move.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+# release-notes/: one-line note files and per-version pages are pulled into release-notes/index.md
+# with {include}; as standalone documents they would fail the build as orphans.
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'release-notes/[!i]*.md']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'

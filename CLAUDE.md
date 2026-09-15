@@ -40,6 +40,8 @@ loosen a test to make it pass.
   sub-issues.
 - Every PR links the issue it delivers (`Closes #N`, or `Part of #N` below the top of a stack)
   and sets the milestone it ships in, or carries `no issue` / `no milestone`.
+- Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md`, or carries
+  `no release note`.
 - New functions and methods stay private until the last PR of their sub-issue.
 - Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
 
