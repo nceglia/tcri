@@ -18,8 +18,9 @@ build:
       - git fetch --tags --force
     post_install:
       - python -m pip install --no-deps .
-      # A missing tag makes the version fall back to 0.1.devN silently; fail instead.
-      - python -c "import importlib.metadata as m, sys; v = m.version('tcri'); print('tcri', v); sys.exit(v.startswith(('0.0', '0.1.dev')))"
+      # A missing tag makes the version fall back to 0.1.devN silently; fail instead. Read the
+      # Docs wraps each command in single quotes, so this command must not contain any.
+      - 'python -m pip show tcri | grep -E "^Version: " | grep -vE "^Version: 0\.(0|1\.dev)"'
 
 python:
   install:
