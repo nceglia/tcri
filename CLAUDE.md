@@ -43,6 +43,7 @@ loosen a test to make it pass.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md`, or carries
   `no release note`.
 - `check-pr` reports what a PR is missing; read its output after pushing.
+- Versions come from git tags. Never write a version into a file.
 - New functions and methods stay private until the last PR of their sub-issue.
 - Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
 

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "tcri"
-version = "0.12.0"
+dynamic = ["version"]
 description = "Information theoretic metrics for single cell RNA and TCR sequencing."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -69,8 +69,19 @@ Repository = "https://github.com/nceglia/tcri"
 Issues = "https://github.com/nceglia/tcri/issues"
 Documentation = "https://tcri.readthedocs.io"
 
-[tool.setuptools.packages.find]
-include = ["tcri*"]
+# The version comes from the latest git tag (vX.Y.Z); no file holds it. On main, commits after a
+# tag build as the next minor .devN; on an X.Y.x branch, as the next patch .devN.
+[tool.hatch.version]
+source = "vcs"
+raw-options.version_scheme = "release-branch-semver"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tcri"]
+
+# Anchored paths: unanchored names would match at any depth.
+[tool.hatch.build.targets.sdist]
+include = ["/tcri", "/tests", "/governance", "/README.md", "/LICENSE", "/pyproject.toml"]
+exclude = ["/tests/data/archives"]
 
 [tool.towncrier]
 name = "tcri"

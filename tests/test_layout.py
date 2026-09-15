@@ -116,6 +116,8 @@ def test_governance_lives_outside_the_docs_tree():
         assert (ROOT / "governance" / name).is_file(), f"governance/{name} is missing"
 
 
+@pytest.mark.skipif(not (ROOT / ".git").exists(),
+                    reason="needs a git checkout (not available when testing from an sdist)")
 def test_the_wheel_ships_only_the_package():
     """The check that actually consumes the layout.
 
@@ -203,3 +205,25 @@ def test_namespace_all_contains_only_tcri_objects(ns):
         f"third-party name makes it part of tcri's public API — its signature, its deprecations, "
         f"its breakage. Import it privately (`import numpy as _np`) instead."
     )
+
+
+def test_the_version_comes_from_the_installed_distribution():
+    """The version is derived from git tags at install time; nothing may shadow it.
+
+    A setuptools-era ``tcri.egg-info`` left in the repository root sits on ``sys.path`` for any
+    process started there and reports its own frozen version instead of the installed one.
+    """
+    from importlib.metadata import distribution
+
+    from packaging.version import Version
+
+    path = getattr(distribution("tcri"), "_path", None)  # PathDistribution; others can't shadow
+    location = Path(str(path)).resolve() if path is not None else None
+    assert not (location is not None and location.name.endswith(".egg-info")
+                and location.parent == ROOT.resolve()), (
+        f"tcri metadata resolves to {location}; delete the stale egg-info and reinstall with "
+        f"`pip install -e .`"
+    )
+    assert tcri.__version__ != "0.0.0+unknown", "tcri is not installed; run `pip install -e .`"
+    Version(tcri.__version__)  # raises InvalidVersion if it is not PEP 440
+

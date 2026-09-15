@@ -155,5 +155,5 @@ scvi_log/
 lightning_logs/
 
 # local docs preview env — mirrors docs/requirements.txt, i.e. exactly what RTD installs
-# (the package itself is NOT installed; heavy deps are mocked via autodoc_mock_imports)
+# (tcri is installed with --no-deps for its version; heavy deps are mocked via autodoc_mock_imports)
 .venv-docs/
