@@ -1,9 +1,13 @@
 """Results written by past releases, read back by the current tcri.
 
 The schema snapshot pins what the tools store *now*; it cannot notice that a result written by a
-released tcri stopped loading. This test keeps one small ``.h5ad`` per release from 0.13.0 on — the release this began in —
-under ``tests/data/archives/<version>/`` and reads every result in it through ``tcri.get``, so a schema
-change that leaves old results unreadable fails here rather than in someone's saved analysis.
+released tcri stopped loading. This test keeps one small ``.h5ad`` per release from 0.13.0 on — the
+release the versioning began in — under ``tests/data/archives/<version>/`` and reads every result in
+it through ``tcri.get``.
+
+That is what makes the upgrades real. A schema bump writes an upgrade from the previous version
+(:func:`tcri._state.storage.reader`), and these files are what it is run against: without them an
+upgrade is written from memory of the old shape and exercised for the first time by a user.
 
 An archive is written as part of cutting a release (see the release page in the docs)::
 
