@@ -25,16 +25,19 @@ file or public symbol, agree which lands first and note it on both issues.
 
 ## Stacks
 
-A sub-issue that needs several pull requests is a stack: each pull request branches from the one
-below it, using GitHub's stacked pull requests.
+Open one pull request from `main` whenever the pieces are independent.
+
+When a piece genuinely needs the one below it, make a stack with `gh stack` (`gh stack init`, `gh
+stack add`, `gh stack submit`): each pull request branches from the one below, and GitHub moves the
+next one onto `main` when the one below merges, so nobody rebases by hand. Its checks re-run after
+that move, because the commits change.
 
 - Every pull request in the stack says `Part of #N`, where `#N` is the sub-issue.
 - The pull request that completes the sub-issue says `Closes #N` when everything the sub-issue asks
   can be checked before merging. Otherwise close the sub-issue by hand once it has been checked.
 - Merge the stack into `main` **one pull request at a time, from the bottom, with a merge commit**.
-  Do not merge several at once: each pull request should be its own commit on `main`.
-- After the pull request below merges, the next one is rebased onto `main`. If you update a stacked
-  branch yourself, rebase it; do not merge `main` into it.
+  Do not use `gh stack merge`, which lands the whole stack as a single commit.
+- If you update a stacked branch yourself, rebase it; do not merge `main` into it.
 
 ## Milestones
 
