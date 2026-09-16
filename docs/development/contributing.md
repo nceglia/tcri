@@ -42,8 +42,9 @@ onto `main` for you. Its checks re-run after that move, because the commits chan
 - Every pull request in the stack says `Part of #N`, where `#N` is the sub-issue.
 - The pull request that completes the sub-issue says `Closes #N` when everything the sub-issue asks
   can be checked before merging. Otherwise close the sub-issue by hand once it has been checked.
-- Merge the stack into `main` **one pull request at a time, from the bottom, with a merge commit**.
-  Do not use `gh stack merge`, which lands the whole stack as a single commit.
+- Merge the stack into `main` **one pull request at a time, from the bottom**. A merge commit is
+  the only merge `main` accepts, so each pull request stays one commit there. Do not use
+  `gh stack merge`, which lands the whole stack as a single commit.
 - If you update a stacked branch yourself, rebase it; do not merge `main` into it.
 
 ## Milestones
@@ -78,8 +79,8 @@ towncrier build --draft --version <next version>
 
 Every pull request runs `check-pr`, which reports a missing linked issue, milestone or release note,
 and release-note files that are misnamed, named for another pull request, or longer than one line.
-It runs again when the description, labels or milestone change. For now it reports and does not
-block merging.
+It runs again when the description, labels or milestone change, and it has to pass before a pull
+request can merge.
 
 A first-time contributor's pull request runs its checks after a maintainer approves the run. A pull
 request that changes the check itself is checked by its own new version, so review those changes by
