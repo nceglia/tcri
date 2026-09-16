@@ -47,6 +47,7 @@ api/perturbation
 api/null
 api/datasets
 api/utils
+api/stored_results
 ```
 
 ```{toctree}

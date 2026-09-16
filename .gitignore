@@ -157,3 +157,6 @@ lightning_logs/
 # local docs preview env — mirrors docs/requirements.txt, i.e. exactly what RTD installs
 # (tcri is installed with --no-deps for its version; heavy deps are mocked via autodoc_mock_imports)
 .venv-docs/
+
+# generated at docs build time from tests/snapshots/tl_schemas.json
+docs/api/_generated/
