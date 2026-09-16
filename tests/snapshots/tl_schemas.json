@@ -1,0 +1,832 @@
+{
+  "tools": {
+    "tcri_clonotypic_entropy": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "covariate",
+              "excess",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "phenotype",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "phenotype",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "covariate",
+              "draw",
+              "excess",
+              "null_value",
+              "phenotype",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "draw",
+              "phenotype",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.clonotypic_entropy"
+    },
+    "tcri_delta_clonotypic_entropy": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "cov_from",
+              "cov_to",
+              "excess",
+              "excess_from",
+              "excess_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "phenotype",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "minimal": [
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "phenotype",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "excess",
+              "excess_from",
+              "excess_to",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "phenotype",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "minimal": [
+              "cov_from",
+              "cov_to",
+              "draw",
+              "phenotype",
+              "value",
+              "value_from",
+              "value_to"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.delta_clonotypic_entropy"
+    },
+    "tcri_delta_phenotypic_entropy": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "excess",
+              "excess_from",
+              "excess_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "excess",
+              "excess_from",
+              "excess_to",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "value",
+              "value_from",
+              "value_to"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.delta_phenotypic_entropy"
+    },
+    "tcri_gene_importance": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "excess",
+              "gene",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "gene",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "shift": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "baseline",
+              "gene",
+              "perturbed",
+              "phenotype",
+              "shift"
+            ],
+            "minimal": [
+              "baseline",
+              "gene",
+              "perturbed",
+              "phenotype",
+              "shift"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "gene",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "draw",
+              "excess",
+              "gene",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "draw",
+              "gene",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.perturb.gene_importance"
+    },
+    "tcri_joint_distribution": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<phenotype>"
+            ],
+            "minimal": [
+              "<phenotype>"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "covariate",
+              "clonotype"
+            ],
+            "minimal": [
+              "covariate",
+              "clonotype"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<phenotype>"
+            ],
+            "minimal": [
+              "<phenotype>"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "covariate",
+              "clonotype",
+              "sample_id"
+            ],
+            "minimal": [
+              "covariate",
+              "clonotype"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.joint_distribution"
+    },
+    "tcri_mutual_information": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "covariate",
+              "denom",
+              "excess",
+              "hdi_high",
+              "hdi_low",
+              "null_denom",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "denom",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "covariate",
+              "denom",
+              "draw",
+              "excess",
+              "null_denom",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "denom",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.mutual_information"
+    },
+    "tcri_phenotypic_entropy": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "covariate",
+              "excess",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "covariate",
+              "draw",
+              "excess",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.phenotypic_entropy"
+    },
+    "tcri_phenotypic_flux": {
+      "slots": {
+        "result": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "excess",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        },
+        "table": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "excess",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.tl.phenotypic_flux"
+    }
+  }
+}
