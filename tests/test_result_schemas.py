@@ -61,11 +61,11 @@ def _calls(adata):
     }
 
 
-def _run(name, kwargs, model, adata):
-    """Call one tool without touching the fixture (``inplace=False``)."""
+def _run(name, kwargs, model, adata, *, inplace=False):
+    """Call one tool. ``inplace=False`` by default, so the shared fixture is left as it was."""
     if name == "gene_importance":
-        return tcri.perturb.gene_importance(model, adata, inplace=False, **kwargs)
-    return getattr(tcri.tl, name)(adata, inplace=False, **kwargs)
+        return tcri.perturb.gene_importance(model, adata, inplace=inplace, **kwargs)
+    return getattr(tcri.tl, name)(adata, inplace=inplace, **kwargs)
 
 
 def _observe(result, placeholders):
