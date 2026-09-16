@@ -33,7 +33,7 @@ provenance, not a specification, and are not kept in the repository.
   exemptions. The procedure is in the contributing guide in the docs.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md` (`breaking`, `feat`,
   `fix` or `perf`), or carries the `no release note` label.
-- The `check-pr` workflow reports a missing link, milestone or release note on every PR.
+- The `check-pr` workflow blocks the merge of a PR with a missing link, milestone or release note.
 - Versions come from git tags; no file holds a version. Releases are published GitHub Releases;
   the procedure is the release page in the docs.
 - The shape of a stored `tl` result is versioned by `@tl_result(version=N)`. Changing its fields
