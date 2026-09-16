@@ -8,7 +8,8 @@ repository. Nothing here edits a version: the version comes from the git tag.
 A pre-release lets people try finished work without changing what plain `pip install tcri` gives
 them.
 
-1. Pick the commit on `main` whose push build is green, and note its SHA.
+1. Pick the commit on `main` whose push build is green, and note its full SHA (`git rev-parse
+   origin/main`); an abbreviated SHA is rejected.
 2. Preview the notes collected so far:
 
    ```bash
@@ -44,12 +45,20 @@ them.
 
    This writes `docs/release-notes/0.13.0.md`, deletes the one-line files it collected, and stages
    both. (`--yes` and `--keep` cannot be combined.)
-3. Add an include for the new page at the top of the list in `docs/release-notes/index.md`.
-4. Open a pull request with the labels `no release note` and `no issue` and the milestone of the
+3. Write this release's copy of what the tools store, which later releases are checked against:
+
+   ```bash
+   pytest tests/test_result_archives.py --write-archive 0.13.0
+   ```
+
+   Commit it together with the notes. The release workflow refuses to publish a release that has
+   none.
+4. Add an include for the new page at the top of the list in `docs/release-notes/index.md`.
+5. Open a pull request with the labels `no release note` and `no issue` and the milestone of the
    release, and merge it.
-5. Publish the release on that merge commit: tag `v0.13.0`, **not** a pre-release, with a body
+6. Publish the release on that merge commit: tag `v0.13.0`, **not** a pre-release, with a body
    linking to the release notes page.
-6. Close the milestone and open the next one.
+7. Close the milestone and open the next one.
 
 ## Patch release
 
@@ -64,7 +73,8 @@ Otherwise the fix has to go out without the unreleased work on `main`:
    git switch -c 0.13.x v0.13.0 && git push -u origin 0.13.x
    ```
 2. Open a pull request against `0.13.x` with the fix cherry-picked from `main` and `Backport of #N`
-   in the description. Build the notes there in the same commit, as in step 2 above.
+   in the description. Build the notes and the archive there in the same commit, as in steps 2 and 3
+   above.
 3. Publish the release from the `0.13.x` branch.
 4. Open a pull request to `main` with that same commit, so the one-line note is removed there too.
 
