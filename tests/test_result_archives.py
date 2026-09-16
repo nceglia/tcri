@@ -1,8 +1,8 @@
 """Results written by past releases, read back by the current tcri.
 
 The schema snapshot pins what the tools store *now*; it cannot notice that a result written by a
-released tcri stopped loading. This test keeps one small ``.h5ad`` per release under
-``tests/data/archives/<version>/`` and reads every result in it through ``tcri.get``, so a schema
+released tcri stopped loading. This test keeps one small ``.h5ad`` per release from 0.13.0 on — the release this began in —
+under ``tests/data/archives/<version>/`` and reads every result in it through ``tcri.get``, so a schema
 change that leaves old results unreadable fails here rather than in someone's saved analysis.
 
 An archive is written as part of cutting a release (see the release page in the docs)::
