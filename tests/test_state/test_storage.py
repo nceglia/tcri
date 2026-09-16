@@ -16,13 +16,18 @@ import pytest
 from anndata import AnnData
 
 from tcri._state.storage import (
+    _REGISTRY,
+    _READERS,
     _encode,
     decode_blob,
     load_result,
     load_result_params,
+    reader,
     tl_result,
     with_resolved_params,
 )
+import tcri
+from tcri.get import _PROVENANCE
 
 #: Labels that break a naive encoder. The "/" entries are the ones that matter — h5py would
 #: split them into groups. Real TCR ids and cell-type names look like this.
@@ -178,7 +183,7 @@ def test_h5ad_roundtrip(tmp_path, payload_kind):
     else:
         # dict payloads carry provenance through load_result -- see
         # test_load_result_provenance_asymmetry. tcri.get.result() is what strips it.
-        assert set(back) - {"params", "version"} == {"R", "NR"}
+        assert set(back) - set(_PROVENANCE) == {"R", "NR"}
         for g in payload:
             assert set(back[g]) == set(payload[g])
 
@@ -260,3 +265,95 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     assert isinstance(back.index, pd.MultiIndex)
     assert list(back.index.names) == ["clonotype", "sample_id"]
     pd.testing.assert_frame_equal(back, frame, check_dtype=False)
+
+
+# ── provenance and schema versions ───────────────────────────────────────────
+
+def test_the_blob_records_the_tool_and_the_tcri_version(adata):
+    """Which tool wrote a result, and which tcri, without asking the caller to remember."""
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=3)
+
+    blob = adata.uns["tcri_x"]
+    assert blob["tool"] == "tcri_x"
+    assert blob["version"] == 3
+    assert blob["tcri_version"] == tcri.__version__
+
+
+def test_get_result_strips_the_provenance():
+    """`tcri.get.result` returns what the tool returned, provenance removed."""
+    adata = AnnData(X=np.zeros((2, 2), dtype="float32"))
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})})
+
+    got = tcri.get.result(adata, "tcri_x")
+    assert set(got) == {"table"}
+
+
+def _registered(monkeypatch, key, version):
+    """Put a fake tool in the registry, as if `tcri` declared `key` at `version`."""
+    class _Tool:
+        tcri_schema_version = version
+    monkeypatch.setitem(_REGISTRY, key, _Tool)
+
+
+def test_a_newer_schema_version_refuses_to_load(adata, monkeypatch):
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=4)
+    _registered(monkeypatch, "tcri_x", 2)
+
+    with pytest.raises(ValueError, match=r"schema v4.*reads up to v2"):
+        load_result(adata, "tcri_x")
+
+
+def test_an_older_schema_version_goes_through_its_reader(adata, monkeypatch):
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
+    _registered(monkeypatch, "tcri_x", 3)
+    monkeypatch.setitem(_READERS, ("tcri_x", 1), lambda r: {**r, "one_to_two": True})
+    monkeypatch.setitem(_READERS, ("tcri_x", 2), lambda r: {**r, "two_to_three": True})
+
+    got = load_result(adata, "tcri_x")
+    assert got["one_to_two"] and got["two_to_three"]
+
+
+def test_an_older_schema_version_without_a_reader_says_to_recompute(adata, monkeypatch):
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
+    _registered(monkeypatch, "tcri_x", 2)
+
+    with pytest.raises(ValueError, match="no longer read"):
+        load_result(adata, "tcri_x")
+
+
+def test_a_result_written_before_the_tool_key_existed_still_loads(adata, monkeypatch):
+    """Results from 0.9-0.12 carry `version` but no `tool`; `tcri.get` supplies it."""
+    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
+    del adata.uns["tcri_x"]["tool"]
+    _registered(monkeypatch, "tcri_x", 1)
+
+    assert set(load_result(adata, "tcri_x", tool="tcri_x")) == {"table", "params", "version",
+                                                                "tcri_version"}
+    assert "table" in load_result(adata, "tcri_x")   # no tool passed: decoded as it stands
+
+
+def test_tools_defined_outside_tcri_are_not_registered(adata):
+    """A tool defined in a test file cannot displace a real one in the registry."""
+    _store(adata, "tcri_not_registered", {"table": pd.DataFrame({"v": [1.0]})})
+
+    assert "tcri_not_registered" not in _REGISTRY
+
+
+def test_every_tool_tcri_get_knows_is_registered():
+    from tcri import get
+
+    assert set(get._RESULTS.values()) <= set(_REGISTRY)
+
+
+def test_the_registry_records_each_tools_schema_version():
+    versions = {key: tool.tcri_schema_version for key, tool in _REGISTRY.items()}
+
+    assert versions and all(isinstance(v, int) and v >= 1 for v in versions.values())
+
+
+def test_a_registered_reader_is_kept():
+    @reader("tcri_probe", 1)
+    def _up(result):
+        return result
+
+    assert _READERS.pop(("tcri_probe", 1)) is _up
