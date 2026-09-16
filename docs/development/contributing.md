@@ -27,10 +27,17 @@ file or public symbol, agree which lands first and note it on both issues.
 
 Open one pull request from `main` whenever the pieces are independent.
 
-When a piece genuinely needs the one below it, make a stack with `gh stack` (`gh stack init`, `gh
-stack add`, `gh stack submit`): each pull request branches from the one below, and GitHub moves the
-next one onto `main` when the one below merges, so nobody rebases by hand. Its checks re-run after
-that move, because the commits change.
+When a piece genuinely needs the one below it, make a **stack**, so GitHub knows the pull requests
+belong together:
+
+- Building the branches together: `gh stack init`, `gh stack add <branch>`, `gh stack submit`.
+- Branches that already have pull requests: `gh stack link <bottom> <top>`, taking pull request
+  numbers or branch names in stack order.
+
+A pull request opened with another branch as its base is *not* a stack: GitHub shows no stack, does
+not move the pull requests above a merged one, and each one has to be rebased by hand. In a real
+stack the banner says the pull request is part of one, and when the bottom merges the next is moved
+onto `main` for you. Its checks re-run after that move, because the commits change.
 
 - Every pull request in the stack says `Part of #N`, where `#N` is the sub-issue.
 - The pull request that completes the sub-issue says `Closes #N` when everything the sub-issue asks
