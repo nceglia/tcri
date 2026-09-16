@@ -10,10 +10,11 @@ permissions:
   contents: read
   pull-requests: read
 
-# Label, milestone and description edits arrive as separate events; only the latest run matters.
+# Label, milestone and description edits arrive as separate events. Queue them rather than
+# cancelling: a cancelled run stays on the commit, and a cancelled required check blocks the merge.
 concurrency:
   group: check-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   check-pr:
