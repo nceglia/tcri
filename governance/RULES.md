@@ -40,6 +40,8 @@ provenance, not a specification, and are not kept in the repository.
   bumps N, keeps a reader for results that must still load, and carries a `breaking` release
   note; `tests/test_result_schemas.py` enforces it. Results written by past releases must still
   load: `tests/test_result_archives.py` reads an archive kept for each one.
+- A saved session's layout is versioned by `SESSION_FORMAT_VERSION`; a session written by a newer
+  tcri is refused rather than half-loaded.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
   its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 

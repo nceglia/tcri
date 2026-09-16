@@ -1,5 +1,6 @@
 from __future__ import print_function, division
 from .._state import keys as K
+from .._state.storage import _tcri_version
 import os
 import sys
 import numpy as np
@@ -180,6 +181,19 @@ def _pyro_load(path, map_location=None):
     _pyro.get_param_store().set_state(state)
 
 
+def _read_session_meta(run_dir: str) -> Dict[str, Any]:
+    """``meta.json`` if it is there and readable, else an empty dict with a warning."""
+    meta_file = _os.path.join(run_dir, META_FILE)
+    if not _os.path.exists(meta_file):
+        return {}
+    try:
+        with open(meta_file, "r") as f:
+            return dict(_json.load(f))
+    except Exception as e:
+        _warnings.warn(f"Could not read {META_FILE}: {e}")
+        return {}
+
+
 def load_tcri_session(
     run_dir: str,
     *,
@@ -188,6 +202,18 @@ def load_tcri_session(
     layer: Optional[str] = None,
 ):
     TCRIModel = _resolve_TCRIModel()
+
+    # 0) What wrote this session. Checked BEFORE anything is loaded: a session from a newer tcri
+    # may need files or keys this one knows nothing about, and reporting that after a partial load
+    # is worse than not starting. Read once here; step 5 uses the same dict.
+    meta = _read_session_meta(run_dir)
+    found = int(meta.get("format_version", 0) or 0)
+    if found > SESSION_FORMAT_VERSION:
+        raise ValueError(
+            f"the session at {run_dir!r} has format v{found}, written by tcri "
+            f"{meta.get('versions', {}).get('tcri', 'unknown')}; this tcri "
+            f"({_tcri_version()}) reads up to v{SESSION_FORMAT_VERSION}. Upgrade tcri to load it."
+        )
 
     # 1) Load adata
     ad_file = adata_path or _os.path.join(run_dir, AD_FILE)
@@ -250,13 +276,8 @@ def load_tcri_session(
     # would silently fall back to `train()`'s defaults and stop being the parent's model on
     # permuted labels. An older session has no record; `_train_kwargs` stays empty and
     # `tcri.null.*` raises rather than guessing.
-    meta_file = _os.path.join(run_dir, META_FILE)
-    if _os.path.exists(meta_file):
-        try:
-            with open(meta_file, "r") as f:
-                model._train_kwargs = dict(_json.load(f).get("train_kwargs") or {})
-        except Exception as e:
-            _warnings.warn(f"Could not read {META_FILE}: {e}")
+    if meta.get("train_kwargs"):
+        model._train_kwargs = dict(meta["train_kwargs"])
 
     return model, adata
 
@@ -281,6 +302,12 @@ AD_FILE = "adata.h5ad"
 SETUP_FILE = "setup.json"
 PYRO_FILE = "pyro_params.pt"
 META_FILE = "meta.json"
+
+#: The layout of a saved session: which files it has and which keys a load reads out of them.
+#: Bump it when a load needs something an older session does not carry, so a session written by a
+#: newer tcri is refused with a message rather than half-loaded. Sessions written before this
+#: existed record no version and are read as they always were.
+SESSION_FORMAT_VERSION = 1
 
 def _ensure_dir(path: str) -> None:
     _os.makedirs(path, exist_ok=True)
@@ -400,6 +427,7 @@ def save_tcri_session(
 
     # 5) Meta / versions
     meta = {
+        "format_version": SESSION_FORMAT_VERSION,
         "n_obs": int(adata.n_obs),
         "n_vars": int(adata.n_vars),
         "var_names_hash": str(_pd.util.hash_pandas_object(_pd.Index(adata.var_names)).sum()),
@@ -408,6 +436,7 @@ def save_tcri_session(
         "train_kwargs": dict(getattr(model, "_train_kwargs", {}) or {}),
         "name": str(getattr(model, "name", "")),
         "versions": {
+            "tcri": _tcri_version(),
             "python": f"{_os.sys.version_info.major}.{_os.sys.version_info.minor}.{_os.sys.version_info.micro}",
             "anndata": getattr(_ad, "__version__", "unknown"),
             "scanpy": getattr(_sc, "__version__", "unknown"),
