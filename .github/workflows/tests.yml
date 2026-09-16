@@ -48,8 +48,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]" ${{ matrix.deps == 'pre' && '--pre' || '' }}
+      # The slow statistical-recovery tests take most of the run. On a pull request one job
+      # carries them, so a rebase does not pay for three slow runs; every push to main and every
+      # scheduled run has them on all jobs.
       - name: Run tests
-        run: pytest tests/ -v --runslow
+        run: pytest tests/ -v ${{ (github.event_name != 'pull_request' || (matrix.python == '3.12' && matrix.deps == 'stable')) && '--runslow' || '' }}
 
   lowest:
     # The floors in pyproject.toml, actually installed and tested. Without this the declared
