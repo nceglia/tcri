@@ -54,7 +54,8 @@ _CALLS = {
     "gene_importance": "tcri.perturb.gene_importance(model, adata, ...)",
 }
 
-_PROVENANCE = ("params", "version")
+#: Written beside every result; stripped by :func:`result`, which returns what ``tl`` returned.
+_PROVENANCE = ("params", "version", "tool", "tcri_version")
 
 
 def fits(adata) -> list:
@@ -109,14 +110,14 @@ def _require(adata, name, key, fit=None):
 def result(adata, name: str, *, key=None, fit=None):
     """The cached result, exactly as the ``tl`` function returned it.
 
-    Strips ``params``/``version``, which ``load_result`` carries through for dict payloads but
-    not for DataFrame ones — normalising that asymmetry is most of this function's job.
+    Strips the provenance keys, which ``load_result`` carries through for dict payloads but not
+    for DataFrame ones — normalising that asymmetry is most of this function's job.
 
     ``fit`` selects which fit's RESULT BLOB to read, which is a different question from the
     ``fit`` a metric takes: that one selects which fit the number is computed on. They resolve
     through the same :func:`~tcri._state.keys.fit_key`, which is why one spelling serves both.
     """
-    payload = _load_result(adata, _require(adata, name, key, fit))
+    payload = _load_result(adata, _require(adata, name, key, fit), tool=_RESULTS.get(name))
     if isinstance(payload, dict):
         return {k: v for k, v in payload.items() if k not in _PROVENANCE}
     return payload
@@ -133,7 +134,7 @@ def table(adata, name: str, *, key=None, which: str = "result", fit=None):
     ``which="result"`` (default) is the reduced, per-group frame the plots consume;
     ``which="table"`` is the unreduced substrate, one row per (covariate, group, item[, draw]).
     """
-    payload = _load_result(adata, _require(adata, name, key, fit))
+    payload = _load_result(adata, _require(adata, name, key, fit), tool=_RESULTS.get(name))
     if not isinstance(payload, dict) or which not in payload:
         raise KeyError(
             f"cached result for {name!r} has no {which!r} frame "

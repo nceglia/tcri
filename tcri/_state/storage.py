@@ -1,7 +1,8 @@
 """Result-storage convention for ``tl`` functions — realized once as a decorator.
 
-The contract: every ``tl`` writes ``uns[key]`` as a **dict-of-arrays + a ``params`` block + a
-``version`` int** (the scanpy ``rank_genes_groups`` pattern) and **returns** the natural result.
+The contract: every ``tl`` writes ``uns[key]`` as a **dict-of-arrays + a provenance block**
+(``params``, the schema ``version`` int, the writing ``tool`` and the ``tcri_version`` that wrote
+it; the scanpy ``rank_genes_groups`` pattern) and **returns** the natural result.
 ``@tl_result`` is that convention as code, so the metrics cannot drift from it.
 
 Why this exists rather than each tool writing its own ``uns`` entry: every ``pl.*`` used to take
@@ -41,7 +42,9 @@ array *values*, and a label-keyed dict is tagged and stored as parallel key/valu
 from __future__ import annotations
 
 import functools
+import importlib.metadata
 import inspect
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -54,8 +57,37 @@ __all__ = [
     "decode_blob",
     "load_result",
     "load_result_params",
+    "reader",
     "with_resolved_params",
 ]
+
+#: Canonical ``uns`` key -> the wrapped ``tl`` that writes it. Only tools defined in ``tcri`` are
+#: registered, so a tool defined in a test cannot displace a real one.
+_REGISTRY: dict[str, Callable] = {}
+
+#: ``(tool, version)`` -> a reader turning a decoded result of that schema version into the next
+#: one. A bump to vN adds exactly one reader, ``(tool, N - 1)``; earlier readers never change.
+_READERS: dict[tuple[str, int], Callable] = {}
+
+
+def _tcri_version() -> str:
+    """The installed package version, recorded in every result it writes."""
+    try:
+        return importlib.metadata.version("tcri")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+def reader(tool: str, version: int):
+    """Register a one-step reader: a decoded result at ``version`` -> the same at ``version + 1``.
+
+    Storing the step rather than a direct path to the current version means a bump never touches
+    the readers already written: :func:`load_result` chains them.
+    """
+    def deco(fn):
+        _READERS[(tool, int(version))] = fn
+        return fn
+    return deco
 
 #: Never recorded as provenance. The data argument is excluded by POSITION (see ``tl_result``)
 #: rather than by name, so a tool is free to call its first parameter whatever fits.
@@ -174,21 +206,49 @@ def _decode(obj):
 
 
 def decode_blob(blob: dict):
-    """Decode a stored blob back to the tool's natural result (``params``/``version`` kept)."""
+    """Decode a stored blob back to the tool's natural result (the provenance keys kept)."""
     return _decode(blob)
 
 
-def load_result(adata, key: str):
+def load_result(adata, key: str, *, tool: str | None = None):
     """Read and decode ``adata.uns[key]``; raise if absent.
 
     ``tcri.get`` and every ``pl`` cache renderer go through here, so the "run the tool first"
     message is written once.
+
+    The stored schema ``version`` decides what happens next. Results written before 0.13 carry no
+    ``tool``, so ``tcri.get`` passes the one it resolved the key from; without it the blob is
+    decoded as it stands. A result from a NEWER schema than this tcri knows is refused rather than
+    half-read, and an older one is converted by the chain of readers registered with :func:`reader`.
     """
     if key not in adata.uns:
         raise KeyError(
             f"adata.uns[{key!r}] not found — run the matching tcri.tl tool first."
         )
-    return decode_blob(adata.uns[key])
+    blob = adata.uns[key]
+    if not isinstance(blob, dict):
+        return decode_blob(blob)
+    tool = blob.get("tool") or tool
+    if tool not in _REGISTRY:
+        return decode_blob(blob)
+    stored = int(blob.get("version", 1))
+    current = _REGISTRY[tool].tcri_schema_version
+    if stored > current:
+        raise ValueError(
+            f"adata.uns[{key!r}] was written by tcri {blob.get('tcri_version', '?')} with "
+            f"{tool} schema v{stored}; this tcri ({_tcri_version()}) reads up to v{current}. "
+            f"Upgrade tcri to read it."
+        )
+    result = decode_blob(blob)
+    for step in range(stored, current):
+        convert = _READERS.get((tool, step))
+        if convert is None:
+            raise ValueError(
+                f"adata.uns[{key!r}] uses {tool} schema v{stored}, which this tcri can no longer "
+                f"read (current v{current}). Recompute it with tcri."
+            )
+        result = convert(result)
+    return result
 
 
 def load_result_params(adata, key: str, default=None) -> dict:
@@ -341,7 +401,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     params["null_model"] = _reference.name_of(reference_of)
                 if resolved:
                     params.update(resolved)
-                blob = {**blob, "params": _encode(params), "version": int(version)}
+                blob = {**blob, "params": _encode(params), "version": int(version),
+                        "tool": key, "tcri_version": _tcri_version()}
                 dest = arguments.get("key_added") or key
                 adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
@@ -389,6 +450,17 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         wrapper.tcri_default_null = default_null
         wrapper.tcri_values = tuple(values)
         wrapper.tcri_denominators = tuple(denominators)
+        wrapper.tcri_key = key
+        wrapper.tcri_schema_version = int(version)
+        wrapper.tcri_schema = schema
+        if fn.__module__.startswith("tcri."):
+            previous = _REGISTRY.get(key)
+            if previous is not None and (
+                (previous.__module__, previous.__qualname__, previous.tcri_schema_version)
+                != (wrapper.__module__, wrapper.__qualname__, int(version))
+            ):
+                raise RuntimeError(f"two tl tools declare uns key {key!r}")
+            _REGISTRY[key] = wrapper
         return wrapper
 
     return deco
