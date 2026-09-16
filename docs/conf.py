@@ -1,6 +1,8 @@
 # Configuration file for the Sphinx documentation builder.
 
+import json
 import os
+import pathlib
 import sys
 sys.path.insert(0, os.path.abspath('..'))
 
@@ -64,7 +66,8 @@ templates_path = ['_templates']
 # collision that motivated the move.
 # release-notes/: one-line note files and per-version pages are pulled into release-notes/index.md
 # with {include}; as standalone documents they would fail the build as orphans.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'release-notes/[!i]*.md']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'release-notes/[!i]*.md',
+                    'api/_generated']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
@@ -179,3 +182,51 @@ intersphinx_mapping = {
     'pandas': ('https://pandas.pydata.org/pandas-docs/stable/', None),
     'scanpy': ('https://scanpy.readthedocs.io/en/stable/', None),
 }
+
+
+
+# -- Stored results page ------------------------------------------------------
+# The fields of every stored ``tl`` result are generated from the snapshot the schema test pins
+# (tests/snapshots/tl_schemas.json), so the page cannot drift from what the tools actually store.
+_SCHEMAS = pathlib.Path(__file__).resolve().parents[1] / "tests" / "snapshots" / "tl_schemas.json"
+
+
+#: The snapshot masks names that come from the test data; spell them out for readers.
+_PLACEHOLDERS = {
+    "<groupby>": "the `groupby` column",
+    "<splitby>": "the `splitby` column",
+    "<phenotype>": "one column per phenotype",
+}
+
+
+def _columns(names):
+    return ", ".join(_PLACEHOLDERS.get(name, f"`{name}`") for name in names)
+
+
+def _write_stored_results(app):
+    tools = json.loads(_SCHEMAS.read_text())["tools"]
+    lines = []
+    for key in sorted(tools):
+        tool = tools[key]
+        lines += [f"## `{key}`", "",
+                  f"Written by `{tool['writer']}`. Schema version {tool['version']}.", ""]
+        for slot, shape in sorted(tool["slots"].items()):
+            always = shape["columns"]["minimal"]
+            extra = sorted(set(shape["columns"]["maximal"]) - set(always))
+            lines.append(f"- `{slot}` ({shape['type']})")
+            if always:
+                lines.append("  - always: " + _columns(always))
+            if extra:
+                lines.append("  - with a group, a split or a reference: " + _columns(extra))
+            index = [level for level in shape["index"]["maximal"] if level != "None"]
+            if index:
+                lines.append("  - index: " + _columns(index))
+        lines.append("")
+    out = pathlib.Path(app.srcdir) / "api" / "_generated" / "stored_results.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines))
+
+
+def setup(app):
+    app.connect("builder-inited", _write_stored_results)
+

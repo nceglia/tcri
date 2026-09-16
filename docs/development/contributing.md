@@ -85,6 +85,22 @@ A first-time contributor's pull request runs its checks after a maintainer appro
 request that changes the check itself is checked by its own new version, so review those changes by
 eye.
 
+## Stored results
+
+Each `tcri.tl` function stores its result under `adata.uns`, in a shape that is versioned: the
+`version` recorded with the result says which layout it is. Changing what a tool stores — a renamed,
+added or dropped column, a different index — means bumping that version in `@tl_result(version=N)`.
+The [stored results](../api/stored_results.md) page lists the current fields, and is generated from
+a snapshot the tests pin, so it cannot drift from the code.
+
+When the fields change, the test fails until you:
+
+1. bump `@tl_result(version=N)` for that tool;
+2. register a reader for the previous version, if results written by a released tcri should still
+   load;
+3. add a `breaking` release note;
+4. rewrite the snapshot with `pytest tests/test_result_schemas.py --update-schema-snapshot`.
+
 ## Labels
 
 - `tracking` marks a tracking issue.
