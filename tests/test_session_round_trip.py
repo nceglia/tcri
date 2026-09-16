@@ -12,12 +12,15 @@ Locks three things:
 """
 import contextlib
 import io
+import json
 
 import numpy as np
 import pyro
 import pytest
 
+import tcri
 from tcri._state import keys as K
+from tcri.utils._utils import SESSION_FORMAT_VERSION
 from tcri.utils._utils import load_tcri_session, save_tcri_session
 
 
@@ -135,3 +138,39 @@ def test_session_round_trip(fresh_trained_model, tmp_path):
     assert loaded_model.module.phenotype_kl_weight == model.module.phenotype_kl_weight
     assert loaded_model.module.gate_prob == model.module.gate_prob
     assert loaded_model.module.classifier_dropout == model.module.classifier_dropout
+
+
+# ── the session format version ───────────────────────────────────────────────
+
+def test_a_saved_session_records_its_format_and_the_tcri_that_wrote_it(fresh_trained_model, tmp_path):
+    model, adata = fresh_trained_model
+    out_dir = tmp_path / "session"
+
+    save_tcri_session(model, adata, str(out_dir))
+
+    meta = json.loads((out_dir / "meta.json").read_text())
+    assert meta["format_version"] == SESSION_FORMAT_VERSION
+    assert meta["versions"]["tcri"] == tcri.__version__
+
+
+def test_a_session_from_a_newer_tcri_is_refused(tmp_path):
+    """Refused before anything is read: a newer session may need files this tcri knows nothing of."""
+    (tmp_path / "meta.json").write_text(json.dumps({
+        "format_version": SESSION_FORMAT_VERSION + 1,
+        "versions": {"tcri": "99.0.0"},
+    }))
+
+    with pytest.raises(ValueError, match=r"format v\d+.*99\.0\.0.*reads up to"):
+        load_tcri_session(str(tmp_path))
+
+
+def test_a_session_written_before_format_versions_is_not_refused(tmp_path):
+    """No `format_version` means a session from 0.12 or earlier; it is read as it always was.
+
+    The load gets past the version check and stops at the missing files of this empty directory,
+    which is what proves the check let it through.
+    """
+    (tmp_path / "meta.json").write_text(json.dumps({"train_kwargs": {"max_epochs": 3}}))
+
+    with pytest.raises(FileNotFoundError):
+        load_tcri_session(str(tmp_path))
