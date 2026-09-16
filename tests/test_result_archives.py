@@ -1,9 +1,13 @@
 """Results written by past releases, read back by the current tcri.
 
 The schema snapshot pins what the tools store *now*; it cannot notice that a result written by a
-released tcri stopped loading. This test keeps one small ``.h5ad`` per release under
-``tests/data/archives/<version>/`` and reads every result in it through ``tcri.get``, so a schema
-change that leaves old results unreadable fails here rather than in someone's saved analysis.
+released tcri stopped loading. This test keeps one small ``.h5ad`` per release from 0.13.0 on — the
+release the versioning began in — under ``tests/data/archives/<version>/`` and reads every result in
+it through ``tcri.get``.
+
+That is what makes the upgrades real. A schema bump writes an upgrade from the previous version
+(:func:`tcri._state.storage.reader`), and these files are what it is run against: without them an
+upgrade is written from memory of the old shape and exercised for the first time by a user.
 
 An archive is written as part of cutting a release (see the release page in the docs)::
 
@@ -39,6 +43,12 @@ def _archives():
     return sorted(p for p in ARCHIVES.glob("*/results.h5ad")) if ARCHIVES.exists() else []
 
 
+def _writer_versions(adata) -> set:
+    """The tcri versions recorded in the stored results of an archive."""
+    return {blob.get("tcri_version") for blob in adata.uns.values()
+            if isinstance(blob, dict) and "tcri_version" in blob}
+
+
 def test_write_archive(cohort, request):
     """Write this release's archive. Skipped unless ``--write-archive VERSION`` is passed."""
     version = request.config.getoption("--write-archive")
@@ -64,11 +74,31 @@ def test_write_archive(cohort, request):
     assert size < MAX_ARCHIVE_BYTES, f"archive is {size} bytes, over the {MAX_ARCHIVE_BYTES} cap"
 
 
-@pytest.mark.parametrize(
+#: One case per archive on disk, so a missing archive directory skips rather than errors.
+_each_archive = pytest.mark.parametrize(
     "archive",
     _archives() or [pytest.param(None, marks=pytest.mark.skip(reason="no archives written yet"))],
     ids=lambda p: p.parent.name if p is not None else "none",
 )
+
+
+@_each_archive
+def test_an_archive_was_written_by_the_release_it_is_filed_under(archive):
+    """The whole point of an archive is which release wrote it.
+
+    Writing one from a working copy whose installed metadata is stale — a leftover editable
+    install, a stray ``egg-info`` — silently files one release's results under another's name,
+    and every later comparison is then against the wrong release.
+    """
+    recorded = _writer_versions(anndata.read_h5ad(archive))
+
+    assert recorded == {archive.parent.name}, (
+        f"{archive.parent.name} archive records writer version(s) {sorted(recorded)}; write it "
+        f"from a checkout of the release tag, with tcri installed from that checkout"
+    )
+
+
+@_each_archive
 def test_archived_results_still_load(archive):
     """Every result in a released archive loads, keeps its schema, and matches the pinned columns."""
     adata = anndata.read_h5ad(archive)

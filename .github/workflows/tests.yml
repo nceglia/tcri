@@ -90,6 +90,14 @@ jobs:
           python -m build
       - name: Check distributions
         run: python -m twine check dist/*
+      # The suite has to run from the sdist too: that is how conda-forge and anyone packaging
+      # tcri gets it, and a test that reads a file the sdist does not ship fails only there.
+      - name: Collect the tests from the sdist
+        run: |
+          mkdir -p /tmp/sdist && tar xzf dist/*.tar.gz -C /tmp/sdist --strip-components=1
+          cd /tmp/sdist
+          python -m pip install pytest
+          python -m pytest tests/ -q --collect-only > /dev/null
 
   docs:
     # Builds the docs the way Read the Docs does and FAILS ON WARNING.

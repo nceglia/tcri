@@ -38,8 +38,10 @@ provenance, not a specification, and are not kept in the repository.
   the procedure is the release page in the docs.
 - The shape of a stored `tl` result is versioned by `@tl_result(version=N)`. Changing its fields
   bumps N, keeps a reader for results that must still load, and carries a `breaking` release
-  note; `tests/test_result_schemas.py` enforces it. Results written by past releases must still
-  load: `tests/test_result_archives.py` reads an archive kept for each one.
+  note; `tests/test_result_schemas.py` enforces it. When the version changes, write the upgrade
+  from the previous one; reading an older result then upgrades it, and without an upgrade it raises
+  and says to recompute. `tests/test_result_archives.py` keeps an archive per release from 0.13.0
+  on, which is what the upgrades are tested against.
 - A saved session's layout is versioned by `SESSION_FORMAT_VERSION`; a session written by a newer
   tcri is refused rather than half-loaded.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of

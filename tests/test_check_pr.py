@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[1] / ".github" / "scripts" / "check_pr.py"
+if not _SCRIPT.is_file():  # the sdist ships tests/ but not .github/
+    pytest.skip("the pull request check is not part of the source distribution",
+                allow_module_level=True)
 _spec = importlib.util.spec_from_file_location("check_pr", _SCRIPT)
 check_pr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_pr)
