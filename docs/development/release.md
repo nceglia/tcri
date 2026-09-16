@@ -53,6 +53,15 @@ them.
 
    Commit it together with the notes. The release workflow refuses to publish a release that has
    none.
+
+   Each stored result records the tcri version that wrote it, and a test checks that it matches the
+   release the archive is filed under. Run the command in a checkout with no stale build metadata:
+
+   ```bash
+   rm -rf tcri.egg-info build && pip install --no-deps -e .
+   ```
+
+   To redo an archive, delete its directory first; the command refuses to overwrite one.
 4. Add an include for the new page at the top of the list in `docs/release-notes/index.md`.
 5. Open a pull request with the labels `no release note` and `no issue` and the milestone of the
    release, and merge it.
