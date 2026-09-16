@@ -54,6 +54,7 @@ api/utils
 :caption: Development
 
 development/contributing
+development/release
 release-notes/index
 ```
 

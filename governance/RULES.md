@@ -34,7 +34,8 @@ provenance, not a specification, and are not kept in the repository.
 - Every PR adds one release-note line at `docs/release-notes/<PR>.<type>.md` (`breaking`, `feat`,
   `fix` or `perf`), or carries the `no release note` label.
 - The `check-pr` workflow reports a missing link, milestone or release note on every PR.
-- Versions come from git tags; no file holds a version.
+- Versions come from git tags; no file holds a version. Releases are published GitHub Releases;
+  the procedure is the release page in the docs.
 - `main` is releasable at every merge: a new function or method stays private until the last PR of
   its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 
