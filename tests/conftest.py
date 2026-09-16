@@ -18,6 +18,10 @@ def pytest_addoption(parser):
         "--runslow", action="store_true", default=False,
         help="run slow statistical-recovery tests (model fits over many configs)",
     )
+    parser.addoption(
+        "--update-schema-snapshot", action="store_true", default=False,
+        help="rewrite tests/snapshots/tl_schemas.json from what the tools store now",
+    )
 
 
 def pytest_configure(config):
