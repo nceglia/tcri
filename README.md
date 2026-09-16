@@ -19,6 +19,7 @@
 <p align="center">
   <a href="https://github.com/nceglia/tcri/actions/workflows/tests.yml"><img src="https://github.com/nceglia/tcri/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
   <a href="https://tcri.readthedocs.io"><img src="https://readthedocs.org/projects/tcri/badge/?version=latest" alt="docs"></a>
+  <a href="https://pypi.org/project/tcri/"><img src="https://img.shields.io/pypi/v/tcri.svg" alt="PyPI"></a>
   <a href="https://github.com/nceglia/tcri/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.12%2B-blue.svg" alt="python 3.12+">
   <img src="https://img.shields.io/badge/built%20on-scverse-%231f9e16.svg" alt="built on scverse">
