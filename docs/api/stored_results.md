@@ -11,8 +11,7 @@ listed below, the `tool` that wrote it and the `tcri_version` that was installed
 earlier carry only `params` and `version`, and their columns may predate the layout below.
 
 Reading a result whose schema version is newer than the installed tcri raises an error asking you to
-upgrade. An older version is converted when tcri ships a converter for it, and otherwise the error
-asks you to recompute the result.
+upgrade. Reading an older version raises an error asking you to recompute the result.
 
 The fields below are generated from the same snapshot the test suite pins, so they match what the
 tools store. Columns marked "always" are present in every result; the others appear when the metric

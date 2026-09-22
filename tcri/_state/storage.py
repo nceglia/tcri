@@ -57,17 +57,12 @@ __all__ = [
     "decode_blob",
     "load_result",
     "load_result_params",
-    "reader",
     "with_resolved_params",
 ]
 
 #: Canonical ``uns`` key -> the wrapped ``tl`` that writes it. Only tools defined in ``tcri`` are
 #: registered, so a tool defined in a test cannot displace a real one.
 _REGISTRY: dict[str, Callable] = {}
-
-#: ``(tool, version)`` -> a reader turning a decoded result of that schema version into the next
-#: one. A bump to vN adds exactly one reader, ``(tool, N - 1)``; earlier readers never change.
-_READERS: dict[tuple[str, int], Callable] = {}
 
 
 def _tcri_version() -> str:
@@ -78,16 +73,6 @@ def _tcri_version() -> str:
         return "0.0.0+unknown"
 
 
-def reader(tool: str, version: int):
-    """Register a one-step reader: a decoded result at ``version`` -> the same at ``version + 1``.
-
-    Storing the step rather than a direct path to the current version means a bump never touches
-    the readers already written: :func:`load_result` chains them.
-    """
-    def deco(fn):
-        _READERS[(tool, int(version))] = fn
-        return fn
-    return deco
 
 #: Never recorded as provenance. The data argument is excluded by POSITION (see ``tl_result``)
 #: rather than by name, so a tool is free to call its first parameter whatever fits.
@@ -219,7 +204,7 @@ def load_result(adata, key: str, *, tool: str | None = None):
     The stored schema ``version`` decides what happens next. Results written before 0.13 carry no
     ``tool``, so ``tcri.get`` passes the one it resolved the key from; without it the blob is
     decoded as it stands. A result from a NEWER schema than this tcri knows is refused rather than
-    half-read, and an older one is converted by the chain of readers registered with :func:`reader`.
+    half-read, and an older one is refused with a request to recompute it.
     """
     if key not in adata.uns:
         raise KeyError(
@@ -239,16 +224,12 @@ def load_result(adata, key: str, *, tool: str | None = None):
             f"{tool} schema v{stored}; this tcri ({_tcri_version()}) reads up to v{current}. "
             f"Upgrade tcri to read it."
         )
-    result = decode_blob(blob)
-    for step in range(stored, current):
-        convert = _READERS.get((tool, step))
-        if convert is None:
-            raise ValueError(
-                f"adata.uns[{key!r}] uses {tool} schema v{stored}, which this tcri can no longer "
-                f"read (current v{current}). Recompute it with tcri."
-            )
-        result = convert(result)
-    return result
+    if stored < current:
+        raise ValueError(
+            f"adata.uns[{key!r}] uses {tool} schema v{stored}, which this tcri can no longer "
+            f"read (current v{current}). Recompute it with tcri."
+        )
+    return decode_blob(blob)
 
 
 def load_result_params(adata, key: str, default=None) -> dict:

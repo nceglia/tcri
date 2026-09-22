@@ -61,11 +61,11 @@ def _calls(adata):
     }
 
 
-def _run(name, kwargs, model, adata, *, inplace=False):
-    """Call one tool. ``inplace=False`` by default, so the shared fixture is left as it was."""
+def _run(name, kwargs, model, adata):
+    """Call one tool with ``inplace=False``, so the shared fixture is left as it was."""
     if name == "gene_importance":
-        return tcri.perturb.gene_importance(model, adata, inplace=inplace, **kwargs)
-    return getattr(tcri.tl, name)(adata, inplace=inplace, **kwargs)
+        return tcri.perturb.gene_importance(model, adata, inplace=False, **kwargs)
+    return getattr(tcri.tl, name)(adata, inplace=False, **kwargs)
 
 
 def _observe(result, placeholders):
@@ -137,8 +137,6 @@ def test_stored_result_schemas_match_the_snapshot(observed, request):
         if now["slots"] != was["slots"] and now["version"] == was["version"]:
             pytest.fail(
                 f"{key}: the stored fields changed but @tl_result(version={now['version']}) did "
-                f"not. Bump the version, register a reader for v{was['version']} if results "
-                f"written by a released tcri must still load, add a `breaking` release note, then "
-                f"{update}.\n  was: {was['slots']}\n  now: {now['slots']}"
+                f"not. Bump the version, add a `breaking` release note, then {update}.\n  was: {was['slots']}\n  now: {now['slots']}"
             )
         assert now == was, f"{key}: the snapshot is out of date: {update}"

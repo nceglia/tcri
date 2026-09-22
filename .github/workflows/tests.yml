@@ -84,12 +84,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Build sdist + wheel
         run: |
           python -m pip install --upgrade pip build "twine>=7"
           python -m build
       - name: Check distributions
         run: python -m twine check dist/*
+      # The suite has to collect from the sdist too: that is how anyone packaging tcri gets it,
+      # and a test that reads a file the sdist does not ship fails only there.
+      - name: Collect the tests from the sdist
+        run: |
+          mkdir -p /tmp/sdist && tar xzf dist/*.tar.gz -C /tmp/sdist --strip-components=1
+          cd /tmp/sdist
+          python -m pip install ".[test]"
+          python -m pytest tests/ -qqq --collect-only
 
   docs:
     # Builds the docs the way Read the Docs does and FAILS ON WARNING.

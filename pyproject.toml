@@ -81,7 +81,6 @@ packages = ["tcri"]
 # Anchored paths: unanchored names would match at any depth.
 [tool.hatch.build.targets.sdist]
 include = ["/tcri", "/tests", "/governance", "/README.md", "/LICENSE", "/pyproject.toml"]
-exclude = ["/tests/data/archives"]
 
 [tool.towncrier]
 name = "tcri"

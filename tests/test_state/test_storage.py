@@ -17,12 +17,10 @@ from anndata import AnnData
 
 from tcri._state.storage import (
     _REGISTRY,
-    _READERS,
     _encode,
     decode_blob,
     load_result,
     load_result_params,
-    reader,
     tl_result,
     with_resolved_params,
 )
@@ -303,17 +301,7 @@ def test_a_newer_schema_version_refuses_to_load(adata, monkeypatch):
         load_result(adata, "tcri_x")
 
 
-def test_an_older_schema_version_goes_through_its_reader(adata, monkeypatch):
-    _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
-    _registered(monkeypatch, "tcri_x", 3)
-    monkeypatch.setitem(_READERS, ("tcri_x", 1), lambda r: {**r, "one_to_two": True})
-    monkeypatch.setitem(_READERS, ("tcri_x", 2), lambda r: {**r, "two_to_three": True})
-
-    got = load_result(adata, "tcri_x")
-    assert got["one_to_two"] and got["two_to_three"]
-
-
-def test_an_older_schema_version_without_a_reader_says_to_recompute(adata, monkeypatch):
+def test_an_older_schema_version_says_to_recompute(adata, monkeypatch):
     _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
     _registered(monkeypatch, "tcri_x", 2)
 
@@ -349,11 +337,3 @@ def test_the_registry_records_each_tools_schema_version():
     versions = {key: tool.tcri_schema_version for key, tool in _REGISTRY.items()}
 
     assert versions and all(isinstance(v, int) and v >= 1 for v in versions.values())
-
-
-def test_a_registered_reader_is_kept():
-    @reader("tcri_probe", 1)
-    def _up(result):
-        return result
-
-    assert _READERS.pop(("tcri_probe", 1)) is _up
