@@ -109,15 +109,6 @@ When the fields change, the test fails until you:
   `area: pp`, `area: tl`, `area: pl`, `area: model`, `area: infra` (packaging, CI, docs build). They
   make it easier to spot two tracking issues working on the same part of the package.
 
-## Keeping `main` releasable
-
-Any commit on `main` could become a release, so unfinished public API never lands there. A new
-function or method stays private until the last pull request of its sub-issue: give it an
-underscore name, or do not import it into its `tcri.*` namespace. Methods on `TCRIModel` stay
-underscore-named, because the API conformance test sees every public method. The last pull request
-makes it public, adds it to `__all__`, declares it in `governance/API_CONTRACT.md`, and greps for the
-old name.
-
 ## Rules
 
 Contracts, tests and branching rules:

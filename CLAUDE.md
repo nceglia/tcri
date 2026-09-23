@@ -44,7 +44,6 @@ loosen a test to make it pass.
   `no release note`.
 - `check-pr` blocks the merge until the PR has its link, milestone and release note.
 - Versions come from git tags. Never write a version into a file.
-- New functions and methods stay private until the last PR of their sub-issue.
 - Full text: `governance/RULES.md`; how-to: `docs/development/contributing.md`.
 
 ## Branching

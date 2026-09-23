@@ -17,8 +17,8 @@ provenance, not a specification, and are not kept in the repository.
 - Code and its contract change in the same PR. A conformance failure means either the change
   was intended, in which case the contract file changes deliberately in that PR, or it is a
   regression. It never means loosen the test until it passes.
-- Adding a public function: declare it in the stub in `API_CONTRACT.md`. Changing a signature:
-  the same.
+- Adding a public function: add it to its namespace's `__all__` and declare it in the stub in
+  `API_CONTRACT.md`. Changing a signature: the same.
 - Changing the model: update the block and the prose in `MODEL_CONTRACT.md`; add a test that
   fails on the parent commit for the behaviour that changed.
 - Changing what a metric computes: update `METRICS_CONTRACT.md` including the pinned values,
@@ -40,8 +40,6 @@ provenance, not a specification, and are not kept in the repository.
   bumps N and carries a `breaking` release note; `tests/test_result_schemas.py` enforces it.
 - A saved session's layout is versioned by `SESSION_FORMAT_VERSION`; a session written by a newer
   tcri is refused rather than half-loaded.
-- `main` is releasable at every merge: a new function or method stays private until the last PR of
-  its sub-issue, which makes it public, adds it to `__all__` and declares it in `API_CONTRACT.md`.
 
 ## Working rules
 
