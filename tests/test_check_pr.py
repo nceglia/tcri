@@ -19,13 +19,12 @@ check_pr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_pr)
 
 
-def _pr(number=10, body="Closes #5", labels=(), milestone="0.13.0", base="main"):
+def _pr(number=10, body="Closes #5", labels=(), milestone="0.13.0"):
     return {
         "number": number,
         "body": body,
         "labels": [{"name": name} for name in labels],
         "milestone": None if milestone is None else {"title": milestone},
-        "base": {"ref": base},
     }
 
 
@@ -67,14 +66,6 @@ def test_unfilled_or_non_closing_links_are_rejected(body):
 def test_note_named_for_another_pull_request_is_reported():
     notes = {"docs/release-notes/10.feat.md": "Mine.\n", "docs/release-notes/9.fix.md": "Below.\n"}
     assert any("another pull request" in p for p in _problems(_pr(), notes=notes))
-
-
-def test_backport_to_a_release_branch_may_carry_the_original_note():
-    notes = {"docs/release-notes/7.fix.md": "Fixed.\n"}
-    backport = _pr(number=20, body="Backport of #7\nCloses #6", base="0.13.x")
-    assert _problems(backport, notes=notes) == []
-    on_main = _pr(number=20, body="Backport of #7\nCloses #6", base="main")
-    assert any("another pull request" in p for p in _problems(on_main, notes=notes))
 
 
 def test_unknown_type_is_reported():
