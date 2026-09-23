@@ -91,8 +91,8 @@ eye.
 Each `tcri.tl` function stores its result under `adata.uns`, in a shape that is versioned: the
 `version` recorded with the result says which layout it is. Changing what a tool stores — a renamed,
 added or dropped column, a different index — means bumping that version in `@tl_result(version=N)`.
-The [stored results](../api/stored_results.md) page lists the current fields, and is generated from
-a snapshot the tests pin, so it cannot drift from the code.
+The [stored results](../concepts/stored_results.md) page explains the convention: what is stored,
+what is recorded beside it, and what the snapshot test guards.
 
 When the fields change, the test fails until you:
 
