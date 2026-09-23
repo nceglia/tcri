@@ -23,8 +23,6 @@ LINK = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)\s+#\
 NOTE = re.compile(r"docs/release-notes/(\d+)\.([a-z]+)\.md")
 #: Files that belong in docs/release-notes/ without being a note: the index and version pages.
 PAGE = re.compile(r"docs/release-notes/(?:index|\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?)\.md")
-BACKPORT = re.compile(r"(?im)^\s*backport of #(\d+)\b")
-RELEASE_BRANCH = re.compile(r"\d+\.\d+\.x")
 
 
 def problems(pr: dict, files: list[tuple[str, str]], read_file) -> list[str]:
@@ -52,18 +50,14 @@ def problems(pr: dict, files: list[tuple[str, str]], read_file) -> list[str]:
         found.append(f"Unexpected files in docs/release-notes/: {', '.join(stray)}. A release note "
                      f"is named `<PR number>.<type>.md`.")
 
-    # A backport to a release branch carries the original pull request's note.
-    backports = ({int(n) for n in BACKPORT.findall(body)}
-                 if RELEASE_BRANCH.fullmatch(pr.get("base", {}).get("ref", "")) else set())
-    own = {number, *backports}
     notes = [(match, name) for name in present for match in [NOTE.fullmatch(name)] if match]
-    foreign = [name for match, name in notes if int(match[1]) not in own]
+    foreign = [name for match, name in notes if int(match[1]) != number]
     if foreign:
         found.append(f"Release notes named for another pull request: {', '.join(foreign)}. If the "
                      f"pull request below in a stack just merged, rebase this branch onto main.")
 
     if "no release note" not in labels:
-        mine = [(match, name) for match, name in notes if int(match[1]) in own]
+        mine = [(match, name) for match, name in notes if int(match[1]) == number]
         if len(mine) != 1:
             found.append(f"Add one release note, `docs/release-notes/{number}.<type>.md`, or the "
                          f"`no release note` label.")

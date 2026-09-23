@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # all branches and tags: the version and the guard both need them
+          fetch-depth: 0   # the version and the guard both need the tags and main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -63,10 +63,9 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = release ]; then V="${GITHUB_REF_NAME#v}"; PRE="$EVENT_PRE"
           else V="${INPUT_TAG#v}"; PRE="$INPUT_PRE"; fi
 
-          # Only commits on main or a release branch (X.Y.x) are released.
+          # Only commits on main are released.
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || git branch -r --contains "$GITHUB_SHA" | grep -Eq 'origin/[0-9]+\.[0-9]+\.x$' \
-            || { echo "::error::$GITHUB_SHA is not on main or an X.Y.x branch"; exit 1; }
+            || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
 
           # The built version must be the tag (a dry run has no tag on its commit).
           if [ "$GITHUB_EVENT_NAME" = release ]; then

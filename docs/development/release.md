@@ -54,23 +54,7 @@ them.
 
 ## Patch release
 
-If only fixes have landed on `main` since the last release, cut it from `main` exactly like a
-release, with the patch version.
-
-Otherwise the fix has to go out without the unreleased work on `main`:
-
-1. Create the release branch from the tag, once per minor version:
-
-   ```bash
-   git switch -c 0.13.x v0.13.0 && git push -u origin 0.13.x
-   ```
-2. Open a pull request against `0.13.x` with the fix cherry-picked from `main` and `Backport of #N`
-   in the description. Build the notes there in the same commit, as in step 2 above.
-3. Publish the release from the `0.13.x` branch.
-4. Open a pull request to `main` with that same commit, so the one-line note is removed there too.
-
-A release branch cut from a tag older than the current release workflow first needs that workflow,
-the build configuration and the release-note setup backported to it.
+A patch release is cut from `main` exactly like a release, with the patch version.
 
 ## If the release workflow fails after the release is published
 

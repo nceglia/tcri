@@ -7,10 +7,10 @@ on:
   # already landed. That is exactly backwards: the whole point of a stack is that each
   # piece is reviewable and verifiable on its own.
   pull_request:
-  # On push as well, so main and the release branches are known-good at the commit a release
-  # is cut from, not only at the tip of the branch a PR was merged from.
+  # On push as well, so main is known-good at the commit a release is cut from, not only at the
+  # tip of the branch a PR was merged from.
   push:
-    branches: [main, "[0-9]+.[0-9]+.x"]
+    branches: [main]
   # Twice a month, to catch a dependency release breaking tcri between pull requests.
   schedule:
     - cron: "0 5 1,15 * *"

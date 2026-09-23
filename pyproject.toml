@@ -70,7 +70,7 @@ Issues = "https://github.com/nceglia/tcri/issues"
 Documentation = "https://tcri.readthedocs.io"
 
 # The version comes from the latest git tag (vX.Y.Z); no file holds it. On main, commits after a
-# tag build as the next minor .devN; on an X.Y.x branch, as the next patch .devN.
+# tag build as the next minor .devN.
 [tool.hatch.version]
 source = "vcs"
 raw-options.version_scheme = "release-branch-semver"
