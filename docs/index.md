@@ -32,6 +32,7 @@ tutorials/index
 :caption: Concepts
 
 concepts/index
+concepts/stored_results
 ```
 
 ```{toctree}
@@ -47,7 +48,6 @@ api/perturbation
 api/null
 api/datasets
 api/utils
-api/stored_results
 ```
 
 ```{toctree}

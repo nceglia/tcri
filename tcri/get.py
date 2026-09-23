@@ -5,13 +5,15 @@ object. This module is how everything else reads it back without knowing the blo
 ``pl`` renders from here, and so should any user code that wants the table a plot was drawn
 from.
 
-The invariant: :func:`result` reconstructs exactly what the ``tl`` function **returned** —
-provenance stripped — so
+The invariant: :func:`result` reconstructs the slots the ``tl`` function **returned**, provenance
+stripped, so
 
-    res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient")
-    assert res == tcri.get.result(adata, "mutual_information")
+    res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None)
+    cached = tcri.get.result(adata, "mutual_information")
+    pd.testing.assert_frame_equal(cached["result"], res["result"])
 
-holds for every metric. :func:`params` reads the provenance separately.
+holds for every metric (frame by frame: the frames are decoded afresh, so the payloads compare
+equal rather than being the same objects). :func:`params` reads the provenance separately.
 """
 from __future__ import annotations
 
