@@ -10,7 +10,7 @@ import matplotlib as mpl
 import matplotlib.patches as mpatches
 from matplotlib.collections import LineCollection
 import numpy as np
-from scipy.stats import fisher_exact#, binom_test
+from scipy.stats import fisher_exact
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as mcolors
 
@@ -31,16 +31,15 @@ import pyro as _pyro
 import numpy as np
 
 
-# stars / auc_and_label_permutation / bootstrap_auc → moved to tcri/_stats/_core.py (PR1;
-# the flat _stats.py became the _stats/ package in the layout pass).
+# `stars`, `auc_and_label_permutation` and `bootstrap_auc` live in tcri/_stats/_core.py.
 
 
-#: Star-imported by ``tcri/utils/__init__.py``. Without this, `import *` pulled in every
-#: module-level name the file happened to bind -- numpy, os, sys, matplotlib, typing
-#: aliases, scipy functions, the private path constants -- and ``dir(tcri.ut)`` listed
-#: 27 public names for a namespace that has 4. The contract could not see any of it:
-#: its surface check freezes tcri-DEFINED callables, so a re-exported third-party name
-#: is invisible to it by construction.
+#: Star-imported by ``tcri/utils/__init__.py``. Without this, `import *` would pull in every
+#: module-level name the file happens to bind -- numpy, os, sys, matplotlib, typing
+#: aliases, scipy functions, the private path constants -- and ``dir(tcri.ut)`` would
+#: advertise them as API. ``governance/API_CONTRACT.md`` cannot catch that: its surface
+#: check freezes tcri-DEFINED callables, so a re-exported third-party name is invisible to
+#: it by construction.
 __all__ = ["save_tcri_session", "load_tcri_session"]
 
 
@@ -306,8 +305,8 @@ META_FILE = "meta.json"
 
 #: The layout of a saved session: which files it has and which keys a load reads out of them.
 #: Bump it when a load needs something an older session does not carry, so a session written by a
-#: newer tcri is refused with a message rather than half-loaded. Sessions written before this
-#: existed record no version and are read as they always were.
+#: newer tcri is refused with a message rather than half-loaded. A session that records no
+#: version at all is read without the check.
 SESSION_FORMAT_VERSION = 1
 
 def _ensure_dir(path: str) -> None:
@@ -419,7 +418,7 @@ def save_tcri_session(
         _json.dump(setup, f, indent=2)
     paths["setup"] = _os.path.join(out_dir, SETUP_FILE)
 
-    # 4) Save the AnnData (plain h5ad; the manager stash is retired at setup_anndata)
+    # 4) Save the AnnData (plain h5ad; setup_anndata leaves no manager stash in uns)
     if save_adata:
         ad_path = _os.path.join(out_dir, AD_FILE)
         adata.uns.pop(K.LEGACY_MANAGER, None)  # defensive: never serialize a stray AnnDataManager
@@ -433,7 +432,7 @@ def save_tcri_session(
         "n_vars": int(adata.n_vars),
         "var_names_hash": str(_pd.util.hash_pandas_object(_pd.Index(adata.var_names)).sum()),
         # What `train()` actually ran with, so `tcri.null.*` can replay it after a reload.
-        # Empty for a model that was loaded-and-never-trained or saved before 0.12.
+        # Empty for a model that was loaded and never trained, or a session that recorded none.
         "train_kwargs": dict(getattr(model, "_train_kwargs", {}) or {}),
         "name": str(getattr(model, "name", "")),
         "versions": {

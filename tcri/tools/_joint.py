@@ -69,7 +69,7 @@ def _engine_blocks(
 
     # subset/filtered-AnnData guard: the per-cell uns arrays live in full-cell space and
     # are NOT sliced when adata is subset, whereas obsm/obs ARE — so a slice silently
-    # misaligns cells. Fail loudly (mirrors the legacy joint_distribution_posterior guard).
+    # misaligns cells. Fail loudly rather than return a joint built on the wrong cells.
     n_obs = adata.n_obs
     if _key(K.CT_ARRAY) not in adata.uns:
         raise KeyError(
@@ -95,8 +95,9 @@ def _engine_blocks(
             f"is missing; run model.to_anndata(...)."
         )
     local_scale = float(local_scale) if local_scale is not None else 1.0
-    # DE-5b: present on anything written by a current to_anndata; absent on older objects,
-    # which fall back to the local_scale reconstruction rather than failing.
+    # the guide's own posterior concentration: present on anything written by a current
+    # to_anndata, absent on older objects, which fall back to the local_scale reconstruction
+    # rather than failing.
     conc_ct = adata.uns.get(_key(K.CONC_CT), None)
 
     blocks, n_draws = _joint_draws(
@@ -215,8 +216,8 @@ def joint_distribution(
         clones = list(clones)
         if isinstance(df.index, pd.MultiIndex):
             # filter to the listed clones (absent dropped, not all-zero) then order by the
-            # requested list — stable within the sample_id/covariate levels (matches the
-            # single-index reindex; §7.1 "reindex to the exact list").
+            # requested list — stable within the sample_id/covariate levels, so this matches
+            # the single-index reindex in the branch below.
             keep = df.index.get_level_values("clonotype").isin(clones)
             df = df[keep]
             rank = pd.Index(df.index.get_level_values("clonotype")).map({c: i for i, c in enumerate(clones)})
@@ -237,9 +238,8 @@ def joint_distribution(
     else:
         result = df
 
-    # `params` is captured by the decorator from the call signature, so the old
-    # df.attrs["params"] hand-roll is gone -- attrs does not survive most pandas operations
-    # and did not survive a write_h5ad at all.
+    # `params` is captured by the decorator from the call signature, rather than stashed in
+    # df.attrs -- attrs does not survive most pandas operations, nor a write_h5ad at all.
     # n_draws is what ACTUALLY happened, which the call arguments cannot say on their own --
     # the same distinction as epochs_actual vs max_epochs in the training record. Recorded as an
     # effective value so the provenance answers "how many draws is this table built from".

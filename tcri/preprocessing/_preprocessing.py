@@ -41,9 +41,7 @@ def group_singletons(adata, *, clonotype_key="trb", groupby="patient",
 
 
 def clone_size(adata, *, key_added=K.CLONE_SIZE, return_counts=False):
-    # Canonical source is uns[METADATA]['clone_col'] (written by to_anndata). This
-    # used to read the legacy uns['tcri_clone_key'] shadow key — the last reader of
-    # it, which is why the shim outlived Phase 4.
+    # Canonical source is uns[METADATA]['clone_col'], written by to_anndata.
     meta = adata.uns.get(K.METADATA)
     if not meta or K.CLONE_COL not in meta:
         raise KeyError(

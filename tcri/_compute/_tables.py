@@ -22,14 +22,6 @@ from .._stats import hdi
 # itself reach back into ``_tables``; that is a property of today's code, not a guarantee.
 
 
-# `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
-# accepting a bare DataFrame instead of an AnnData (the §7.9 "precomputed joint" path). Both are
-# gone: the path was declared in the first contract freeze (7599959), implemented because it was
-# declared, and had exactly one caller in the repo -- a test scoring one table four ways. With
-# every tl taking an AnnData, a stacked joint cannot arrive at a metric, so there is nothing left
-# to guard against.
-
-
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
                 use_logits=True, device=None, fit=None):
     """Return ``(draws, phenotype_cols)`` where ``draws`` is a list of ``(clone_ids, [C, P])``
@@ -47,25 +39,20 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     """
     from ..tools._joint import _engine_blocks  # lazy: see module note
 
-    # covariate=None used to stack the per-covariate blocks row-wise, so a clone present in k
-    # covariate levels contributed k ROWS and the row axis of the joint became the
-    # (covariate, clone) pair rather than the clone. H(c) was then the entropy over pseudo-
-    # clones. Measured on a 10-clone / 2-covariate fixture:
-    #
-    #     C=20 P=4  (many clones)   min  +0.0%   average +13.8%
-    #     C=6  P=8  (few clones)    min +12.4%   average +15.4%
+    # Stacking the per-covariate blocks row-wise gives a clone present in k covariate levels
+    # k ROWS, so the row axis of the joint becomes the (covariate, clone) pair rather than the
+    # clone and H(c) is the entropy over pseudo-clones.
     #
     # `min` divides by min(H(c), H(phi)). When clones OUTNUMBER phenotypes it selects H(phi),
-    # which row-splitting does not touch, so the default looks unaffected; when they do not, it
-    # selects H(c) and moves by ~12%. So this is not "invisible at the default" -- that was a
-    # property of one fixture. `average` always moves, since it averages both entropies.
+    # which row-splitting does not touch, so the default can look unaffected; when they do not,
+    # it selects H(c) and moves. `average` always moves, since it averages both entropies.
     #
-    # The three metrics that reduce to a scalar also disagreed on what covariate=None means
-    # (one collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one
-    # stacked). Rather than pick a unification -- which is a question about the estimand, not
-    # about the code -- covariate is now required wherever the result must be REDUCED.
+    # The three metrics that reduce to a scalar also have no shared meaning for covariate=None
+    # (a per-phenotype index, a (covariate, clonotype) index and a stacked table are each
+    # defensible). Picking one is a question about the estimand, not about the code, so
+    # covariate is required wherever the result must be REDUCED.
     #
-    # joint_distribution(covariate=None) is deliberately still allowed: it LABELS the blocks
+    # joint_distribution(covariate=None) is deliberately allowed: it LABELS the blocks
     # with a covariate index level instead of collapsing them, so no ambiguity arises there,
     # and it remains the way to get every covariate in one object.
     if covariate is None:
@@ -133,9 +120,9 @@ def summarize(values, *, hdi_prob=0.94) -> dict:
     if v.size == 0:
         return {"mean": np.nan, "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     if v.size == 1:
-        # A single draw has no spread to report. Returning sd=0 and a zero-width HDI states
-        # certainty that was never measured -- at n_samples=1 the interval read
-        # [0.289341, 0.289341]. mean is still the draw; the rest is undefined, and NaN says so.
+        # A single draw has no spread to report. Returning sd=0 and a zero-width HDI would state
+        # certainty that was never measured. mean is still the draw; the rest is undefined, and
+        # NaN says so.
         return {"mean": float(v[0]), "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     lo, hi = hdi(v, prob=hdi_prob)
     return {"mean": float(v.mean()), "sd": float(v.std(ddof=1)), "hdi_low": lo, "hdi_high": hi}
@@ -212,8 +199,8 @@ def _refit_hint(adata, fit, groupby):
         return ""
     # h5ad stores a list of strings as a numpy ARRAY, so the idiomatic `or []` raises "the truth
     # value of an array with more than one element is ambiguous" on any object that has been to
-    # disk -- which is every object a reference is read from in practice. The same spelling bit
-    # `keys.fits()` in 0.12; written against the round-tripped shape both times.
+    # disk -- which is every object a reference is read from in practice. Written against the
+    # round-tripped shape, not the in-memory one.
     raw = settings.get("strata")
     strata = [] if raw is None else [str(c) for c in raw]
     if not strata:
@@ -481,7 +468,7 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     obs = adata.obs
     clone_labels = fit_clone_labels(adata, fit)
     # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
-    # `covariate=None` through added an all-NaN column to every row of its result
+    # `covariate=None` through would add an all-NaN column to every row of its result
     base = {"covariate": covariate} if covariate is not None else {}
     if extra_labels:
         base.update({k: v for k, v in extra_labels.items() if v is not None})
@@ -491,8 +478,8 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
             if item_col is None:
                 # a draw's payload is a scalar, or a mapping of value columns when the metric
                 # carries more than one. Mutual information is the only metric with no item
-                # axis, so it is the only one that reaches this branch with a mapping -- but
-                # the two branches now handle a payload the same way, which is the point.
+                # axis, so it is the only one that reaches this branch with a mapping; both
+                # branches unpack a payload the same way.
                 rows.append({**label_row, "draw": draw,
                              **(payload if isinstance(payload, dict) else {"value": payload})})
             else:

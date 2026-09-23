@@ -140,9 +140,9 @@ class BestObjectiveSnapshot(Callback):
     def on_fit_end(self, trainer, pl_module):
         if self._module_state is None:
             # No gated check ever ran: the ramp did not finish inside this fit, or there was no
-            # validation loop. B5 says warn, never raise -- raising here would break every short
-            # fit in the test suite and the whole benchmark grid, whose 60-epoch default reaches
-            # roughly 15% of a 2000-step ramp.
+            # validation loop. B5 says warn, never raise -- raising here would break every fit
+            # whose epoch budget is too short to finish the ramp, which is most of the test
+            # suite and the benchmark defaults.
             return
 
         pl_module.module.load_state_dict(self._module_state, strict=False)

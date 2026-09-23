@@ -5,10 +5,10 @@ Import as ``from tcri._state import keys as K``.
 # ── uns: metadata + learned priors ───────────────────────────────────────────
 METADATA = "tcri_metadata"                 # {covariate_col, clone_col, phenotype_col, batch_col}
 P_CT = "tcri_p_ct"                         # learned posterior-mean p_ct, shape (n_ct, P)
-LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale (legacy draw)
+LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale (fallback draw)
 CONC_CT = "tcri_conc_ct"                   # guide concentration lambda'_m, shape (n_ct, P)
-GATE_PROB = "tcri_gate_prob"               # NEW (Phase 4): classifier/prior gate, scalar or None
-CLASSIFIER_TEMPERATURE = "tcri_classifier_temperature"  # NEW (Phase 4): classifier temperature
+GATE_PROB = "tcri_gate_prob"               # classifier/prior gate, scalar or None
+CLASSIFIER_TEMPERATURE = "tcri_classifier_temperature"  # classifier temperature
 
 CT_TO_COV = "tcri_ct_to_cov"               # ct -> covariate index
 CT_TO_C = "tcri_ct_to_c"                   # ct -> clonotype index
@@ -29,7 +29,7 @@ X_UMAP = "X_umap"
 # ── obs ──────────────────────────────────────────────────────────────────────
 PHENOTYPE = "tcri_phenotype"               # hard phenotype label
 CLONE_SIZE = "clone_size"
-INDICES = "indices"                        # scvi registration glue (kept)
+INDICES = "indices"                        # scvi registration glue
 
 # ── metadata sub-keys (values inside uns[METADATA]) ──────────────────────────
 COVARIATE_COL = "covariate_col"
@@ -38,11 +38,8 @@ PHENOTYPE_COL = "phenotype_col"
 BATCH_COL = "batch_col"
 
 # ── legacy ───────────────────────────────────────────────────────────────────
-# The shadow keys `tcri_clone_key` / `tcri_phenotype_key` and the old
-# `X_tcri_phenotypes` obsm slot are GONE: `to_anndata` no longer writes them and
-# nothing reads them (`pp.clone_size`, the last reader, now uses METADATA).
-# `LEGACY_MANAGER` stays because it still does defensive work — `save_tcri_session`
-# pops it so a stray non-picklable AnnDataManager can never be serialized.
+# Nothing in tcri writes this key. It is named here so `save_tcri_session` can pop it,
+# which keeps a stray non-picklable AnnDataManager out of the .h5ad.
 LEGACY_MANAGER = "tcri_manager"                    # popped defensively before save
 
 
@@ -62,14 +59,14 @@ DELTA_PHENOTYPIC_ENTROPY = "tcri_delta_phenotypic_entropy"
 #: stored with the same ``{table, result, stats}`` shape the metrics use plus a ``shift`` slot.
 GENE_IMPORTANCE = "tcri_gene_importance"
 
-#: The layer recorded by setup_anndata. Previously a bare literal in two places.
+#: The layer recorded by setup_anndata.
 LAYER = "tcri_layer"
 
 #: Oracle payload written by the synthetic generators.
 TRUTH = "tcri_truth"
 
 
-# ── per-fit provenance (0.12) ─────────────────────────────────────────────────
+# ── per-fit provenance ───────────────────────────────────────────────────────
 # One AnnData can carry several fits: the main one and, beside it, any null or alternative
 # model written with `to_anndata(fit=...)`. Each fit's arrays live under a prefixed key built by
 # `fit_key`; these three carry what a fit IS, as opposed to what it learned.

@@ -55,9 +55,9 @@ class TCRIModule(PyroBaseModuleClass):
         # Pyro's param store is PROCESS-GLOBAL and its names are the only thing separating one
         # model's parameters from another's. `name` is that separation: every parameter this
         # module registers goes through `pname`, so two models -- a fit and its null, or two
-        # fits -- coexist instead of overwriting each other. "" is the historical unnamed
-        # layout and is what every 0.10/0.11 session on disk was saved under, so it must stay
-        # byte-identical.
+        # fits -- coexist instead of overwriting each other. "" is the unnamed layout, whose
+        # store keys carry no prefix: a session saved without a name reloads under it, so those
+        # keys must stay unprefixed.
         self.name = str(name)
         self.n_input = n_input
         self.n_latent = n_latent
@@ -88,11 +88,11 @@ class TCRIModule(PyroBaseModuleClass):
         self.classifier_n_layers = classifier_n_layers
         self.guide_init_scale = guide_init_scale
         self.classifier_temperature = classifier_temperature
-        self.phenotype_kl_weight = phenotype_kl_weight  # γ (methods §Inference Details)
+        self.phenotype_kl_weight = phenotype_kl_weight  # γ, the phenotype-alignment weight
         # ε of the noisy-label readout y_i | z^ϕ_i ~ Cat(C[z^ϕ_i, ·]), C = (1-ε) on the diagonal
         # and ε/(P-1) off it. None switches the readout off: model() is then the label-free
-        # surrogate alone, exactly as shipped before 2026-09 (the hierarchy takes gradient from
-        # its prior only). See the readout block in model().
+        # surrogate alone, and the hierarchy takes gradient from its prior only. See the readout
+        # block in model().
         if label_error_rate is not None:
             label_error_rate = float(label_error_rate)
             limit = (P - 1) / P
@@ -105,10 +105,10 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
-        # DE-4: the warmup counter lives on the MODULE, not the training plan. train() builds
-        # a fresh UnifiedTrainingPlan per call, so a plan-local counter restarted the KL ramp on
-        # every staged or resumed train() -- the model saw a sawtooth kl_weight rather than a
-        # monotone ramp. A plain int, deliberately not a registered buffer: a buffer changes the
+        # The warmup counter lives on the MODULE, not the training plan: train() builds a fresh
+        # UnifiedTrainingPlan per call, so a plan-local counter would restart the KL ramp on
+        # every staged or resumed train(), giving a sawtooth kl_weight rather than B1's monotone
+        # ramp. A plain int, deliberately not a registered buffer: a buffer changes the
         # state_dict key set and breaks load_state_dict(strict=True) against saved models.
         self._kl_warmup_step = 0
         self.reconstruction_loss_scale = 1e-2
@@ -290,11 +290,10 @@ class TCRIModule(PyroBaseModuleClass):
             # target across shuffled minibatches.
             ct_idx = self.ct_array[indices]
             # The head reads the posterior MEAN, as predict() and to_anndata() already do.
-            # Trained on the sample z it saw ~1% signal: the posterior scale (~2) is ~100x the
-            # spread of the mean across cells (~0.02), so the optimum is a constant and the
-            # hidden ReLUs die (all dead by epoch 350 on the example cohort; 44/64 alive and
-            # 4 argmax classes on the mean). The recompute is one extra encoder pass; the
-            # alignment gradient reaches the encoder through it.
+            # Trained on the sampled z instead, its input is dominated by posterior noise: the
+            # scale is far wider than the spread of the mean across cells, so the head's optimum
+            # is a constant and its hidden ReLUs die. The recompute is one extra encoder pass;
+            # the alignment gradient reaches the encoder through it.
             z_mean, _ = encoder_posterior(self.encoder, x, batch_idx)
             cls_logits = self.classifier(z_mean)  # l_i = f_cls(z_i)  (eq. 4)
 
@@ -302,7 +301,7 @@ class TCRIModule(PyroBaseModuleClass):
             #   ℓ_i = π·f_cls(μ_i) + (1-π)·log φ_{g(i)},  probs_i = softmax(ℓ_i);
             #   add -γ·KL(probs_i ‖ φ_{g(i)}) to the log-joint. It trains f_cls toward its
             #   group's distribution. φ enters DETACHED: with the target live, the head and the
-            #   hierarchy converge to one shared vector at a lower objective (measured 2026-09).
+            #   hierarchy converge to one shared vector at a lower objective.
             #   The hierarchy's data term is the label readout below, not this penalty.
             phi = p_ct[ct_idx].detach()
             log_phi = torch.log(phi + 1e-8)
@@ -321,14 +320,13 @@ class TCRIModule(PyroBaseModuleClass):
             #
             # This is the one observation downstream of z^ϕ. Without it z^ϕ is a leaf latent
             # with no likelihood, the surrogate above ties the head to ϕ and nothing ties either
-            # to the cells, and the pair drifts to one shared constant (measured 2026-09: a live
-            # surrogate target collapses the head by epoch 360 and pulls every group
-            # distribution together, at a LOWER objective). Here ϕ enters LIVE, so the readout
-            # is the hierarchy's data term: each group's distribution is pulled toward its
-            # cells' labels, tempered by the head's expression-based opinion through the gate,
-            # by the Dirichlet prior above, and by ε. The surrogate keeps its detached target.
+            # to the cells, and the pair drifts to one shared constant at a LOWER objective.
+            # Here ϕ enters LIVE, so the readout is the hierarchy's data term: each group's
+            # distribution is pulled toward its cells' labels, tempered by the head's
+            # expression-based opinion through the gate, by the Dirichlet prior above, and by ε.
+            # The surrogate keeps its detached target.
             #
-            # label_error_rate=None removes this block and restores the label-free model.
+            # label_error_rate=None removes this block, leaving the label-free model.
             if self.label_error_rate is not None:
                 eps = max(self.label_error_rate, 1e-6)     # ε = 0 is the hard-label limit
                 log_phi_live = torch.log(p_ct[ct_idx] + 1e-8)
@@ -404,10 +402,10 @@ class TCRIModule(PyroBaseModuleClass):
             # Apply a sharpening transformation controlled by guide_temperature.
             q_c_mag = q_p_c_raw.sum(dim=1, keepdim=True).clamp(min=1e-6)
             q_p_c_sharp = (q_p_c_raw / q_c_mag) ** (1.0 / self.guide_temperature)
-            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)  # ← add this
+            q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
-            # DE-5, same defect on lambda_c: alpha is the eq-1 prior scale, not the variational
-            # total. Free the magnitude here too rather than fixing half the pair.
+            # alpha is the eq-1 PRIOR scale, not the variational total, so the magnitude is free
+            # here as it is for lambda'_m below: the pair is parameterised the same way.
             conc_c_guide = torch.clamp(q_c_mag * q_p_c_sharp, min=1e-3)
             
             # Sample p_c from a single learned Dirichlet per clonotype.
@@ -430,13 +428,12 @@ class TCRIModule(PyroBaseModuleClass):
             if bad_ct.any():
                 q_p_ct_raw = torch.where(bad_ct, init_mat.to(q_p_ct_raw.device), q_p_ct_raw)
 
-            # DE-5 / eq 6: lambda'_m is a FREE variational parameter in R^P_{>0}. It was
-            # `local_scale * normalized(...)`, which pins the TOTAL concentration to beta
-            # regardless of how many cells the group has -- a 3-cell clone and a 3000-cell clone
-            # got the same posterior width, so the posterior could not concentrate with data and
-            # every interval at n_samples>0 was prior-set. beta is a scalar PRIOR
-            # hyperparameter (eq 2); using it as a variational parameter's total conflates two
-            # rows of the note's own notation table.
+            # eq 6: lambda'_m is a FREE variational parameter in R^P_{>0}. Pinning the TOTAL
+            # concentration to beta -- `local_scale * normalized(...)` -- would fix the posterior
+            # width regardless of how many cells the group has, so a 3-cell clone and a
+            # 3000-cell clone would get the same width, the posterior could not concentrate with
+            # data, and every interval at n_samples>0 would be prior-set. beta is a scalar PRIOR
+            # hyperparameter (eq 2), not a variational parameter's total.
             #
             # Any positive vector factors as magnitude x simplex, so freeing the magnitude and
             # keeping the learned direction yields exactly eq 6's family. guide_temperature
@@ -450,7 +447,6 @@ class TCRIModule(PyroBaseModuleClass):
 
         # eq 6: q(z_i|x_i) = N(μ_i, diag(σ_i²)). σ comes from `encoder_posterior`, the same
         # map the eq-3 VampPrior uses, so prior and posterior share one parameterisation.
-        # This line used scvi's VARIANCE output directly as the scale.
         z_loc, z_scale = encoder_posterior(self.encoder, x, batch_idx)
 
         with pyro.plate("data", size=self.plate_size(), subsample=indices):

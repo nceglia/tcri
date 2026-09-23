@@ -212,7 +212,7 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
 
     def _empirical_mi(clones_codes, pheno_codes, n_clones):
         # bincount on the flattened (clone, phenotype) key rather than np.add.at —
-        # identical counts, ~3.7x faster (np.add.at is the unbuffered ufunc path).
+        # identical counts, and faster: np.add.at takes the unbuffered ufunc path.
         flat = np.bincount(
             clones_codes * n_phenos + pheno_codes, minlength=n_clones * n_phenos
         )
@@ -223,8 +223,8 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
         if groupby not in adata.obs.columns:
             raise ValueError(f"groupby={groupby!r} is not a column of adata.obs")
         from .._compute._tables import _validate_group_clones
-        # `obs[clone_col]`, not `fit_clone_labels`: `permutation_null` is model-free (it reads
-        # only the three shared keys) and keeps today's behaviour by design.
+        # `obs[clone_col]`, not `fit_clone_labels`: `permutation_null` is model-free by
+        # design -- it reads only the three shared keys.
         _validate_group_clones(adata.obs[clone_col], adata.obs[groupby], groupby)
         groups = adata.obs[groupby].dropna().unique().tolist()
     else:
@@ -253,9 +253,9 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
             z = (obs_mi - mu) / sd if sd > 0 else np.nan
             # (1 + #{null >= obs}) / (1 + n_perm), not the raw fraction. A permutation p-value
             # estimated from a finite number of shuffles can never be 0: the observed statistic
-            # is itself one realisation under the null. The unfloored version returned exactly
-            # 0.0 whenever no shuffle beat the observation, claiming infinite evidence from a
-            # finite sample. Phipson & Smyth (2010).
+            # is itself one realisation under the null. The unfloored fraction would return
+            # exactly 0.0 whenever no shuffle beat the observation, claiming infinite evidence
+            # from a finite sample. Phipson & Smyth (2010).
             p = float((1.0 + np.count_nonzero(null >= obs_mi)) / (1.0 + int(n_perm)))
             row = {"covariate": m, "observed": obs_mi, "null_mean": mu, "null_sd": sd,
                    "z": z, "p": p}
