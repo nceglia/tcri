@@ -15,8 +15,8 @@ from .._state import keys as K
 
 #: The permutation's own random stream, per kind. A null's TRAINING seed is the parent's exactly
 #: -- same initialisation, same split, same minibatch order -- so the permuted labels are the
-#: only difference between a null and its parent (plan §8 decision 3). Name-keyed, never
-#: positional: a reordering of this dict must not silently change every recorded permutation.
+#: only difference between a null and its parent. Name-keyed, never positional: a reordering
+#: of this dict must not silently change every recorded permutation.
 OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
 
 KINDS = ("phenotype", "clonotype", "condition")
@@ -69,9 +69,9 @@ def resolve_strata(adata, kind: str, within=None):
 
     A ``within`` that drops a required column is rejected rather than unioned: strata are fixed
     at fit time and recorded, so quietly adding a column would make the recorded strata differ
-    from the strata the caller believes they asked for. Measured on a covariate-sparse fixture,
-    a ``within`` that drops the covariate takes ``n_ct`` from 42 to 72 and the shared-clone set
-    from 6 to 36, so the ``null_value`` join would be onto a row set 71% larger.
+    from the strata the caller believes they asked for. Dropping the covariate also changes the row
+    set: it permutes across covariate levels, so the null carries clone-by-covariate rows the
+    parent fit does not, and the ``null_value`` join is onto a different set of rows.
     """
     if within is None:
         return default_strata(adata, kind)

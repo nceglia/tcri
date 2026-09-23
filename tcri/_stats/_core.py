@@ -60,7 +60,7 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
     n_pos = int(y.sum())
     n_neg = n - n_pos
 
-    if n_pos == 0 or n_neg == 0:  # AUROC undefined; keep the old failure mode
+    if n_pos == 0 or n_neg == 0:  # AUROC is undefined with only one class present
         perm_stats = np.array([])
         return obs_auc, float("nan"), perm_stats, "degenerate"
 

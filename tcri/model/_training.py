@@ -97,16 +97,14 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.optimizer_config = optimizer_config
 
         # Hand the optimizer settings to PYRO's optimizer — the one inside SVI that
-        # actually descends the ELBO gradients. Previously this class overrode
-        # `configure_optimizers` with a real torch Adam over every module parameter;
-        # that override replaced scvi's deliberate no-op shim ("a shim optimizer ...
-        # to keep Lightning happy") and ran AFTER SVI.step() had already stepped and
-        # ZEROED the gradients. Stepping Adam on zero gradients is not a no-op: the
-        # weight-decay term becomes the whole gradient, and Adam's own normalization
-        # (g/sqrt(g^2)) strips its magnitude, so the update degenerates to ~lr*sign(p)
-        # — a scale-free shrink, not proportional L2. Measured effect: network weights
-        # held at ~2.4x smaller than without it. It also meant `lr` never reached the
-        # real optimizer (Pyro always used scvi's hard-coded 1e-3).
+        # actually descends the ELBO gradients. Overriding `configure_optimizers` with a
+        # real torch Adam over every module parameter would replace scvi's deliberate
+        # no-op shim and run AFTER SVI.step() had already stepped and ZEROED the
+        # gradients. Stepping Adam on zero gradients is not a no-op: the weight-decay
+        # term becomes the whole gradient, and Adam's own normalization (g/sqrt(g^2))
+        # strips its magnitude, so the update degenerates to ~lr*sign(p) — a scale-free
+        # shrink of every weight, not proportional L2. It would also keep `lr` from
+        # reaching the real optimizer at all.
         base_optim_args = {
             "lr": optimizer_config["lr"],
             "betas": optimizer_config["betas"],
@@ -123,8 +121,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         self.n_steps_kl_warmup = n_steps_kl_warmup
         self.reconstruction_loss_scale = reconstruction_loss_scale
-        #: I3 clause 5. Fixed across every check, so the monitored series is a function of the
-        #: parameters rather than of the draw. Not the fit seed: this only controls evaluation.
+        #: I3's forked evaluation seed, fixed across every check, so the monitored series is a
+        #: function of the parameters rather than of the draw. Not the fit seed: evaluation only.
         self._validation_seed = 0
 
     @property
@@ -175,8 +173,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         self.log("kl_divergence_with_prior_train", kl_div, prog_bar=False, on_epoch=True)
         self.log("entropy_train", entropy, prog_bar=False, on_epoch=True)
         self.log("confidence_train", confidence, prog_bar=False, on_epoch=True)
-        # B9: without this, I3 and I5 are unfalsifiable once a run has finished -- nothing in
-        # the record says whether the ramp ever completed.
+        # Training contract B9: without this, I3 and I5 are unfalsifiable once a run has
+        # finished -- nothing in the record says whether the ramp ever completed.
         self.log("kl_weight", float(kl_weight), prog_bar=False, on_epoch=True)
 
         self.module._kl_warmup_step += 1
@@ -189,17 +187,19 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def _objective_blocks(self, *args, **kwargs):
         """Split the log-joint minus log-guide into (per-cell, global) blocks.
 
-        Returns a 2-tuple of floats whose SUM is the ELBO on this batch -- verified against
-        ``Trace_ELBO().loss`` to ~3e-6 relative on a fixture. Splitting rather than calling
-        ``SVI.evaluate_loss`` is the point: the monitored criterion is the per-cell block only.
+        Returns a 2-tuple of floats whose SUM is the ELBO on this batch, which
+        ``tests/test_training_invariants.py`` pins against ``Trace_ELBO().loss``. Splitting rather
+        than calling ``SVI.evaluate_loss`` is the point: the monitored criterion is the per-cell
+        block only.
 
         Why the global block is excluded from the monitor (contract I3, "scope"): ``p_c`` and
         ``p_ct`` live in ``pyro.plate("clonotypes", c_count)`` / ``pyro.plate("ct_plate",
         ct_count)``, neither subsampled. Their KL is therefore identical for every choice of
         validation split -- it is a function of the TRAINING-fitted guide and the prior, and of
         nothing that was held out. Monitoring it means selecting partly on prior-matching over
-        data the criterion was supposed to exclude. Its share grows with clone count: ~27% on a
-        6-clone fixture, and larger on real repertoires, which are singleton-dominated.
+        data the criterion was supposed to exclude. Its share of the ELBO grows with clone count, and
+        real repertoires are singleton-dominated, so it is largest exactly where it is least
+        informative.
 
         The per-cell block still contains ``phenotype_alignment``, which scores held-out cells
         against ``phi = p_ct[ct_idx]``. The Dirichlet branch is therefore still covered by the
@@ -262,8 +262,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         # The data plate scales every per-cell site by plate_size()/B, so the per-cell block on
         # this batch is (plate_size/B) * sum_b; dividing by plate_size() -- not by B -- returns
-        # the mean per cell, which is what the monitor's name promises and what it was before
-        # the plate carried a size.
+        # the mean per cell, which is what the monitor's name promises.
         n_ref = max(int(self.module.plate_size()), 1)
         val_dict = {
             "loss": torch.as_tensor(-per_cell / n_ref, dtype=torch.float32, device=device),
@@ -271,10 +270,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         }
 
         # ── Diagnostic only ──────────────────────────────────────
-        # Stays in eval mode (Lightning's evaluation loop already set it) and under no_grad.
-        # Previously the block above restored train mode before reaching here, so this ran with
-        # classifier dropout ACTIVE, and it was outside no_grad — building an autograd graph
-        # through get_latent, the classifier and get_p_ct() for values that are only logged.
+        # Stays in eval mode (Lightning's evaluation loop already set it) and under no_grad. In
+        # train mode classifier dropout would be ACTIVE here; outside no_grad this would build an
+        # autograd graph through get_latent, the classifier and get_p_ct() for values that are
+        # only logged.
         with torch.no_grad():
             z_batch = self.module.get_latent(batch).to(device)
             idx = batch["indices"].long().view(-1).to(device)

@@ -254,8 +254,8 @@ def _mark_reference(ax, first_collection, first_patch, first_line):
         pch.set_label(REFERENCE_LABEL)
         pch.set_zorder(1.4)
     # ...and the LINES. Seaborn draws a box's whiskers, caps and median as Line2D at zorder 2
-    # and 2.1, above the value boxes, so a reference drawn "behind" still had ten grey lines
-    # crossing the marks in front of it.
+    # and 2.1, above the value boxes, so without this a reference drawn "behind" still puts
+    # grey lines across the marks in front of it.
     for ln in ax.lines[first_line:]:
         ln.set_label(REFERENCE_LABEL)
         ln.set_zorder(1.45)
@@ -608,8 +608,8 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value
                              item_col=item_col) if entity_matched else None
 
     # ONE collapse over every endpoint column present, selected by presence rather than
-    # hard-coded so the branch works at null_model=None. Two calls and a merge -- what this
-    # replaces -- gave each endpoint its own non-finite mask, so a replicate could contribute
+    # hard-coded so the branch works at null_model=None. Collapsing the endpoints separately
+    # and merging would give each its own non-finite mask, so a replicate could contribute
     # one endpoint and not the other and the pair drawn would not be a pair.
     endpoints = [c for c in ("value_from", "value_to") if c in result.columns]
     reference = [c for c in ("null_value_from", "null_value_to") if c in result.columns]

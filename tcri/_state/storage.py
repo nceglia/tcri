@@ -419,7 +419,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # Keying the blob by it would put the reference somewhere no reader looks.
                 fit_name = _reference.name_of(reference_of)
                 if isinstance(reference_of, str):
-                    from ..null._rebuild import rebuild   # a view package: lazy, by the layout rule
+                    from ..null._rebuild import rebuild   # a view package: lazy (test_layout.py)
                     reference_of = rebuild(arguments[reference_arg],
                                            arguments[_data_param], reference_of)
                 call[reference_arg] = reference_of

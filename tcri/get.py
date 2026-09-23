@@ -16,7 +16,7 @@ holds for every metric. :func:`params` reads the provenance separately.
 from __future__ import annotations
 
 # Aliased private: this module IS the public accessor namespace, so anything bound at module
-# scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` advertised K,
+# scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` would advertise K,
 # load_result and load_result_params -- the storage internals the accessors exist to hide.
 from ._state import keys as _K
 from ._state.storage import load_result as _load_result, load_result_params as _load_result_params

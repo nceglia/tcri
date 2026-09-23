@@ -89,15 +89,13 @@ def _phenotype_programs(rng, n_phenotypes, n_factors, fuzziness):
     alpha = rng.uniform(1.5, 6.0, size=(n_phenotypes, n_factors))
     beta = rng.uniform(1.0, 3.0, size=(n_phenotypes, n_factors))
 
-    # DE-20. Supplementary Note 1 interpolates with a CONCAVE mapping g(f), not with f:
+    # The blend weight is a CONCAVE mapping g(f) of `fuzziness`, not f itself:
     #
-    #     theta'_k = (1 - g(f)) theta_k + g(f) theta_bar,
-    #     "in the reported experiments, we use g(f) = sqrt(f)"
+    #     theta'_k = (1 - g(f)) theta_k + g(f) theta_bar
     #
-    # The code used g(f) = f, which under-mixes at every f in (0, 1) -- at f=0.1 the note
-    # blends 0.316 toward the mean where this blended 0.100. The endpoints f=0 and f=1 agree,
-    # so only the interior of the sweep was affected. The note permits any concave g on
-    # [0, 1]; sqrt is what the reported experiments use and is therefore the default here.
+    # Any concave g agrees with f at the endpoints f=0 and f=1 and mixes more than f in
+    # between, so the interior of a fuzziness sweep is the part the choice of g decides.
+    # sqrt is the g used here.
     g = float(np.sqrt(fuzziness))
 
     theta = np.concatenate([alpha - 1.0, -beta], axis=1)
@@ -202,7 +200,7 @@ def simulate_tcri(
     _PHEN_LEVELS = [f"phen_{p}" for p in range(n_phenotypes)]
     obs = pd.DataFrame(
         {
-            # DE-13: declare the label space. Without `categories=`, pandas infers it from
+            # Declare the label space. Without `categories=`, pandas infers it from
             # the values it happens to see and sorts LEXICOGRAPHICALLY, so at K>=10
             # 'phen_2' gets code 4 and 'phen_11' code 3 -- codes stop matching the integer
             # phenotype index they were built from. A phenotype with zero sampled cells
@@ -269,13 +267,13 @@ def temperature_scale(P, T, eps=1e-12):
     not just the difficulty.
     """
     T = float(T)
-    # Supplementary Note 1, "Temperature Scaling of Conditional Distributions", specifies
-    # T > 0. Outside that the function used to fail three different silent ways:
+    # Temperature scaling is defined only for T > 0. Without this guard each way out of that
+    # range fails differently, and only the first of them announces itself:
     #   T = 0      -> ZeroDivisionError
     #   T = nan    -> an all-NaN matrix, no error
     #   T = -1.0   -> finite, plausible-looking numbers that INVERT the distribution
-    # The last is the dangerous one: a negative T produced a valid-looking row-stochastic
-    # matrix and would have propagated into a benchmark as though it meant something.
+    # The last is the dangerous one: a negative T gives a valid-looking row-stochastic
+    # matrix that would propagate into a benchmark as though it meant something.
     if not np.isfinite(T) or T <= 0.0:
         raise ValueError(
             f"temperature must be finite and > 0; got T={T!r}"
@@ -285,9 +283,8 @@ def temperature_scale(P, T, eps=1e-12):
     Pp = P ** (1.0 / T)
 
     # float64 underflow: once (1/T)*log10(p) < -308 every entry of a row becomes exactly
-    # 0.0 and the renormalisation below is 0/0. Measured on a [0.7, 0.2, 0.1] row: fine at
-    # T=1e-3, all-NaN at T=1e-4. Raising beats returning NaN, which the caller would have
-    # to notice.
+    # 0.0 and the renormalisation below is 0/0. Raising beats returning NaN, which the
+    # caller would have to notice.
     row_sums = Pp.sum(axis=1, keepdims=True)
     dead = ~np.isfinite(row_sums) | (row_sums <= 0.0)
     if dead.any():
@@ -383,7 +380,7 @@ def simulate_from_fit_params(
     clone_names = ([str(clone_levels[i]) for i in z] if clone_levels is not None
                    else [f"clone_{i}" for i in z])
 
-    # DE-13, as above: declare the label space rather than letting pandas infer it.
+    # As above: declare the label space rather than letting pandas infer it.
     phen_levels = [f"phen_{p}" for p in range(n_phenotypes)]
     clone_levels_all = ([str(c) for c in clone_levels] if clone_levels is not None
                         else [f"clone_{i}" for i in range(n_clones)])

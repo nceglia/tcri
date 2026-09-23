@@ -62,7 +62,7 @@ def _star_labels(ax, stats, genes, *, groupby, quantity="value"):
         # excess's star over the value's marks. That is an error.
         #
         # More than one CONTRAST per gene is what `splitby` with three or more levels produces,
-        # and it is a pre-existing limitation of a panel that puts ONE star above each gene:
+        # and it is a limitation of a panel that puts ONE star above each gene:
         # there is no position for the other pairs. Draw nothing and say why, rather than
         # starring one pair and letting it read as the whole comparison.
         if not declared:
