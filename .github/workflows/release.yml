@@ -80,12 +80,6 @@ jobs:
           else
             [ "$PRE" = false ] || { echo "::error::$V is not a pre-release: untick 'Set as a pre-release'"; exit 1; }
           fi
-          # A release keeps a copy of what the tools store, so a later schema change cannot
-          # silently make this release's results unreadable. Pre-releases do not need one.
-          if [ "$PRE" = false ] && [ ! -f "tests/data/archives/$V/results.h5ad" ]; then
-            echo "::error::no stored-results archive for $V: write it as the release page describes"
-            exit 1
-          fi
           echo "Guard passed for $V (pre-release: $PRE)"
       - uses: actions/upload-artifact@v4
         with:

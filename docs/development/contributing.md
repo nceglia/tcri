@@ -97,10 +97,8 @@ a snapshot the tests pin, so it cannot drift from the code.
 When the fields change, the test fails until you:
 
 1. bump `@tl_result(version=N)` for that tool;
-2. register a reader for the previous version, if results written by a released tcri should still
-   load;
-3. add a `breaking` release note;
-4. rewrite the snapshot with `pytest tests/test_result_schemas.py --update-schema-snapshot`.
+2. add a `breaking` release note;
+3. rewrite the snapshot with `pytest tests/test_result_schemas.py --update-schema-snapshot`.
 
 ## Labels
 

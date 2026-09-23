@@ -22,10 +22,6 @@ def pytest_addoption(parser):
         "--update-schema-snapshot", action="store_true", default=False,
         help="rewrite tests/snapshots/tl_schemas.json from what the tools store now",
     )
-    parser.addoption(
-        "--write-archive", action="store", default="", metavar="VERSION",
-        help="write tests/data/archives/VERSION/ from what the tools store now (done at release)",
-    )
 
 
 def pytest_configure(config):
