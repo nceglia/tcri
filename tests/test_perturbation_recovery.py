@@ -9,26 +9,19 @@ generates expression as ``x_i ~ Poisson(U_i @ V)`` with ``U_i ~ Gamma(alpha[phi_
 
 and its true discriminativeness is the spread of ``m_{.,j}`` across phenotypes.
 
-What was measured before these assertions were written (2026-09-10; 60 genes, 8 factors,
-1500 cells, 4 phenotypes, one-layer networks of width 32, 60 epochs, seeds 11-14):
+Two properties of this fixture bound what the importance can be asked for:
 
-* the fitted head calls the phenotype at 0.86-0.91 accuracy;
-* the rank correlation between importance and the closed-form discriminativeness is weak
-  and seed-dependent (rho -0.11 to 0.32), and does not improve with 150 or 300 epochs;
-* against a naive-Bayes reader of the true programs given the same knockout it is 0.28-0.54;
-* with 20 phenotype-independent noise genes appended at matched count scale, the importance
-  ranks informative genes above noise only moderately (AUROC 0.61-0.75; 0.52-0.73 at 300-600
-  epochs or width 128), and within the noise genes it tracks the gene's mean count
-  (rho 0.26-0.63).
+* silencing a gene is an intervention whose size scales with the gene's counts, and the fitted
+  encoder responds to that regardless of what the gene says about phenotype, so the importance
+  is only partly about information;
+* gene-level truth is not identifiable -- a handful of dense factors drive every gene, so a
+  reader may lean on any subset of a redundant set and still call the phenotype.
 
-So on this fixture the importance is only partly about information: silencing a gene is an
-intervention whose size scales with the gene's counts, and the fitted encoder responds to
-that regardless of what the gene says about phenotype. Gene-level truth is also not
-identifiable here -- eight dense factors drive sixty genes, so any reader may lean on any
-subset. The assertions below are the floors those numbers clear with margin: informative
-genes outrank noise on average over seeds, and an expression matrix that carries no
-phenotype gives a flat importance. They are not a claim that the ranking recovers the
-programs gene for gene; the measured values above are the record of how far it does.
+The assertions are therefore floors rather than a claim that the ranking recovers the programs
+gene for gene: informative genes outrank appended phenotype-independent noise genes on average
+over seeds, and an expression matrix carrying no phenotype gives a flat importance. A ranking
+that ignores the phenotype fails them; one that merely disagrees with the oracle on a redundant
+gene set does not.
 """
 from __future__ import annotations
 
@@ -109,19 +102,17 @@ def test_the_oracle_is_visible_in_the_realised_counts():
 # ── the fitted model ─────────────────────────────────────────────────────────
 
 #: One namespace per FIT, not per seed. These tests fit several models with the same `seed`
-#: (it seeds the network init, not the identity of the fit), and two fits sharing a namespace
-#: means the second continues the first -- which is what `clear_param_store` used to prevent
-#: here, and what made the flat-vs-sharp separation collapse from 25x to 1.8x when the clear
-#: was removed without this.
+#: (it seeds the network init, not the identity of the fit), and two fits sharing a namespace in
+#: the process-global Pyro store would mean the second continues the first -- so a comparison
+#: between two fits would report the order they ran in rather than their data.
 _FIT_COUNTER = itertools.count()
 
 
 def _fit(adata, *, seed=0, max_epochs=60):
     from tcri.model._model import TCRIModel
 
-    # NAMED (0.12), and no longer clearing the store: these fits used to wipe the session
-    # fixtures' parameters, which is why this module carried an autouse save/restore fixture.
-    # A namespace per fit makes that unnecessary -- the fits simply do not collide.
+    # The `name` is what keeps this fit's parameters apart from every other fit's and from
+    # the session fixtures' in the process-global Pyro store, so nothing here has to clear it.
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
                             phenotype_key="phenotype", covariate_key="covariate",
                             batch_key="batch")
@@ -140,8 +131,10 @@ def test_informative_genes_outrank_matched_noise_genes_on_average():
     """Over three seeds, the mean AUROC of importance for informative-vs-noise genes is above
     chance, and the ten most important genes are mostly informative.
 
-    Measured 2026-09-10 (see the module docstring): AUROC 0.747 / 0.704 / 0.656 for seeds
-    11 / 12 / 13 (mean 0.70), 0 / 1 / 0 noise genes in the top ten. The floors are 0.55 and 3.
+    The noise genes are the one set with an unambiguous truth on this fixture: they are drawn
+    at the real genes' count scale and carry no phenotype, so an importance that ranked them
+    level with the informative genes would be reporting intervention size and nothing else.
+    The floors are loose by design -- the assertion messages report the realised values.
     """
     aurocs, noise_in_top = [], []
     for seed in (11, 12, 13):

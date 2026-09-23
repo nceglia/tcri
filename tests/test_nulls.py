@@ -8,12 +8,12 @@ cell carries which label.
 
 The load-bearing invariant, asserted here for all three kinds: the clone x covariate index is the
 PARENT'S. Same ``n_ct``, same order, same ``ct_to_c``, same ``ct_to_cov``. That is what makes the
-``null_value`` join total with no NaN rows. What moves per cell differs by kind, and asserting
-movement for all three is the mistake an earlier revision of the design made -- under the
-phenotype null ``ct_array`` is the parent's cell for cell, because neither the clone nor the
-covariate has been touched.
+``null_value`` join total with no NaN rows. What moves per cell differs by kind, so asserting
+movement for all three would be wrong -- under the phenotype null ``ct_array`` is the parent's
+cell for cell, because neither the clone nor the covariate has been touched.
 
-Rows of plan §3.4 that assert reader surface (``fit=``, ``null_model=``) land with that surface.
+The reader surface that consumes a null (``fit=``, ``null_model=``) is asserted in
+``tests/test_references.py``.
 
 Fits are deliberately tiny; nothing here asserts accuracy.
 """
@@ -152,11 +152,11 @@ def test_the_ct_index_is_the_parents(fitted):
 
 
 def test_the_clone_map_is_a_no_op_on_the_main_fit(fitted):
-    """§4.2a's substrate-derived helpers agree with the obs reading they replace.
+    """The substrate-derived clone helpers agree with the obs reading on the main fit.
 
-    ``metric_table`` and the delta endpoints now build their clone lists from the fit rather
-    than from ``obs``. On the main fit the two must be the same thing; if they ever are not,
-    every metric in the package silently moved.
+    ``metric_table`` and the delta endpoints build their clone lists from the fit rather than
+    from ``obs``. On the main fit the two must be the same thing; if they ever are not, every
+    metric in the package silently moved.
     """
     _, adata, _ = fitted
     meta = adata.uns[K.METADATA]
@@ -181,8 +181,8 @@ def test_within_is_validated_not_extended(fitted):
 
     Silently unioning the missing column back in would make the recorded strata differ from the
     strata the caller believes they asked for -- and on a covariate-sparse frame a ``within``
-    that drops the covariate takes the shared-clone set from 6 to 36, so the join would be onto
-    a row set six times larger with no error anywhere.
+    that drops the covariate multiplies the shared-clone set, so the join would be onto a much
+    larger row set with no error anywhere.
     """
     model, adata, _ = fitted
     covariate_col = adata.uns[K.METADATA][K.Config.COVARIATE_COL]
@@ -372,39 +372,27 @@ def test_rebuild_names_the_missing_namespace(fitted):
         rebuild(model, adata, "not_a_fit")
 
 
-# ── a null is a fit, so everything that takes a fit takes a null (PR C) ──────
+# ── a null is a fit, so everything that takes a fit takes a null ─────────────
 
 def test_a_null_is_a_fit_for_every_reader(fitted):
-    """The evaluation table, row by row. A null whose row does not look like this is a wrong
+    """The evaluation table, row by row: reconstruction, calibration, head accuracy and mutual
+    information on each of the three nulls. A null whose row does not look like this is a wrong
     null, and there is nowhere else in the package where that is checked.
 
-    Measured 2026-09-11 on this fixture at 30 epochs, seeds 0/1/2 (majority-class rate of the
-    true labels in brackets):
-
-    | quantity | parent | phenotype null | clonotype null | condition null |
-    |---|---|---|---|---|
-    | head accuracy [0.405] seed 0 | 0.630 | 0.545 | 0.460 | 0.630 |
-    | head accuracy [0.535] seed 1 | 0.820 | 0.535 | 0.545 | 0.820 |
-    | head accuracy [0.480] seed 2 | 0.865 | 0.480 | 0.480 | 0.865 |
-    | mutual information seed 0 | 0.2075 | 0.0075 | 0.0130 | 0.2069 |
-    | mutual information seed 1 | 0.4744 | 0.0223 | 0.0331 | 0.4749 |
-    | mutual information seed 2 | 0.4522 | 0.0386 | 0.0076 | 0.4520 |
-
-    Two things in that table are worth stating because they are NOT what one would predict.
+    Two of the bounds asserted here are NOT what one would predict.
 
     A label null's head does not fall to chance (1/P); it falls to the MAJORITY-CLASS RATE. The
     permutation preserves each stratum's label multiset, so the marginal survives it and a head
-    with nothing else to learn predicts the marginal. On seeds 1 and 2 the accuracy equals that
-    rate to three decimals. Asserting "at chance" would be asserting something false.
+    with nothing else to learn predicts the marginal. Asserting "at chance" would be asserting
+    something false, which is why the bound here is the majority-class rate.
 
     And the CLONOTYPE null's head falls too, rather than staying at its parent's. The hard label
     is the argmax of the GATED posterior, which mixes the head with ``log p_ct``, and a
     clonotype permutation destroys exactly that prior; the noisy-label readout also ties the
     head to the hierarchy. So "the head is intact" is true of ``f_cls`` and not of the call.
 
-    What IS clean is the mutual information row and the condition null's column: the condition
-    null reproduces its parent's accuracy exactly on all three seeds, because neither the
-    phenotype nor the clone of any cell moved.
+    The condition null is the clean case: it reproduces its parent's accuracy and its mutual
+    information, because neither the phenotype nor the clone of any cell moved.
     """
     import tcri
 
@@ -486,9 +474,9 @@ def test_a_groupby_finer_than_the_strata_raises():
 
     On a fixture where a (batch, covariate) stratum spans two replicates, the clonotype null's
     shuffle moves clones between those replicates while the group mask still comes from obs. A
-    group's clone list then selects the other group's null rows -- measured on one patient with
-    two replicates, 20 of 20 clones span both and about half of R1's selected rows are R2's
-    cells. The parent's obs passes every disjointness check, so nothing else catches it.
+    group's clone list then selects the other group's null rows, so a per-group number is
+    computed over cells belonging to both. The parent's obs passes every disjointness check, so
+    nothing else catches it.
 
     The strata alone cannot close this: they are fixed at fit time while `groupby` is chosen at
     metric time. Only the substrate-derived clone map is evaluated against the groupby actually

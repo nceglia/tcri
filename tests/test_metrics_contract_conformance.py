@@ -88,7 +88,8 @@ def test_the_reference_table_is_the_contracts():
 
     The KEY SET is asserted, not only the values. Without it a metric added later silently gets
     no default -- it would just never compute a reference -- and a test comparing values only
-    would stay green while the rule in §References quietly stopped applying to it.
+    would stay green while the References section of METRICS_CONTRACT.md quietly stopped
+    applying to it.
 
     The live side is read off the decorators rather than from a second table in the package, so
     there is no copy of this mapping that can drift from the contract.
@@ -191,9 +192,9 @@ def test_eq2_joint_entropy():
 def test_eq3_clonotypic_entropy_matches_the_contract():
     """Eq 3: H(p(c|phi)) = -sum_{c in C} p(c|phi) log(p(c|phi)).
 
-    Note the weight is the CONDITIONAL p(c|phi), matching the log — an earlier
-    revision weighted by the marginal p(c), which is a cross-entropy and can exceed
-    log2(|C|) (see ``test_marginal_weighting_is_not_an_entropy``).
+    Note the weight is the CONDITIONAL p(c|phi), matching the log. Weighting by the
+    marginal p(c) instead gives a cross-entropy, which can exceed log2(|C|) (see
+    ``test_marginal_weighting_is_not_an_entropy``).
     """
     J = _joint()
     cols = ["phen_A", "phen_B"]
@@ -251,8 +252,8 @@ def test_eq6_nmi_is_the_average_denominator():
 def test_marginal_weighting_is_not_an_entropy():
     """Weighting by the marginal instead of the conditional is provably wrong.
 
-    Kept as a standing guard rather than an erratum: it is the natural way to
-    mis-transcribe eqs 3-4, and it fails two ways at once — the value can exceed
+    A standing guard, because it is the natural way to mis-transcribe eqs 3-4, and
+    it fails two ways at once — the value can exceed
     log2(|C|) (impossible for an entropy over |C| outcomes), and substituting it into
     the MI decomposition yields a NEGATIVE mutual information, which is impossible
     for a KL divergence.
@@ -306,7 +307,8 @@ def test_entropy_degenerate_is_zero():
 
 
 def test_entropy_zero_mass_is_nan_not_zero_or_one():
-    """IDENTITIES['entropy_zero_mass_is_nan'] — the spurious-H=1 regression."""
+    """IDENTITIES['entropy_zero_mass_is_nan']: an unsupported row or column is NaN, never a
+    spurious 1.0 from normalizing zero by zero."""
     J = np.array([[1.0, 0.0], [1.0, 0.0]])       # phenotype 'b' has no mass
     c = _clonotypic_one(J, ["a", "b"], normalized=True)
     assert np.isnan(c["b"]), "empty phenotype column must be NaN"
@@ -420,15 +422,12 @@ def test_marginal_weighted_formula_would_break_the_decomposition():
 # ── `weighted` selects the clone marginal ───────────────────────────────────
 
 def test_weighted_default_is_false_and_the_knob_is_live():
-    """Pins the CURRENT default and proves the argument is not inert.
+    """The signature default for ``weighted`` is ``False`` on every metric that takes it.
 
-    Two assertions, because either alone passes by accident: the signature default must be
-    ``False``, and the two settings must produce different numbers on a repertoire where they
-    should differ. A test that only checked the default would still pass if `weighted` stopped
-    being read.
-
-    The default is deliberately unsettled — the argument's meaning is to be reviewed with it as
-    the only variable moving. Until then this makes a change to it a contract change.
+    Flipping it changes which estimand every caller gets -- one vote per clone against one vote
+    per cell -- so it is a contract change. ``test_weighted_changes_the_clone_marginal`` is the
+    other half: a test that only checked the default would still pass if ``weighted`` stopped
+    being read at all.
     """
     import inspect
 

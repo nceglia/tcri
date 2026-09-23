@@ -2,10 +2,8 @@
 
 Every other test in this suite runs on `simulate_tcri`, which draws ω from a Dirichlet and
 generates expression from the model's own assumptions. That is circular: it can only ask whether
-tcri inverts data produced by tcri's generative story. It has already proved measurably blind to
-a real defect — re-measuring `reconstruction_loss_scale` (deviation [E]), the synthetic read a
-perfectly calibrated posterior-predictive library ratio of 1.00 at *every* setting while real
-1000-gene, 87%-dropout data read 1.40 vs 0.99.
+tcri inverts data produced by tcri's generative story, so any misfit the story itself rules out
+— dropout, thousands of genes, heavy-tailed clone sizes — is invisible to it by construction.
 
 So this file exists to check the things the synthetic structurally cannot, on data the model did
 not generate. It is **not** CI: the dataset lives outside the repo and the fits take minutes.
@@ -101,9 +99,9 @@ def test_metrics_run_and_are_in_range(fitted):
     import tcri
 
     _m, a = fitted
-    # `null_model=None` throughout this file: the yost fixture fits real counts for 120
-    # epochs, so the "small models, seconds" cost note does not hold here, and what is being
-    # asserted is that the metrics run and land in range on real data.
+    # `null_model=None` throughout this file: the fixture fits real counts for 120 epochs, so
+    # a permutation reference would repeat that cost, and what is asserted here is only that
+    # the metrics run and land in range on real data.
     mi = float(tcri.tl.mutual_information(a, covariate=COV, null_model=None, n_samples=0, weighted=True,
                                           normalize_mode="average")["result"]["value"].iloc[0])
     assert np.isfinite(mi) and 0.0 <= mi <= 1.0, f"NMI out of range: {mi}"
@@ -148,13 +146,13 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
     """`p_ct` is the clone×phenotype table every metric reads. Check it is well-formed and not
     degenerate on real dropout-heavy expression.
 
-    This test previously asserted that `p_ct` tracks the observed crosstab, as evidence for
-    DE-18's observed-phenotype likelihood. **DE-18 is withdrawn** — z^ϕ is latent and the
-    hierarchical branch is a prior that does not see the data directly, so `p_ct` is under no
-    obligation to stay near the crosstab and an L1 bound against it asserts the wrong thing.
+    Deliberately not a bound against the observed crosstab: z^ϕ is latent and the hierarchical
+    branch is a prior (`MODEL_CONTRACT.md`, eq 2), so `p_ct` is under no obligation to stay near
+    the crosstab and an L1 bound against it would assert the wrong thing.
 
-    What is still worth checking on real data is that the table is a valid distribution and
-    retains clone-to-clone structure rather than collapsing to one shared row.
+    What real data can check is that the table is a valid distribution and retains
+    clone-to-clone structure rather than collapsing to one shared row — a collapsed table
+    carries no clonotype information and would drive every MI to ~0 by construction.
     """
     import tcri
 
@@ -185,12 +183,13 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
 
 
 def test_posterior_concentration_is_not_pinned_to_beta(fitted):
-    """DE-5 on real, heavy-tailed clone sizes.
+    """The variational concentration must be free, on real, heavy-tailed clone sizes.
 
-    Eq 6 specifies λ'_m ∈ ℝ^P_{>0} — a free variational parameter. The implementation had
-    `conc = β · (normalized row)`, pinning every group's concentration TOTAL to β regardless of
-    its cell count. This is what DE-5 fixes, and it is what this test checks: the totals must be
-    free to differ across groups.
+    Eq 6 (`MODEL_CONTRACT.md`, "The variational family") specifies λ'_m ∈ ℝ^P_{>0}: magnitude
+    and direction are both learned. A parameterisation that normalises the row and multiplies by
+    β pins every group's concentration TOTAL to β whatever its cell count, so a 3-cell group and
+    a 3000-cell group would report the same posterior width. The totals must differ across
+    groups.
     """
     import pyro
 

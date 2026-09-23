@@ -6,8 +6,7 @@ What these pin, in order of how much they'd cost to get wrong:
    difference — not something reconstructed from the endpoints' intervals, which is not
    possible because HDIs do not subtract;
 2. both sides come from ONE shared sample, so a self-delta is exactly 0 rather than the
-   sampling noise floor (``phenotypic_flux`` reported 0.209 for a self-flux before its seed
-   was pinned);
+   sampling noise floor;
 3. the support is the intersection, within each replicate, and the drop is warned about
    because it moves ``n``;
 4. there is no ``delta_mutual_information`` — the scope principle, not an oversight.
@@ -104,10 +103,9 @@ def test_delta_is_to_minus_from_within_a_draw(name, cohort):
 
     # The HDI brackets the MEDIAN, not necessarily the mean. An HDI is the *narrowest*
     # interval holding 94% of the mass, so a single outlying draw is excluded from the
-    # interval while still pulling the mean. Measured on this fixture: draws
-    # [-0.0002, 0.0 x18, +0.0038] give mean 0.000218 and hdi (-0.000192, 0.0000396) --
-    # the mean sits outside by construction, not by error. Any interval holding >50% of
-    # the mass must contain the median, so that is the invariant worth asserting.
+    # interval while still pulling the mean: the mean can sit outside by construction and
+    # not by error. Any interval holding >50% of the mass must contain the median, so that
+    # is the invariant worth asserting.
     fin = got.dropna(subset=["hdi_low", "hdi_high", "median"])
     assert len(fin)
     assert (fin["hdi_low"] <= fin["median"]).all() and (fin["median"] <= fin["hdi_high"]).all()
@@ -118,10 +116,10 @@ def test_delta_is_to_minus_from_within_a_draw(name, cohort):
 def test_a_self_delta_is_exactly_zero(name, cohort):
     """Both sides must come from one shared sample.
 
-    ``phenotypic_flux`` learned this: at ``random_state=None`` the flux of a covariate against
-    itself — exactly 0 by construction — came back as 0.209 at n_samples=16, which was the
-    sampling noise floor being reported as a result. Independent draws would give a delta
-    whose spread grows with n_samples and whose mean is only asymptotically 0.
+    Independent draws give a delta whose spread grows with n_samples and whose mean is only
+    asymptotically 0, so what a self-delta reports is the sampling noise floor rather than the
+    zero it is by construction. ``tests/test_tools/test_metric_axes.py`` asserts the same
+    property for ``phenotypic_flux``.
     """
     _, adata = cohort
     a, _ = _covs(adata)
@@ -138,10 +136,8 @@ def test_a_self_delta_is_exactly_zero(name, cohort):
 def test_the_support_is_the_intersection_and_the_drop_is_reported(name, ragged):
     """A delta needs both endpoints, and dropping clones moves the n a contrast is built on.
 
-    ``null_model=None``: these assertions are the INTERSECTION RULE, not an effect size, and a
-    reference would double the warning traffic this test reads. The fixture would in fact
-    support a condition null -- 25 of 29 clones sit at both levels and the ct index is
-    preserved -- so this is a choice about what the test is about, not a limitation.
+    Run at ``null_model=None``: these assertions are the INTERSECTION RULE, not an effect size,
+    and a reference run would double the warning traffic this test reads.
     """
     adata, a, b, at = ragged
     one_sided = at[a] ^ at[b]

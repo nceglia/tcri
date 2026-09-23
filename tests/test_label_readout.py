@@ -1,4 +1,5 @@
-"""The noisy-label readout: y_i | z^phi_i ~ Cat(C[z^phi_i, .]), summed out under eq 4.
+"""The noisy-label readout of ``MODEL_CONTRACT.md`` eq 8: ``y_i | z^phi_i ~ Cat(C[z^phi_i, .])``
+with ``z^phi_i`` summed out in closed form.
 
 It is the one observation downstream of the latent phenotype, so it is what gives the clone x
 covariate hierarchy a per-cell data term. ``label_error_rate=None`` removes it and restores
@@ -64,8 +65,8 @@ def _grad_to_hierarchy(node_log_prob):
 
 
 def test_off_switch_restores_the_label_free_model():
-    """``None``: no readout site, and the hierarchy gets no per-cell gradient (the shipped
-    pre-2026-09 behaviour). Catches a readout that ignores the switch."""
+    """``None``: no readout site, and the hierarchy gets no per-cell gradient — the label-free
+    model. Catches a readout that ignores the switch."""
     m = _model(_fixture(), label_error_rate=None)
     t, _ = _traces(m)
     assert "phenotype_label" not in t.nodes

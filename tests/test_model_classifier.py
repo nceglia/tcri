@@ -1,21 +1,19 @@
 """Phenotype-classifier recovery test.
 
-Locks in the two coupled fixes that make ``f_cls`` (the phenotype classifier head,
-methods eq. 4) actually train:
+Two coupled requirements make ``f_cls``, the phenotype classifier head, train at all:
 
-  1. The classifier enters the ELBO through ``pyro.factor("phenotype_alignment", ...)``
-     in ``TCRIModule.model()`` (the surrogate KL objective, methods "Inference
-     Details"). Without it ``cls_logits`` never touches the log-joint and f_cls
-     gets no gradient (weight change == 0).
-  2. The per-cell alignment target ``phi = p_ct[ct_idx]`` is indexed with the
-     GLOBAL cell indices, not the local pyro data-plate index. Indexing with the
-     local index silently scrambles each cell's target across shuffled minibatches,
-     which trains the classifier on the wrong labels and collapses it to a constant
-     (recovery == chance).
+  1. The classifier enters the ELBO through ``pyro.factor("phenotype_alignment", ...)`` in
+     ``TCRIModule.model()`` -- the alignment surrogate of ``governance/MODEL_CONTRACT.md``
+     eq 7. Without it ``cls_logits`` never touches the log-joint and f_cls gets no gradient
+     (weight change == 0).
+  2. The per-cell alignment target ``phi = p_ct[ct_idx]`` is indexed with the GLOBAL cell
+     indices, not the local pyro data-plate index. The local index scrambles each cell's
+     target across shuffled minibatches, which trains the classifier on the wrong labels and
+     collapses it to a constant (recovery == chance).
 
-The dataset is "perfect": each clonotype expresses one unique marker gene and maps
-to one phenotype, so a correctly-trained classifier recovers the phenotype from gene
-expression alone (gate_prob=1.0, the pure-classifier path).
+The dataset is "perfect": each clonotype expresses one unique marker gene and maps to one
+phenotype, so a correctly-trained classifier recovers the phenotype from gene expression alone
+(gate_prob=1.0, the pure-classifier path).
 """
 import contextlib
 import io
@@ -76,13 +74,15 @@ def _perfect_adata(n_clones=5, n_per=60, n_genes=6, seed=0):
 def test_head_is_not_constant_after_a_short_fit():
     """The head varies across cells after a short fit on a realistic (noisy) cohort.
 
-    Trained on a SAMPLE of z it does not: the posterior scale is ~100x the spread of the
-    posterior mean across cells, so its input is ~1% signal, the optimum is a constant, and
-    its hidden ReLUs die. On this fixture the sample-trained head has a logit sd across cells
-    of ~3e-3 and one argmax class; the mean-trained head ~7e-2 and three classes (measured
-    across three seeds: worst-case sample 7e-3, worst-case mean 3e-2). The perfect-recovery
-    test above cannot see this -- its marker gene at 100 counts puts the mean far outside the
-    posterior width. Fails on the parent commit.
+    Trained on a SAMPLE of z it does not: on a noisy cohort the encoder's posterior scale dwarfs
+    the spread of the posterior mean across cells, so the head's input is almost all posterior
+    noise, a constant is the optimum, and its hidden ReLUs die. The head must therefore read the
+    posterior mean (``governance/MODEL_CONTRACT.md``, "The head reads the posterior mean").
+
+    ``test_classifier_perfect_recovery`` below cannot see this: its marker gene at 100 counts
+    puts the posterior mean far outside the posterior width, so even a sample-trained head
+    recovers the phenotype there. The assertion here is on the logit spread across cells, which
+    a collapsed head cannot clear.
     """
     from tcri.datasets import simulate_cohort
     from tcri.model._priors import encoder_posterior
@@ -125,8 +125,8 @@ def test_head_is_not_constant_after_a_short_fit():
 def test_classifier_perfect_recovery(gate_prob):
     """f_cls recovers the phenotype on a linearly-separable dataset.
 
-    gate_prob=1.0 is the strict test (phenotype comes from the classifier alone);
-    gate_prob=0.5 is the methods default (classifier + clonotype prior).
+    gate_prob=1.0 is the strict test (the phenotype comes from the classifier alone);
+    gate_prob=0.5 is the constructor default (classifier + clonotype prior).
     """
     np.random.seed(0)
     torch.manual_seed(0)

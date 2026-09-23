@@ -1,8 +1,9 @@
 """Unit tests for the shared private helpers. Pure and fast — no model.
 
-These moved in the layout pass: `_stats.py` became the `_stats/` package (`_core` primitives +
-`_compare`), `_distance.py` moved under `_compute/`, and the `_keys` shim over `_state.keys` was
-deleted along with the dead `_console` module.
+Covers the key constants in ``tcri._state.keys``, the statistics primitives in
+``tcri._stats._core`` (stars, HDI, AUROC permutation), the phenotype distances in
+``tcri._compute._distance``, and what ``import tcri`` is allowed to do to the process it is
+imported into.
 """
 import json
 import os
@@ -20,8 +21,8 @@ def test_keys_constants():
     assert K.X_LOGITS == "X_tcri_logits"
     assert K.METADATA == "tcri_metadata"
     assert K.X_PROBABILITIES == "X_tcri_probabilities"
-    # the legacy shadow keys are GONE (Phase 4 removal completed); only the
-    # defensively-popped manager stash name remains
+    # one name per stored thing: no shadow copies of the clone/phenotype keys for a reader
+    # to pick the stale one out of. Only the defensively-popped manager stash name remains.
     assert not hasattr(K, "LEGACY_CLONE_KEY")
     assert not hasattr(K, "LEGACY_PHENOTYPE_KEY")
     assert not hasattr(K, "LEGACY_X_PHENOTYPES")
@@ -31,11 +32,11 @@ def test_keys_constants():
 def test_import_tcri_does_not_hijack_global_warning_filters():
     """A library must not silence the application's warnings.
 
-    ``_preprocessing`` used to call a blanket ``warnings.filterwarnings('ignore')``
-    at module scope, which runs on ``import tcri`` and silenced EVERY warning in the
-    user's session — including this package's own guardrails (the K clamp, the
-    param-store-reuse notice, the batch_size warning). Narrow message-specific
-    filters are tolerated; a catch-all is not.
+    A blanket ``warnings.filterwarnings('ignore')`` at module scope runs on
+    ``import tcri`` and silences EVERY warning in the user's session — including this
+    package's own guardrails (the K clamp, the param-store-reuse notice, the
+    batch_size warning). Narrow message-specific filters are tolerated; a catch-all
+    is not.
     """
     import subprocess
     import sys
@@ -54,10 +55,11 @@ def test_import_tcri_does_not_hijack_global_warning_filters():
 
 
 def test_preprocessing_import_is_light():
-    """``import tcri`` must not drag in umap (~2.9 s via pynndescent/numba).
+    """``import tcri`` must not drag in umap.
 
-    umap is only needed for the opt-in ``to_anndata(compute_umap=True)`` path, which
-    imports it locally. An eager module-level import cost every user ~2.9 s.
+    umap pulls pynndescent and numba behind it, so importing it at module scope adds
+    that compile cost to every ``import tcri``. It is needed only for the opt-in
+    ``to_anndata(compute_umap=True)`` path, which imports it locally.
     """
     import subprocess
     import sys
@@ -81,9 +83,10 @@ def test_stars_thresholds():
 def test_hdi_hugs_skew():
     """The HDI must be narrower than the equal-tailed interval on a skewed sample.
 
-    `eti` is deleted -- it had no caller outside this test, and every interval the package
-    reports is an HDI. The comparison is kept by computing the equal-tailed bound inline,
-    which is one line of numpy and keeps the property under test without keeping an API.
+    Every interval the package reports is an HDI, so this is the property that matters: on a
+    skewed sample it must exclude the far tail a percentile interval keeps. The equal-tailed
+    bound is computed inline from numpy rather than through an API of its own. The second half
+    checks that the two agree on a symmetric sample, where they should.
     """
     x = np.array([0, 0, 0, 0, 0.1, 0.2, 5.0])
     hlo, hhi = S.hdi(x, prob=0.8)
@@ -163,15 +166,15 @@ def test_distance_dispatch():
 
 
 def test_importing_tcri_does_not_mutate_global_state():
-    """NEW-5: a library configures nothing on the caller's behalf.
+    """A library configures nothing on the caller's behalf.
 
-    ``import tcri`` used to delete SLURM_NTASKS/SLURM_NTASKS_PER_NODE from os.environ and call
-    logging.basicConfig(level=INFO) at module scope. The first breaks anything else in the
-    process that sizes work from those variables -- a joblib pool, a subprocess srun, a second
-    Trainer -- and the second switches on INFO logging for the entire application.
+    ``import tcri`` must leave SLURM_NTASKS/SLURM_NTASKS_PER_NODE in os.environ and the root
+    logger alone. Deleting those variables breaks anything else in the process that sizes work
+    from them -- a joblib pool, a subprocess srun, a second Trainer -- and calling
+    logging.basicConfig(level=INFO) switches on INFO logging for the entire application.
 
-    Runs in a subprocess: this process has already imported tcri, so the mutation would be
-    invisible here.
+    Runs in a subprocess: this process has already imported tcri, so a mutation made at import
+    time would be invisible here.
     """
     import subprocess
     import sys

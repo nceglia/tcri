@@ -7,18 +7,12 @@ The stub inside ``governance/API_CONTRACT.md`` freezes the public surface. Two t
 2. **Signature equality** — for every name in that set, the live signature matches the
    ``.pyi`` declaration (parameter names, kinds, and which carry defaults).
 
-Check 1 replaced a hand-maintained ``IMPLEMENTED`` allowlist. An allowlist can only
-police what somebody remembered to add to it, so anything never listed was invisible:
-not its signature, not even its existence. The same hole appeared in grafiti and in
-tcri. When set equality went in it immediately found two things the allowlist had
-never seen — ``TCRIModel.boost_phenotype_prior`` (a public method that multiplied the
-eq-1 archetype concentration by a constant in place, undeclared and uncalled) and the
-whole ``tcri.datasets`` namespace.
+Check 1 is set equality rather than an allowlist on purpose. An allowlist can only
+police what somebody remembered to add to it, so a callable that was never listed is
+invisible to it: not its signature, not even its existence.
 
-Adding a public function is now a contract change by construction: the test fails
-until it is declared. That is the intent.
-
-AST logic ported from grafiti's ``test_contract_conformance.py``.
+Adding a public function is therefore a contract change by construction: the test fails
+until it is declared in ``governance/API_CONTRACT.md``. That is the intent.
 """
 import ast
 import importlib
@@ -197,11 +191,10 @@ def test_import_smoke():
     """`import tcri` is green and the public namespaces resolve."""
     for ns in ("tl", "pp", "pl", "ml", "ut"):
         assert hasattr(tcri, ns), f"tcri.{ns} missing"
-    # diag is added in Phase 8; assert once it lands.
 
 
-# migrated canonical keys (PR1) — must come from `_state.keys` K.*, never a literal.
-# legacy keys (tcri_clone_key/…, X_tcri_phenotypes) are exempt until their removal phase.
+# Canonical keys that must come from `_state.keys` K.*, never a string literal, so that
+# renaming one is a single edit rather than a grep across the package.
 _MIGRATED_KEYS = [
     "METADATA", "P_CT", "LOCAL_SCALE", "CT_TO_COV", "CT_TO_C", "CT_ARRAY",
     "COV_ARRAY", "COVARIATE_CATEGORIES", "CLONOTYPE_CATEGORIES",

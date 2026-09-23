@@ -1,14 +1,14 @@
-"""Session save/load round-trip + the Phase-4 model→AnnData streamline contract.
+"""Session save/load round-trip, and the split between what ``setup_anndata`` and
+``to_anndata`` may write.
 
 Locks three things:
-  1. ``to_anndata`` writes exactly the canonical key set, including the Phase-4
-     additions (logits / gate / classifier-temperature / local-scale), and no
-     ``tcri_manager`` stash.
+  1. ``to_anndata`` writes exactly the canonical key set (latent / logits / probabilities /
+     gate / classifier-temperature / local-scale), and no ``tcri_manager`` stash.
   2. ``setup_anndata`` is registration-only — no analysis/label ``obs`` mutation.
-  3. save → load reproduces ``p_ct`` + latent + ``predict`` from the *reloaded model*
-     (this also guards the PyTorch ``weights_only=True`` regression that silently
-     broke pyro param-store loading; a failed load re-inits ``q_p_ct_raw`` to a
-     uniform 1/P matrix, which we detect via row variance).
+  3. save → load reproduces ``p_ct`` + latent + ``predict`` from the *reloaded model*. A pyro
+     param-store load can fail without raising, which leaves ``q_p_ct_raw`` re-initialised to
+     a uniform 1/P matrix, so the round-trip is checked against the reloaded model rather than
+     against the saved file, and uniform rows are caught via row variance.
 """
 import contextlib
 import io
@@ -27,9 +27,9 @@ from tcri.utils._utils import load_tcri_session, save_tcri_session
 @pytest.fixture
 def fresh_trained_model(synthetic_adata):
     """A model trained fresh inside this test so it OWNS the process-global pyro
-    param store for the save (§5.2 — loading/training a second model in one process
-    clobbers ``q_p_ct_raw``, so the shared session-scoped ``trained_model`` store is
-    unsafe for a round-trip that recomputes from the reloaded model)."""
+    param store for the save: loading or training a second model in one process overwrites
+    ``q_p_ct_raw``, so the shared session-scoped ``trained_model`` store is unsafe for a
+    round-trip that recomputes from the reloaded model."""
     from tcri.model._model import TCRIModel
 
     pyro.clear_param_store()
@@ -57,8 +57,8 @@ CANONICAL_OBSM = [K.X_TCRI, K.X_LOGITS, K.X_LOGPOSTERIOR, K.X_PROBABILITIES]
 
 
 def test_to_anndata_writes_canonical_set(trained_model):
-    """to_anndata writes the full canonical key set incl. the Phase-4 additions,
-    with the scalar knobs equal to the model's configured values; no manager stash."""
+    """to_anndata writes the full canonical key set, with the scalar knobs equal to the
+    model's configured values; no manager stash."""
     model, adata = trained_model
     for k in CANONICAL_UNS:
         assert k in adata.uns, f"to_anndata did not write uns[{k}]"
@@ -66,7 +66,7 @@ def test_to_anndata_writes_canonical_set(trained_model):
         assert k in adata.obsm, f"to_anndata did not write obsm[{k}]"
     assert K.PHENOTYPE in adata.obs, "to_anndata did not write the hard-label obs"
     assert "tcri_manager" not in adata.uns, "manager stash was not retired"
-    # Phase-4 scalar knobs: written == the model's configured value (not just finite)
+    # the scalar knobs: written == the model's configured value (not just finite)
     assert adata.uns[K.LOCAL_SCALE] == float(model.module.local_scale)
     assert adata.uns[K.CLASSIFIER_TEMPERATURE] == float(model.module.classifier_temperature)
     gp = model.module.gate_prob
@@ -134,7 +134,7 @@ def test_session_round_trip(fresh_trained_model, tmp_path):
     )
 
     # 4) the model scalars carried only in init_params_ (not in the AnnData) survive
-    #    the save/load — guards the classifier knobs added in the model PR.
+    #    the save/load — after a load they are reachable nowhere else.
     assert loaded_model.module.phenotype_kl_weight == model.module.phenotype_kl_weight
     assert loaded_model.module.gate_prob == model.module.gate_prob
     assert loaded_model.module.classifier_dropout == model.module.classifier_dropout
@@ -165,7 +165,7 @@ def test_a_session_from_a_newer_tcri_is_refused(tmp_path):
 
 
 def test_a_session_written_before_format_versions_is_not_refused(tmp_path):
-    """No `format_version` means a session from 0.12 or earlier; it is read as it always was.
+    """A `meta.json` with no `format_version` predates the field; it is read, not refused.
 
     The load gets past the version check and stops at the missing files of this empty directory,
     which is what proves the check let it through.

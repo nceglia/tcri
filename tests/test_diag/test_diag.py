@@ -46,15 +46,16 @@ def test_loss_and_archetypes(trained_model):
 
 
 def test_reconstruction_ppc_n_sims_is_wired(trained_model):
-    """NEW-3: ``n_sims`` is declared in the frozen contract and was never read.
+    """``n_sims`` must change the result, not merely be accepted.
 
-    The body drew exactly one replicate per cell regardless, so ``n_sims=1`` and
-    ``n_sims=1000`` returned bit-identical frames in identical wall-clock — a user tightening
-    the check got no more precision and no warning that the knob was inert.
+    ``reconstruction_ppc(..., n_sims=)`` is part of the diagnostics surface pinned in
+    ``governance/API_CONTRACT.md``. A body that draws one replicate per cell whatever the
+    caller passes returns bit-identical frames for ``n_sims=1`` and ``n_sims=8``: a user
+    tightening the check gets no more precision and no warning that the knob is inert.
 
-    Averaging more posterior-predictive draws must move the simulated statistics. This asserts
-    the knob changes the OUTPUT, not that the value arrives somewhere: an argument that is
-    merely connected is the failure mode this repo keeps rediscovering.
+    Averaging more posterior-predictive draws must move the simulated statistics while leaving
+    the observed ones alone, which is what this asserts — the value arriving in the body is not
+    enough.
     """
     model, adata = trained_model
 
@@ -73,8 +74,9 @@ def test_reconstruction_ppc_n_sims_is_wired(trained_model):
 
 
 def _perfectly_coupled_adata(n_clones=6, per_clone=30):
-    """Clone k is ALWAYS phenotype k. No shuffle can reach the observed MI, so the unfloored
-    estimator returns exactly 0.0 — which is what makes this fixture able to see the floor.
+    """Clone k is ALWAYS phenotype k. No shuffle can reach the observed MI, so the raw
+    exceedance fraction is exactly 0 and the floor is the only thing that can lift the p-value
+    off zero — which is what makes this fixture able to see the floor.
     Built by hand rather than fitted: permutation_null is model-free and reads only obs + uns.
     """
     import anndata as ad
@@ -97,12 +99,12 @@ def _perfectly_coupled_adata(n_clones=6, per_clone=30):
 
 @pytest.mark.parametrize("R", [50, 200])
 def test_permutation_null_p_value_is_floored(R):
-    """DE-15: a permutation p-value estimated from R shuffles can never be 0.
+    """A permutation p-value estimated from R shuffles can never be 0.
 
     The observed statistic is itself one realisation under the null, so the estimator is
-    (1 + #{null >= obs}) / (1 + R), not the raw fraction (Phipson & Smyth 2010). The unfloored
-    version returned exactly 0.0 whenever no shuffle beat the observation — claiming infinite
-    evidence from a finite sample, and giving -inf to anyone who logged it.
+    (1 + #{null >= obs}) / (1 + R), not the raw fraction (Phipson & Smyth 2010). The raw
+    fraction is exactly 0.0 whenever no shuffle beats the observation — claiming infinite
+    evidence from a finite sample, and giving -inf to anyone who logs it.
 
     Uses a perfectly coupled fixture on purpose: on ordinary data some shuffle usually ties the
     observation, the raw fraction is already nonzero, and the floor is invisible.
@@ -119,11 +121,11 @@ def test_permutation_null_p_value_is_floored(R):
 
 
 def test_permutation_null_honours_normalize_mode(trained_model):
-    """DE-15: the null must be on the same scale as the statistic it is a null for.
+    """The null must be on the same scale as the statistic it is a null for.
 
-    ``mode="min"`` was hardcoded, so a caller working in ``"average"`` compared their number
-    against a null computed on a different normalizer. That is not a weaker null — it is not a
-    null for their statistic at all.
+    If the normalizer were fixed inside the null, a caller working in ``"average"`` would
+    compare their number against a null computed on a different one. That is not a weaker null
+    — it is not a null for their statistic at all.
     """
     model, adata = trained_model
     lo = tcri.diag.permutation_null(adata, n_perm=50, normalize_mode="min", random_state=0)
@@ -137,13 +139,12 @@ def test_permutation_null_honours_normalize_mode(trained_model):
 
 
 def test_permutation_null_groupby_matches_the_metric_surface(trained_model):
-    """DE-15: ``groupby`` was accepted and never read — passing it returned a bit-identical
-    frame. It is now implemented rather than removed.
+    """``groupby`` must change the null, not merely be accepted.
 
-    Every ``tl.*`` metric takes ``groupby``, and this is the null FOR those metrics, so without
-    it a per-patient MI had no per-patient null. Cells are restricted to the group and
-    phenotypes permuted within each (covariate, group) stratum, so the null conditions on what
-    the reported statistic conditions on.
+    Every ``tl.*`` metric takes ``groupby``, and this is the null FOR those metrics, so a
+    per-patient MI needs a per-patient null. Cells are restricted to the group and phenotypes
+    permuted within each (covariate, group) stratum, so the null conditions on what the
+    reported statistic conditions on.
     """
     import inspect
 

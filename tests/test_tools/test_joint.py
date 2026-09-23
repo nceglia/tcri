@@ -1,8 +1,8 @@
-"""The Phase-5 engine gate — ``tcri.joint_distribution`` identities (§7.1).
+"""``tcri.joint_distribution``: the identities that define the engine's output.
 
 Comparisons use the *frozen* canonical keys written by ``to_anndata`` (``uns[P_CT]``,
 ``obsm[X_LOGITS]``, ``obsm[X_PROBABILITIES]``) rather than a live ``predict()`` call,
-so the identities do not depend on the process-global pyro param store (§5.2).
+so the identities do not depend on the process-global pyro param store.
 """
 import json
 
@@ -126,9 +126,10 @@ def test_provenance_is_json_serializable(trained_model):
 
 
 def test_groupby_is_not_a_joint_distribution_argument(trained_model):
-    """``groupby`` was declared in the first contract freeze (7599959) and never implemented --
-    it raised ``NotImplementedError``. Removed rather than implemented: a joint IS the
-    covariate object, and grouping belongs to the metrics that reduce it."""
+    """``groupby`` is not an argument of ``joint_distribution``.
+
+    A joint IS the covariate object, and grouping belongs to the metrics that reduce it, so
+    passing ``groupby`` here raises rather than being accepted and ignored."""
     import inspect
 
     import pytest
@@ -179,7 +180,7 @@ def test_temperature_tempers_base_on_ct_path(trained_model):
 
 
 def test_temperature_changes_use_logits_joint(trained_model):
-    """T!=1 tempers the cell-informed joint too (behavior lock, per §7.1)."""
+    """T!=1 tempers the cell-informed joint too, not only the ct path."""
     _, adata = trained_model
     cov = _first_covariate(adata)
     a = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0)['table']

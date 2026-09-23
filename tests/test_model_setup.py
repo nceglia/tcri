@@ -35,7 +35,7 @@ def test_setup_anndata_defaults_to_x_matrix():
     manager = TCRIModel._get_most_recent_anndata_manager(adata)
     assert manager.registry["setup_args"]["layer"] is None
     assert "tcri_layer" not in adata.uns
-    # Phase 4: the AnnDataManager is no longer stashed in uns (tcri_manager retired).
+    # the AnnDataManager is not stashed in uns; the registry is the only place it lives.
     assert "tcri_manager" not in adata.uns
     np.testing.assert_array_equal(
         manager.get_from_registry(REGISTRY_KEYS.X_KEY),

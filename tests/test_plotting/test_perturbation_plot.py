@@ -125,7 +125,7 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     with pytest.raises(ValueError, match="no\n?\s*`quantity` column|`quantity` column"):
         _star_labels(ax, doubled, genes, groupby="patient")
 
-    # ...while THREE split levels are a pre-existing limitation of a one-star-per-gene panel,
+    # ...while THREE split levels are a limitation of a one-star-per-gene panel,
     # not an error: three contrasts per gene and one position to draw them in. Warn and draw
     # nothing, rather than starring one pair as if it were the whole comparison.
     import warnings as _warnings

@@ -8,18 +8,12 @@ the L1 norm of a shift that sums to zero; groups reduce cells by row and bind th
 global id; draws come from the guide's Dirichlet and are seeded; the contrast is per gene over
 groups. The fixtures fit for a few epochs -- the numbers here are identities, not accuracies.
 
-Each test says what it catches. The mutations run against this file before it was trusted, and
-what failed: flipping the sign of ``shift`` (the sign test alone); binding the prior by loader
-position instead of global id (the cell-order test alone); dropping the draw path (the draws
-test alone); zeroing the neighbouring column in either kernel path (the knockout-vs-predict or
-the unexpressed-gene test, plus every hand comparison, because the two paths then disagree).
+Each test names the mutation it catches: a flipped sign on ``shift``, a prior bound by loader
+position instead of global id, a dropped draw path, a zeroed neighbouring column in either
+kernel path.
 
-Every model call here goes through the ``cohort`` fixture. That used to be forced: the Pyro
-parameter store is process-global and each session fixture cleared it when built, so a model
-method on ``trained_model`` after ``cohort`` existed read the wrong ``q_p_ct_raw`` (P=4 against
-a P=3 head). Since 0.12 the fixtures are namespaced and coexist, so this is now one fixture for
-consistency rather than a constraint. The no-replicate case is a copy of the cohort with the
-registered replicate removed.
+Every model call goes through the ``cohort`` fixture, so every comparison is against one fit.
+The no-replicate case is a copy of that cohort with the registered replicate removed.
 """
 from __future__ import annotations
 
@@ -258,7 +252,7 @@ def test_splitby_contrast_is_per_gene_over_groups(cohort):
 
     Both quantities are carried and nothing switches automatically. A frame that silently
     became the excess while every panel still drew the value would star one quantity's contrast
-    over the other's marks, and on this fixture the two do not agree in sign.
+    over the other's marks, which is a mislabelled figure rather than a failing test.
     """
     model, adata = cohort
     res = tcri.perturb.gene_importance(model, adata, splitby="disease_status", inplace=False)

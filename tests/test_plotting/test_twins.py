@@ -2,9 +2,9 @@
 
 The load-bearing property here is not "the plot renders". It is that the plot renders the
 *stored* result and nothing else: no recompute, no metric arguments of its own, no axis the
-``tl`` call did not use. Before this, every ``pl`` called its ``tl`` twin internally, so the
-figure and the frame in the caller's hand could differ — and ``pl.mutual_information`` and
-``pl.phenotypic_flux`` invented a ``groupby`` from ``batch_col`` when none was given.
+``tl`` call did not use. A ``pl`` that calls its ``tl`` twin internally can draw a figure that
+disagrees with the frame in the caller's hand, and a ``pl`` that supplies a ``groupby`` of its own
+groups the picture by a column the caller never named.
 """
 import inspect
 
@@ -39,7 +39,7 @@ def _n_points(ax, *, reference=False):
     The permutation reference is a second collection at the same x positions, labelled
     :data:`tcri.plotting._base.REFERENCE_LABEL`. Counting both would make every "one dot per
     replicate" assertion in this file read double the moment a result carries a reference,
-    which is the normal case now. ``reference=True`` counts the reference collection instead.
+    which is the normal case. ``reference=True`` counts the reference collection instead.
     """
     from tcri.plotting._base import REFERENCE_LABEL
 
@@ -79,10 +79,9 @@ def _compute_all(adata, **kw):
 def test_pl_takes_no_metric_arguments(name):
     """A ``pl`` twin's signature is ``(adata, key=, display args)`` — nothing computable.
 
-    This is the structural fix for the ``tl``/``pl`` ``distance_metric`` disagreement
-    (``"kl"`` vs ``"l1"``): with no ``distance_metric`` on the plot there is one place the
-    distance is chosen, so the axis label and the numbers under it cannot describe different
-    quantities.
+    A metric argument on both sides gives two places to choose it: a ``distance_metric`` on
+    the plot that differs from the one the ``tl`` call used makes the axis label and the numbers
+    under it describe different quantities. With none on the plot, the distance is chosen once.
     """
     params = set(inspect.signature(getattr(tcri.pl, name)).parameters)
     assert not (params & METRIC_ARGS), f"pl.{name} can still compute: {sorted(params & METRIC_ARGS)}"
@@ -91,7 +90,7 @@ def test_pl_takes_no_metric_arguments(name):
 
 @pytest.mark.parametrize("name", TWINS)
 def test_pl_says_which_tool_to_run(name, trained_model):
-    """Plotting before computing is now the easy mistake, so the error names the call."""
+    """Plotting before computing is the easy mistake, so the error names the call to run."""
     _, adata = trained_model
     adata = adata.copy()
     adata.uns.pop(getattr(K, name.upper()), None)
@@ -131,10 +130,10 @@ def test_pl_return_df_is_the_cached_result(name, trained_model):
 def test_pl_renders_the_axes_the_tl_call_used(trained_model):
     """The x axis comes from the cached ``params``, not from a plot argument.
 
-    ``pl.mutual_information`` used to manufacture ``groupby`` from ``batch_col`` whenever the
-    caller passed none, because a box plot needs per-unit values — so the figure was grouped
-    by a column the caller never named, and a caller who genuinely wanted the ungrouped MI
-    could not get it. Now an ungrouped result renders ungrouped.
+    A box plot wants per-unit values, so it is tempting for the renderer to manufacture a
+    ``groupby`` from ``batch_col`` when the caller passed none. That groups the figure by a
+    column the caller never named and leaves no way to see the ungrouped metric: an ungrouped
+    result must render ungrouped.
     """
     _, adata = trained_model
     adata = adata.copy()
@@ -236,7 +235,8 @@ def test_entropy_twins_choose_their_own_x_axis(trained_model):
 
 
 def test_flux_labels_the_distance_it_was_computed_with(trained_model):
-    """``tl`` defaulted to ``kl`` and ``pl`` to ``l1``, so the label could lie about the data."""
+    """The y label names the distance recorded in ``params``, so it cannot describe a quantity
+    other than the one plotted."""
     _, adata = trained_model
     adata = adata.copy()
     covs = list(adata.uns[K.COVARIATE_CATEGORIES])
@@ -301,8 +301,9 @@ def test_a_violin_never_spans_replicates(cohort):
 # ── colours ──────────────────────────────────────────────────────────────────
 
 def test_resolve_colors_persists_and_is_reused(trained_model):
-    """A level keeps its colour across figures, which ``resolve_palette`` could not promise:
-    it had no way to READ an existing assignment, so it reassigned on every call."""
+    """A level keeps its colour across figures: the assignment is written to ``uns`` under
+    scanpy's own ``<key>_colors`` name and read back from there, so a later figure reuses it
+    rather than assigning afresh."""
     _, adata = trained_model
     adata = adata.copy()
 
@@ -336,9 +337,12 @@ def test_resolve_colors_palette_forms(trained_model):
 
 
 def test_the_palette_has_one_definition():
-    """There were two ``tcri_colors`` — this one and a 30-entry list in ``utils/_utils.py``
-    that led with the Monokai *background*, so the first category rendered near-black. They
-    disagreed on contents and order, and nothing imported the utils copy."""
+    """One ``tcri_colors``, and it lives in ``tcri.pl``.
+
+    A second copy in ``tcri.utils._utils`` can disagree on contents and order, so the same
+    level draws in a different colour depending on which list the caller reached. The entries
+    must also be distinct, and the first must be a category colour rather than the dark editor
+    background (``#272822``) that ships alongside such palettes."""
     from tcri.utils import _utils
 
     assert not hasattr(_utils, "tcri_colors")
@@ -381,17 +385,13 @@ def test_plots_route_through_the_shared_palette(trained_model):
 @pytest.mark.parametrize("metric", ["phenotypic_entropy", "clonotypic_entropy",
                                     "mutual_information"])
 def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
-    """Measured before this fix, on ``phenotypic_entropy(groupby, splitby)``::
+    """The marks and the p-value drawn above them must describe the same unit.
 
-        x axis        : cohort
-        result rows   : 47 (one per patient x clone)
-        strip dots    : 47
-        stats n_a/n_b : 3 / 3   p = 0.1
-
-    The box and strip described 47 clones; the p-value bracketed above them described 6
-    patients. That is the pseudoreplication ``build_stats`` collapses away, surviving in the
-    marks — and it is invisible on ``mutual_information``, which has no item axis, so the
-    parametrization matters.
+    With an item axis the result carries one row per (replicate, item) — patient x clone for
+    the entropies — so a strip drawn from result rows shows clones while the bracket from
+    ``stats`` tests patients. That is the pseudoreplication ``build_stats`` collapses away,
+    surviving in the marks. ``mutual_information`` has no item axis and cannot show it, which
+    is why the parametrization covers all three.
     """
     _, adata = cohort
     adata = adata.copy()
@@ -418,9 +418,9 @@ def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
 def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
     """Not merely the same COUNT — the same values, from the shared helper.
 
-    Two implementations of "average the items to one number per replicate" is how the
-    ``tl``/``pl`` ``distance_metric`` disagreement happened. `collapse_to_replicates` has one
-    definition and both callers use it.
+    Two implementations of "average the items to one number per replicate" drift apart, and
+    the figure then rests on a different collapse than the contrast drawn over it.
+    `collapse_to_replicates` has one definition and both callers use it.
     """
     from tcri._compute._tables import collapse_to_replicates
 
@@ -448,13 +448,13 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
 def test_nothing_connects_two_x_positions(cohort):
     """A line between x positions claims the two points are the same entity observed twice.
 
-    Only matched data supports that, and matched data does not exist on this side of the API
-    yet. Box internals (whiskers, caps, medians) stay within one box; a connector spans
-    categories, which are 1.0 apart — so the span is the discriminator.
+    Only matched data supports that, and these twins render unmatched summaries. Box internals
+    (whiskers, caps, medians) stay within one box; a connector spans categories, which are 1.0
+    apart — so the span is the discriminator.
 
-    This is a prohibition, not a feature: when connectors arrive with the delta metrics they
-    must be drawn from an identity key, never from adjacency, and this test is what forces
-    that to be a deliberate change.
+    This is a prohibition, not a feature: a connector must be drawn from an identity key, never
+    from adjacency, so adding one is a deliberate change to this test rather than a side effect
+    of a style change.
     """
     _, adata = cohort
     adata = adata.copy()
@@ -477,10 +477,11 @@ def test_nothing_connects_two_x_positions(cohort):
 def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
     """The colour is a property of the level, not of where it lands on this figure.
 
-    Found by looking at rendered panels: the renderer sorts x by median, so a `cohort`
-    panel where NR sorted first drew NR purple while the panel beside it, where R sorted
-    first, drew R purple. Same variable, same figure, swapped — because `resolve_colors`
-    zipped the stored hex list against the caller's display order.
+    The renderer sorts x by median, so two panels of the same variable can present its levels
+    in different orders. A `resolve_colors` that zipped the stored hex list against the caller's
+    display order would then give one level two colours in one figure, so the lookup is per
+    level: a reversed order, a subset, and a key with no obs column all keep each level's
+    colour.
     """
     _, adata = trained_model
     adata = adata.copy()
@@ -652,9 +653,9 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
     """The size legend says "clones matched", so it must be clones.
 
     For `delta_clonotypic_entropy` the item is a phenotype and the matched clone count is not
-    in `result` — those clones were summed over inside H(c|phi). Counting item rows there
-    would count PHENOTYPES: measured on a 4-phenotype fixture the legend read
-    "clones matched: 4", a different number about a different thing.
+    in `result` — those clones were summed over inside H(c|phi). Counting item rows there would
+    put a phenotype count behind a legend that claims clones, so that panel draws no size
+    legend and no size variation at all.
     """
     _, adata = cohort
     adata = adata.copy()

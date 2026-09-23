@@ -1,10 +1,11 @@
-"""The fitted hierarchy depends on which cells sit in which clone x covariate group.
+"""The fitted hierarchy must depend on which cells sit in which clone x covariate group.
 
-Until 2026-09 the hierarchy had no per-cell data term (the surrogate's target is detached
-and nothing else in the data plate touches q(p_ct)), so the fitted p_ct was BITWISE invariant
-to permuting the covariate labels within each clone (same per-clone label counts, so the same
-initialisation; no per-cell path). The noisy-label readout gives it one. This is the
-acceptance test: the same permutation now moves the fit, and with the readout off it must not.
+Permuting the covariate labels among a clone's cells preserves every per-clone label count and
+every (clone, covariate) group size, so the initialisation is identical and only cell membership
+changes. Without a per-cell data term the fitted p_ct is BITWISE invariant to that permutation:
+the alignment surrogate's target is detached and nothing else in the data plate touches
+q(p_ct). The noisy-label readout (``MODEL_CONTRACT.md``, eq 8) is that term, so with it on the
+permutation must move the fit, and with ``label_error_rate=None`` it must not.
 """
 from __future__ import annotations
 
@@ -85,7 +86,8 @@ def test_hierarchy_moves_with_the_covariate_shuffle():
 
 def test_hierarchy_is_invariant_with_the_readout_off():
     """The switch restores the label-free model exactly: with ``label_error_rate=None`` the
-    same shuffle leaves the fitted p_ct bitwise identical (the pre-2026-09 behaviour)."""
+    same shuffle leaves the fitted p_ct bitwise identical. Paired with the test above, this is
+    what attributes the movement to the readout and not to the shuffle."""
     ad = _cohort()
     shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="condition", seed=0)
     p0, _ = _fit_p_ct(ad, label_error_rate=None)

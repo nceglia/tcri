@@ -1,18 +1,15 @@
-"""The variational concentration is a free parameter, not a pinned constant (DE-5, eq 6).
+"""The variational concentration is a free parameter, not a pinned constant.
 
-Note 1's eq 6 and its notation table give ``λ'_m, λ_c ∈ ℝ^P_{>0}`` — free variational
-parameters in Λ, the set being optimised — while ``α, β`` are scalar PRIOR hyperparameters
-appearing only in ``p(· | x; α, β, {ψ_b}, {u_k})``. The guide used the scalar prior
-hyperparameter as the variational parameter's total, which conflates two rows of the note's own
-notation table and pins every group's posterior width to the same constant.
+``governance/MODEL_CONTRACT.md`` eq 6 makes ``λ_c`` and ``λ'_m`` free variational parameters,
+optimised per group, while ``α`` (``global_scale``) and ``β`` (``local_scale``) are scalar PRIOR
+hyperparameters of the generative model. Using a prior scale as the variational total conflates
+the two and pins every group's posterior width to the same constant: a 3-cell clone and a
+3000-cell clone then get the same credible interval, so no interval reported at ``n_samples>0``
+is data-informed, and comparisons between groups of very different size are the worst case.
 
-The consequence is not abstract: a 3-cell clone and a 3000-cell clone got the same posterior
-width, so no credible interval reported at ``n_samples>0`` was data-informed, and comparisons
-between groups of very different size were the worst case.
-
-This is a structural test — it asserts the concentration is not a constant multiple of a
-simplex, which is the defect. Whether the learned magnitudes track group size is a question
-about a *fitted* model and belongs with the benchmark, not here.
+This is a structural test -- it asserts the concentration is not a constant multiple of a
+simplex. Whether the learned magnitudes track group size is a question about a *fitted* model
+and belongs with the benchmarks, not here.
 """
 from __future__ import annotations
 
@@ -85,16 +82,16 @@ def test_concentration_total_is_not_pinned_to_the_prior_scale(fitted, site, scal
     )
 
 
-# ── DE-5b: the freed concentration must reach the metric draw ────────────────
+# ── the freed concentration must reach the metric draw ───────────────────────
 
 def test_guide_concentration_reaches_the_metric_draw(fitted):
-    """DE-5b: credible intervals must come from the fitted posterior, not a reconstruction.
+    """Credible intervals must come from the fitted posterior, not a reconstruction.
 
-    DE-5 freed lambda'_m per eq 6 — but only inside ``guide()``. Every interval the metrics
-    report is drawn in ``_compute/_joint.py``, which rebuilt its own Dirichlet as
-    ``local_scale * p_ct``: a fixed pseudo-count, identical for every group no matter how much
-    data supported it. So DE-5 changed no reported interval at all, and its own test passed
-    while the user-visible number was untouched.
+    A free ``λ'_m`` inside ``guide()`` changes nothing a user sees unless the draw uses it. Every
+    interval the metrics report is drawn in ``_compute/_joint.py``; rebuilding a Dirichlet there
+    as ``local_scale * p_ct`` is a fixed pseudo-count, identical for every group no matter how
+    much data supports it, so eq 6 would hold in the guide and be absent from every reported
+    number.
 
     Two assertions, because either alone is passable by accident: the concentration must be
     EXPORTED (it reaches ``uns``), and it must be USED (dropping it changes the draw).

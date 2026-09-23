@@ -10,18 +10,17 @@ Tiering (see ``conftest.py``):
 * unmarked — oracle self-consistency, exactness of the metric against an independent
   MI implementation, and metamorphic invariances. Model-free, so fast; runs every commit.
 * ``@pytest.mark.slow`` — needs model fits and/or replication over seeds. Skipped unless
-  ``--runslow``. Run nightly / before a release.
+  ``--runslow``.
 
-Two honest caveats baked into the assertions below:
+Two limits are baked into the assertions below:
 
 1. **Finite-sample bias.** The plug-in MI estimator is biased *upward* by roughly
    ``(C-1)(P-1)/(2N ln2)`` bits, so a realized sample's MI exceeds the population value.
    Tests compare against the *realized* oracle where that matters, and use
    bias-aware tolerances where they compare against the population value.
-2. **Single-seed monotonicity is flaky.** Sampling noise can make a larger N land
-   *further* from the truth on one seed (observed: gap +0.003 at N=5000 vs +0.012 at
-   N=20000 on the same seed). Convergence is therefore asserted on a **mean over
-   seeds**, never on one draw.
+2. **Single-seed monotonicity is noisy.** Sampling noise can put a larger N *further*
+   from the truth on one seed, so convergence is asserted on a **mean over seeds**,
+   never on one draw.
 """
 from __future__ import annotations
 
@@ -117,10 +116,9 @@ def test_tcri_mi_matches_an_independent_implementation():
     than a tautology. Catches sign errors, wrong log base, and denominator swaps.
 
     This tier scores a COUNT table built from ``obs`` -- there is no model and no posterior --
-    so it calls ``_mi_from_joint`` directly. It used to reach it through
-    ``tl.mutual_information(jd)``, the precomputed-joint path, and was that path's only caller
-    in the repo. Going through the public tool added a store-to-``uns`` step to a test with no
-    AnnData to store into, and hid which function the oracle was actually being compared to.
+    so it calls ``_mi_from_joint`` directly: that names the function the oracle is compared
+    against, and keeps a test with no AnnData out of the store-to-``uns`` path of the public
+    tool.
     """
     for seed in range(3):
         adata = simulate_tcri(n_cells=1500, n_clones=15, n_phenotypes=4, seed=seed)
@@ -138,11 +136,12 @@ def test_tcri_mi_matches_an_independent_implementation():
 
 
 def test_the_two_normalizations_are_not_interchangeable():
-    """Guards the benchmark trap: tcri defaults to 'min', the note's grid used the mean.
+    """Guards a benchmark trap: the two normalisations are different estimands, and ``min``
+    is the default (``METRICS_CONTRACT.md``, "``mutual_information``").
 
-    ``min <= average`` denominators means nmi_min >= nmi_average, so comparing a
-    'min'-normalized estimate to a mean-normalized ground truth silently inflates the
-    estimate. A benchmark must pick deliberately.
+    ``min <= average`` denominators means nmi_min >= nmi_average, so scoring a
+    'min'-normalized estimate against a mean-normalized ground truth silently inflates the
+    estimate. A benchmark must pass ``normalize_mode`` deliberately.
     """
     adata = simulate_tcri(n_cells=1200, n_clones=25, n_phenotypes=4, seed=1)
     jd = _empirical_joint(adata)
@@ -191,8 +190,9 @@ def test_mi_is_invariant_to_uniform_replication():
 def test_empirical_mi_converges_to_the_population_value():
     """|empirical - true| must shrink with N **on average over seeds**.
 
-    Deliberately not a single-seed monotonicity check: one draw can land further away
-    at larger N (observed +0.003 at N=5000 vs +0.012 at N=20000, same seed).
+    Deliberately not a single-seed monotonicity check: sampling noise lets one draw land
+    further from the truth at larger N, so a single-seed assertion would fail on noise rather
+    than on a regression.
     """
     n_seeds = 6
     mae = {}
@@ -255,27 +255,17 @@ def test_model_mi_tracks_the_true_mi_across_difficulty():
 def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
     """The n_samples>0 path returns a usable posterior summary of NMI.
 
-    RE-BASELINED. This test previously asserted the 94% HDI covers the simulator's truth in
-    >=6/8 replicates, and it passed at 8/8 — on two errors cancelling:
+    Coverage of the simulator's truth is deliberately not the assertion. The interval
+    summarises ``E_s[F(J_s)]``, the metric evaluated on each posterior draw, while the number
+    most callers read is the plug-in ``F(E[J])`` at ``n_samples=0``. Those are different
+    estimators separated by a Jensen gap whose sign is indeterminate for mutual information,
+    and no test may equate them (``METRICS_CONTRACT.md``, "Posterior summaries"), so a coverage
+    bar would be scoring one estimator against the other's target.
 
-      1. the plug-in NMI(E[J]) reads LOW against the truth (issue #59), and
-      2. the draws read HIGH, because NMI is nonlinear in the joint and the draw was taken
-         from a fabricated concentration (local_scale=3) roughly 3x wider than the fitted
-         posterior (~9.5).
-
-    DE-5b removed the second by drawing from the guide's actual posterior. Coverage then went
-    to 0/8 — not because DE-5b broke calibration, but because it stopped compensating for #1.
-
-    A coverage bar is the wrong assertion here anyway: it compares an HDI of E_s[NMI(J_s)]
-    against a truth, while the number most callers see is the plug-in NMI(E[J]). Those are
-    different functionals — on seed 100 the old interval [0.248, 0.342] did not even contain
-    its own point estimate of 0.173. The manuscript's Methods define the posterior summary as
-    E_s[F(J_s)] (metrics contract, SANCTIONED_EXTENSIONS['posterior_summary_of_a_nonlinear_metric']);
-    the plug-in at n_samples=0 is a distinct estimator, documented as such.
-
-    So this now asserts what the path genuinely guarantees: the interval is well formed,
-    ordered, finite, informative, and brackets its own posterior mean. Coverage against truth
-    is tracked in issue #59, where it can be swept properly rather than pinned at 8 replicates.
+    What the path does guarantee is checked instead: the interval is finite, ordered, narrow
+    enough to be informative, inside [0, 1] for ``normalize_mode='average'``, and brackets its
+    own posterior mean. An interval that excludes the value reported beside it is summarising
+    some other quantity.
     """
     from tcri.model._model import TCRIModel
 

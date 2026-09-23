@@ -38,8 +38,8 @@ def test_clones_pair_across_conditions_within_a_patient(cohort):
     Measured by MASS, not by count. With power-law clone sizes some rare clones simply are
     not drawn at both conditions — that is what a heavy tail does to a finite sample, and it
     is the behaviour the intersection rule exists to handle. What has to hold is that the
-    clones carrying the repertoire are paired: on this fixture the 8 shared clones of 12 in
-    P04 cover 97.9% of its post cells.
+    clones carrying the repertoire are paired, so the assertion is on the fraction of each
+    sample's cells that the shared clones cover.
     """
     obs = cohort.obs
     for patient, g in obs.groupby("patient", observed=True):
