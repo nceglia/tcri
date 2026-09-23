@@ -10,10 +10,9 @@ The semi-synthetic generative story, with every quantity known in closed form::
 
 Because ``pi`` and ``omega`` are known, the **population** mutual information
 I(c;phi) is available in closed form — which is what makes statistical *recovery*
-testing possible at all. Nothing else in the test suite has an oracle: the contract
-tests check structure and identities, never accuracy.
+testing possible at all.
 
-Two oracles are reported, and the distinction matters for writing honest tests:
+Two oracles are reported, and they answer different questions:
 
 ``true_mi_*``
     the **population** value implied by ``(pi, omega)`` — what an estimator should
@@ -25,11 +24,11 @@ Two oracles are reported, and the distinction matters for writing honest tests:
     estimator's upward bias, roughly ``(C-1)(P-1) / (2 N ln2)`` bits.
 
 Both are given under both normalizations (``min`` and ``average``): tcri defaults to
-``normalize_mode="min"`` while the note's benchmark used the mean denominator, so a
-like-for-like comparison has to pick deliberately.
+``normalize_mode="min"``, and the two denominators are not interchangeable, so a
+like-for-like comparison has to pick one deliberately.
 
-Unlike the original ``sc_simulator``, this needs no real dataset to fit — the gene
-programs are generated directly — so it is importable, seeded, and fast.
+No real dataset is needed to fit — the gene programs are generated directly — so this
+is importable, seeded, and fast.
 """
 from __future__ import annotations
 
@@ -48,8 +47,8 @@ def mi_from_joint_oracle(joint: np.ndarray) -> dict:
 
     ``joint`` must sum to 1. Returns ``mi``, ``h_clone``, ``h_phenotype`` and both
     normalized variants. This is the oracle — deliberately a small, independent
-    implementation so it cannot drift with the package's own metric code (a test
-    that computes the expected value with the code under test proves nothing).
+    implementation of the closed form, so it cannot drift with the package's own
+    metric code.
     """
     P = np.asarray(joint, dtype=np.float64)
     total = P.sum()
@@ -85,8 +84,7 @@ def _phenotype_programs(rng, n_phenotypes, n_factors, fuzziness):
     the clone->phenotype coupling (and hence the true MI) is untouched. That
     separation is the point: it varies estimation difficulty at fixed ground truth.
 
-    Interpolation is in natural-parameter space ``theta = [alpha-1, -beta]``, matching
-    the original ``interpolate_gamma_params``.
+    Interpolation is in natural-parameter space ``theta = [alpha-1, -beta]``.
     """
     alpha = rng.uniform(1.5, 6.0, size=(n_phenotypes, n_factors))
     beta = rng.uniform(1.0, 3.0, size=(n_phenotypes, n_factors))
@@ -267,9 +265,8 @@ def simulate_tcri(
 def temperature_scale(P, T, eps=1e-12):
     """Sharpen/flatten a row-stochastic matrix: ``P**(1/T)`` renormalized.
 
-    Verbatim behaviour of ``sc_simulator.temperature_scale_conditional``. ``T<1``
-    sharpens (raising I(c;phi)), ``T>1`` flattens. This is the axis the published
-    benchmark sweeps, and it changes the GROUND TRUTH, not just the difficulty.
+    ``T<1`` sharpens (raising I(c;phi)), ``T>1`` flattens. It changes the GROUND TRUTH,
+    not just the difficulty.
     """
     T = float(T)
     # Supplementary Note 1, "Temperature Scaling of Conditional Distributions", specifies
@@ -314,16 +311,11 @@ def simulate_from_fit_params(
 ) -> AnnData:
     """Simulate from an **empirically fitted** ``(pi, omega, gamma_params, V)``.
 
-    Reproduces ``sc_simulator.simulate_dataset``: ``z ~ Cat(pi)``,
-    ``phi|z ~ Cat(omega[z])``, ``U ~ Gamma(alpha_phi, 1/beta_phi)``,
-    ``x ~ Poisson(U @ V)``.
+    The generative story is ``z ~ Cat(pi)``, ``phi|z ~ Cat(omega[z])``,
+    ``U ~ Gamma(alpha_phi, 1/beta_phi)``, ``x ~ Poisson(U @ V)``.
 
-    Use this — rather than :func:`simulate_tcri` — whenever the point is to compare
-    against the published benchmark. A symmetric-Dirichlet ``omega`` cannot
-    reproduce the benchmark's true-NMI anchors: its response to temperature has the
-    wrong SHAPE (sharpening ratio 4.22x vs the true 2.86x), so no reparameterization
-    of the synthetic generator suffices. The empirical fit matches all three anchors
-    exactly (0.520 / 0.316 / 0.182 at T = 0.1 / 0.5 / 1.0).
+    Use this — rather than :func:`simulate_tcri` — whenever the generating
+    ``(pi, omega)`` must come from a real fit rather than from a symmetric Dirichlet.
 
     Parameters
     ----------
@@ -500,10 +492,8 @@ def simulate_cohort(
         The power-law exponent ``alpha`` in ``P(size) ~ size**-alpha``. ~2 is the usual
         repertoire regime; larger is more skewed toward singletons. It is a **target**: cells
         are drawn without replacement from a finite pool, so a clone whose target share
-        exceeds its pool supply is capped and the realized tail comes out shallower. Measured
-        at the default (40 clones, 1200 cells/sample): requested 2.0 -> realized log-log slope
-        about -1.5, Gini 0.70, largest clone ~22% of cells. Still firmly heavy-tailed; just
-        not the exact exponent asked for.
+        exceeds its pool supply is capped and the realized tail comes out shallower than the
+        exponent asked for — still firmly heavy-tailed, just not that exact exponent.
     disease_enrichment, control_enrichment
         How hard the final condition oversamples each clone's dominant phenotype. ``1.0`` is
         no enrichment. Jittered +/-15% per patient so replicates are not identical.
@@ -525,11 +515,11 @@ def simulate_cohort(
     Notes
     -----
     ``per_sample`` is the **plug-in estimate on the observed labels**, not a target a fitted
-    model should reproduce. Two reasons it sits above what ``tl.mutual_information`` reports,
-    and neither is a defect:
+    model should reproduce. It sits above what ``tl.mutual_information`` reports, for two
+    reasons:
 
-    * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits
-      (see this module's header) — it is the quantity the model is trying to see *past*;
+    * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits,
+      which is the quantity the model is trying to see *past*;
     * the model shrinks toward a covariate-free ``omega_c``, deliberately, since
       the cells in hand are a sample of a much larger unobserved repertoire. Conservative is
       the intent.

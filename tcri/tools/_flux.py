@@ -1,5 +1,5 @@
-"""``tl.phenotypic_flux`` (renamed from ``flux``) — per-clonotype phenotype-distribution
-shift between two covariate values (§7.5), engine-backed.
+"""``tl.phenotypic_flux`` — per-clonotype phenotype-distribution shift between two
+covariate values, engine-backed.
 
 For each clone in the ``cov_from`` ∩ ``cov_to`` intersection, the distance between its
 phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l1 / jsd,

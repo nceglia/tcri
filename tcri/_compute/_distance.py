@@ -1,9 +1,9 @@
 """Distance / divergence kernels for phenotype distributions.
 
-Single home for the KL kernel (was `metrics.dkl` + `flux.dkl_func`, two copies)
-plus L1 and a symmetric Jensen–Shannon option. All operate on 1-D probability
-vectors, use log base 2 (bits), and share one eps floor. ``phenotype_distance``
-is the string→callable dispatcher used by ``phenotypic_flux(distance_metric=)``.
+Single home for the KL kernel, plus L1 and a symmetric Jensen–Shannon option. All
+operate on 1-D probability vectors, use log base 2 (bits), and share one eps floor.
+``phenotype_distance`` is the string→callable dispatcher used by
+``phenotypic_flux(distance_metric=)``.
 """
 from __future__ import annotations
 

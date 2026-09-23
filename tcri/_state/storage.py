@@ -5,11 +5,9 @@ The contract: every ``tl`` writes ``uns[key]`` as a **dict-of-arrays + a provena
 it; the scanpy ``rank_genes_groups`` pattern) and **returns** the natural result.
 ``@tl_result`` is that convention as code, so the metrics cannot drift from it.
 
-Why this exists rather than each tool writing its own ``uns`` entry: every ``pl.*`` used to take
-``adata`` and recompute the metric internally, so a plot could silently disagree with the table
-the user had in hand. Storing once and reading from the cache makes that impossible. The
-recompute is also why ``pl.phenotypic_flux`` manufactured a ``groupby`` from ``batch_col`` — it
-could only consume the tidy frame, which only existed when ``groupby`` was set.
+Why this exists rather than each tool writing its own ``uns`` entry: the metric is computed and
+stored once, and every ``pl.*`` reads that cache instead of recomputing, so a plot cannot
+disagree with the table the user holds.
 
 Usage — the wrapped function declares the full contract signature (including ``key_added`` /
 ``inplace``, for signature conformance) and returns its *natural* result. The decorator owns
@@ -103,8 +101,8 @@ def _encode_index(index):
     writer for a tuple -- it fails with "Can't implicitly convert non-string objects to
     strings", named against the enclosing group rather than the index, which is a long way
     from the cause. ``joint_distribution(n_samples>0)`` produces exactly that: a
-    (clonotype, sample_id) MultiIndex on its `table`. So the whole result was unwritable to
-    .h5ad, which is the one thing this module exists to guarantee.
+    (clonotype, sample_id) MultiIndex on its `table`. Flattening it level by level keeps the
+    result writable to .h5ad, which is what this module exists to guarantee.
     """
     if isinstance(index, pd.MultiIndex):
         return {

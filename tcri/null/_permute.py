@@ -3,8 +3,8 @@
 A null is the parent's model on ONE permuted label vector. Everything that makes it a
 *reference* rather than noise is in the strata: the permutation shuffles only within cells that
 share the columns the metric is not asking about, so the quantity being scored is destroyed and
-nothing else is. Plan §3.1 fixes the defaults per kind; this module builds them, validates a
-caller's refinement, and turns strata into an integer permutation of ``range(n_obs)``.
+nothing else is. This module holds the default strata per kind, validates a caller's
+refinement, and turns strata into an integer permutation of ``range(n_obs)``.
 """
 from __future__ import annotations
 
@@ -49,7 +49,11 @@ def required_strata(adata, kind: str):
 
 
 def default_strata(adata, kind: str):
-    """Plan §3.1's table, as columns of ``obs``."""
+    """The default strata for ``kind``, as columns of ``obs``.
+
+    ``(batch, covariate, replicate)`` for the phenotype and clonotype nulls -- the replicate
+    column only when one is registered -- and ``(clonotype, batch)`` for the condition null.
+    """
     covariate_col, clone_col, _, batch_col, replicate = _cols(adata)
     if kind == "condition":
         # Each clone keeps its cells and its size; which condition a cell sits at is random.

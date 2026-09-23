@@ -1,4 +1,4 @@
-"""``tcri.diag`` posterior-predictive checks (§9.1). All return DataFrames. ``model`` is
+"""``tcri.diag`` posterior-predictive checks. All return DataFrames. ``model`` is
 required only for ``reconstruction_ppc`` (the live ZINB decoder); the rest are adata-only.
 """
 from __future__ import annotations
@@ -13,8 +13,8 @@ __all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_pp
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", temperature=1.0,
                            clones=None, random_state=None, fit=None):
-    """Model vs empirical per-clone phenotype frequencies (the fixed
-    ``compare_joint_distribution``). Per-clone distance + per-covariate aggregate. adata-only.
+    """Model vs empirical per-clone phenotype frequencies: a per-clone distance plus a
+    per-covariate aggregate. adata-only.
 
     ``fit`` selects which fit's predictions are checked against the data. A null's predictions
     are compared against the SAME empirical crosstab, which is the point: a phenotype null
@@ -92,9 +92,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
 
     ``n_sims`` posterior-predictive replicates are drawn per cell and each statistic is
     averaged over them, which is what makes this a posterior-predictive check rather than a
-    single-draw comparison. It previously did nothing: the body drew exactly one replicate,
-    so ``n_sims=1`` and ``n_sims=1000`` returned bit-identical frames in identical wall-clock
-    while the knob was declared in the frozen contract.
+    single-draw comparison.
 
     The encoder/decoder run once per batch and only the sampling is repeated, so cost is
     roughly linear in ``n_sims`` on the cheap part. Statistics accumulate per draw rather than
@@ -179,17 +177,14 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     covariate, recompute the metric on the **empirical** clone×phenotype joint to form a null;
     report observed, null mean/sd, z, p. adata-only, model-free.
 
-    ``normalize_mode`` must match the mode used for the statistic this is a null FOR. It was
-    hardcoded to ``"min"``, so a caller working in ``"average"`` compared their number against
-    a null on a different scale -- measured on a 12-clone fixture, the same data gives 0.378
-    under ``"min"`` and a materially different value under ``"average"``. A null on the wrong
-    scale is not a weaker null; it is not a null for that statistic at all.
+    ``normalize_mode`` must match the mode used for the statistic this is a null FOR. A null
+    computed on the other scale is not a weaker null; it is not a null for that statistic at
+    all.
 
-    ``groupby`` was accepted and never read -- passing it returned a bit-identical frame.
-    Now implemented, because every ``tl.*`` metric takes ``groupby`` and this is the null FOR
-    those metrics: without it a per-patient MI had no per-patient null. Cells are restricted to
-    the group and phenotypes are permuted WITHIN each (covariate, group) stratum, so the null
-    conditions on exactly what the reported statistic conditions on.
+    ``groupby`` gives a per-group null, which is what a per-group statistic needs: a
+    per-patient MI is read against a per-patient null. Cells are restricted to the group and
+    phenotypes are permuted WITHIN each (covariate, group) stratum, so the null conditions on
+    exactly what the reported statistic conditions on.
 
     The same clone-disjointness check the metric applies is applied here, so the null raises in
     exactly the cases the metric raises rather than quietly answering a different question.

@@ -1,10 +1,8 @@
-"""Device seam for the batched engine — **torch-first** (grafiti `_compute/_xp`
-parity, adapted because tcri's numeric core is torch: the Dirichlet draws and the
-softmax are `torch`, and torch≥2.4 is already a hard dep so torch.cuda is zero new
-deps). `cupy` may be added later as a second backend; for now the ladder is
-CPU / torch-CUDA. Every accelerated function returns a host numpy array via
-:func:`asnumpy` (§7.4 guardrail 4). GPU libs are imported lazily inside functions
-(guardrail 1) — importing this module never touches CUDA.
+"""Device seam for the batched engine — **torch-first**, because the numeric core is torch:
+the Dirichlet draws and the softmax are `torch` calls. The ladder is CPU / torch-CUDA.
+
+Every accelerated function returns a host numpy array via :func:`asnumpy`. GPU libs are
+imported lazily inside functions — importing this module never touches CUDA.
 """
 from __future__ import annotations
 
@@ -14,10 +12,10 @@ import numpy as np
 
 
 def resolve_device(device: str | None) -> str:
-    """Resolve ``device`` to ``"cpu"`` or ``"cuda"`` (§7.1 ladder).
+    """Resolve ``device`` to ``"cpu"`` or ``"cuda"``.
 
-    ``None``/``"cpu"`` → cpu; ``"mps"`` → cpu (first pass: the Dirichlet core has no
-    Metal backend); ``"auto"``/``"gpu"``/``"cuda"`` → cuda only if torch reports a
+    ``None``/``"cpu"`` → cpu; ``"mps"`` → cpu, since the Dirichlet core has no Metal
+    backend; ``"auto"``/``"gpu"``/``"cuda"`` → cuda only if torch reports a
     device, else cpu (an explicit ``"cuda"`` warns on fallback; ``auto``/``gpu`` are
     silent).
     """

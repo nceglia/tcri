@@ -1,7 +1,6 @@
 """AnnData key constants — every literal tcri writes or reads lives here.
 
-The canonical -- and now only -- import is
-``from tcri._state import keys as K``.
+Import as ``from tcri._state import keys as K``.
 """
 # ── uns: metadata + learned priors ───────────────────────────────────────────
 METADATA = "tcri_metadata"                 # {covariate_col, clone_col, phenotype_col, batch_col}
@@ -89,9 +88,9 @@ FITS = "fits"
 def fit_key(base: str, fit=None) -> str:
     """Insert a fit name after the namespace prefix of ``base``.
 
-    ``fit=None`` returns ``base`` unchanged, which is what keeps every 0.11 object and every
-    0.11 call byte-identical. Otherwise the fit name goes *after* the prefix rather than in
-    front of it, so the keys still sort together and still read as tcri's::
+    ``fit=None`` returns ``base`` unchanged, so an object carrying only the main fit keeps its
+    original keys. Otherwise the fit name goes *after* the prefix rather than in front of it,
+    so the keys still sort together and still read as tcri's::
 
         fit_key("tcri_p_ct", "null.phenotype")      -> "tcri_null.phenotype_p_ct"
         fit_key("X_tcri_logits", "null.phenotype")  -> "X_tcri_null.phenotype_logits"
@@ -116,10 +115,9 @@ def fit_key(base: str, fit=None) -> str:
 def fits(adata) -> list:
     """The fit names this object carries, excluding the main fit.
 
-    Written against the ROUND-TRIPPED object, not the in-memory one: h5ad stores a list of
-    strings as a numpy array of them, so the idiomatic ``meta.get(FITS) or []`` raises "the
-    truth value of an array with more than one element is ambiguous" on any object that has
-    been through disk -- which is every object a reference is read from in practice.
+    Written against the ROUND-TRIPPED object, not the in-memory one: h5ad stores this list as
+    a numpy array of strings, so it is tested against ``None`` and never for truthiness —
+    truth-testing a multi-element array raises.
     """
     meta = adata.uns.get(METADATA)
     names = None if meta is None else meta.get(FITS)

@@ -1,8 +1,8 @@
 """Batched engine core — the clone×phenotype joint as a ``[S, n_clones, P]`` stack,
-device-routed via :mod:`._xp` (§7.2). ``tools/joint_distribution`` is a thin
+device-routed via :mod:`._xp`. ``tools/joint_distribution`` is a thin
 DataFrame wrapper over :func:`_joint_draws`.
 
-Design invariants (§7.1/§7.8):
+Design invariants:
 - Temperature-temper the base **once**: ``T==1`` is the exact identity (``base = p_ct``,
   no ``eps`` round-trip), else ``base = softmax(log(p_ct+1e-8)/T)``.
 - Draws are made over **all ct rows at once** (a single seeded ``Dirichlet.sample((N,))``),
@@ -11,8 +11,8 @@ Design invariants (§7.1/§7.8):
 - ``n_samples=0`` is deterministic (base only; no Monte-Carlo, ``random_state`` ignored).
 - ``use_logits=True`` folds per-cell logits with ``log(base)`` (gate-aware) exactly like
   ``predict()`` and scatter-adds per clone; ``use_logits=False`` returns the ct-level base.
-- ``weighted`` scales each clone row by its **ct-keyed** cell count (the fix for the old
-  clone-indexed ``Counter`` bug); ``weighted=False`` row-normalizes to a per-clone simplex.
+- ``weighted`` scales each clone row by its **ct-keyed** cell count; ``weighted=False``
+  row-normalizes to a per-clone simplex.
 """
 from __future__ import annotations
 

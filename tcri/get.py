@@ -86,8 +86,8 @@ def _require(adata, name, key, fit=None):
     """Resolve the uns key, or raise naming the exact call that would fill it.
 
     With ``pl`` reading the cache instead of recomputing, "I plotted before I computed" is
-    now the most common way to get this wrong — so the message has to be the fix, not a
-    description of the problem. ``run the matching tcri.tl tool first`` was neither.
+    the most common way to get this wrong, so the message names the exact call that fills the
+    key.
     """
     fit = _K.resolve_fit(adata, fit)
     resolved = _resolve_key(name, key, fit)

@@ -1,4 +1,4 @@
-"""``pl.delta_*`` (§8.4) — cache renderers for the paired entropies.
+"""``pl.delta_*`` — cache renderers for the paired entropies.
 
 Two views of one cached result, selected by ``kind``:
 

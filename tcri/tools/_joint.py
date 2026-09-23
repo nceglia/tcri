@@ -1,10 +1,9 @@
 """The joint-distribution engine (``tl``) — a thin DataFrame wrapper over
 :func:`tcri._compute._joint._joint_draws`. Re-exported top-level as
-``tcri.joint_distribution``; unifies the old ``joint_distribution`` +
-``joint_distribution_posterior``.
+``tcri.joint_distribution``. One call covers both regimes: ``n_samples=0`` returns the
+posterior-mean table, ``n_samples>0`` returns that many clamped-Dirichlet draws.
 
-See ``governance/API_CONTRACT.md`` (the engine's semantics) and ``METRICS_CONTRACT.md``. This
-is the substrate every metric consumes (Phase 6 migrates them onto it).
+This is the substrate every metric consumes.
 """
 from __future__ import annotations
 

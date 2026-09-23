@@ -3,11 +3,9 @@
 Every tool computes once, stores its result under a namespaced ``uns`` key with a ``params``
 provenance block, and returns the same object. ``pl`` reads that cache; it never recomputes.
 
-``compare_groups`` is no longer here. It was a separate user-facing step only because there
-was nowhere to put statistics -- so a contrast meant remembering to call a second function on
-the right frame, and getting the replicate unit right yourself. Now ``splitby`` produces the
-contrast as part of the metric (``stats``), and the contrast math lives in ``tcri/_stats/_compare.py`` as an
-internal helper with one caller.
+``splitby`` produces the between-split contrast as part of the metric, returned under
+``stats``. The replicate unit is the group, so item rows are collapsed to one value per group
+before the test.
 """
 from ._joint import joint_distribution
 from ._entropy import clonotypic_entropy, phenotypic_entropy

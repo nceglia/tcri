@@ -1,8 +1,7 @@
 """Result shapes for the ``tl`` metrics, as ``TypedDict``s.
 
 ``@tl_result(schema=...)`` checks required-key PRESENCE on dict results. The shapes in the
-trailing comments are documentation — nothing parses them — but they are the only place the
-payload layout is written down, so keep them accurate.
+trailing comments are documentation of the payload layout; nothing parses them.
 
 Every metric returns the same two payload keys:
 
@@ -12,11 +11,11 @@ Every metric returns the same two payload keys:
 
 ``result``
     The reduced frame, built FROM ``table`` — one row per group (or per item when there is no
-    groupby). This is what the box/swarm plots and the comparison consume. Statistics live here
-    as **columns**, following grafiti: there is no separate ``stats`` slot, and ``pl`` dispatches
-    on column presence (``"p" in result.columns``) rather than re-reading params.
+    groupby). This is what the box/swarm plots and the comparison consume. Per-row statistics
+    live here as **columns**, following grafiti, and ``pl`` dispatches on column presence
+    (``"p" in result.columns``) rather than re-reading params.
 
-**Reference columns (0.12).** When the metric ran with a reference — ``null_model`` not ``None``,
+**Reference columns.** When the metric ran with a reference — ``null_model`` not ``None``,
 which is the default — ``result`` and ``table`` each gain, beside every native value column
 ``v``, a ``null_v`` (the same functional on the permutation null, at the same arguments) and an
 ``excess`` (``value - null_value``; ``excess_from``/``excess_to`` for the delta endpoints). A
@@ -24,11 +23,12 @@ DENOMINATOR gets ``null_denom`` and no excess. At ``null_model=None`` none of th
 either frame. The ``excess`` carries no ``sd`` and no interval: it is a difference of two
 summaries, and draws are never paired across two fits.
 
-**The ``stats`` slot.** Three metrics declare it below and four do not, which is a pre-existing
-inconsistency (issue-tracked) rather than a statement about which return it — every metric does.
-It carries one row per (contrast, ``quantity``), the quantity being ``"value"`` or ``"excess"``;
-without a reference it carries only ``"value"``. Nothing switches automatically on the presence
-of a reference: the plot selects, so the star and the marks are always the same quantity.
+**The ``stats`` slot.** Every metric except :class:`JointDistribution` returns it. Only three
+of the ``TypedDict``s below declare it, and a declared key is a required one, so the rest accept
+a payload with or without it. It carries one row per (contrast, ``quantity``), the quantity being
+``"value"`` or ``"excess"``; without a reference it carries only ``"value"``. Nothing switches
+automatically on the presence of a reference: the plot selects, so the star and the marks are
+always the same quantity.
 """
 from __future__ import annotations
 

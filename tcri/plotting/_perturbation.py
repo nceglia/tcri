@@ -44,9 +44,10 @@ def _top_genes(result, n_top, order, quantity="value"):
 def _star_labels(ax, stats, genes, *, groupby, quantity="value"):
     """That gene's own contrast (over ``groupby`` units), starred above its x position.
 
-    Filtered by quantity FIRST. This is a dict comprehension keyed by gene, so on a doubled
-    frame the last row silently wins -- the excess's star over the value's marks -- and the two
-    disagree in sign on a realistic fixture. A leftover duplicate raises rather than choosing.
+    Filtered by quantity FIRST, because the stars are collected into a mapping keyed by gene:
+    one row per gene is what the panel has room to draw. A gene left with more than one row is
+    never resolved by position -- it raises, or, where the duplicate is a third ``splitby``
+    level, warns and draws no stars.
     """
     # Whether the frame DECLARES its quantities decides what a leftover duplicate means.
     declared = (stats is not None and len(stats) and "quantity" in stats.columns)
@@ -173,18 +174,15 @@ def gene_importance(adata, *, kind="rank", quantity="auto", n_top=25, key=None, 
     ``order`` restricts and orders the genes shown; ``hue_order`` orders the split levels;
     ``return_df`` hands back the cached ``result`` frame instead of drawing.
 
-``quantity`` defaults to ``"auto"``, which is the EXCESS whenever the cached result carries a
-    reference, and the bare value otherwise. This is the one twin where the corrected quantity
-    is the default, and the reason is that the bare ranking is not merely incomplete, it is
-    dominated by something the question is not about.
+    ``quantity`` defaults to ``"auto"``, which is the EXCESS whenever the cached result
+    carries a reference, and the bare value otherwise. This is the one twin where the corrected
+    quantity is the default, and the reason is that the bare ranking is not merely incomplete,
+    it is dominated by something the question is not about.
 
     Silencing a gene is an intervention whose size scales with the gene's counts, and the
-    encoder responds to that whatever the gene says about phenotype. Measured on the OE fit,
-    2,000 genes: the bare importance and its null are 0.901 rank-correlated, and the bare top
-    ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal proteins. Ranked by excess the
-    same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2 and KLRC4, and only 17 of the top 50 genes
-    are shared. A reader shown the first list reasonably concludes the perturbation is not
-    working; the second is the question actually asked.
+    encoder responds to that whatever the gene says about phenotype. The excess subtracts the
+    same gene's importance under the permutation null, leaving the part of the ranking that a
+    gene's abundance does not account for.
 
     ``quantity="value"`` still draws the bare ranking, and is worth looking at once: the gap
     between the two panels IS the abundance confound, and it is a property of this estimand

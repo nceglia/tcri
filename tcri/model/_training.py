@@ -34,9 +34,9 @@ def _per_param_optim_args(base):
     reached ``q_p_c_raw``/``q_p_ct_raw`` too. Those are positive-constrained, so the store's
     leaf is ``log θ``; L2 decay there is a pull toward ``log θ = 0``, i.e. every entry toward
     1 and every row toward ``Dirichlet(1, …, 1)`` -- a flat prior applied through an optimizer
-    setting that the model never declares (training contract B8, formerly Q-D). The objective
-    is eq 7 plus the surrogate and nothing in it asks for that prior, so the decay is removed
-    from the guide rather than declared as a prior.
+    setting that the model never declares (training contract B8). The objective is eq 7 plus the
+    surrogate and nothing in it asks for that prior, so the decay is removed from the guide
+    rather than declared as a prior.
 
     Pyro calls the one-argument form with the normalised param-store name, which is what
     ``normalize_param_name`` produces: ``"scvi.encoder..."`` for module parameters and the
@@ -230,31 +230,18 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def validation_step(self, batch, batch_idx):
         """Evaluate the selection criterion. Never step.
 
-        DE-1: this used to call ``super().training_step()``, which reaches
-        ``PyroTrainingPlan.training_step`` -> ``SVI.step()`` -> the Pyro optimizer. Every
-        validation batch therefore applied an Adam update to ``q_p_c_raw``/``q_p_ct_raw`` — the
-        exact guide parameters ``get_p_ct()`` and every metric read. Lightning zeroes ``.grad``
-        on the LightningModule's parameters before the validation loop, so torch Adam skipped
-        the networks; but those two tensors live only in Pyro's param store, are not reachable
-        from ``parameters()``, and kept the zeroed grad Pyro left there. Adam then stepped them
-        on ``weight_decay * theta`` in the UNCONSTRAINED log space of a positive-constrained
-        parameter — every entry pulled toward ``log theta = 0``, i.e. every clone row pulled
-        toward uniform. Measured 0.54 L1 per validation check.
+        The criterion comes from ``_objective_blocks``, which traces ``model()`` and
+        ``guide()`` under ``torch.no_grad()``. Nothing here reaches ``SVI.step()``, so no
+        optimizer update touches ``q_p_c_raw``/``q_p_ct_raw`` — the guide parameters
+        ``get_p_ct()`` and every metric read. That matters because those two live only in
+        Pyro's param store, are not reachable from ``parameters()``, and are therefore outside
+        the gradient zeroing Lightning does around the validation loop.
 
-        ``SVI.evaluate_loss`` computes the identical estimator through the same wrapped
-        model/guide, with no ``param_capture``, no ``optim()`` and no ``zero_grads``.
-
-        I3. ``kl_weight`` used to be deliberately left unset here, inheriting whatever the last
-        training batch happened to leave. The stated reason was that this keeps the validation
-        series on the same scale as ``elbo_train`` — a property that was never real, since the
-        two are computed on different splits and now on different site sets. The cost was that
-        every check evaluated a *different* objective while the ramp climbed, and an argmin over
-        a series of different functions is not an argmin.
-
-        So the check now pins ``kl_weight`` to ``kl_weight_max``, runs in eval mode (Lightning's
-        evaluation loop sets it), and draws under a forked, fixed seed. That last clause is
-        load-bearing rather than fussy: a Monte-Carlo estimator redrawn each check is not a
-        function of the parameters at all, so selecting its minimum selects noise.
+        I3. The check pins ``kl_weight`` to ``kl_weight_max``, runs in eval mode (Lightning's
+        evaluation loop sets it), and draws under a forked, fixed seed. The pin keeps every
+        entry in the monitored series on one objective, the one at ``kl_weight_max``; the fixed
+        seed keeps that series a function of the parameters rather than of the draw, since the
+        minimum of a Monte-Carlo estimator redrawn each check is noise.
 
         The pin is undone in ``finally``, so B1's monotone TRAINING schedule is untouched.
         """

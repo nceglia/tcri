@@ -200,8 +200,8 @@ class TCRIModule(PyroBaseModuleClass):
     def pname(self, base: str) -> str:
         """Param-store name of a parameter this module owns.
 
-        ``""`` returns the bare name, which is what keeps every saved 0.10/0.11 session
-        loading. A named module owns exactly the keys under ``f"{name}."``; nothing else
+        ``""`` returns the bare name, so an unnamed module's parameters keep unprefixed store
+        keys. A named module owns exactly the keys under ``f"{name}."``; nothing else
         may match that prefix, which is what the constructor warning and the best-weight
         snapshot both rely on.
         """
@@ -217,11 +217,10 @@ class TCRIModule(PyroBaseModuleClass):
         Both ``model()`` and ``guide()`` declare ``pyro.plate("data", size=plate_size(),
         subsample=indices)``, so Pyro scales every site inside the plate -- the ZINB
         likelihood, the latent KL and the phenotype-alignment factor -- by ``size / B``. The
-        two Dirichlet KLs live in unsubsampled plates and enter at weight 1. Without the
-        scaling each minibatch step counted the global KLs at full weight against only B
-        cells' worth of data, so over an epoch of S steps the prior pull on ω_c and φ_m was
-        S times what eq 7 specifies (about 9x at 10k cells and batch 1000). The note's one
-        sentence on inference names "KL scaling for Dirichlet ... terms"; this is it.
+        two Dirichlet KLs live in unsubsampled plates and enter at weight 1. With the scaling,
+        a minibatch's per-cell terms already count for all ``size`` cells, so a global KL at
+        weight 1 sits against a full epoch's worth of data in every step -- the ratio eq 7
+        specifies -- rather than against the B cells that step happened to draw.
         """
         return int(self.n_obs_training or self.n_cells)
 
@@ -472,11 +471,9 @@ class TCRIModule(PyroBaseModuleClass):
     def get_conc_ct(self):
         """The guide's Dirichlet concentration lambda'_m for q(phi_m), shape [n_ct, P].
 
-        DE-5 freed this magnitude (eq 6: lambda'_m in R^P_{>0}), but only inside guide().
-        Every credible interval the metrics report is drawn in `_compute/_joint.py`, which
-        rebuilt its own Dirichlet as `local_scale * p_ct` -- so the posterior width the user
-        sees came from a fixed pseudo-count, not from the fitted posterior, and DE-5 changed
-        no reported interval at all (DE-5b).
+        Both the direction and the magnitude come from the fitted ``q_p_ct_raw`` (eq 6:
+        lambda'_m in R^P_{>0}), so the width of this posterior is fitted rather than a fixed
+        pseudo-count.
 
         This mirrors the guide line for line. If the two ever drift apart, the metrics are
         sampling from a distribution the model never fit.

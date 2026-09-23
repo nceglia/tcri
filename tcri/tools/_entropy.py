@@ -1,5 +1,5 @@
 """``tl.clonotypic_entropy`` and ``tl.phenotypic_entropy`` — normalized Shannon entropies
-in **bits** (§7.2/§7.3), engine-backed.
+in **bits**, engine-backed.
 
 - ``clonotypic_entropy``: per phenotype φ, H[P(c|φ)] over the **supported** clones (spread of
   a phenotype across clones). Absent/zero-support clones are excluded before normalizing (no
@@ -8,7 +8,7 @@ in **bits** (§7.2/§7.3), engine-backed.
   posterior mass returns **NaN** (not reindexed-to-zeros → spurious H=1). Normalizer = log2(P).
 
 ``n_samples=0`` is the deterministic plug-in; ``n_samples>0`` returns the posterior-mean +
-sd + HDI of the entropy (plug-in ≥ posterior-mean for entropy — documented as distinct).
+sd + HDI of the entropy (the plug-in value is ≥ the posterior mean for entropy).
 """
 from __future__ import annotations
 

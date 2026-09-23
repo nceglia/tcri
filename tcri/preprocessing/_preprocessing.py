@@ -1,8 +1,7 @@
 """Preprocessing helpers: clonotype grouping and clone sizes.
 
-Deliberately light on imports — this module is loaded by ``import tcri``, so an
-eager ``import umap`` here cost ~2.9 s of every import (umap → pynndescent →
-numba/llvmlite) for a dependency this file never used.
+Deliberately light on imports: this module is loaded by ``import tcri``, so anything
+heavy imported here is paid for on every import of the package.
 """
 from __future__ import annotations
 

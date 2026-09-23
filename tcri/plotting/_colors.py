@@ -47,10 +47,10 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     when colouring something that is not an obs column -- a phenotype axis read off a metric
     result, say.
 
-    This replaces ``resolve_palette``, which took a LIST of columns, always overwrote
-    ``uns``, and had no way to read an existing assignment back. That last part is the point:
-    a plot that cannot see the colours already stored assigns its own, so the same patient
-    changed colour between two figures in the same notebook.
+    An existing ``uns["<cat_key>_colors"]`` is read back rather than reassigned, so a level
+    keeps its colour across figures. That is the point: a plot that cannot see the colours
+    already stored assigns its own, and the same level changes colour from one figure to the
+    next.
     """
     if categories is None:
         categories = adata.obs[cat_key].astype("category").cat.categories

@@ -125,8 +125,9 @@ from contextlib import contextmanager
 @contextmanager
 def _disable_scvi_onload_train():
     """
-    Temporarily monkey-patch scvi's PyroBaseModuleClass.on_load to avoid
-    the one-step warmup train that triggers EarlyStopping('elbo_validation').
+    Suppress scvi's ``PyroBaseModuleClass.on_load`` warmup train for the duration of a
+    model load: ``on_load`` is replaced by a no-op that clears the pyro param store, and is
+    restored on exit. The saved parameters are loaded afterwards instead.
 
     Compatible across scvi variants that pass different kwargs (e.g., pyro_param_store).
     """

@@ -61,9 +61,9 @@ def _check_the_name_is_free(adata, model, fit):
     """A fit name is claimed by one parent.
 
     ``tcri.null.all(a, adata)`` then ``tcri.null.all(b, adata)`` would have both claim
-    ``null.phenotype`` and the second silently overwrite the first -- two ordinary calls, newly
-    reachable because PR A is what lets two models coexist in one process at all. Re-running the
-    SAME parent rewrites in place, which is the ``tl`` convention and not a collision.
+    ``null.phenotype`` and the second silently overwrite the first -- two ordinary calls,
+    reachable because two models can coexist in one process. Re-running the SAME parent
+    rewrites in place, which is the ``tl`` convention and not a collision.
     """
     record = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit))
     if not record or "parent" not in record:

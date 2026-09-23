@@ -127,8 +127,7 @@ def _labels(result, values, reference_columns=()):
 
     Excluded by EXACT NAME, never by prefix. `groupby` and `splitby` are arbitrary `obs` column
     names, so a user column called `excess_patient` or `null_arm` is a perfectly legitimate row
-    label; excluding it by prefix drops a join key and the merge fans out. Measured: a groupby
-    named `excess_patient` took a 24-row result to 144.
+    label; excluding it by prefix drops a join key and the merge fans out.
     """
     drop = set(values) | set(SUMMARY_COLUMNS) | set(reference_columns)
     return [c for c in result.columns if c not in drop]
@@ -138,9 +137,9 @@ def attach(payload, reference, *, values, denominators=()):
     """Add the reference and difference columns to ``table`` and ``result``, in place.
 
     The reference frame is joined on the row LABELS, never positionally: a null's rows are the
-    parent's by construction (§3.1), but a join says so and an alignment by position only
-    assumes it. A label with no reference row gets NaN rather than being dropped, so the
-    caller's own rows stay authoritative.
+    parent's by construction, but a join says so and an alignment by position only assumes
+    it. A label with no reference row gets NaN rather than being dropped, so the caller's own
+    rows stay authoritative.
     """
     result, ref_result = payload.get("result"), reference.get("result")
     if result is None or ref_result is None or not len(result) or not len(ref_result):

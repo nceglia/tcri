@@ -72,7 +72,7 @@ def _owns_param(name: str, key: str) -> bool:
     of which the obvious implementations hit. ``key.startswith(name)`` is correct for every
     named model and wrong for the unnamed one, whose keys every named model's start with.
     ``key.startswith(f"{name}.")`` fixes that and is still wrong DOWNWARD: a null's namespace is
-    ``f"{parent}.null.{kind}"`` (plan §3.2), so a parent would claim its own nulls' parameters
+    ``f"{parent}.null.{kind}"``, so a parent would claim its own nulls' parameters
     and warn about a collision with itself. So the namespace has to match exactly, which means
     stripping it and requiring what remains to be one of this model's own entries.
     """
@@ -240,11 +240,11 @@ class TCRIModel(BaseModelClass):
     ) -> None:
         """Register clonotype/phenotype/covariate/batch/count fields with scvi.
 
-        Registration only. Writes ``obs['indices']`` (scvi glue that the
-        training/validation steps consume via ``batch['indices']``) and records the
-        layer, but performs **no** analysis/label ``obs`` mutation and does **not**
-        stash the ``AnnDataManager`` in ``uns`` (the retired ``tcri_manager`` hack) —
-        learned outputs are written solely by :meth:`to_anndata`.
+        Registration only. Writes ``obs['indices']`` (scvi glue that the training/validation
+        steps consume via ``batch['indices']``), records the clonotype, phenotype, covariate,
+        batch, replicate and layer choices on the registry, and mirrors a named layer in
+        ``uns['tcri_layer']`` (clearing it when ``layer`` is ``None``). No analysis or label
+        ``obs`` column is written here — learned outputs come solely from :meth:`to_anndata`.
         """
         if clonotype_key == "auto":
             _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
@@ -330,12 +330,11 @@ class TCRIModel(BaseModelClass):
         phenotype label is wrong. With it on (the default) each cell's label is an observation
         of its latent phenotype with reliability 1-ε, which is what lets the clone x covariate
         distributions learn from the cells. ``None`` switches the readout off and fits the
-        label-free surrogate alone (the pre-2026-09 model). Must be in ``[0, 1 - 1/P)``.
+        label-free surrogate alone. Must be in ``[0, 1 - 1/P)``.
 
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
         two models can be fitted in one session without overwriting each other. ``""`` is the
-        historical unnamed layout, which every session saved before 0.12 uses and which stays
-        byte-identical.
+        unnamed layout: this model's parameters keep their bare store names.
 
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
@@ -543,10 +542,52 @@ class TCRIModel(BaseModelClass):
         n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):
-        """
-        We split the data into train/val, define a UnifiedTrainingPlan with
-        validation_step, and let scvi handle early stopping automatically
-        by passing early_stopping parameters to TrainRunner.
+        """Fit the model on the registered AnnData.
+
+        The cells are split 0.9/0.1 into train and validation, SVI runs through
+        ``UnifiedTrainingPlan`` (Pyro ``Adam``, with no weight decay on the guide
+        concentrations), and the parameters that scored best on the validation criterion are
+        restored when the fit ends.
+
+        Parameters
+        ----------
+        max_epochs
+            Epoch budget. Reaching it means the stopping rule never engaged, so the fit is
+            truncated rather than converged; that case warns.
+        batch_size
+            Cells per optimizer step. ``batch_size >= n_obs`` warns, because each epoch is then
+            a single gradient update and ``max_epochs`` becomes the number of updates.
+        lr
+            Learning rate of the Pyro optimizer, for the networks and the guide alike.
+        reconstruction_loss_scale
+            Weight on the ZINB likelihood of the counts; set on the module for the whole fit.
+        n_steps_kl_warmup
+            Optimizer steps over which ``kl_weight`` ramps to ``kl_weight_max``; ``<= 0``
+            disables annealing. The counter lives on the module, so a second ``train()``
+            continues the schedule instead of restarting it -- construct a new model for a
+            fresh ramp.
+        kwargs
+            Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``
+            and ``early_stopping_monitor``/``_mode``/``_patience``. An unrecognised name raises
+            ``TypeError`` here rather than several frames deep in scvi. The train/validation
+            split is fixed at 0.9 and is not configurable.
+
+        Notes
+        -----
+        scvi's own early stopping is switched off and replaced by two callbacks:
+        ``RampGatedEarlyStopping``, which ignores every check taken before the KL ramp
+        completes, and ``BestObjectiveSnapshot``, which restores the best-scoring module state
+        and guide concentrations at the end of the fit. The monitored criterion is
+        ``objective_validation_percell``, minimised, with patience ``patience_epochs``;
+        ``check_val_every_n_epoch`` defaults to 1, so one check is one epoch.
+
+        If the ramp does not complete within the fit, no checkpoint is selected, the final
+        weights are kept, and the call warns: checks taken at different ``kl_weight`` values
+        come from different objectives and are not comparable.
+
+        Sets ``training_record_`` -- epochs run, warmup steps taken, steps per epoch, the epoch
+        and score selected, whether the fit stopped before ``max_epochs``, and the seed -- and
+        stores the arguments this fit ran with, so ``tcri.null.*`` can fit a null the same way.
         """
 
         # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
@@ -769,11 +810,9 @@ class TCRIModel(BaseModelClass):
         Combines classifier logits with ``log p_ct`` exactly as in training: if
         ``self.module.gate_prob`` is set (``use_gate``),
         ``gate_prob * cls_logits + (1 - gate_prob) * log(prior)``; otherwise the
-        additive rule ``cls_logits + log(prior)``. Renamed from
-        ``get_cell_phenotype_probs`` (which returned a bare ``ndarray``). The module
-        is put in ``eval`` mode so classifier dropout is off and the result is
-        deterministic; the sequential loader keeps the row order aligned to
-        ``obs_names``.
+        additive rule ``cls_logits + log(prior)``. The module is put in ``eval`` mode so
+        classifier dropout is off and the result is deterministic; the sequential loader keeps
+        the row order aligned to ``obs_names``.
         """
         adata = self._validate_anndata(adata)
         self.module.eval()
@@ -822,14 +861,13 @@ class TCRIModel(BaseModelClass):
     def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False,
                    fit: Optional[str] = None) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
-        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it. Replaces the old
-        ``preprocessing.register_model``; writes no manager stash.
+        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it.
 
         ``fit`` names a SECOND fit on the same object: every per-fit key is written under that
         prefix (``tcri_null.phenotype_p_ct`` and so on), the shared keys are left alone, and the
-        name is appended to ``uns[METADATA]["fits"]``. ``None`` is the main fit and behaves
-        exactly as it did in 0.11. One object holds one main fit and as many named fits as you
-        like; a second model calling this with ``fit=None`` overwrites the first.
+        name is appended to ``uns[METADATA]["fits"]``. ``None`` writes the main fit. One object
+        holds one main fit and as many named fits as you like; a second model calling this with
+        ``fit=None`` overwrites the first.
 
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell

@@ -1,7 +1,6 @@
-"""``pl.phenotypic_flux`` (§8.3) — cache renderer for per-clone phenotype-distribution flux.
+"""``pl.phenotypic_flux`` — cache renderer for per-clone phenotype-distribution flux.
 
-(A phenotype-flow Sankey over a covariate ``order`` is a deferred enhancement, tracked as its
-own issue; the tidy flux values are available via ``return_df=True``.)
+The tidy flux values are available via ``return_df=True``.
 """
 from __future__ import annotations
 
@@ -14,10 +13,9 @@ def phenotypic_flux(adata, *, quantity="value", key=None, order=None, hue_order=
                     figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-clone flux from ``cov_from`` to ``cov_to``, from the cached ``tl.phenotypic_flux``.
 
-    The endpoints and the distance metric come from the cached ``params``. ``pl`` used to
-    take its own ``distance_metric``, defaulting to ``"l1"`` while ``tl`` defaulted to
-    ``"kl"`` -- so the axis label and the numbers beneath it could describe different
-    quantities. There is now one place the distance is chosen.
+    The endpoints and the distance metric come from the cached ``params``, so the axis label
+    and the numbers beneath it always describe the same quantity. The distance is chosen in
+    one place, ``tl.phenotypic_flux``.
     """
     from .. import get as _get
 

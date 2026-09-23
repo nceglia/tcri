@@ -28,12 +28,10 @@ __all__ = ["RampGatedEarlyStopping", "BestObjectiveSnapshot", "ramp_is_complete"
 def _is_own_guide_param(module, store_name: str) -> bool:
     """Is ``store_name`` one of THIS module's two guide concentrations?
 
-    The snapshot used to take every store key not starting with ``scvi$$$``, which was the
-    whole store minus the networks -- correct while one model existed per process. With a
-    namespace per model that set includes other models' concentrations, so a restore would
-    write another fit's parameters over this one's. Two conditions, both needed: the key is
-    in this module's namespace, and its tail is a guide concentration rather than a network
-    parameter (whose normalised name also lives under the namespace).
+    Two conditions, both needed. The key is in this module's namespace, which excludes the
+    concentrations of any other model in the same process; and its tail is a guide
+    concentration rather than a network parameter, whose normalised name also lives under the
+    namespace.
     """
     from ._training import GUIDE_CONCENTRATION_PARAMS
 
@@ -87,12 +85,9 @@ class BestObjectiveSnapshot(Callback):
     * the Pyro param store — ``q_p_c_raw``/``q_p_ct_raw`` are not in ``state_dict()`` at all,
       and they are what every metric reads.
 
-    The store is handled through ``named_parameters()`` in UNCONSTRAINED space. This is not a
-    style preference. Those two are ``constraints.positive``, so ``store.items()`` yields a
-    non-leaf ``ExpTransform`` output, and ``.data.copy_()`` on it is a silent no-op — verified
-    directly: writing 5.0 leaves the store reading 2.0, with no error raised. A restore written
-    the obvious way does nothing at all, which is DE-1's failure class: a real defect hiding
-    behind an operation that looks like it worked.
+    The store is handled through ``named_parameters()`` in UNCONSTRAINED space. Those two are
+    ``constraints.positive``, so ``store.items()`` yields a non-leaf ``ExpTransform`` output,
+    and ``.data.copy_()`` on it is a silent no-op: it raises nothing and changes nothing.
 
     Index buffers are excluded. They are fixed for the life of the module and copying them each
     improvement is pure overhead.

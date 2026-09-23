@@ -1,4 +1,4 @@
-"""``pl.mutual_information`` (§8.2) — cache renderer for I(c;phi)."""
+"""``pl.mutual_information`` — cache renderer for I(c;phi)."""
 from __future__ import annotations
 
 from ._base import render_metric
