@@ -74,7 +74,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
             "\n"
             "A scalar metric reduces one joint. Stacking every covariate level into one table "
             "treats each (covariate, clone) pair as a distinct clone, which inflates H(c) and "
-            "moves the normalized value under both normalize_mode settings.\n"
+            "the clone axis it is measured on.\n"
             "\n"
             "Pass an explicit covariate level, or use tl.joint_distribution(covariate=None) to "
             "get every level as a labelled (covariate, clonotype) table and reduce it the way "
@@ -268,9 +268,9 @@ def validate_splitby(obs, groupby, splitby):
     """``splitby`` labels groups for a contrast, so it needs groups, and the label must be a
     property OF the group.
 
-    Two conditions are enforced: ``splitby`` requires ``groupby``, and ``splitby`` must be
-    constant within each group. Without the second, a group's split label would be whichever
-    one its first cell happens to carry.
+    It raises unless ``groupby`` is set, ``splitby`` is a column of ``obs``, and ``splitby`` is
+    constant within each group. Without the last, a group's split label would be whichever one
+    its first cell happens to carry.
     """
     if splitby is None:
         return

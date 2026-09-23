@@ -11,9 +11,10 @@ Every metric returns the same two payload keys:
 
 ``result``
     The reduced frame, built FROM ``table`` — one row per group (or per item when there is no
-    groupby). This is what the box/swarm plots and the comparison consume. Per-row statistics
-    live here as **columns**, following grafiti, and ``pl`` dispatches on column presence
-    (``"p" in result.columns``) rather than re-reading params.
+    groupby). This is what the box/swarm plots consume. It carries the value columns and their
+    spread — ``sd``, ``hdi_*`` over draws, ``ci_*`` across groups — as columns. The contrast
+    between groups is not here: it is the ``stats`` frame below, and ``pl`` reads it from
+    there.
 
 **Reference columns.** When the metric ran with a reference — ``null_model`` not ``None``,
 which is the default — ``result`` and ``table`` each gain, beside every native value column
@@ -61,8 +62,8 @@ class MutualInformation(TypedDict):
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value, denom
     result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
-                            # (across groups) + p/stat/stars when splitby is set;
-                            # + denom, and null_value/null_denom/excess with a reference.
+                            # (across groups) + denom, and null_value/null_denom/excess with
+                            # a reference. The contrast lives in `stats`.
                             # `denom` is the normaliser this MI was divided by: the null does
                             # not share it, so both are stored and value*denom recovers bits
 

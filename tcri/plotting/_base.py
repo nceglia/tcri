@@ -6,7 +6,8 @@ The twins are **cache renderers** in the strict sense: they read ``uns`` through
 That matters more than it sounds. The plot and the frame in the caller's hand cannot disagree
 about ``n_samples``, the draw or the distance metric, because both read the one cached result.
 The replicate axis comes from that result's ``params`` as well: a twin never manufactures a
-``groupby``, so a figure is never grouped by a column the caller did not name.
+``groupby``, so the axis a figure is grouped by is whichever one the metric resolved and
+recorded — the caller's, or the registered replicate column when the caller named none.
 
 **The mark rule.** A mark shows ONE variance component. Within each x position the sample is
 the *coarsest* unit that varies there, ranked replicate > item > draw:
