@@ -1,9 +1,9 @@
-"""A seeded fit is reproducible; an unseeded one is not (DE-19).
+"""A seeded fit is reproducible; an unseeded one is not.
 
-Network init and minibatch order were unseeded: `seed` reached the simulator and the metric
-draw only, never the model. Two fits with the same nominal seed differed by ~1.8e-3 in reported
-NMI — larger than the effect of several defects this stack fixes, which made those effects
-unmeasurable from a paired fit.
+If `seed` does not reach network initialisation and minibatch order, two fits with the same
+nominal seed differ, and every paired comparison built on them -- a metric before and after a
+change, a null against its parent -- measures run-to-run noise along with the change
+(`governance/TRAINING_CONTRACT.md` B7: a fit is a function of seed, data and knobs).
 
 The negative control matters as much as the positive one. Asserting only that a seeded fit
 reproduces would pass on a model that is deterministic for some unrelated reason (a collapsed

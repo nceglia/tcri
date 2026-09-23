@@ -211,9 +211,9 @@ def test_load_result_provenance_asymmetry_is_deliberate(adata):
     DataFrame one, because the ``__tcri_df__`` tag wins in ``_decode`` and the siblings are
     dropped on the floor.
 
-    That asymmetry is inherited from grafiti and is easy to trip over, so it is pinned here
-    rather than discovered. ``tcri.get.result()`` is the accessor that normalises it — it strips
-    provenance so the return mirrors the tool's natural result in BOTH cases.
+    That asymmetry is easy to trip over, so it is pinned here rather than discovered.
+    ``tcri.get.result()`` is the accessor that normalises it — it strips provenance so the
+    return mirrors the tool's natural result in BOTH cases.
     """
     _store(adata, "tcri_df_case", pd.DataFrame({"v": [1.0]}))
     _store(adata, "tcri_dict_case", {"table": pd.DataFrame({"v": [1.0]})})
@@ -233,11 +233,12 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     """`index.to_numpy()` on a MultiIndex yields an object array of TUPLES, and h5py has no
     writer for a tuple.
 
-    Found by an example notebook, not by this suite: `joint_distribution(n_samples>0)` puts a
-    (clonotype, sample_id) MultiIndex on its `table`, so the whole cached result was
-    unwritable to .h5ad. The failure surfaced as `TypeError: Can't implicitly convert
-    non-string objects to strings` named against the enclosing group -- a long way from the
-    index that caused it -- and only when someone tried to save a session.
+    `joint_distribution(n_samples>0)` puts a (clonotype, sample_id) MultiIndex on its
+    `table`, so an encoder that passes the index straight through leaves the whole cached
+    result unwritable to .h5ad. It fails as `TypeError: Can't implicitly convert non-string
+    objects to strings` named against the enclosing group -- a long way from the index that
+    caused it -- and only when someone saves a session, which is why the write is exercised
+    here rather than the encoding alone.
     """
     import anndata as ad
     import numpy as np
@@ -257,7 +258,7 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     probe(adata)
 
     path = tmp_path / "multi.h5ad"
-    adata.write_h5ad(path)                      # the step that used to raise
+    adata.write_h5ad(path)                      # the step h5py refuses on a tuple index
     back = decode_blob(ad.read_h5ad(path).uns["tcri_multi_probe"])["table"]
 
     assert isinstance(back.index, pd.MultiIndex)
@@ -310,7 +311,8 @@ def test_an_older_schema_version_says_to_recompute(adata, monkeypatch):
 
 
 def test_a_result_written_before_the_tool_key_existed_still_loads(adata, monkeypatch):
-    """Results from 0.9-0.12 carry `version` but no `tool`; `tcri.get` supplies it."""
+    """A result stored before the blob recorded a `tool` carries `version` alone; `tcri.get`
+    supplies the tool from the registry."""
     _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})}, version=1)
     del adata.uns["tcri_x"]["tool"]
     _registered(monkeypatch, "tcri_x", 1)

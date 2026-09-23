@@ -17,9 +17,9 @@ And `excess` is **a difference of two summaries, never a summary of a difference
 not paired across two fits -- there is no correspondence between the parent's draw 7 and the
 null's -- so the excess carries no sd and no interval, and nothing here asks for one.
 
-`null_model=None` reproduces 0.11's values and its `uns` key set exactly. The four shape changes
-that fire unconditionally are fixes, and `rule_9_shape_changes_are_the_only_ones` pins them as
-the only ones.
+`null_model=None` reproduces the values and the `uns` key set of a run with no reference at all.
+Four shape changes fire unconditionally, and `test_rule_9_shape_changes_are_the_only_ones` pins
+them as the only ones.
 """
 from __future__ import annotations
 
@@ -170,9 +170,9 @@ def test_endpoint_means_use_their_own_masks(ref):
     """Pin the known discrepancy so the next reader cannot assume the identity.
 
     ``build_result`` averages ``value``, ``value_from`` and ``value_to`` over their own finite
-    masks, so ``value != value_to - value_from`` wherever a draw has a non-finite endpoint. It
-    is a pre-existing defect (issue-tracked), not one the reference introduced, and this asserts
-    the shape of it rather than a specific size.
+    masks, so ``value != value_to - value_from`` wherever a draw has a non-finite endpoint. The
+    gap belongs to the delta result rather than to the reference, and this asserts its shape
+    rather than a specific size.
     """
     _, adata = ref
     a, b = _cov(adata)[:2]
@@ -223,7 +223,7 @@ def test_null_model_none_is_the_old_result(ref):
 
 
 def test_rule_9_shape_changes_are_the_only_ones(ref):
-    """At ``null_model=None`` the frames differ from 0.11 in exactly four ways.
+    """At ``null_model=None`` the reference machinery changes the frames in exactly four ways.
 
     (a) ``build_result``'s empty branch carries its declared extras; (b) the delta ``table``'s
     row order follows the substrate rather than obs first appearance; (c) ``stats`` gains a
@@ -245,7 +245,7 @@ def test_rule_9_shape_changes_are_the_only_ones(ref):
     assert "denom" in mi["result"].columns
     assert list(mi["stats"]["quantity"].unique()) == ["value"]
 
-    # and the value columns beyond those four are the 0.11 set
+    # and the value columns beyond those four are the no-reference set
     assert set(mi["result"].columns) == {"covariate", "patient", "disease_status", "value",
                                          "sd", "hdi_low", "hdi_high", "denom"}
     delta = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
@@ -424,8 +424,8 @@ def test_an_empty_result_is_not_a_missing_reference(ref):
     """An empty frame carries its columns, and the y label does not blame the reference.
 
     An empty ``phenotypic_flux`` is a real and documented outcome -- no clone at both covariate
-    levels within any replicate. Before this, the empty branch returned one column against the
-    non-empty shape's nine, so the panel read as if the null were missing.
+    levels within any replicate. An empty branch that returned one column against the non-empty
+    shape's nine would make the panel read as if the null were missing.
     """
     from tcri._compute._tables import build_result
 
@@ -439,7 +439,7 @@ def test_an_empty_result_is_not_a_missing_reference(ref):
 
 
 def test_old_results_render_without_a_reference(ref):
-    """A 0.11 blob with no ``null_value`` still renders, with the "no reference" label."""
+    """A stored result with no ``null_value`` still renders, with the "no reference" label."""
     import matplotlib
     matplotlib.use("Agg")
 
@@ -546,13 +546,13 @@ def test_both_gene_panels_rank_alike(ref):
 
 @pytest.mark.slow
 def test_oe_shape_smoke():
-    """A cohort fit, its references, and the two metrics the deliverable reports, end to end.
+    """A cohort fit, its references, and two metrics read off it, end to end.
 
-    Not an accuracy claim: it asserts that the excess is finite everywhere and that the disease
-    arm's mutual information clears its own floor, which is the shape every figure in the
-    deliverable rests on. It is the only test here that fits a model rather than reusing a
-    fixture, and it is the one that would catch a reference that silently returned NaN on a
-    frame with groups, a split and a covariate contrast all at once.
+    Not an accuracy claim: it asserts that the excess is finite everywhere and that mutual
+    information clears its own floor, which is the shape a reported figure rests on. It is the
+    only test here that fits a model rather than reusing a fixture, so it is the one that would
+    catch a reference that silently returned NaN on a frame with groups, a split and a covariate
+    contrast all at once.
     """
     import contextlib
     import io
@@ -589,13 +589,14 @@ def test_oe_shape_smoke():
         assert np.isfinite(flux["excess"]).any(), flux
 
 
-# ── what an adversarial review found ─────────────────────────────────────────
+# ── the reference on the reading and the plotting paths ──────────────────────
 
 def test_a_label_column_named_like_a_reference_column_is_still_a_label(ref):
     """`groupby` is an arbitrary obs column name, so excluding join keys by PREFIX drops one.
 
-    Measured before the fix: a groupby column called `excess_patient` took a 24-row result to
-    144, because the merge lost that key and fanned out. The exclusion is by exact name now.
+    A groupby column called `excess_patient` would be dropped from the merge keys, and the
+    reference join would then fan the result out to a multiple of its rows. The exclusion is by
+    exact name, which is what this asserts.
     """
     _, adata = ref
     adata.obs["excess_patient"] = adata.obs["patient"]
@@ -616,8 +617,8 @@ def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
     """`gene_importance`'s reference is keyed by the FIT, not by the null's parameter namespace.
 
     A rebuilt null's `name` is `<parent>.null.phenotype` — its place in the process-global
-    parameter store, not its name on this AnnData. Keying the blob by it put the reference
-    somewhere `tcri.get(fit=...)` does not look, while `params["null_model"]` named the fit.
+    parameter store, not its name on this AnnData. Keying the blob by that puts the reference
+    somewhere `tcri.get(fit=...)` does not look, while `params["null_model"]` names the fit.
     """
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]))
@@ -633,8 +634,8 @@ def test_a_non_finite_reference_does_not_delete_the_stats(ref):
 
     `collapse_to_replicates` drops a row when ANY listed quantity is non-finite, which is what
     keeps the two quantities on one replicate set. A reference that is non-finite EVERYWHERE
-    would empty that mask, and rebuilding `stats` from it returned None — deleting a frame the
-    metric legitimately had.
+    empties that mask, and rebuilding `stats` from an empty mask would return None — deleting a
+    frame the metric legitimately has.
     """
     from tcri._state import _reference as R
 
@@ -654,10 +655,10 @@ def test_a_non_finite_reference_does_not_delete_the_stats(ref):
 def test_an_all_nan_reference_is_no_reference(ref):
     """A reference column with nothing finite in it is not a reference.
 
-    Two ways this used to go wrong. On the replicate path the shared collapse emptied the frame
-    and the panel rendered with no marks at all; on the item path seaborn was handed an all-NaN
-    y and raised `UnboundLocalError: boxprops`. The honest panel is the value, drawn normally,
-    with "no reference" on the label.
+    Two ways that can go wrong. On the replicate path the shared collapse empties the frame and
+    the panel renders with no marks at all; on the item path seaborn is handed an all-NaN y and
+    raises. What the panel should show is the value, drawn normally, with "no reference" on the
+    label.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -702,8 +703,8 @@ def test_the_reference_dodges_with_the_value(ref):
                              if c.get_label() == REFERENCE_LABEL and len(c.get_offsets())])
     assert len(grey_x)
     # each grey mark sits in a dodge band the value marks occupy. Compared as OFFSETS FROM THE
-    # CATEGORY CENTRE, because the strip jitter moves individual points by a few hundredths;
-    # what the bug did was put every grey mark at offset 0 while the value marks sat at +-0.2.
+    # CATEGORY CENTRE, because the strip jitter moves individual points by a few hundredths; a
+    # reference that does not dodge sits at offset 0 while the value marks sit at +-0.2.
     grey_offsets = np.abs(grey_x - np.round(grey_x))
     value_offsets = np.abs(value_x - np.round(value_x))
     assert grey_offsets.mean() > 0.5 * value_offsets.mean(), (
@@ -714,11 +715,10 @@ def test_the_reference_dodges_with_the_value(ref):
 def test_the_perturbation_reference_dodges_too(ref):
     """The same assertion for `pl.gene_importance`, because it is a SECOND implementation.
 
-    The twin and `render_metric` are parallel code paths, and this defect appeared in both --
-    fixed in one and missed in the other, so the perturbation panel showed a single grey box
-    against two coloured ones and a gene whose null differs between arms read as if it did not.
-    The violin-of-a-constant defect did the same thing. Asserting the property on both paths
-    is what stops the pair drifting again.
+    The twin and `render_metric` are parallel code paths, so a property held on one can be lost
+    on the other: a single grey box against two coloured ones pools both arms, and a gene whose
+    null differs between arms then reads as if it did not. Asserting the property on both paths
+    is what stops the pair drifting.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -786,8 +786,7 @@ def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
 
     h5ad stores a list of strings as a numpy array, so `settings.get("strata") or []` raises
     "the truth value of an array with more than one element is ambiguous" on any object that
-    has been to disk -- which is every object a reference is actually read from. The same
-    spelling bit `keys.fits()` earlier in this work; this pins the second one.
+    has been to disk -- which is every object a reference is actually read from.
     """
     import anndata as ad
 
@@ -854,10 +853,9 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     """`pl.gene_importance` defaults to the EXCESS, alone among the twins.
 
     The bare ranking is not merely incomplete, it is dominated by something the question is not
-    about: silencing a gene is an intervention whose size scales with the gene's counts.
-    Measured on the OE fit, the bare importance and its null are 0.901 rank-correlated and the
-    bare top ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal proteins. A reader shown
-    that list concludes the perturbation is broken.
+    about: silencing a gene is an intervention whose size scales with the gene's counts, so the
+    bare ranking tracks expression and its null tracks it just as closely. The excess is what
+    removes that shared component.
 
     `"auto"` still means the bare value when there is no reference, and it means the bare value
     for `kind="shift"` whatever else is present -- otherwise the default call would raise

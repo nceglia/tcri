@@ -1,8 +1,10 @@
-"""Generator fidelity to Supplementary Note 1 (DE-13, DE-14, DE-20).
+"""What the synthetic generator guarantees about its own ground truth.
 
-The synthetic generator defines the ground truth every benchmark number is scored against, so
-a defect here does not make a test fail — it makes the answer wrong while everything stays
-green. All three of these were silent.
+The generator defines the truth every benchmark number is scored against, so a wrong value
+here does not make a test fail — it makes the answer wrong while the suite stays green. Three
+properties are pinned: the declared phenotype label space survives into the categorical codes,
+``temperature_scale`` refuses inputs it cannot compute, and the fuzziness knob blends the
+expression programs through the concave mapping ``g(f) = sqrt(f)``.
 """
 from __future__ import annotations
 
@@ -16,17 +18,18 @@ warnings.filterwarnings("ignore")
 from tcri.datasets import simulate_tcri, temperature_scale
 
 
-# ── DE-13: the generator declares its label space ────────────────────────────
+# ── the generator declares its label space ───────────────────────────────────
 
 @pytest.mark.parametrize("n_phenotypes", [4, 12])
 def test_category_codes_match_the_integer_labels(n_phenotypes):
-    """``pd.Categorical`` without ``categories=`` infers levels from the observed values and
-    sorts them LEXICOGRAPHICALLY.
+    """Phenotype ``phen_k`` must carry category code ``k``, so a code can be mapped back to
+    the phenotype index the cell was generated from.
 
-    At K >= 10 that decouples a code from the integer it was built from: measured before the
-    fix at K=12, ``phen_2`` got code 4 and ``phen_11`` got code 3. Anything round-tripping a
-    code back to a phenotype index was reading a different phenotype. K=4 is here to show the
-    defect is invisible below 10, which is why it survived.
+    ``pd.Categorical`` without ``categories=`` infers levels from the observed values and sorts
+    them LEXICOGRAPHICALLY, which at K >= 10 puts ``phen_11`` before ``phen_2`` and decouples a
+    code from its integer. Anything round-tripping a code back to a phenotype index would then
+    read a different phenotype. Both a one-digit and a two-digit K are covered because the two
+    orderings agree below 10.
     """
     adata = simulate_tcri(n_clones=6, n_phenotypes=n_phenotypes, n_genes=20,
                           n_cells=400, seed=0)
@@ -53,22 +56,22 @@ def test_true_and_observed_phenotype_share_a_level_set():
             == list(adata.obs["true_phenotype"].cat.categories))
 
 
-# ── DE-14: temperature_scale refuses what it cannot compute ──────────────────
+# ── temperature_scale refuses what it cannot compute ─────────────────────────
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, np.nan, np.inf, -np.inf])
 def test_temperature_scale_rejects_non_positive_or_non_finite(bad):
-    """Note 1 specifies T > 0. Outside that the old code failed three different silent ways:
-    ZeroDivisionError at T=0, an all-NaN matrix at T=nan, and — worst — finite, plausible,
-    row-stochastic output at T=-1.0 that inverts the distribution and would have propagated
-    into a benchmark as though it meant something."""
+    """Temperature scaling is defined only for finite T > 0, so the function must raise
+    instead of returning something a caller cannot recognise as wrong: T=0 divides by zero,
+    T=nan gives an all-NaN matrix, and a negative T gives finite, plausible, row-stochastic
+    output that inverts the distribution and would propagate into a benchmark silently."""
     with pytest.raises(ValueError, match="finite and > 0"):
         temperature_scale(np.array([[0.7, 0.2, 0.1]]), bad)
 
 
 def test_temperature_scale_raises_on_float64_underflow():
-    """Once (1/T)*log10(min(P)) < -308 every entry of a row underflows to exactly 0.0 and the
-    renormalisation is 0/0. Measured on [0.7, 0.2, 0.1]: computable at T=1e-3, all-NaN at
-    T=1e-4. Raising beats returning NaN that the caller has to notice."""
+    """Once (1/T)*log10(min(P)) < -308 every entry of a row underflows to exactly 0.0 in
+    float64 and the renormalisation is 0/0. Raising names the cause; returning a NaN row leaves
+    the caller to notice. The two temperatures here bracket that point for this row."""
     P = np.array([[0.7, 0.2, 0.1]])
     assert np.isfinite(temperature_scale(P, 1e-3)).all(), "1e-3 should still be computable"
     with pytest.raises(ValueError, match="underflow"):
@@ -83,18 +86,19 @@ def test_temperature_scale_endpoints_are_sane():
     assert hot.std() < P.std(), "large T must flatten"
 
 
-# ── DE-20: the concave mapping g(f) = sqrt(f) ────────────────────────────────
+# ── the concave mapping g(f) = sqrt(f) ───────────────────────────────────────
 
 def test_fuzziness_uses_the_concave_mapping():
-    """Note 1: ``theta'_k = (1 - g(f)) theta_k + g(f) theta_bar``, with "in the reported
-    experiments, we use g(f) = sqrt(f)".
+    """``fuzziness`` blends each phenotype's expression program toward the mean as
+    ``theta'_k = (1 - g(f)) theta_k + g(f) theta_bar`` with the concave ``g(f) = sqrt(f)``.
 
-    The code interpolated with ``f`` itself, which under-mixes across the whole interior of
-    the sweep — at f=0.1 the note blends 0.316 toward the mean where the old code blended
-    0.100. The endpoints agree, so f=0 and f=1 could not detect it.
+    Interpolating with ``f`` itself under-mixes across the whole interior of a fuzziness sweep,
+    so the difficulty axis a benchmark reports would not be the axis it swept. The endpoints
+    agree under either mapping, so only an interior ``f`` can detect the difference.
 
     The blend is recomputed here independently from the same RNG draw, so this checks the
-    quantity the note defines rather than matching the source line.
+    quantity the mapping defines rather than matching the source line; the final assertion
+    confirms the two mappings do differ on this fixture.
     """
     from tcri.datasets._simulate import _phenotype_programs
 
@@ -122,8 +126,9 @@ def test_fuzziness_uses_the_concave_mapping():
 
 @pytest.mark.parametrize("f", [0.0, 1.0])
 def test_fuzziness_endpoints_are_unchanged_by_the_mapping(f):
-    """g(0)=0 and g(1)=1, so the sweep endpoints are identical either way. Recorded because it
-    bounds what the DE-20 correction invalidates: interior f only."""
+    """g(0)=0 and g(1)=1, so the endpoints of a fuzziness sweep are the same under either
+    mapping: the choice of g can only matter for interior f. At f=1 the programs must collapse
+    onto one, which is what makes the phenotypes indistinguishable from expression."""
     from tcri.datasets._simulate import _phenotype_programs
 
     alpha, beta = _phenotype_programs(np.random.default_rng(0), 5, 4, f)

@@ -1,9 +1,9 @@
 """Runtime smoke for the model: construct -> train (2 epochs) -> latent / p_ct / predict.
 
-Exercises the pieces split into sibling modules in PR3 (``TCRIModule`` model/guide,
-``UnifiedTrainingPlan``, ``build_archetypes``, ``MixtureDirichlet``, ``VampPrior``)
-end-to-end. Before this the suite only covered ``setup_anndata``; this locks in that
-the split preserves the full construct/train/query path.
+Walks the whole construct/train/query path across the pieces a fit is assembled from
+(``TCRIModule`` model/guide, ``UnifiedTrainingPlan``, ``build_archetypes``,
+``MixtureDirichlet``, ``VampPrior``), so a break anywhere along it surfaces here rather than
+only inside a metric test that happens to depend on it.
 """
 import contextlib
 import io
@@ -33,12 +33,12 @@ def test_model_construct_train_predict(synthetic_adata):
         n_pseudo_obs=3,
     )
 
-    # PR3 rename: the clone x phenotype prior attribute is clone_phenotype_prior (was c2p_mat).
+    # the clone x phenotype prior is exposed as clone_phenotype_prior, and under no other name.
     assert hasattr(model, "clone_phenotype_prior")
     assert not hasattr(model, "c2p_mat")
     n_clones, P = model.clone_phenotype_prior.shape
 
-    # build_archetypes returns centers AND labels (M5).
+    # build_archetypes returns centers AND labels.
     centers, labels = build_archetypes(model.clone_phenotype_prior, K=3)
     assert centers.shape == (3, P)
     assert labels.shape == (n_clones,)

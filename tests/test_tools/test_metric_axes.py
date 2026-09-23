@@ -1,14 +1,10 @@
 """Behavioural tests for the metric comparison axes.
 
 Every metric takes the same family of arguments — ``covariate``, ``groupby``, ``splitby``,
-``clones``, ``weighted``, ``normalize_mode``, ``n_samples``, ``temperature`` — and until now
-nothing checked that any of them reaches a code path. That is the defect class in issue #64:
-an argument can be declared, accepted, and completely inert while every test stays green. It
-has already happened four times in this package (``n_sims``, ``permutation_null(groupby=)``,
-``random_state``, ``hue_order``).
-
-So these tests assert that each axis CHANGES THE ANSWER, and — where an exact identity exists —
-that it changes it to the right thing.
+``clones``, ``weighted``, ``normalize_mode``, ``n_samples``, ``temperature``. An argument can
+be declared, accepted, and completely inert while every test stays green, so these tests
+assert that each axis CHANGES THE ANSWER, and — where an exact identity exists — that it
+changes it to the right thing.
 
 The fixture combines independent synthetic blocks with deliberately different clone→phenotype
 coupling into one AnnData. What that buys:
@@ -19,8 +15,8 @@ coupling into one AnnData. What that buys:
 * **Ordinal** assertions for accuracy. The model ranks the blocks as the oracle does.
 
 What it deliberately does NOT claim: equality against the oracle's absolute value. The metrics
-read the model's ``p_ct``, not the observed crosstab, and the two differ (issue #59). Asserting
-an absolute value here would be pinning the fit, not the metric.
+read the model's ``p_ct``, not the observed crosstab, and the two differ. Asserting an absolute
+value here would be pinning the fit, not the metric.
 """
 from __future__ import annotations
 
@@ -103,11 +99,10 @@ def blocks():
 
 
 def _value(res):
-    """The comparable value column out of the new ``{table, result, stats}`` return.
+    """The comparable value column out of the ``{table, result, stats}`` return.
 
-    Every metric now returns the same three slots and caches them; the pre-migration returns
-    (float / dict / Series / DataFrame, depending on metric and axes) are gone. This helper
-    keeps the axis assertions about the AXES rather than about unpacking.
+    Every metric returns the same three slots and caches them, so this helper keeps the axis
+    assertions about the AXES rather than about unpacking a per-metric return type.
     """
     return res["result"]["value"]
 
@@ -219,7 +214,8 @@ def test_weighted_is_live(blocks):
 
 
 def test_normalize_mode_is_live(blocks):
-    """``min`` and ``average`` are different normalizers (metrics doc eq 6 vs the default)."""
+    """``min`` and ``average`` are different normalizers (METRICS_CONTRACT.md eq 6 vs the
+    ``min`` default)."""
     _model, adata, _truth = blocks
     lo = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="min")).iloc[0])
     av = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="average")).iloc[0])
@@ -269,10 +265,10 @@ def test_random_state_makes_draws_reproducible(blocks):
 def test_model_ranks_the_blocks_as_the_oracle_does(blocks):
     """Ordinal, not absolute.
 
-    The metrics read the model's ``p_ct``; the oracle reads the observed crosstab. They differ
-    (issue #59), so an absolute-value assertion here would pin the fit rather than the metric.
-    What must hold is that a block the oracle says is more clone→phenotype coupled scores
-    higher — otherwise the metric is not tracking the structure it claims to measure.
+    The metrics read the model's ``p_ct``; the oracle reads the observed crosstab. They differ,
+    so an absolute-value assertion here would pin the fit rather than the metric. What must
+    hold is that a block the oracle says is more clone→phenotype coupled scores higher —
+    otherwise the metric is not tracking the structure it claims to measure.
     """
     _model, adata, truth = blocks
 
@@ -290,24 +286,17 @@ def test_model_ranks_the_blocks_as_the_oracle_does(blocks):
 @pytest.mark.parametrize("metric", ["mutual_information", "clonotypic_entropy",
                                     "phenotypic_entropy"])
 def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
-    """``covariate=None`` used to stack every covariate level into one table, treating each
-    (covariate, clone) pair as a distinct clone.
+    """A metric that reduces over clones requires an explicit covariate level.
 
-    That inflates H(c). Measured on a 10-clone / 2-covariate fixture:
+    Stacking every covariate level into one table treats each (covariate, clone) pair as a
+    distinct clone, which inflates H(c) and so moves ``normalize_mode="average"``. The default
+    ``min`` divides by min(H(c), H(phi)), and in the realistic regime for a repertoire — clones
+    vastly outnumbering phenotypes — that selects H(phi), which row-splitting does not touch;
+    the exemption is a property of the ratio, not of the metric.
 
-        C=20 P=4  (many clones)   min  +0.0%   average +13.8%
-        C=6  P=8  (few clones)    min +12.4%   average +15.4%
-
-    ``min`` divides by min(H(c), H(phi)). In the realistic regime for a repertoire — clones
-    vastly outnumbering phenotypes — it selects H(phi), which row-splitting does not touch, so
-    the default really is unaffected. The C=6/P=8 row is kept only to show that this exemption
-    is a property of the ratio rather than of the metric; an earlier version of this docstring
-    stated it as universal. ``average`` moves in every regime, including the realistic one.
-
-    The three reducing metrics also disagreed about what ``covariate=None`` meant: one
-    collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one stacked.
-    Choosing a unification is a question about the estimand, not the code, so covariate is now
-    required wherever a reduction happens rather than being silently resolved one of three ways.
+    There is also no single meaning for ``covariate=None`` across the three reducing metrics:
+    collapsing to a per-phenotype index, keeping a (covariate, clonotype) index and stacking
+    are three different estimands. Requiring the level is how that choice stays the caller's.
     """
     _model, adata, _truth = blocks
     with pytest.raises(ValueError, match="covariate is required"):
@@ -319,8 +308,8 @@ def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
 
 def test_joint_distribution_still_returns_every_covariate(blocks):
     """``joint_distribution`` is deliberately exempt: it LABELS the blocks with a covariate
-    index level instead of collapsing them, so no ambiguity arises, and it stays the way to
-    get every covariate level in one object."""
+    index level instead of collapsing them, so no ambiguity arises, and it is the way to get
+    every covariate level in one object."""
     _model, adata, _truth = blocks
 
     jd = tcri.tl.joint_distribution(adata, covariate=None)["result"]
@@ -335,12 +324,10 @@ def test_joint_distribution_still_returns_every_covariate(blocks):
 
 
 def test_pl_cannot_reach_the_metric_at_all(blocks):
-    """``pl`` no longer forwards ``covariate`` -- it has no metric arguments to forward.
+    """``pl`` has no metric arguments to forward: it reads the cache.
 
-    This used to check that the covariate guard fired one layer up, because ``pl`` passed
-    ``covariate`` straight into a recompute. Now ``pl`` reads the cache, so the guard is
-    unreachable from here by construction, and the failure mode that IS reachable -- plotting
-    before computing -- has to name the tool to run.
+    So the covariate guard is unreachable from the plotting layer by construction, and the
+    failure mode that IS reachable -- plotting before computing -- has to name the tool to run.
     """
     _model, adata, _truth = blocks
     import inspect
@@ -354,20 +341,15 @@ def test_pl_cannot_reach_the_metric_at_all(blocks):
         tcri.pl.mutual_information(adata)
 
 
-# ── defects the audit surfaced, each with the number that proves it ──────────
+# ── what the payload guarantees, and what each axis may not quietly do ───────
 
 def test_metrics_take_an_anndata_only(blocks):
-    """The precomputed-joint path is gone, and with it the ``adata_or_jd`` union type.
+    """These metrics take an AnnData, never a precomputed joint table.
 
-    Three metrics used to accept a bare DataFrame as well as an AnnData. That arrived in the
-    first contract freeze (7599959) alongside the other declared-but-unwanted parameters, was
-    implemented because it was declared, and had exactly one caller in the repo. Its root cause
-    was ``joint_distribution`` returning a naked table; once every tl stores its result, there
-    is nothing to hand back in.
-
-    What it cost while it existed: an ``is_precomputed_joint`` branch in three metrics, a
-    ``reject_stacked_covariate_joint`` guard that existed only to police that branch, and a
-    decorator patched to tolerate an object with no ``uns``.
+    Accepting a bare DataFrame as well would mean an ``is_precomputed_joint`` branch in three
+    metrics, a guard whose only job is to police that branch, and a decorator that tolerates an
+    object with no ``uns``. Every ``tl`` stores its result, so the joint is read back off the
+    object rather than handed in.
     """
     import inspect
 
@@ -385,8 +367,8 @@ def test_metrics_take_an_anndata_only(blocks):
 
 def test_the_joint_is_cached_like_every_other_metric(blocks):
     """``joint_distribution`` is probabilistic -- n_samples, temperature, weighted,
-    random_state -- and was the only tl not recording how it was derived. It now stores and
-    returns like the rest, and a recompute REPLACES the cached entry (scanpy)."""
+    random_state -- so it records how it was derived: it stores and returns the same slots as
+    every other tool, and a recompute REPLACES the cached entry, as scanpy does."""
     _model, adata, _truth = blocks
 
     res = tcri.tl.joint_distribution(adata, covariate="cov_0", n_samples=4, random_state=0)
@@ -411,11 +393,11 @@ def test_the_joint_is_cached_like_every_other_metric(blocks):
 
 
 def test_groupby_honours_the_callers_clone_restriction(blocks):
-    """D3: ``clones=`` was accepted and discarded whenever ``groupby`` was set.
+    """``clones=`` is intersected with each group's clones, not discarded under ``groupby``.
 
-    The per-group closure rebound the name to that group's clone list, shadowing the caller's,
-    so ``groupby='patient', clones=[two clones]`` returned a frame ``.equals()`` the
-    unrestricted call. The restriction is now intersected with each group's clones.
+    A per-group closure that rebinds the name to that group's clone list shadows the caller's,
+    so ``groupby='patient', clones=[two clones]`` would return a frame ``.equals()`` the
+    unrestricted call -- a restriction accepted and silently dropped.
     """
     _model, adata, _truth = blocks
     subset = _clones_of(adata, "P0")[:2]
@@ -436,10 +418,10 @@ def test_groupby_honours_the_callers_clone_restriction(blocks):
 
 
 def test_groupby_warns_when_cells_have_no_group_label(blocks):
-    """D9: ``.dropna()`` on the groupby column silently excluded unlabelled cells.
+    """Cells with no label in the ``groupby`` column are excluded, so the exclusion is warned.
 
-    Measured 20% of cells dropped with no warning. Excluding a fifth of the data from every
-    reported number is not a default anyone opted into.
+    A bare ``.dropna()`` on that column takes data out of every reported number without the
+    caller choosing it; the warning is what makes the reduced n visible.
     """
     _model, adata, _truth = blocks
     site = pd.Series(adata.obs["patient"].astype(str).values, index=adata.obs_names)
@@ -452,10 +434,10 @@ def test_groupby_warns_when_cells_have_no_group_label(blocks):
 
 
 def test_a_single_draw_reports_no_spread(blocks):
-    """D11: ``n_samples=1`` returned ``sd=0.0`` and a zero-width HDI.
+    """One draw carries no information about spread, so ``n_samples=1`` summarises to NaN.
 
-    One draw carries no information about spread. Reporting ``[0.289341, 0.289341]`` states a
-    certainty that was never measured; NaN says what is actually known.
+    An ``sd`` of 0.0 and a zero-width HDI state a certainty that was never measured. The second
+    half asserts that the n=1 case did not disable real summaries.
     """
     _model, adata, _truth = blocks
     one = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=1,
@@ -470,7 +452,7 @@ def test_a_single_draw_reports_no_spread(blocks):
     )
 
 
-# ── flux: the two sides must come from one shared draw (issue #65) ───────────
+# ── flux: the two sides must come from one shared draw ───────────────────────
 
 @pytest.mark.parametrize("random_state", [None, 0, 7])
 @pytest.mark.parametrize("distance_metric", ["kl", "l1", "jsd"])
@@ -478,14 +460,10 @@ def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
     """The flux of a covariate against ITSELF is the distance of a distribution from itself,
     which is exactly 0 for every metric here.
 
-    It was not. The two sides came from two independent ``joint_draws`` calls, and at the
-    DEFAULT ``random_state=None`` those were independent samples — so self-flux read 0.209180
-    at n_samples=16. The number being reported was the sampling noise floor, and it grew with
-    the noise. The docstring already claimed the sides were drawn "coherently (same seed)";
-    that was true only when a seed was passed.
-
-    ``random_state=None`` is parametrised deliberately — it is the default, and it is the case
-    that was broken. A test that only checked a seeded call would have passed throughout.
+    Two independent ``joint_draws`` calls would instead report the sampling noise floor, which
+    grows with ``n_samples`` rather than shrinking. ``random_state=None`` is parametrised
+    deliberately: it is the default, and it is the case where nothing but a shared draw makes
+    the two sides agree, so a seeded-only test could not see it.
     """
     _model, adata, _truth = blocks
     out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_0", n_samples=16,

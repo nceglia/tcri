@@ -1,22 +1,19 @@
 """The package layout, as a test.
 
-Every rule here was violated at least once and fixed by hand. A layout that is only ever
-restored by someone noticing will drift back the moment nobody is looking, so the shape is
-pinned rather than described.
+A layout that is only ever restored by someone noticing will drift back the moment nobody is
+looking, so the shape is pinned rather than described.
 
 What each rule is defending against, concretely:
 
 * **Contract manifests inside the package.** They are enforcement, not code; nothing in ``tcri``
-  imports them. While they sat in ``tcri/tools/`` and ``tcri/model/`` every wheel shipped them,
-  handing users a frozen declaration they could mistake for an API.
-* **Loose private modules at the top level.** ``_console`` (dead), ``_keys`` (a shim outliving
-  its migration), ``_stats``, ``_distance`` — the top level had become where anything shared
-  landed by default.
+  imports them. Anything under ``tcri/`` ships in the wheel, so a manifest there hands users a
+  frozen declaration they could mistake for an API.
+* **Loose private modules at the top level.** Without a rule, the top level is where anything
+  shared lands by default, and nothing says which layer it belongs to.
 * **Upward imports.** ``_compute`` and ``_stats`` are lower layers. A module-level import back up
-  into ``tools`` makes the package import-order dependent; one such edge existed and resolved
-  only by luck.
-* **An unbounded top-level surface.** With no ``__all__``, ``sys`` and ``PackageNotFoundError``
-  were advertised by ``dir(tcri)`` purely because they were imported at module scope.
+  into ``tools`` makes the package import-order dependent, and whether it resolves is luck.
+* **An unbounded top-level surface.** With no ``__all__``, a module-scope ``import sys`` is
+  advertised by ``dir(tcri)`` as part of the API.
 """
 from __future__ import annotations
 
@@ -68,9 +65,9 @@ def test_no_loose_top_level_modules():
 
 
 def test_no_contract_manifests_inside_the_package():
-    # __pycache__ is skipped deliberately: a stale .pyc from a module deleted in this very pass
-    # is build residue, not a layout violation, and it would make the guard fail for a reason
-    # that has nothing to do with what it is defending.
+    # __pycache__ is skipped deliberately: a stale .pyc from a deleted module is build residue,
+    # not a layout violation, and it would make the guard fail for a reason that has nothing to
+    # do with what it is defending.
     offenders = [str(p.relative_to(ROOT)) for p in PKG.rglob("*")
                  if p.is_file() and "__pycache__" not in p.parts
                  and ("contract" in p.name.lower() or p.suffix == ".pyi")]
@@ -105,7 +102,9 @@ def test_top_level_surface_is_declared():
 
 
 def test_governance_lives_outside_the_docs_tree():
-    """`governance/` and `docs/contracts/` were one letter apart as `docs/contract`."""
+    """The governance corpus lives in `governance/` at the repo root. `docs/contracts/` is the
+    published reader page, and `docs/contract/` differs from it by one letter, so the wrong one
+    is easy to recreate."""
     assert (ROOT / "governance").is_dir(), "governance/ is missing"
     assert not (ROOT / "docs" / "contract").exists(), (
         "docs/contract/ is back. The governance corpus lives in governance/ at the repo root; "
@@ -121,9 +120,9 @@ def test_governance_lives_outside_the_docs_tree():
 def test_the_wheel_ships_only_the_package():
     """The check that actually consumes the layout.
 
-    Every layout defect in this pass was invisible to the unit suite and visible in a built
-    artifact: contract manifests shipping, dead modules shipping. `git ls-files` is a cheap
-    proxy for it — nothing outside `tcri/` may be inside `tcri/`.
+    A layout defect is invisible to the unit suite and visible in a built artifact: contract
+    manifests shipping, dead modules shipping. `git ls-files` is a cheap proxy for it — nothing
+    that is not Python may sit inside `tcri/`.
     """
     tracked = subprocess.run(["git", "ls-files", "tcri/"], cwd=ROOT,
                              capture_output=True, text=True, check=True).stdout.split()
@@ -148,10 +147,9 @@ def test_namespace_exposes_exactly_its_all(ns):
 
     `__all__` alone is not enough: it governs `from x import *`, but `dir(x)` — which is what
     tab-completion and `help()` show, and what a reader treats as the API — still lists every
-    module-scope binding. `tcri.ut` was the worst case, advertising 27 public names for a
-    namespace with 4: numpy, os, sys, matplotlib, typing aliases, scipy functions and the
-    private session-path constants, all pulled in by `from ._utils import *` over a module with
-    no `__all__`.
+    module-scope binding. A `from ._utils import *` over a module with no `__all__` puts numpy,
+    os, sys, matplotlib, typing aliases and private session-path constants on the namespace, and
+    `dir()` advertises every one of them.
 
     The contract's surface check could not see any of it. `_public_callables` freezes callables
     whose `__module__` starts with "tcri", so a re-exported third-party name is invisible to it
@@ -182,9 +180,8 @@ def test_namespace_all_contains_only_tcri_objects(ns):
     The companion test above asks whether anything is exposed but undeclared. That alone is
     satisfiable the wrong way: adding ``"np"`` to ``__all__`` makes the leak *declared* and the
     test green. The contract's surface check does not catch it either — ``_public_callables``
-    requires ``callable(attr)``, and a module is not callable — so a re-exported third-party
-    module could sit in the public API with both guards passing. This was found by mutating
-    exactly that and watching the suite stay green.
+    requires ``callable(attr)``, and a module is not callable — so without this test a
+    re-exported third-party module could sit in the public API with both guards passing.
 
     So: every name a namespace declares must be something tcri defines, or a tcri submodule.
     """

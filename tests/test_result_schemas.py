@@ -1,9 +1,10 @@
 """The shape of every stored ``tl`` result, pinned.
 
-``@tl_result(version=N)`` declares the schema version of a stored result, but nothing forced the
-number to move when the fields did: the layouts live in comments in ``tcri/_state/schemas.py``, and
-``pl`` and ``tcri.get`` read the frames by column name. A rename or a dropped column therefore used
-to pass every test while making every stored result of the previous release unreadable.
+``@tl_result(version=N)`` declares the schema version of a stored result, but nothing in the code
+forces the number to move when the fields do: the layouts live in comments in
+``tcri/_state/schemas.py``, and ``pl`` and ``tcri.get`` read the frames by column name. Without this
+test a renamed or dropped column passes the suite while making every result stored by an earlier
+version unreadable.
 
 This test runs each tool twice on the ``cohort`` fixture — once with only its required arguments,
 once with grouping, splitting and draws — records the slots, their column names and index levels,

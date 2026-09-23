@@ -6,19 +6,12 @@ its own value down. When the two declarations disagree, the outer one silently w
 the inner one becomes **dead** — reachable only by constructing the inner object directly,
 which is exactly what a test fixture or a downstream user does.
 
-This has happened four times:
+Four knobs are declared in both layers and so are pinned by value below:
+``reconstruction_loss_scale``, ``local_scale``, ``n_steps_kl_warmup`` and ``global_scale`` (α).
 
-* ``reconstruction_loss_scale`` — ``train()`` 1e-3, ``_module`` 1e-3, ``_training`` 1e-2.
-  The effective value was 1e-3, so ``_training``'s was already dead. Found only while
-  re-measuring deviation [E]; unified in 19db68e.
-* ``local_scale`` — ``TCRIModel`` 3.0, ``TCRIModule`` 5.0. Effective 3.0.
-* ``n_steps_kl_warmup`` — ``train()`` 2000, ``UnifiedTrainingPlan`` 1000. Effective 2000.
-* ``global_scale`` (α) — ``TCRIModel`` 5.0, ``TCRIModule`` 10.0. Effective 5.0. Found by
-  this test on its first run, having been missed by every manual pass.
-
-None was caught by the knob test, because that verifies a value *arrives* at its target —
-which it does. The defect is that the two declared defaults differ, so a caller reading one
-signature is misled about what the package does.
+A test that a value *arrives* at its target cannot catch this, because it does arrive. The
+defect is that the two declared defaults differ, so a caller reading one signature is misled
+about what the package does.
 
 Cheap and signature-only: no model is constructed.
 """
@@ -70,8 +63,8 @@ def test_shared_defaults_agree(outer, inner, label):
 
 
 def test_the_known_drifted_knobs_are_pinned():
-    """Regression lock on the four that actually drifted, so a future edit to one layer
-    cannot silently reintroduce the split."""
+    """The four knobs declared in both layers, pinned by value, so an edit to one layer
+    cannot silently reintroduce a split."""
     model, module = _defaults(TCRIModel.__init__), _defaults(TCRIModule.__init__)
     train, plan = _defaults(TCRIModel.train), _defaults(UnifiedTrainingPlan.__init__)
 

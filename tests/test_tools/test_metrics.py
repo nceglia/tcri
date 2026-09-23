@@ -1,11 +1,11 @@
-"""The four engine-backed metric twins + compare_groups (PR6). Shapes, bits/normalization,
+"""The four engine-backed metric twins and the group contrast: shapes, bits/normalization,
 and the group-comparison math.
 
-Every ``tl`` now returns the same three payload keys — ``table`` (one row per draw, never
+Every ``tl`` returns the same three payload keys — ``table`` (one row per draw, never
 reduced), ``result`` (reduced over draws), ``stats`` (the between-split contrast, ``None``
 without ``splitby``) — and stores that object under its ``uns`` key. These tests read the
-payload rather than a bare float/Series, which is the whole point of the migration: there is
-one shape to learn instead of four return types that depended on which axes you passed.
+payload rather than a bare float/Series, so there is one shape to learn rather than a return
+type per combination of axes.
 """
 import numpy as np
 import pandas as pd
@@ -90,9 +90,9 @@ def test_metric_groupby_tidy(trained_model):
 def test_every_metric_returns_what_it_cached(trained_model):
     """The store-once invariant, on all five tools: what you get back IS what is in ``uns``.
 
-    Before this, each ``pl.*`` recomputed the metric from ``adata``, so the plot and the frame
-    in the caller's hand could disagree — different ``n_samples``, a different draw, a
-    ``distance_metric`` default that differed between ``tl`` and ``pl``.
+    If ``pl.*`` recomputed the metric from ``adata`` instead of reading the cache, the plot and
+    the frame in the caller's hand could disagree — a different ``n_samples``, a different draw,
+    a ``distance_metric`` that differed between ``tl`` and ``pl``.
     """
     _, adata = trained_model
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
@@ -137,9 +137,10 @@ def test_phenotypic_flux_over_common_clones(trained_model):
 # ── the contrast: internal, and reached through `splitby` ────────────────────
 
 def test_compare_groups_is_not_public():
-    """It was ``tl.compare_groups``: a second function you had to remember to call, on the
-    right frame, having picked the replicate unit yourself. ``splitby`` now produces the
-    contrast as part of the metric, so the separate step has nothing left to do."""
+    """The contrast is not a public step: ``splitby`` produces it as part of the metric.
+
+    A public function would have to be called on the right frame, with the replicate unit
+    picked by the caller. It stays importable internally, for the metrics to use."""
     assert "compare_groups" not in tcri.tl.__all__
     assert not hasattr(tcri.tl, "compare_groups")
     from tcri._stats import compare_groups   # still there, just not a public step
@@ -150,9 +151,9 @@ def test_compare_groups_is_not_public():
 def test_build_stats_delegates_to_the_one_contrast(cohort):
     """``stats`` is not a second Mann-Whitney implementation — it IS ``compare_groups``.
 
-    Two copies of "rank-test two levels and star the p" is exactly how the ``tl``/``pl``
-    ``distance_metric`` disagreement happened. This asserts they cannot drift: the delta and
-    p in ``stats`` equal what ``compare_groups`` returns on the per-group frame.
+    Two copies of "rank-test two levels and star the p" would be free to drift apart. This
+    asserts they cannot: the delta and p in ``stats`` equal what ``compare_groups`` returns on
+    the per-group frame.
     """
     from tcri._stats import compare_groups
 
@@ -204,11 +205,11 @@ def test_stats_carries_the_between_replicate_spread(cohort):
 def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_col, cohort):
     """n is the number of PATIENTS, on every metric — including the ones with an item axis.
 
-    This is #66, and the item-bearing metrics are where it actually bites: `result` holds one
-    row per (patient, clone), so handing it straight to a rank test compares hundreds of
-    clones and reports a star off n=6 patients. Checked here on all three because the same
-    assertion on `mutual_information` alone proves nothing — MI has no item axis, so its
-    `result` is already one row per patient and the collapse is a no-op.
+    The item-bearing metrics are where this bites: `result` holds one row per (patient, clone),
+    so handing it straight to a rank test compares hundreds of clones and reports a star off
+    six patients. Checked here on all three because the same assertion on `mutual_information`
+    alone proves nothing — MI has no item axis, so its `result` is already one row per patient
+    and the collapse is a no-op.
     """
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
@@ -252,10 +253,8 @@ def test_compare_groups_unpaired():
 def test_compare_groups_paired_direction():
     """Paired posterior-draw contrast emits p_gt + HDI via prob_direction.
 
-    NOTE: this branch has no producer — it wants a frame whose cells are draw VECTORS, and
-    no ``tl`` emits that shape. It is kept rather than deleted because ``table`` (one row per
-    group/item/draw) makes a paired posterior contrast genuinely reachable now, and which
-    estimand that should be is a question for the authors. Tracked as an issue.
+    The branch takes a frame whose cells are draw VECTORS, which no ``tl`` emits, so it is
+    exercised directly here rather than through a metric.
     """
     from tcri._stats import compare_groups
 
@@ -273,16 +272,15 @@ def test_compare_groups_paired_direction():
 
 
 def test_build_result_survives_an_empty_table():
-    """An empty table has NO columns, which is what made this crash.
+    """An empty table has NO columns, which is what makes this a crash rather than a no-op.
 
     `build_result` derives its grouping keys from `table.columns`. When the table is empty
     those columns are a bare RangeIndex, so `keys` is empty, the scalar branch runs, and
-    `table["value"]` raises KeyError('value') from four frames inside pandas.
+    `table["value"]` raises KeyError('value') from inside pandas.
 
     This is a real path, not a hypothetical: `phenotypic_flux` legitimately produces nothing
     when no replicate has clones at both covariate levels — which is always true if the
-    covariate is constant within replicate. Found on a 525k-cell run that had already spent
-    17 minutes training before it died here.
+    covariate is constant within replicate.
     """
     import pandas as pd
     from tcri._compute._tables import build_result

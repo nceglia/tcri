@@ -180,10 +180,11 @@ def test_guide_family_matches_contract(traced):
 def test_guide_registers_variational_params(traced):
     """Both variational parameters are registered, under whatever namespace the module has.
 
-    Since 0.12 a module registers under ``f"{name}."`` so two models can share the process, so
-    the contract names the PARAMETERS and the test compares the tail of each traced site. The
-    fixture here is unnamed, and the second half asserts the tail match is doing real work
-    rather than passing because the tail happens to be the whole name.
+    A module registers under ``f"{name}."`` so two models can share one process, so the contract
+    names the PARAMETERS rather than the store keys and this test compares the tail of each
+    traced param site. The fixture here is unnamed;
+    ``test_guide_params_live_under_the_module_namespace`` below is what shows the tail match is
+    doing real work rather than passing because the tail happens to be the whole name.
     """
     _, _, g_trace, _, _ = traced
     params = {n for n, nd in g_trace.nodes.items() if nd["type"] == "param"}
@@ -306,7 +307,7 @@ def test_beta_scales_the_covariate_prior(traced):
 
 
 def test_alignment_factor_is_a_negative_kl(traced):
-    """Inference Details: the surrogate must ENTER as −γ·KL (a penalty), never +γ·KL."""
+    """eq 7: the surrogate must ENTER as −γ·KL (a penalty), never +γ·KL."""
     _, m_trace, _, _, _ = traced
     node = m_trace.nodes["phenotype_alignment"]
     val = node["fn"].log_factor if hasattr(node["fn"], "log_factor") else node["value"]
@@ -471,11 +472,12 @@ def test_latent_scale_is_the_encoder_std(traced):
     """eq 6 / eq 3: one σ. The guide's q(z|x) scale and every VampPrior component scale must be
     the square root of the encoder's variance output, under the same clamp.
 
-    scvi's ``Encoder`` returns ``(mean, VARIANCE, sample)``. The guide used the variance as the
-    Normal scale (q(z|x) = N(μ, σ⁴)) and the VampPrior used ``sqrt(exp(variance))`` (never below
-    1), so eq 3's "mixture of encoder posteriors" was not built from the encoder posterior and
-    the latent KL compared two parameterisations. Both fail on the parent commit. Traced in
-    eval mode so encoder dropout does not make the comparison stochastic.
+    scvi's ``Encoder`` returns ``(mean, VARIANCE, sample)``, so the parameterisation is easy to
+    get wrong in two directions: taking the variance as the Normal scale gives q(z|x) = N(μ, σ⁴),
+    and ``sqrt(exp(variance))`` in the prior gives a scale that can never fall below 1. Either
+    way eq 3's "mixture of encoder posteriors" is not built from the encoder posterior, and the
+    latent KL compares two different parameterisations. Traced in eval mode so encoder dropout
+    does not make the comparison stochastic.
     """
     model, _, _, args, kwargs = traced
     mod = model.module
@@ -515,15 +517,14 @@ def test_latent_scale_is_the_encoder_std(traced):
 
 
 def test_data_plate_is_scaled_to_the_dataset(traced):
-    """eq 7 sums the per-cell terms over N cells and the two Dirichlet KLs once, so a
-    minibatch is an unbiased estimate only if the data plate carries ``size = N`` with the
-    batch as its subsample. Checked on a live trace of a batch with ``B < N``: the per-cell
-    sites carry scale ``N/B`` (times their own poutine scale), the global sites carry 1.
+    """eq 7 sums the per-cell terms over N cells and the two Dirichlet KLs once, so a minibatch
+    is an unbiased estimate only if the data plate carries ``size = N`` with the batch as its
+    subsample. Checked on a live trace of a batch with ``B < N``: the per-cell sites carry scale
+    ``N/B`` (times their own poutine scale), the global sites carry 1.
 
-    Declared at ``size = B`` every site read scale 1 and the assertion below fails at the
-    first line. The second pass sets ``n_obs_training`` to a smaller number and asserts the
-    scale follows it, which is what makes the training split -- not the whole object -- the
-    reference.
+    Declared at ``size = B`` instead, every site reads scale 1 and the first assertion below
+    fails. The second pass sets ``n_obs_training`` to a smaller number and asserts the scale
+    follows it, which is what makes the training split -- not the whole object -- the reference.
     """
     model, _, _, _, _ = traced
     mod = model.module

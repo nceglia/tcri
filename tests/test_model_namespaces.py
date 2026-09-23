@@ -1,15 +1,13 @@
 """Two models in one process, and the store keys that keep them apart.
 
-Pyro's parameter store is process-global and, until 0.12, every `TCRIModule` registered under
-the same names: `q_p_c_raw`, `q_p_ct_raw`, and `scvi$$$...` from `pyro.module("scvi", self)`.
-A second model therefore continued the first one's fit. The constructor warned about it, the
-test suite worked around it (one fitted fixture per session; an autouse fixture that snapshotted
-and restored the store), and it broke the suite twice during the perturbation work.
+Pyro's parameter store is process-global, so two `TCRIModule`s registered under the same names
+share one fit: the second overwrites the first, and the first goes on predicting from
+parameters it never learned. `name` is what separates them -- a model owns exactly the store
+keys under `f"{name}."`, and `""` is the unnamed layout that a session saved before namespaces
+existed restores into.
 
-`name` is the fix: a model owns exactly the store keys under `f"{name}."`, and `""` is the
-historical unnamed layout that every session saved before 0.12 uses. These tests are the
-guarantee the null work rests on, since a null is a second fit of the same model living beside
-its parent.
+These are the tests a null rests on, since a permutation reference is a second fit of the same
+model living beside its parent (`governance/MODEL_CONTRACT.md`, "A null is this model").
 
 Fits are deliberately tiny -- the assertions are about names and isolation, not accuracy.
 """
@@ -66,10 +64,9 @@ def _keys():
 def test_two_models_coexist():
     """Fit `a`, fit `b`, and `a` still predicts what it predicted. No `clear_param_store`.
 
-    This is the whole point. Before `name`, `b`'s guide wrote `q_p_ct_raw` over `a`'s and
-    `a.predict()` silently returned numbers from `b`'s fit -- the failure that broke the
-    perturbation suite twice, once as an `IndexError` when the two had different phenotype
-    counts and once, more quietly, when they did not.
+    This is the whole point of `name`. Sharing store keys, `b`'s guide writes `q_p_ct_raw` over
+    `a`'s and `a.predict()` returns numbers from `b`'s fit -- loudly, as an `IndexError`, when
+    the two have different phenotype counts, and silently when they do not.
     """
     a_data, b_data = _adata(0), _adata(1)
     a = _fit(a_data, "a", seed=0)
@@ -113,11 +110,12 @@ def test_fitting_b_does_not_move_a():
 
 
 def test_unnamed_is_the_legacy_layout():
-    """`name=""` registers exactly the names every saved 0.10/0.11 session was written under.
+    """`name=""` registers exactly the names a session saved before namespaces existed was
+    written under.
 
-    Pinned as a literal set rather than a property, because this is a compatibility claim
-    about files on disk: a session saved before 0.12 restores by key, so a rename here makes
-    every one of them silently load into nothing.
+    Pinned as a literal set rather than a property, because this is a compatibility claim about
+    files on disk: such a session restores by key, so a rename here makes every one of them
+    silently load into nothing.
     """
     model = _fit(_adata(0), "", seed=0)
     keys = _keys()
@@ -145,9 +143,9 @@ def test_ownership_is_not_a_bare_prefix_test():
     assert not _owns_param("a", "ab.q_p_ct_raw"), "prefix match without the separator"
 
     # ...and it must not claim DOWNWARD either. A null's namespace is `f"{parent}.null.{kind}"`,
-    # so `key.startswith(f"{name}.")` -- the fix for the unnamed case above, and correct for
-    # every test written before nulls existed -- makes a parent own its own nulls' parameters
-    # and warn that it is about to continue its own fit.
+    # so plain `key.startswith(f"{name}.")` -- which is what the unnamed case above requires --
+    # makes a parent own its own nulls' parameters and warn that it is about to continue its
+    # own fit.
     assert not _owns_param("a", "a.null.phenotype.q_p_ct_raw"), "a parent claimed its null"
     assert not _owns_param("", "null.phenotype.q_p_ct_raw"), "an unnamed parent claimed its null"
     assert _owns_param("a.null.phenotype", "a.null.phenotype.q_p_ct_raw")
@@ -179,9 +177,9 @@ def test_the_snapshot_restores_only_its_own_concentrations():
     """`BestObjectiveSnapshot` keys on the module's namespace, not on "everything but the
     networks".
 
-    The old filter was `not name.startswith("scvi$$$")`, i.e. the whole store minus the
-    networks -- correct while one model existed per process, and a silent cross-fit restore
-    the moment two do.
+    Filtering by `not name.startswith("scvi$$$")` -- the whole store minus the networks -- is
+    indistinguishable from the right answer while one model exists per process, and a silent
+    cross-fit restore the moment two do.
     """
     from tcri.model._callbacks import _is_own_guide_param
 
@@ -203,8 +201,8 @@ def test_the_weight_decay_exemption_survives_a_namespace():
     """B8's exemption matches the parameter's tail, so a named model keeps it.
 
     An exact match against `{"q_p_c_raw", "q_p_ct_raw"}` passes every test in the suite that
-    builds unnamed models and silently reinstates the flat-Dirichlet prior for every named
-    one -- the defect B8 exists to remove, reintroduced by a rename.
+    builds unnamed models and silently reinstates the flat-Dirichlet prior for every named one
+    -- the effect `governance/TRAINING_CONTRACT.md` B8 exists to rule out.
     """
     from tcri.model._training import _per_param_optim_args
 

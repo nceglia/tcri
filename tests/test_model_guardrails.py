@@ -1,8 +1,9 @@
-"""Guardrails on TCRIModel construction/training defaults.
+"""Guardrails on TCRIModel construction and training defaults.
 
-These pin fixes for footguns found in the performance audit: a hard crash on small
-datasets, silent cross-model contamination via Pyro's process-global param store,
-a pathological batch size, and Trainer knobs the caller could not override.
+Each test asserts that a configuration which would otherwise produce a quietly bad fit is
+corrected with a warning or rejected outright: K above the clonotype count, a second model
+sharing Pyro's process-global param store, a batch size that leaves one optimizer step per
+epoch, and Trainer keywords the caller must be able to override.
 """
 import contextlib
 import io
@@ -68,7 +69,8 @@ def _model(adata, **kw):
 
 
 def test_K_clamped_to_n_clonotypes(tiny_adata):
-    """K > n_clonotypes used to raise from sklearn KMeans; it now clamps + warns."""
+    """K above the clonotype count cannot be met by KMeans, so the constructor clamps and
+    warns rather than raising."""
     pyro.clear_param_store()
     with pytest.warns(UserWarning, match="archetype"):
         model = _model(tiny_adata)  # K=10 default, only 5 clones
@@ -87,7 +89,8 @@ def test_second_model_warns_about_shared_param_store(tiny_adata):
 
 
 def test_batch_size_at_or_above_n_obs_warns(tiny_adata):
-    """batch_size >= n_obs => 1 optimizer step/epoch (the 9-hour-notebook pathology)."""
+    """batch_size >= n_obs leaves ONE optimizer step per epoch, so a large max_epochs buys
+    almost no optimisation; the caller must be told."""
     pyro.clear_param_store()
     model = _model(tiny_adata, K=5)
     with pytest.warns(UserWarning, match="SINGLE"):
@@ -99,11 +102,12 @@ def test_batch_size_at_or_above_n_obs_warns(tiny_adata):
 def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
     """The optimizer settings must configure SVI, not a side optimizer.
 
-    ``UnifiedTrainingPlan`` used to override ``configure_optimizers`` with a real
-    torch Adam over every module parameter. That replaced scvi's deliberate no-op
-    shim and ran *after* ``SVI.step()`` had already zeroed the gradients, so it
-    only ever applied a scale-free ~lr*sign(p) shrink — and ``lr`` never reached
-    the optimizer that actually descends the ELBO (Pyro stayed at scvi's 1e-3).
+    Pyro's optimizer is the one that descends the ELBO; scvi's Lightning-facing
+    ``configure_optimizers`` is a deliberate no-op shim over a single dummy parameter. A real
+    torch optimizer there runs *after* ``SVI.step()`` has already zeroed the gradients, so it
+    applies only a scale-free shrink to every module parameter while ``lr`` never reaches the
+    optimizer doing the work. Both halves are asserted: the per-parameter settings Pyro
+    resolves, and the size of what Lightning is handed.
     """
     from tcri.model._training import UnifiedTrainingPlan
 
@@ -138,11 +142,12 @@ def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
 
 
 def test_trainer_knobs_are_overridable(tiny_adata):
-    """These were hard-coded keywords: passing them raised 'got multiple values'."""
+    """A Trainer keyword train() also sets must be forwarded once, so passing it explicitly
+    overrides the default instead of colliding with it."""
     pyro.clear_param_store()
     model = _model(tiny_adata, K=5)
     with contextlib.redirect_stdout(io.StringIO()):
-        model.train(  # would previously raise TypeError
+        model.train(
             max_epochs=6, batch_size=256,
             early_stopping_patience=1, check_val_every_n_epoch=1,
             enable_progress_bar=False, enable_model_summary=False,
@@ -168,18 +173,16 @@ def _fitted_for_binding():
 
 @pytest.mark.parametrize("view", ["reversed", "tail", "shuffled"])
 def test_predict_binds_p_ct_by_cell_not_by_loader_position(view):
-    """NEW-1: a cell's prediction must not depend on what else was passed alongside it.
+    """A cell's prediction must not depend on what else was passed alongside it.
 
-    ``predict`` indexed the clone x covariate prior with a running loader offset:
-    ``ct_array[current_idx : current_idx + n]``. ``ct_array`` is keyed by TRAINING cell id, so
-    the offset is the correct index only when the passed object is a contiguous prefix of the
-    training data in its original order. Any other subset, a reordered view, or a per-patient
-    slice — all legal under the frozen contract — gave cell *i* the prior of the *i*-th
-    TRAINING cell.
+    ``predict`` binds each cell to its clonotype x covariate prior. Bound instead by a running
+    loader offset, that offset is the right index only when the passed object is a contiguous
+    prefix of the training data in its original order; any other subset, a reordered view, or a
+    per-patient slice -- all legal under ``governance/API_CONTRACT.md`` -- gives cell *i* the
+    prior of the *i*-th TRAINING cell.
 
-    Measured before the fix on a reversed view: max |Δp| = 0.3696. On a prefix it read 0.0000,
-    which is why it went unnoticed — so ``tail`` and ``shuffled`` are here deliberately, and a
-    prefix would not discriminate.
+    A prefix view cannot see that, which is why ``tail`` and ``shuffled`` are in the parametrize
+    list: the same cells must get the same probabilities in any arrangement.
     """
     model, adata = _fitted_for_binding()
     full = model.predict(adata)
@@ -202,7 +205,8 @@ def test_predict_binds_p_ct_by_cell_not_by_loader_position(view):
 
 
 def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
-    """NEW-1 in the other place it appeared: to_anndata's logit/prior loop."""
+    """The same per-cell binding in ``to_anndata``'s logit/prior loop: a reversed view must
+    leave every cell's log-posterior where ``predict`` put it."""
     from tcri._state.keys import X_LOGPOSTERIOR
 
     model, adata = _fitted_for_binding()

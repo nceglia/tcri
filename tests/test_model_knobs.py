@@ -1,16 +1,16 @@
-"""Knob-test matrix — every constructor/train knob gets a correctness test.
+"""Knob-test matrix -- every constructor and train knob gets a correctness test.
 
 Two layers, and the split matters:
 
-**WIRING** — does the value actually reach the object it claims to configure?
-This layer exists because ``lr`` was marked "hooked up" in the matrix for months
-while never reaching Pyro's optimizer: the model still converged, so every
-behavioral test passed. A knob that is silently ignored is invisible to
-convergence tests. Assert the plumbing directly.
+**WIRING** -- does the value actually reach the object it claims to configure? A knob that is
+accepted and then ignored is invisible to a convergence test, because the model still fits.
+Assert the plumbing directly.
 
-**BEHAVIOR** — the mathematically-correct input->output assertion (draw variance
-scales as 1/(scale+1), temperature sharpens, gate endpoints reduce to closed
-forms, batch size is an invariance).
+**BEHAVIOR** -- the mathematically-correct input->output assertion (draw variance scales as
+1/(scale+1), temperature sharpens, gate endpoints reduce to closed forms, batch size is an
+invariance).
+
+``governance/TRAINING_CONTRACT.md`` I7 and B6 are the statements this file enforces.
 """
 from __future__ import annotations
 
@@ -64,10 +64,10 @@ def adata():
 
 
 def _model(ad, **kw):
-    # DE-19: without a seed the network init depends on whatever ran earlier in the session,
-    # so these assertions were order-dependent and passed by luck. A change elsewhere that
-    # merely shifted RNG consumption was enough to land this fixture on a near-degenerate
-    # p_ct row and break the variance identity below.
+    # A fixed seed: unseeded, the network init depends on whatever ran earlier in the session,
+    # so these assertions become order-dependent and a change elsewhere that merely shifts RNG
+    # consumption can land this fixture on a near-degenerate p_ct row and break the variance
+    # identity below.
     kw.setdefault("seed", 0)
     kw.setdefault("n_latent", 8)
     kw.setdefault("n_hidden", 16)
@@ -131,10 +131,11 @@ def test_classifier_depth_is_wired(adata):
 
 
 def test_train_knobs_reach_the_optimizer_and_plan(adata):
-    """lr/weight_decay must reach PYRO's optimizer — the regression that started this.
+    """lr and weight_decay must reach PYRO's optimizer.
 
-    Marked "hooked up" in the knob matrix while Pyro silently used scvi's hard-coded
-    1e-3; the model still converged, so no behavioral test noticed.
+    Pyro's optimizer is the one that descends the ELBO. If the values stop at the Lightning
+    plan, the fit silently runs at scvi's default learning rate and still converges, so no
+    behavioural test notices.
     """
     m = _model(adata)
     plan = UnifiedTrainingPlan(
@@ -191,7 +192,8 @@ def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
     """The warmup must actually anneal module.kl_weight from ~0 up to kl_weight_max.
 
     NOTE the warmup is counted in optimizer STEPS while max_epochs is in epochs; with
-    batch_size >= n_obs that is one step per epoch (tracked as deviation DUX-2).
+    batch_size >= n_obs that is one step per epoch (``governance/TRAINING_CONTRACT.md`` B2,
+    which is why a run records the epoch equivalent).
     """
     m = _model(adata)
     seen = []
@@ -243,13 +245,12 @@ def test_local_scale_controls_p_ct_draw_variance(adata):
     # The knob assertion is the monotonicity above, on the FITTED base: that is what "local_scale
     # controls the p_ct draw variance" means.
     #
-    # The exact Dirichlet identity is a separate claim and is checked on a well-conditioned row
-    # rather than a fitted one. This fixture gives every cell of a clone the same phenotype, so
-    # the true p_ct row is one-hot and the fitted row is near-degenerate; the empirical variance
-    # of a near-degenerate Dirichlet is a high-variance estimator, and asserting rel=0.15 on it
-    # was marginal — it passed by luck and broke on a change that merely made the fit sharper.
-    # Checking the identity where it is well conditioned tests the same mathematics without
-    # inheriting the fixture's degeneracy.
+    # The exact Dirichlet identity is a separate claim, checked on a well-conditioned row rather
+    # than a fitted one. This fixture gives every cell of a clone the same phenotype, so the true
+    # p_ct row is one-hot and the fitted row is near-degenerate; the empirical variance of a
+    # near-degenerate Dirichlet is a high-variance estimator, so a tight tolerance there would
+    # track how sharp the fit happens to be rather than the identity. Checking the identity where
+    # it is well conditioned tests the same mathematics without inheriting the degeneracy.
     beta = 10.0
     row = torch.tensor([0.5, 0.3, 0.2], dtype=torch.float64)
     conc = beta * row                      # a_0 = beta exactly; the clamp cannot bite
@@ -259,7 +260,7 @@ def test_local_scale_controls_p_ct_draw_variance(adata):
 
 
 def test_global_scale_enters_the_eq1_prior(adata):
-    """α scales the clonotype-prior concentration (deviation [G] fix)."""
+    """``governance/MODEL_CONTRACT.md`` eq 1: α scales the clonotype-prior concentration."""
     lo = _model(adata, global_scale=1.0)
     hi = _model(adata, global_scale=50.0)
     conc = lambda m: float((m.module.global_scale * m.module.mixture_concentration).sum(-1).mean())
@@ -333,9 +334,9 @@ def test_gate_prob_endpoints_reduce_to_closed_forms(adata, gate, expect):
 def test_predict_is_invariant_to_batch_size(adata):
     """batch_size is a chunking detail, not a modelling one.
 
-    Tolerance is float32-scale, not exact: different batch shapes take different BLAS
-    kernel paths, so the encoder's accumulations differ in the last bits (~1e-7 here).
-    Anything materially larger would mean batch_size is affecting the computation.
+    Tolerance is float32-scale, not exact: different batch shapes take different BLAS kernel
+    paths, so the encoder's accumulations differ in the last bits. Anything materially larger
+    would mean batch_size is affecting the computation.
     """
     m = _model(adata)
     _train(m)
@@ -346,15 +347,15 @@ def test_predict_is_invariant_to_batch_size(adata):
     np.testing.assert_allclose(a.sum(1), 1.0, atol=1e-5)
 
 
-# ══════════════════════ device seam (CU-01) ═════════════════════════════════
+# ══════════════════════════ device seam ═════════════════════════════════════
 
 def test_device_reaches_the_engine_from_every_metric(adata):
     """``device=`` must actually configure the numeric core.
 
-    The seam existed in ``_compute/_xp`` from PR5 but no metric exposed it, so it was
-    unreachable — GPU was documented and dead. This asserts the value arrives at
-    ``_joint_draws`` for every public metric, which is the only thing that makes a
-    GPU run possible.
+    The numeric core takes a device, but only a metric that forwards the argument makes that
+    reachable: an unforwarded ``device=`` is a documented option that does nothing. This asserts
+    the value arrives at ``_joint_draws`` for every public metric, which is what makes a GPU run
+    possible at all.
     """
     import tcri
     import tcri._compute._joint as CJ

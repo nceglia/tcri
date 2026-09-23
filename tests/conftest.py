@@ -25,7 +25,7 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    """Deterministic RNG for all tests (Notion T13)."""
+    """Deterministic RNG for all tests."""
     np.random.seed(42)
     torch.manual_seed(42)
     config.addinivalue_line(
@@ -66,17 +66,17 @@ def _remember_fixture_params(name: str) -> None:
 def _keep_the_fixture_params_alive():
     """Put the session fixtures' parameters back after a test that cleared the store.
 
-    Pyro's store is process-global and 22 test files call ``clear_param_store()``; the
+    Pyro's store is process-global, and many test files call ``clear_param_store()``; the
     session-scoped ``trained_model`` and ``cohort`` fixtures are built once and read their
-    guide concentrations out of that store for the rest of the run, so any of those files
-    running in between used to leave them reading another model's parameters or nothing at
-    all. The perturbation work hit this twice -- once as an ``IndexError`` when two fixtures
-    had different phenotype counts, once silently.
+    guide concentrations out of that store for the rest of the run. Without this, a test that
+    clears the store leaves those fixtures reading another model's parameters or nothing at
+    all -- an ``IndexError`` when two fixtures have different phenotype counts, and a silently
+    wrong number when they do not.
 
-    This is only writable because the fixtures are NAMED (0.12): the keys a fixture owns are
-    exactly those under ``f"{name}."``, so they can be restored without touching whatever the
-    test under way put in the store. It restores rather than prevents, so a test is still free
-    to clear the store for its own purposes.
+    This is only writable because each fixture is built under a model ``name``: the keys a
+    fixture owns are exactly those under ``f"{name}."``, so they can be restored without
+    touching whatever the test under way put in the store. It restores rather than prevents,
+    so a test is still free to clear the store for its own purposes.
     """
     yield
     if not _FIXTURE_PARAMS:
@@ -93,7 +93,7 @@ def _keep_the_fixture_params_alive():
 def _fit_the_nulls(model, adata):
     """Give a fitted fixture the permutation references every scored metric defaults to.
 
-    Carried by the FIXTURE rather than passed as `null_model=None` at ~200 call sites, so the
+    Carried by the FIXTURE rather than passed as `null_model=None` at every call site, so the
     default path is the tested path: a metric called the way a user calls it computes a
     reference, writes a second `uns` key and returns the `excess` columns, and the suite sees
     all of that. The four tests that deliberately measure something else -- device parity,
@@ -185,7 +185,7 @@ def mock_joint_distribution():
 
 @pytest.fixture(scope="session")
 def synthetic_adata():
-    """Tiny deterministic AnnData for model fixtures (Notion T1)."""
+    """Tiny deterministic AnnData for model fixtures."""
     _seed_all(0)
     rng = np.random.default_rng(0)
 
@@ -228,9 +228,9 @@ def trained_model(synthetic_adata):
         covariate_key="timepoint",
         batch_key="patient",
     )
-    # NAMED (0.12): this fixture owns the store keys under "trained." and nothing else, so it
-    # coexists with `cohort` and with any model a test builds. It no longer clears the store on
-    # the way in -- that is what used to wipe whichever fixture was built first.
+    # The model name scopes this fixture's store keys: it owns those under "trained." and
+    # nothing else, so it coexists with `cohort` and with any model a test builds. It must not
+    # clear the store on the way in -- that would wipe whichever fixture was built first.
     model = TCRIModel(
         adata,
         n_latent=8,

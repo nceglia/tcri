@@ -1,12 +1,14 @@
-"""Behavioural invariants for the training plan (DE-1, DE-4).
+"""Behavioural invariants for the training plan.
 
-The training layer had no contract and no behavioural tests. The knob test verified that
-``patience`` *arrives* at ``EarlyStopping.patience`` and marked it ✅ — while patience was
-counted in validation checks, ``validation_step`` was taking optimizer steps, and the KL ramp
-restarted on every ``train()`` call. Wiring-only verification is why the same defects kept
-being rediscovered from new symptoms.
+Each test here asserts what the training layer *does*: that a validation pass takes no
+optimizer step, that the annealing schedule is monotone across ``train()`` calls, that the
+monitored quantity is a fixed function of the parameters, and that the weights a fit leaves
+behind are the ones the criterion selected. Wiring checks -- does a value reach the object it
+names? -- live in ``tests/test_model_knobs.py`` and cannot see a value that arrives and is
+then ignored.
 
-These assert what the layer *does*, not what it is wired to. Both fail on the parent commit.
+The numbered statements these enforce are in ``governance/TRAINING_CONTRACT.md``, which names
+the test for each one.
 """
 from __future__ import annotations
 
@@ -19,16 +21,15 @@ import torch
 
 warnings.filterwarnings("ignore")
 
-# NOT slow-marked, deliberately. This whole file runs in ~3s, but it carried a module-level
-# `slow` marker, and CI runs bare `pytest tests/` -- so the tests the training contract names as
-# the enforcement for I2, I3, I4, I5, B1 and B5 never ran on a pull request. An invariant whose
-# proof CI skips is an invariant nothing checks.
+# Deliberately NOT slow-marked. CI runs a bare `pytest tests/`, so a module-level `slow` marker
+# would skip the tests governance/TRAINING_CONTRACT.md names as the enforcement for I2, I3, I4,
+# I5, B1 and B5 on every pull request. An invariant whose proof CI skips is unchecked.
 
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
 
 def _store_keys(model=None):
-    """The two guide tensors under the model's namespace (0.12). ``None`` is the unnamed
+    """The two guide tensors under the model's namespace. ``None`` asks for the unnamed
     layout, which is what every fixture in this file builds."""
     if model is None:
         return STORE_KEYS
@@ -82,14 +83,17 @@ class _ValidationWatcher(torch.nn.Module):
 
 
 def test_validation_does_not_update_parameters(adata):
-    """DE-1: a validation pass must not move a single parameter.
+    """A validation pass must not move a single parameter (contract I2).
 
-    ``validation_step`` used to call ``super().training_step()`` -> ``SVI.step()`` -> the Pyro
-    optimizer. Lightning zeroes ``.grad`` on the LightningModule's own parameters before the
-    validation loop, so the networks were spared; ``q_p_c_raw``/``q_p_ct_raw`` are not
-    LightningModule parameters, kept the zeroed grad Pyro left behind, and were stepped on
-    ``weight_decay * theta`` in the unconstrained log space of a positive-constrained
-    parameter — pulling every clone row toward uniform. Measured 0.54 L1 per check.
+    ``q_p_c_raw``/``q_p_ct_raw`` are not LightningModule parameters, so the gradient zeroing
+    Lightning does before a validation loop does not protect them. If ``validation_step``
+    reaches an optimizer step, weight decay alone moves them -- in the unconstrained log space
+    of a positive-constrained parameter, which pulls every clone row toward uniform. Every
+    metric reads those two tensors, so a held-out evaluation would be changing the quantity it
+    reports.
+
+    The second assertion checks the module is in train() mode for each training batch, because
+    a fit that silently runs with dropout disabled produces no other symptom.
     """
     import lightning.pytorch as pl
 
@@ -128,14 +132,12 @@ def test_validation_does_not_update_parameters(adata):
 def test_train_resets_module_mode(adata):
     """A fit must not depend on the module mode an earlier inference call left behind.
 
-    scvi's ``TrainRunner`` calls ``module.eval()`` when a fit ends, and ``predict()``,
-    ``to_anndata()`` and a session load do the same. Lightning 2.x only captures and restores
-    per-submodule ``training`` flags around validation; it never forces train mode. So a
-    ``train()`` that followed any of those ran the ENTIRE fit in eval mode -- classifier dropout
-    off, encoder BatchNorm frozen at its running statistics -- and was bit-reproducible, so a
-    seed check could not see it. Found by an audit probe whose "before training" measurement
-    (an ``eval()`` + forward pass) changed the fit it was measuring: latent spread 0.0075 in that
-    state vs 0.045 in train mode, on the example cohort. Fails on the parent commit.
+    ``predict()``, ``to_anndata()`` and a session load all leave the module in eval mode, and
+    Lightning restores per-submodule ``training`` flags around validation but never forces train
+    mode for a fit. A ``train()`` that follows any of them would therefore run the ENTIRE fit
+    with classifier dropout off and encoder BatchNorm frozen at its running statistics -- and
+    do so bit-reproducibly, so a seed check cannot see it. Contract B7: a fit is a function of
+    (seed, data, knobs) and of nothing that ran before ``train()``.
     """
     import lightning.pytorch as pl
 
@@ -168,12 +170,11 @@ def test_train_resets_module_mode(adata):
 
 
 def test_kl_ramp_is_monotone_across_resumed_training(adata):
-    """DE-4: the warmup counter belongs to the model, not to a per-call training plan.
+    """The warmup counter belongs to the model, not to a per-call training plan.
 
-    ``train()`` builds a fresh ``UnifiedTrainingPlan`` each call. With the counter on the plan,
-    a second ``train()`` restarted the ramp from zero, so a staged or resumed fit saw a sawtooth
-    ``kl_weight`` instead of a monotone one. This invalidated two of our own diagnostic probes
-    before it was found.
+    ``train()`` builds a fresh ``UnifiedTrainingPlan`` on every call, so a counter owned by the
+    plan restarts the ramp: a staged or resumed fit then sees a sawtooth ``kl_weight`` instead
+    of a monotone one, and its two segments descend different objectives (contract I5 and B1).
     """
     m = _fresh(adata)
     m.train(max_epochs=3, batch_size=128, accelerator="cpu",
@@ -216,12 +217,13 @@ def test_monitor_is_invariant_to_ramp_position(adata):
 
     Evaluate the criterion at two different ramp positions with the parameters held EXACTLY
     fixed. A criterion that is a function of (Lambda, Theta) must return the same number; one
-    that inherits the annealed kl_weight, or redraws its Monte-Carlo sample, will not.
+    that inherits the annealed kl_weight, or redraws its Monte-Carlo sample, will not -- and an
+    argmin over a moving quantity is not an argmin, so early stopping would be selecting on the
+    schedule rather than on the fit.
 
-    This fails on the parent commit, and it also fails a partial fix — pinning kl_weight without
-    fixing the evaluation seed still leaves the estimator redrawing every check, so the two
-    numbers differ in the low-order digits. Both clauses are required, so the assertion is
-    exact rather than approximate.
+    Both clauses are needed, so the assertion is exact rather than approximate: pinning
+    kl_weight without also fixing the evaluation seed leaves the estimator redrawing at every
+    check, which shows up only in the low-order digits.
     """
     m, plan, batch = _plan_and_batch(adata)
     plan.module.eval()
@@ -250,7 +252,7 @@ def test_monitor_is_invariant_to_ramp_position(adata):
 
 
 def test_validation_pin_restores_the_training_schedule(adata):
-    """B1: the pin is scoped to the check.
+    """Contract B1: the pin is scoped to the check.
 
     validation_step raises kl_weight to kl_weight_max to make the criterion well-posed. If it
     left it there, the next training step would read a kl_weight it never scheduled, and the
@@ -269,7 +271,7 @@ def test_validation_pin_restores_the_training_schedule(adata):
 
 
 def test_selection_is_gated_until_the_ramp_completes(adata):
-    """B5: no check is recorded before the ramp finishes.
+    """Contract B5: no check is recorded before the ramp finishes.
 
     Every entry in the monitored series must come from the same objective. A run whose ramp
     never completes has no comparable pair, so it must select nothing, keep its final weights,
@@ -290,7 +292,7 @@ def test_selection_is_gated_until_the_ramp_completes(adata):
 
 
 def test_restored_model_is_the_selected_one(adata):
-    """I4: what train() leaves behind is what the criterion chose.
+    """Contract I4: what train() leaves behind is what the criterion chose.
 
     Records every gated check, then asserts that the parameters surviving the fit are the ones
     from the best-scoring check -- across all three places state lives:
@@ -327,10 +329,10 @@ def test_restored_model_is_the_selected_one(adata):
                 sd[BN].detach().clone(),
             ))
 
-    # lr=1e-2 over 60 epochs on this fixture puts the argmin at check ~47 of 58 with a clear
-    # margin. At the default lr the criterion still descends at the last epoch, so "keep the
-    # final weights" would pass by accident -- the assertion below guards against exactly that
-    # if the fixture ever drifts back to monotone.
+    # lr=1e-2 over 60 epochs puts the argmin well before the last check on this fixture. At the
+    # default lr the criterion is still descending at the final epoch, so "keep the final
+    # weights" would pass by accident -- the assertion below fails if the fixture ever drifts
+    # back to monotone.
     m = _fresh(adata)
     m.train(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
             callbacks=[_Spy()], enable_progress_bar=False, enable_model_summary=False)
@@ -358,7 +360,7 @@ def test_restored_model_is_the_selected_one(adata):
 
 
 def test_monitor_excludes_the_global_block(adata):
-    """I3 scope: the monitor is the per-cell block, not the ELBO.
+    """Contract I3, scope: the monitor is the per-cell block, not the ELBO.
 
     This is the deliberate departure the contract records, and it needs its own test: including
     the global sites does NOT break ramp-invariance (the pin fixes kl_weight either way), so
@@ -404,14 +406,13 @@ def test_monitor_excludes_the_global_block(adata):
 
 
 def test_hitting_the_epoch_cap_warns_and_is_recorded(adata):
-    """Reaching max_epochs means the stopping rule never fired — say so.
+    """Reaching max_epochs means the stopping rule never fired -- say so.
 
     A truncated fit and a converged one are otherwise indistinguishable: same record shape,
-    same outputs, no signal. That silence has a measured cost. On a 100k-cell dataset the
-    mutual information kept climbing well past the default budget — 0.236 at 200 epochs,
-    0.290 at 600, 0.328 at 1000, and 0.342 once early stopping finally engaged at epoch 1208
-    of a 2000 budget. Every run at or below 1000 epochs hit its cap, and 1000 is the default,
-    so a default fit understated MI by roughly 31% with nothing to indicate it.
+    same outputs, no signal to the caller. The objective can still be descending when the
+    budget runs out, in which case every metric read off the fit understates its converged
+    value, so the record must carry ``stopped_early`` and the warning must name the cap rather
+    than convergence (contract B9).
     """
     import warnings as _w
 
@@ -434,14 +435,14 @@ def test_hitting_the_epoch_cap_warns_and_is_recorded(adata):
 def test_train_rejects_unknown_kwargs_itself(adata):
     """An unsupported argument must fail HERE, naming tcri, not four frames deep in scvi.
 
-    train() forwards **kwargs to TrainRunner and on into Trainer.__init__, so before this
-    guard a name train() does not accept produced
+    train() forwards ``**kwargs`` to TrainRunner and on into ``Trainer.__init__``, so without
+    this guard a name train() does not accept surfaces as
 
         TypeError: Trainer.__init__() got an unexpected keyword argument 'validation_size'
 
-    from inside lightning, with nothing pointing at tcri or at what the caller should do.
-    That is how `validation_size=0.1` killed a 17-minute run — after training had finished,
-    on the first metric call.
+    from inside lightning, with nothing pointing at tcri or at what the caller should do
+    instead -- and it surfaces whenever that frame is first reached, which can be long after
+    the caller has walked away from the fit.
     """
     m = _fresh(adata)
     with pytest.raises(TypeError) as exc:
@@ -470,18 +471,18 @@ def test_train_still_accepts_genuine_lightning_kwargs(adata):
 # ── B8: weight decay stops at the guide concentrations ───────────────────────
 
 def test_weight_decay_does_not_reach_the_guide_concentrations(adata):
-    """Training contract B8 (formerly Q-D), tested on the mechanism rather than the wiring.
+    """Contract B8, tested on the mechanism rather than the wiring.
 
-    Pyro's optimizer takes one ``weight_decay`` for every parameter in the store, so it
-    reached ``q_p_c_raw``/``q_p_ct_raw`` too. Their leaves are ``log θ``; L2 decay there is a
-    flat ``Dirichlet(1, …, 1)`` prior applied through the optimizer. The fix routes the guide
-    through a per-parameter ``optim_args`` with ``weight_decay=0``.
+    Pyro's optimizer takes one ``weight_decay`` for every parameter in the store, and the guide
+    concentrations' leaves are ``log θ``: L2 decay there is a flat ``Dirichlet(1, …, 1)`` prior
+    applied through the optimizer, i.e. an undeclared optimizer setting acting as a prior. The
+    guide is therefore routed through a per-parameter ``optim_args`` with ``weight_decay=0``.
 
-    The discriminating step: give a guide leaf AND a network weight an all-zero gradient,
-    step each once through the plan's Pyro optimizer, and compare. With decay the only force
-    on the parameter, the leaf must be bit-identical and the weight must have moved. A test
-    that only read ``weight_decay`` back off the optimizer would pass with the callable
-    returning ``base`` for every name.
+    The discriminating step: give a guide leaf AND a network weight an all-zero gradient, step
+    each once through the plan's Pyro optimizer, and compare. With decay the only force on the
+    parameter, the leaf must be bit-identical and the weight must have moved. Reading
+    ``weight_decay`` back off the optimizer instead would pass with a callable that returns
+    ``base`` for every name.
     """
     from tcri.model._training import GUIDE_CONCENTRATION_PARAMS, UnifiedTrainingPlan
 
@@ -547,19 +548,19 @@ def _conditioned_objective(mod, args, kwargs, *, fixed, z_all):
 
 
 def test_minibatch_objective_is_unbiased_for_the_full_batch(adata):
-    """Training contract I8 (formerly Q-B): the mean of the batch objectives over a partition
-    of the cells equals the full-batch objective.
+    """Contract I8: the mean of the batch objectives over a partition of the cells equals the
+    full-batch objective.
 
-    eq 7 sums the per-cell terms over the N cells and the two Dirichlet KLs once. With the
-    data plate declared at ``size = B`` each minibatch counted the global KLs at full weight
-    against B cells of data, so over an epoch of S steps the prior pull on ω_c and φ_m was S
-    times eq 7's. With ``size = N`` and the minibatch as the plate's subsample, Pyro scales
-    the per-cell sites by N/B and the identity below is exact.
+    eq 7 of ``governance/MODEL_CONTRACT.md`` sums the per-cell terms over the N cells and the
+    two Dirichlet KLs once. A minibatch estimates that only if the data plate is declared at
+    ``size = N`` with the batch as its subsample, so Pyro scales the per-cell sites by N/B and
+    the Dirichlet KLs enter once per pass. Declared at ``size = B`` instead, each step counts
+    the global KLs at full weight against B cells of data, so over an epoch of S steps the
+    prior pull on ω_c and φ_m is S times eq 7's and the identity below fails by a wide margin.
 
-    Every stochastic site is pinned (one z per cell from the encoder mean, one draw of p_c
-    and p_ct shared by every batch) so the comparison is deterministic and the tolerance is
-    float rounding, not Monte-Carlo noise. Under the old plate the mean of the parts is
-    ``Σ_cells/S + G`` against ``Σ_cells + G`` and the assertion fails by a wide margin.
+    Every stochastic site is pinned (one z per cell from the encoder mean, one draw of p_c and
+    p_ct shared by every batch) so the comparison is deterministic and the tolerance is float
+    rounding, not Monte-Carlo noise.
     """
     import contextlib
     import io
@@ -608,11 +609,12 @@ def test_plate_size_tracks_the_training_split(adata):
     assert m.module.plate_size() < adata.n_obs
 
 
-# ── structural guards (formerly the training manifest's hygiene test) ─────────
+# ── structural guards ────────────────────────────────────────────────────────
 
 def test_no_reset_knob_on_train():
-    """B1: restarting the KL ramp is the behaviour DE-4 removed, and a reset on ``train()``
-    would also be a signature change to the API contract."""
+    """Contract B1: the KL schedule is non-decreasing within and across ``train()`` calls, so
+    ``train()`` must expose no way to restart the ramp -- and a new keyword there would also
+    change the signature ``governance/API_CONTRACT.md`` pins."""
     import inspect
 
     from tcri.model._model import TCRIModel
@@ -623,8 +625,9 @@ def test_no_reset_knob_on_train():
 
 
 def test_warmup_counter_is_owned_by_the_module_not_the_plan():
-    """B1/I5: ``train()`` builds a fresh plan per call, so a plan-local counter restarts the
-    ramp on every resumed fit. The counter must live on the module, which survives."""
+    """Contract B1/I5: ``train()`` builds a fresh plan per call, so a plan-local counter
+    restarts the ramp on every resumed fit. The counter must live on the module, which
+    survives."""
     import inspect
 
     from tcri.model._training import UnifiedTrainingPlan
@@ -652,7 +655,8 @@ def _body_source(fn) -> str:
 
 
 def test_validation_step_does_not_call_training_step():
-    """I2, structurally; the behavioural proof is above. Catches a reintroduction at review."""
+    """Contract I2, structurally; the behavioural proof is
+    ``test_validation_does_not_update_parameters`` above. Catches a reintroduction at review."""
     from tcri.model._training import UnifiedTrainingPlan
 
     src = _body_source(UnifiedTrainingPlan.validation_step)

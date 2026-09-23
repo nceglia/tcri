@@ -1,10 +1,10 @@
-"""Tests for the _ensure_pyro_posterior_params fallback warning (Notion #24).
+"""The ``_ensure_pyro_posterior_params`` fallback must announce itself.
 
-When the Pyro param store has no 'q_p_ct_raw', the helper re-initializes it to a
-uniform 1/P simplex. That silent fallback used to mask failed param-store loads, so
-downstream posterior metrics ran on an uninformative prior with no signal to the
-caller. It must now emit a warning. The param store is global state, so each test
-snapshots and restores it to avoid leaking into other tests.
+When the Pyro param store has no 'q_p_ct_raw', the helper re-initializes it to a uniform 1/P
+simplex. Done silently, that turns a failed param-store load into a posterior carrying no
+signal, and every downstream metric reports numbers from an uninformative prior as if they were
+fitted. So the fallback warns, and these tests assert it warns when it fires and stays quiet
+when it does not. The param store is global state, so each test snapshots and restores it.
 """
 
 import warnings
