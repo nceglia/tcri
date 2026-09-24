@@ -1,14 +1,13 @@
-"""``pl`` private plotting engine (§8.5) — the shared cache renderer and the mark rule.
+"""``pl`` private plotting engine — the shared cache renderer and the mark rule.
 
 The twins are **cache renderers** in the strict sense: they read ``uns`` through
 :mod:`tcri.get` and draw. There is no metric math here and no call into ``tl``.
 
-That matters more than it sounds. When each ``pl`` recomputed its metric, the plot and the
-frame in the caller's hand could disagree — different ``n_samples``, a different draw, a
-``distance_metric`` default that was ``"kl"`` in ``tl`` and ``"l1"`` in ``pl``. And because
-a box plot needs per-unit values, ``pl.mutual_information`` and ``pl.phenotypic_flux``
-*manufactured* a ``groupby`` from ``batch_col`` when the caller gave none, so the figure was
-grouped by a column the caller never named.
+That matters more than it sounds. The plot and the frame in the caller's hand cannot disagree
+about ``n_samples``, the draw or the distance metric, because both read the one cached result.
+The replicate axis comes from that result's ``params`` as well: a twin never manufactures a
+``groupby``, so the axis a figure is grouped by is whichever one the metric resolved and
+recorded — the caller's, or the registered replicate column when the caller named none.
 
 **The mark rule.** A mark shows ONE variance component. Within each x position the sample is
 the *coarsest* unit that varies there, ranked replicate > item > draw:
@@ -24,10 +23,13 @@ pseudoreplication ``build_stats`` collapses away, drawn as a picture. And a bar 
 whisker is a lossy summary of a distribution the package already stored, so wherever draws are
 the sample the violin shows what was measured instead of two numbers off it.
 
-**Connecting lines.** Nothing here draws a line between x positions. A line implies the two
-points are the same entity observed twice, which is a claim only matched data supports -- and
-matched data does not exist on this side of the API yet. When it does, the line must be drawn
-from an identity key, never from adjacency.
+**Connecting lines.** A line between x positions implies the two points are the same entity
+observed twice, which is a claim only matched data supports, so it is drawn from an identity
+key and never from adjacency: the endpoints view joins one replicate's two endpoint values,
+computed over one intersected clone set, and only where the item is an entity that persists
+across the two levels. The grey reference points are never joined, and a significance bracket
+-- which spans x positions by design -- carries its own label so the guard can tell it from a
+matched-identity line.
 """
 from __future__ import annotations
 
@@ -118,10 +120,9 @@ def filter_quantity(stats, quantity):
     """The rows of ``stats`` for one quantity, or ``stats`` unchanged when it carries none.
 
     A ``stats`` frame holds one row per (contrast, quantity) once a reference has been
-    computed. Every reader of it selects a single row per contrast, so a reader that does not
-    filter makes a SILENT choice between the value's contrast and the excess's -- the first row
-    for ``_stat_label``, the last for ``_star_labels``. On a six-patient fixture the two put
-    the arms in opposite orders, so the star can contradict the marks it sits over.
+    computed. Every reader of it needs a single row per contrast, so the quantity is selected
+    here rather than left to row order, which would make a SILENT choice between the value's
+    contrast and the excess's.
     """
     if stats is None or not len(stats) or "quantity" not in stats.columns:
         return stats
@@ -160,8 +161,7 @@ def _annotate_contrasts(ax, stats, levels, *, quantity="value"):
     contrast being bracketed over the phenotype axis: phenotype names never match split
     names, so no row is found and nothing is drawn. The call-site check is a second layer,
     and it matters if this is ever handed the HUE levels rather than the x order, which for
-    ``item_as_x`` metrics ARE the split levels. Mutating either alone leaves the figure
-    correct; mutating both draws a bracket the numbers never supported.
+    ``item_as_x`` metrics ARE the split levels.
     """
     if stats is None or not len(stats) or len(levels) < 2:
         return
@@ -215,9 +215,7 @@ def order_from(d, x, y):
 
     Computed ONCE by the caller and handed to every mark, because a reference is a SECOND pass
     over the same axes: a mark that re-derives the order from its own y re-sorts the axis and
-    rewrites the tick labels under marks already drawn. Measured on three categories, the value
-    pass labels them A, B, C and the reference pass rewrites them to B, C, A, so every dot sits
-    under the wrong name. It is order-dependent, so a monotone fixture passes.
+    rewrites the tick labels under marks already drawn.
     """
     return d.groupby(x, observed=True)[y].median().sort_values(ascending=False).index.tolist()
 
@@ -256,8 +254,8 @@ def _mark_reference(ax, first_collection, first_patch, first_line):
         pch.set_label(REFERENCE_LABEL)
         pch.set_zorder(1.4)
     # ...and the LINES. Seaborn draws a box's whiskers, caps and median as Line2D at zorder 2
-    # and 2.1, above the value boxes, so a reference drawn "behind" still had ten grey lines
-    # crossing the marks in front of it.
+    # and 2.1, above the value boxes, so without this a reference drawn "behind" still puts
+    # grey lines across the marks in front of it.
     for ln in ax.lines[first_line:]:
         ln.set_label(REFERENCE_LABEL)
         ln.set_zorder(1.45)
@@ -315,8 +313,6 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
     The interval is drawn only for ``y == "value"``. An HDI is the posterior spread of the
     value: the reference has none to show here, and an excess cannot have one at all, because
     an interval on a difference needs paired draws and draws are never paired across two fits.
-    Drawn anyway, it either raises ("yerr must not contain negative values") or, for a small
-    shift, puts the value's full-width interval around the excess marker.
     """
     d = d.sort_values(y, ascending=False) if order is None else \
         d.set_index(d[x].astype(str)).reindex([str(o) for o in order]).dropna(subset=[y])
@@ -572,9 +568,7 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value
 
     The second is not merely cosmetic to gate. For a phenotype-item metric the matched clone
     count is not in ``result`` at all: those clones were summed over inside ``H(c|phi)``, so
-    counting item rows would count PHENOTYPES and label them "clones matched". Measured on a
-    4-phenotype fixture the legend read "clones matched: 4", which is a different number
-    about a different thing.
+    counting item rows would count PHENOTYPES and label them "clones matched".
     """
     from .. import get as _get
     from .._compute._tables import collapse_to_replicates
@@ -614,8 +608,8 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value
                              item_col=item_col) if entity_matched else None
 
     # ONE collapse over every endpoint column present, selected by presence rather than
-    # hard-coded so the branch works at null_model=None. Two calls and a merge -- what this
-    # replaces -- gave each endpoint its own non-finite mask, so a replicate could contribute
+    # hard-coded so the branch works at null_model=None. Collapsing the endpoints separately
+    # and merging would give each its own non-finite mask, so a replicate could contribute
     # one endpoint and not the other and the pair drawn would not be a pair.
     endpoints = [c for c in ("value_from", "value_to") if c in result.columns]
     reference = [c for c in ("null_value_from", "null_value_to") if c in result.columns]

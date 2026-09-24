@@ -10,10 +10,9 @@ The semi-synthetic generative story, with every quantity known in closed form::
 
 Because ``pi`` and ``omega`` are known, the **population** mutual information
 I(c;phi) is available in closed form — which is what makes statistical *recovery*
-testing possible at all. Nothing else in the test suite has an oracle: the contract
-tests check structure and identities, never accuracy.
+testing possible at all.
 
-Two oracles are reported, and the distinction matters for writing honest tests:
+Two oracles are reported, and they answer different questions:
 
 ``true_mi_*``
     the **population** value implied by ``(pi, omega)`` — what an estimator should
@@ -25,11 +24,11 @@ Two oracles are reported, and the distinction matters for writing honest tests:
     estimator's upward bias, roughly ``(C-1)(P-1) / (2 N ln2)`` bits.
 
 Both are given under both normalizations (``min`` and ``average``): tcri defaults to
-``normalize_mode="min"`` while the note's benchmark used the mean denominator, so a
-like-for-like comparison has to pick deliberately.
+``normalize_mode="min"``, and the two denominators are not interchangeable, so a
+like-for-like comparison has to pick one deliberately.
 
-Unlike the original ``sc_simulator``, this needs no real dataset to fit — the gene
-programs are generated directly — so it is importable, seeded, and fast.
+No real dataset is needed to fit — the gene programs are generated directly — so this
+is importable, seeded, and fast.
 """
 from __future__ import annotations
 
@@ -48,8 +47,8 @@ def mi_from_joint_oracle(joint: np.ndarray) -> dict:
 
     ``joint`` must sum to 1. Returns ``mi``, ``h_clone``, ``h_phenotype`` and both
     normalized variants. This is the oracle — deliberately a small, independent
-    implementation so it cannot drift with the package's own metric code (a test
-    that computes the expected value with the code under test proves nothing).
+    implementation of the closed form, so it cannot drift with the package's own
+    metric code.
     """
     P = np.asarray(joint, dtype=np.float64)
     total = P.sum()
@@ -85,21 +84,18 @@ def _phenotype_programs(rng, n_phenotypes, n_factors, fuzziness):
     the clone->phenotype coupling (and hence the true MI) is untouched. That
     separation is the point: it varies estimation difficulty at fixed ground truth.
 
-    Interpolation is in natural-parameter space ``theta = [alpha-1, -beta]``, matching
-    the original ``interpolate_gamma_params``.
+    Interpolation is in natural-parameter space ``theta = [alpha-1, -beta]``.
     """
     alpha = rng.uniform(1.5, 6.0, size=(n_phenotypes, n_factors))
     beta = rng.uniform(1.0, 3.0, size=(n_phenotypes, n_factors))
 
-    # DE-20. Supplementary Note 1 interpolates with a CONCAVE mapping g(f), not with f:
+    # The blend weight is a CONCAVE mapping g(f) of `fuzziness`, not f itself:
     #
-    #     theta'_k = (1 - g(f)) theta_k + g(f) theta_bar,
-    #     "in the reported experiments, we use g(f) = sqrt(f)"
+    #     theta'_k = (1 - g(f)) theta_k + g(f) theta_bar
     #
-    # The code used g(f) = f, which under-mixes at every f in (0, 1) -- at f=0.1 the note
-    # blends 0.316 toward the mean where this blended 0.100. The endpoints f=0 and f=1 agree,
-    # so only the interior of the sweep was affected. The note permits any concave g on
-    # [0, 1]; sqrt is what the reported experiments use and is therefore the default here.
+    # Any concave g agrees with f at the endpoints f=0 and f=1 and mixes more than f in
+    # between, so the interior of a fuzziness sweep is the part the choice of g decides.
+    # sqrt is the g used here.
     g = float(np.sqrt(fuzziness))
 
     theta = np.concatenate([alpha - 1.0, -beta], axis=1)
@@ -204,7 +200,7 @@ def simulate_tcri(
     _PHEN_LEVELS = [f"phen_{p}" for p in range(n_phenotypes)]
     obs = pd.DataFrame(
         {
-            # DE-13: declare the label space. Without `categories=`, pandas infers it from
+            # Declare the label space. Without `categories=`, pandas infers it from
             # the values it happens to see and sorts LEXICOGRAPHICALLY, so at K>=10
             # 'phen_2' gets code 4 and 'phen_11' code 3 -- codes stop matching the integer
             # phenotype index they were built from. A phenotype with zero sampled cells
@@ -267,18 +263,17 @@ def simulate_tcri(
 def temperature_scale(P, T, eps=1e-12):
     """Sharpen/flatten a row-stochastic matrix: ``P**(1/T)`` renormalized.
 
-    Verbatim behaviour of ``sc_simulator.temperature_scale_conditional``. ``T<1``
-    sharpens (raising I(c;phi)), ``T>1`` flattens. This is the axis the published
-    benchmark sweeps, and it changes the GROUND TRUTH, not just the difficulty.
+    ``T<1`` sharpens (raising I(c;phi)), ``T>1`` flattens. It changes the GROUND TRUTH,
+    not just the difficulty.
     """
     T = float(T)
-    # Supplementary Note 1, "Temperature Scaling of Conditional Distributions", specifies
-    # T > 0. Outside that the function used to fail three different silent ways:
+    # Temperature scaling is defined only for T > 0. Without this guard each way out of that
+    # range fails differently, and only the first of them announces itself:
     #   T = 0      -> ZeroDivisionError
     #   T = nan    -> an all-NaN matrix, no error
     #   T = -1.0   -> finite, plausible-looking numbers that INVERT the distribution
-    # The last is the dangerous one: a negative T produced a valid-looking row-stochastic
-    # matrix and would have propagated into a benchmark as though it meant something.
+    # The last is the dangerous one: a negative T gives a valid-looking row-stochastic
+    # matrix that would propagate into a benchmark as though it meant something.
     if not np.isfinite(T) or T <= 0.0:
         raise ValueError(
             f"temperature must be finite and > 0; got T={T!r}"
@@ -288,9 +283,8 @@ def temperature_scale(P, T, eps=1e-12):
     Pp = P ** (1.0 / T)
 
     # float64 underflow: once (1/T)*log10(p) < -308 every entry of a row becomes exactly
-    # 0.0 and the renormalisation below is 0/0. Measured on a [0.7, 0.2, 0.1] row: fine at
-    # T=1e-3, all-NaN at T=1e-4. Raising beats returning NaN, which the caller would have
-    # to notice.
+    # 0.0 and the renormalisation below is 0/0. Raising beats returning NaN, which the
+    # caller would have to notice.
     row_sums = Pp.sum(axis=1, keepdims=True)
     dead = ~np.isfinite(row_sums) | (row_sums <= 0.0)
     if dead.any():
@@ -314,16 +308,11 @@ def simulate_from_fit_params(
 ) -> AnnData:
     """Simulate from an **empirically fitted** ``(pi, omega, gamma_params, V)``.
 
-    Reproduces ``sc_simulator.simulate_dataset``: ``z ~ Cat(pi)``,
-    ``phi|z ~ Cat(omega[z])``, ``U ~ Gamma(alpha_phi, 1/beta_phi)``,
-    ``x ~ Poisson(U @ V)``.
+    The generative story is ``z ~ Cat(pi)``, ``phi|z ~ Cat(omega[z])``,
+    ``U ~ Gamma(alpha_phi, 1/beta_phi)``, ``x ~ Poisson(U @ V)``.
 
-    Use this — rather than :func:`simulate_tcri` — whenever the point is to compare
-    against the published benchmark. A symmetric-Dirichlet ``omega`` cannot
-    reproduce the benchmark's true-NMI anchors: its response to temperature has the
-    wrong SHAPE (sharpening ratio 4.22x vs the true 2.86x), so no reparameterization
-    of the synthetic generator suffices. The empirical fit matches all three anchors
-    exactly (0.520 / 0.316 / 0.182 at T = 0.1 / 0.5 / 1.0).
+    Use this — rather than :func:`simulate_tcri` — whenever the generating
+    ``(pi, omega)`` must come from a real fit rather than from a symmetric Dirichlet.
 
     Parameters
     ----------
@@ -391,7 +380,7 @@ def simulate_from_fit_params(
     clone_names = ([str(clone_levels[i]) for i in z] if clone_levels is not None
                    else [f"clone_{i}" for i in z])
 
-    # DE-13, as above: declare the label space rather than letting pandas infer it.
+    # As above: declare the label space rather than letting pandas infer it.
     phen_levels = [f"phen_{p}" for p in range(n_phenotypes)]
     clone_levels_all = ([str(c) for c in clone_levels] if clone_levels is not None
                         else [f"clone_{i}" for i in range(n_clones)])
@@ -500,10 +489,8 @@ def simulate_cohort(
         The power-law exponent ``alpha`` in ``P(size) ~ size**-alpha``. ~2 is the usual
         repertoire regime; larger is more skewed toward singletons. It is a **target**: cells
         are drawn without replacement from a finite pool, so a clone whose target share
-        exceeds its pool supply is capped and the realized tail comes out shallower. Measured
-        at the default (40 clones, 1200 cells/sample): requested 2.0 -> realized log-log slope
-        about -1.5, Gini 0.70, largest clone ~22% of cells. Still firmly heavy-tailed; just
-        not the exact exponent asked for.
+        exceeds its pool supply is capped and the realized tail comes out shallower than the
+        exponent asked for — still firmly heavy-tailed, just not that exact exponent.
     disease_enrichment, control_enrichment
         How hard the final condition oversamples each clone's dominant phenotype. ``1.0`` is
         no enrichment. Jittered +/-15% per patient so replicates are not identical.
@@ -525,11 +512,11 @@ def simulate_cohort(
     Notes
     -----
     ``per_sample`` is the **plug-in estimate on the observed labels**, not a target a fitted
-    model should reproduce. Two reasons it sits above what ``tl.mutual_information`` reports,
-    and neither is a defect:
+    model should reproduce. It sits above what ``tl.mutual_information`` reports, for two
+    reasons:
 
-    * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits
-      (see this module's header) — it is the quantity the model is trying to see *past*;
+    * the plug-in is upward-biased at finite N, by roughly ``(C-1)(P-1) / (2 N ln2)`` bits,
+      which is the quantity the model is trying to see *past*;
     * the model shrinks toward a covariate-free ``omega_c``, deliberately, since
       the cells in hand are a sample of a much larger unobserved repertoire. Conservative is
       the intent.

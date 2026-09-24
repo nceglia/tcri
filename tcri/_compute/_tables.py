@@ -3,7 +3,7 @@
 Each metric pulls the clone×phenotype joint from the engine (:func:`joint_distribution`,
 ``use_logits=True``), reduces per draw, and — for ``n_samples>0`` — summarizes the draw
 distribution (mean / sd / HDI). ``groupby`` is implemented here by **restricting clones
-per group** (§7.1: full-space clone masks + ``clones=``, never slicing the AnnData), which
+per group** (full-space clone masks + ``clones=``, never slicing the AnnData), which
 relies on clones being disjoint across groups (a TCR clone never spans two patients).
 """
 from __future__ import annotations
@@ -22,14 +22,6 @@ from .._stats import hdi
 # itself reach back into ``_tables``; that is a property of today's code, not a guarantee.
 
 
-# `is_precomputed_joint` and `reject_stacked_covariate_joint` lived here to support metrics
-# accepting a bare DataFrame instead of an AnnData (the §7.9 "precomputed joint" path). Both are
-# gone: the path was declared in the first contract freeze (7599959), implemented because it was
-# declared, and had exactly one caller in the repo -- a test scoring one table four ways. With
-# every tl taking an AnnData, a stacked joint cannot arrive at a metric, so there is nothing left
-# to guard against.
-
-
 def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, random_state,
                 use_logits=True, device=None, fit=None):
     """Return ``(draws, phenotype_cols)`` where ``draws`` is a list of ``(clone_ids, [C, P])``
@@ -38,42 +30,38 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
     Consumes the engine's raw blocks directly. Going through
     :func:`~tcri.tools._joint.joint_distribution` would flatten ``[S, n_rows, P]``
     into a MultiIndex DataFrame only for this function to ``groupby('sample_id')``
-    and unpack it straight back to arrays — measured at ~2x the engine core itself.
+    and unpack it straight back to arrays.
     Ordering matches the DataFrame path exactly (blocks in covariate order, clones in
     block order, then the ``clones=`` filter applied as a stable reorder).
 
-    ``covariate`` is REQUIRED here. See the guard below.
+    ``covariate`` is required: a reduced metric has no defined meaning over stacked covariate
+    levels, because the row axis would become the (covariate, clone) pair rather than the clone.
     """
     from ..tools._joint import _engine_blocks  # lazy: see module note
 
-    # covariate=None used to stack the per-covariate blocks row-wise, so a clone present in k
-    # covariate levels contributed k ROWS and the row axis of the joint became the
-    # (covariate, clone) pair rather than the clone. H(c) was then the entropy over pseudo-
-    # clones. Measured on a 10-clone / 2-covariate fixture:
-    #
-    #     C=20 P=4  (many clones)   min  +0.0%   average +13.8%
-    #     C=6  P=8  (few clones)    min +12.4%   average +15.4%
+    # Stacking the per-covariate blocks row-wise gives a clone present in k covariate levels
+    # k ROWS, so the row axis of the joint becomes the (covariate, clone) pair rather than the
+    # clone and H(c) is the entropy over pseudo-clones.
     #
     # `min` divides by min(H(c), H(phi)). When clones OUTNUMBER phenotypes it selects H(phi),
-    # which row-splitting does not touch, so the default looks unaffected; when they do not, it
-    # selects H(c) and moves by ~12%. So this is not "invisible at the default" -- that was a
-    # property of one fixture. `average` always moves, since it averages both entropies.
+    # which row-splitting does not touch, so the default can look unaffected; when they do not,
+    # it selects H(c) and moves. `average` always moves, since it averages both entropies.
     #
-    # The three metrics that reduce to a scalar also disagreed on what covariate=None means
-    # (one collapsed to a per-phenotype index, one kept a (covariate, clonotype) index, one
-    # stacked). Rather than pick a unification -- which is a question about the estimand, not
-    # about the code -- covariate is now required wherever the result must be REDUCED.
+    # The three metrics that reduce to a scalar also have no shared meaning for covariate=None
+    # (a per-phenotype index, a (covariate, clonotype) index and a stacked table are each
+    # defensible). Picking one is a question about the estimand, not about the code, so
+    # covariate is required wherever the result must be REDUCED.
     #
-    # joint_distribution(covariate=None) is deliberately still allowed: it LABELS the blocks
+    # joint_distribution(covariate=None) is deliberately allowed: it LABELS the blocks
     # with a covariate index level instead of collapsing them, so no ambiguity arises there,
     # and it remains the way to get every covariate in one object.
     if covariate is None:
         raise ValueError(
             "covariate is required for scalar metrics.\n"
             "\n"
-            "covariate=None previously stacked every covariate level into one table, treating "
-            "each (covariate, clone) pair as a distinct clone. That inflates H(c) and changes "
-            "NMI by 12-15% on measured fixtures, under both normalize_mode settings.\n"
+            "A scalar metric reduces one joint. Stacking every covariate level into one table "
+            "treats each (covariate, clone) pair as a distinct clone, which inflates H(c) and "
+            "the clone axis it is measured on.\n"
             "\n"
             "Pass an explicit covariate level, or use tl.joint_distribution(covariate=None) to "
             "get every level as a labelled (covariate, clonotype) table and reduce it the way "
@@ -132,9 +120,9 @@ def summarize(values, *, hdi_prob=0.94) -> dict:
     if v.size == 0:
         return {"mean": np.nan, "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     if v.size == 1:
-        # A single draw has no spread to report. Returning sd=0 and a zero-width HDI states
-        # certainty that was never measured -- at n_samples=1 the interval read
-        # [0.289341, 0.289341]. mean is still the draw; the rest is undefined, and NaN says so.
+        # A single draw has no spread to report. Returning sd=0 and a zero-width HDI would state
+        # certainty that was never measured. mean is still the draw; the rest is undefined, and
+        # NaN says so.
         return {"mean": float(v[0]), "sd": np.nan, "hdi_low": np.nan, "hdi_high": np.nan}
     lo, hi = hdi(v, prob=hdi_prob)
     return {"mean": float(v.mean()), "sd": float(v.std(ddof=1)), "hdi_low": lo, "hdi_high": hi}
@@ -211,8 +199,8 @@ def _refit_hint(adata, fit, groupby):
         return ""
     # h5ad stores a list of strings as a numpy ARRAY, so the idiomatic `or []` raises "the truth
     # value of an array with more than one element is ambiguous" on any object that has been to
-    # disk -- which is every object a reference is read from in practice. The same spelling bit
-    # `keys.fits()` in 0.12; written against the round-tripped shape both times.
+    # disk -- which is every object a reference is read from in practice. Written against the
+    # round-tripped shape, not the in-memory one.
     raw = settings.get("strata")
     strata = [] if raw is None else [str(c) for c in raw]
     if not strata:
@@ -229,7 +217,7 @@ def _validate_group_clones(labels, groups, groupby, hint=""):
     """The metric ``groupby`` restricts the engine by clone id (``clones=``), which is only
     correct when clones are **disjoint across groups** (a clone's cells all live in one group).
     Raise loudly if a clone id spans groups — otherwise a group's estimate would silently
-    absorb that clone's cells from other groups (§7.1 groupby↔covariate semantics).
+    absorb that clone's cells from other groups.
 
     Takes the two RESOLVED Series — clone labels (from :func:`fit_clone_labels` on the fit being
     measured, or ``obs[clone_col]`` for a caller that means the raw column) and the group labels
@@ -267,10 +255,9 @@ def validate_splitby(obs, groupby, splitby):
     """``splitby`` labels groups for a contrast, so it needs groups, and the label must be a
     property OF the group.
 
-    Both failures were silent before: ``splitby`` without ``groupby`` was ignored entirely, and
-    a group spanning two split levels took ``obs.loc[gmask, splitby].iloc[0]`` -- whichever
-    label the first cell happened to carry. Reproduced: a patient genuinely spanning R and NR
-    was reported as NR with no warning.
+    It raises unless ``groupby`` is set, ``splitby`` is a column of ``obs``, and ``splitby`` is
+    constant within each group. Without the last, a group's split label would be whichever one
+    its first cell happens to carry.
     """
     if splitby is None:
         return
@@ -321,10 +308,9 @@ def build_result(table, *, value="value", extra_values=()):
     ``result`` is built FROM ``table`` rather than computed alongside it, so the two cannot
     drift -- which is the same reason ``pl`` now reads the cache instead of recomputing.
 
-    Reduces over ``draw`` ONLY, and the grouping keys are therefore *every other column*.
-    Naming them explicitly (covariate, groupby, splitby, item_col) is what silently dropped
-    ``cov_from``/``cov_to`` from the flux result: a metric with a label the list did not
-    anticipate had it averaged away. Anything a metric puts in ``table`` identifies a row here.
+    Reduces over ``draw`` ONLY, and the grouping keys are therefore *every other column*
+    rather than a named list: any label a metric puts in ``table`` -- ``cov_from``/``cov_to``
+    for the flux, an item column, a split label -- identifies a row here.
 
     Items are KEPT: a swarm plot needs one point per clone, and collapsing them here would make
     the per-item view unreachable from the cached result.
@@ -373,25 +359,19 @@ def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep
     """One row per replicate: the item axis averaged away.
 
     THE pseudoreplication step, and it is a shared function rather than a line inside
-    ``build_stats`` because the PLOT has to make exactly the same collapse. It did not: with
-    ``phenotypic_entropy(groupby='patient', splitby='response')`` the box and strip were drawn
-    from ``result`` directly -- 47 clone dots -- while the p-value beneath them came from 6
-    patients. The figure and the statistic described different units, which is the same defect
-    ``build_stats`` exists to prevent, surviving in the marks.
-
-    Keeping one implementation is the point: the marks and the test cannot disagree about the
-    replicate unit if they are the same collapse.
+    ``build_stats`` because the plotting layer calls this same collapse. Marks and p-value
+    therefore share one replicate unit: they cannot disagree about it if they come from the
+    same collapse.
 
     ``keep`` names further label columns to preserve -- the plotting layer passes whatever it
     is about to put on x and hue, since collapsing away an axis it is drawing would silently
-    drop the split (measured: the ``response`` hue vanished from the clonotypic-entropy panel).
+    drop the split.
 
     ``value`` may be a LIST, and when it is, every listed column is collapsed under ONE mask:
     a row is dropped if ANY of them is non-finite. Averaging each column over its own mask
     means the value and its reference rest on different replicate sets, and then
-    ``mean(excess)`` stops equalling ``mean(value) - mean(null_value)`` -- measured 0.4500
-    against 0.3000 on a two-replicate frame with one NaN reference. The single-column call is
-    unchanged and still returns a frame with that one value column.
+    ``mean(excess)`` stops equalling ``mean(value) - mean(null_value)``. A single-column call
+    returns a frame with that one value column.
     """
     if result is None or not len(result) or groupby is None or groupby not in result.columns:
         return result
@@ -423,7 +403,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
     per (group, item) -- so the item rows are averaged to one value per group FIRST, and the
     contrast is over groups. That is what makes pseudoreplication structurally impossible here:
     15 clones from 2 patients contribute n=2, not n=15, because there are only 2 group rows to
-    compare. The old path handed all 15 rows to a Mann-Whitney and returned p=0.040 with a star.
+    compare.
 
     The contrast math itself is NOT here -- it is ``_compare.compare_groups``, so the package
     has one implementation of "Mann-Whitney two levels and star the p". This function owns the
@@ -481,15 +461,14 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
     ``{item: value}`` mapping; without one (mutual_information) it is a scalar.
 
-    The group loop lives here rather than in each metric so the four of them cannot diverge on
-    what ``groupby`` means — the divergence issue #64 keeps producing. Clone restriction is
-    intersected with the group's clones, never shadowed: ``groupby=... , clones=[...]`` used to
-    return a frame identical to the unrestricted call.
+    The group loop lives here rather than in each metric so the four metrics cannot diverge on
+    what ``groupby`` means. Clone restriction is intersected with the group's clones, never
+    shadowed: ``groupby=...`` together with ``clones=[...]`` keeps only the clones in both.
     """
     obs = adata.obs
     clone_labels = fit_clone_labels(adata, fit)
     # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
-    # `covariate=None` through added an all-NaN column to every row of its result
+    # `covariate=None` through would add an all-NaN column to every row of its result
     base = {"covariate": covariate} if covariate is not None else {}
     if extra_labels:
         base.update({k: v for k, v in extra_labels.items() if v is not None})
@@ -499,8 +478,8 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
             if item_col is None:
                 # a draw's payload is a scalar, or a mapping of value columns when the metric
                 # carries more than one. Mutual information is the only metric with no item
-                # axis, so it is the only one that reaches this branch with a mapping -- but
-                # the two branches now handle a payload the same way, which is the point.
+                # axis, so it is the only one that reaches this branch with a mapping; both
+                # branches unpack a payload the same way.
                 rows.append({**label_row, "draw": draw,
                              **(payload if isinstance(payload, dict) else {"value": payload})})
             else:

@@ -16,11 +16,9 @@ from .._state import keys as K
 
 __all__ = ["tcri_colors", "NA_COLOR", "resolve_colors"]
 
-#: The categorical cycle. There were two of these -- this list and a 30-entry one in
-#: ``utils/_utils.py`` that led with ``#272822`` (the Monokai *background*, so the first
-#: category rendered as a near-black block). They disagreed on both contents and order, and
-#: nothing imported the utils copy. Merged here: this order, plus the colours only the utils
-#: list had.
+#: The categorical cycle, and the only one: every default category colour is taken from here,
+#: in this order. The near-black entries sit late in the cycle on purpose, so the first few
+#: categories of a figure are the distinguishable ones.
 tcri_colors = [
     "#AE81FF", "#FD971F", "#66D9EF", "#A6E22E", "#F92672", "#E6DB74", "#75715E",
     "#D65F0E", "#004d47", "#D291BC", "#3A506B", "#5D8A5E", "#A6A1E2", "#E97451",
@@ -47,10 +45,10 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     when colouring something that is not an obs column -- a phenotype axis read off a metric
     result, say.
 
-    This replaces ``resolve_palette``, which took a LIST of columns, always overwrote
-    ``uns``, and had no way to read an existing assignment back. That last part is the point:
-    a plot that cannot see the colours already stored assigns its own, so the same patient
-    changed colour between two figures in the same notebook.
+    An existing ``uns["<cat_key>_colors"]`` is read back rather than reassigned, so a level
+    keeps its colour across figures. That is the point: a plot that cannot see the colours
+    already stored assigns its own, and the same level changes colour from one figure to the
+    next.
     """
     if categories is None:
         categories = adata.obs[cat_key].astype("category").cat.categories
@@ -61,10 +59,11 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     # categorical's categories, which is also what `uns[<key>_colors]` is aligned to -- and the
     # requested order only selects from the result.
     #
-    # Zipping against the caller's order instead made the colour follow position: the renderer
-    # sorts x by median, so a `response` panel where NR sorted first drew NR purple, and the
-    # panel beside it where R sorted first drew R purple. Same variable, same figure, swapped.
-    # Without an obs column to appeal to, sorting is enough to make it order-independent.
+    # Zipping against the caller's order instead would make the colour follow position: the
+    # renderer sorts x by median, so a `response` panel where NR sorts first would draw NR
+    # purple and the panel beside it, where R sorts first, would draw R purple -- same
+    # variable, same figure, swapped. Without an obs column to appeal to, sorting is enough
+    # to make the assignment order-independent.
     if cat_key in adata.obs:
         canon = list(adata.obs[cat_key].astype("category").cat.categories)
         canon += [c for c in requested if c not in canon]

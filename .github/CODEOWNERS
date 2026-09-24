@@ -12,5 +12,4 @@
 /tests/test_metrics_contract_conformance.py   @nceglia @salehis
 /tests/test_training_invariants.py            @nceglia @salehis
 /tests/_governance.py                         @nceglia @salehis
-/CLAUDE.md                                    @nceglia @salehis
 /.github/CODEOWNERS                           @nceglia @salehis

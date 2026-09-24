@@ -3,8 +3,8 @@
 A null is the parent's model on ONE permuted label vector. Everything that makes it a
 *reference* rather than noise is in the strata: the permutation shuffles only within cells that
 share the columns the metric is not asking about, so the quantity being scored is destroyed and
-nothing else is. Plan §3.1 fixes the defaults per kind; this module builds them, validates a
-caller's refinement, and turns strata into an integer permutation of ``range(n_obs)``.
+nothing else is. This module holds the default strata per kind, validates a caller's
+refinement, and turns strata into an integer permutation of ``range(n_obs)``.
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from .._state import keys as K
 
 #: The permutation's own random stream, per kind. A null's TRAINING seed is the parent's exactly
 #: -- same initialisation, same split, same minibatch order -- so the permuted labels are the
-#: only difference between a null and its parent (plan §8 decision 3). Name-keyed, never
-#: positional: a reordering of this dict must not silently change every recorded permutation.
+#: only difference between a null and its parent. Name-keyed, never positional: a reordering
+#: of this dict must not silently change every recorded permutation.
 OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
 
 KINDS = ("phenotype", "clonotype", "condition")
@@ -49,7 +49,11 @@ def required_strata(adata, kind: str):
 
 
 def default_strata(adata, kind: str):
-    """Plan §3.1's table, as columns of ``obs``."""
+    """The default strata for ``kind``, as columns of ``obs``.
+
+    ``(batch, covariate, replicate)`` for the phenotype and clonotype nulls -- the replicate
+    column only when one is registered -- and ``(clonotype, batch)`` for the condition null.
+    """
     covariate_col, clone_col, _, batch_col, replicate = _cols(adata)
     if kind == "condition":
         # Each clone keeps its cells and its size; which condition a cell sits at is random.
@@ -65,9 +69,9 @@ def resolve_strata(adata, kind: str, within=None):
 
     A ``within`` that drops a required column is rejected rather than unioned: strata are fixed
     at fit time and recorded, so quietly adding a column would make the recorded strata differ
-    from the strata the caller believes they asked for. Measured on a covariate-sparse fixture,
-    a ``within`` that drops the covariate takes ``n_ct`` from 42 to 72 and the shared-clone set
-    from 6 to 36, so the ``null_value`` join would be onto a row set 71% larger.
+    from the strata the caller believes they asked for. Dropping the covariate also changes the row
+    set: it permutes across covariate levels, so the null carries clone-by-covariate rows the
+    parent fit does not, and the ``null_value`` join is onto a different set of rows.
     """
     if within is None:
         return default_strata(adata, kind)

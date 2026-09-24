@@ -1,5 +1,5 @@
-"""``tcri.diag`` training diagnostics (§9.2) — the two model plots relocated off
-``TCRIModel`` (``plot_loss`` → :func:`loss`, ``plot_archetypes`` → :func:`archetypes`)."""
+"""``tcri.diag`` training diagnostics for a fitted model: the ELBO and prior-KL curves
+(:func:`loss`) and the archetype heatmap (:func:`archetypes`)."""
 from __future__ import annotations
 
 import numpy as np

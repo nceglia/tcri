@@ -1,4 +1,4 @@
-"""``tl.mutual_information`` — clone↔phenotype coupling I(c;φ|m) in **bits** (§7.4).
+"""``tl.mutual_information`` — clone↔phenotype coupling I(c;φ|m) in **bits**.
 
 Default ``normalize_mode="min"`` — the coefficient of constraint, I/min(H_c,H_p). The
 ``"average"`` denominator (classical NMI) scales with log2(C) and is not comparable across
@@ -34,10 +34,8 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
     from outside. The normaliser comes from the same joint it normalises, so a null does not
     share it: at the default ``weighted=False`` the engine row-normalises, making ``h_c``
     exactly ``log2(C)``, and ``normalize_mode="min"`` therefore selects ``h_p``, the FITTED
-    phenotype marginal entropy. Measured on a realistic pair, a 2.3% denominator mismatch moves
-    the excess by 4.1%, and on a parent whose head uses two of four phenotypes the denominator
-    alone flips its sign. Both denominators are stored so a reader recovers both bit values
-    exactly, as ``value*denom`` and ``null_value*null_denom``.
+    phenotype marginal entropy. Both denominators are stored so a reader recovers both bit
+    values exactly, as ``value*denom`` and ``null_value*null_denom``.
     """
     J = np.asarray(J, dtype=np.float64)
     total = J.sum()

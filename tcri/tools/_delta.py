@@ -23,8 +23,8 @@ axis sits, which is worth stating because they look unrelated:
 * ``delta_clonotypic_entropy`` — items are phenotypes, present at both levels by construction.
   The intersection instead constrains the clone set summed over *inside* ``H(c|φ)``, which
   makes ``log2(C)`` identical on both sides so the normalizer cancels out of the difference.
-  Without it a repertoire contracting 150 -> 90 clones reports **+0.078** normalized entropy
-  having not redistributed at all — and the artefact points the same way as treatment does.
+  Without it a contracting repertoire reports a positive delta in normalized entropy having
+  not redistributed at all, and the artefact points the same way as treatment does.
 
 That cancellation is why ``n_clones_ref`` keeps its inherited ``None`` default here rather
 than gaining a special one.
@@ -68,9 +68,9 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
 
     # Both sides must come from ONE shared sample. The engine draws over every ct row and then
     # selects a covariate's block, so two calls carrying the same seed realise the same
-    # underlying draw. `phenotypic_flux` learned this the hard way: at random_state=None the
-    # flux of a covariate against ITSELF -- exactly 0 by construction -- came back as 0.209 at
-    # n_samples=16, which was the sampling noise floor being reported as a result.
+    # underlying draw. Left at random_state=None the two calls draw independently, and a
+    # covariate contrasted against ITSELF -- exactly 0 by construction -- reports the sampling
+    # noise floor instead of 0.
     if random_state is None:
         random_state = int(np.random.SeedSequence().generate_state(1)[0])
 

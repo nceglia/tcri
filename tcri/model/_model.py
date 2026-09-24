@@ -39,12 +39,11 @@ from ._module import TCRIModule
 from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
 
-#: Prefixes of the parameter names an UNNAMED model registers: the two guide concentrations
-#: and everything `pyro.module("scvi", ...)` puts in the store. A named model owns `f"{name}."`
-#: instead, and nothing else may.
 #: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
 #: concentrations and the networks `pyro.module` normalises as ``scvi$$$<param>``. This is the
-#: whole of a model's store footprint, which is what makes ownership decidable by name alone.
+#: whole of a model's store footprint, which is what makes ownership decidable by name alone:
+#: an unnamed model owns exactly these bare names, a named one exactly the same set under
+#: ``f"{name}."``, and nothing else may.
 _PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
 
 
@@ -72,7 +71,7 @@ def _owns_param(name: str, key: str) -> bool:
     of which the obvious implementations hit. ``key.startswith(name)`` is correct for every
     named model and wrong for the unnamed one, whose keys every named model's start with.
     ``key.startswith(f"{name}.")`` fixes that and is still wrong DOWNWARD: a null's namespace is
-    ``f"{parent}.null.{kind}"`` (plan §3.2), so a parent would claim its own nulls' parameters
+    ``f"{parent}.null.{kind}"``, so a parent would claim its own nulls' parameters
     and warn about a collision with itself. So the namespace has to match exactly, which means
     stripping it and requiring what remains to be one of this model's own entries.
     """
@@ -141,7 +140,8 @@ def _apply_permutation(codes, axis: str, permutation):
 
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
 #: per-cell block only, at a pinned kl_weight_max under a fixed evaluation seed. The name
-#: says so on purpose; calling it an ELBO is what let the old monitor look well-posed.
+#: says so on purpose: a quantity called an ELBO invites comparison across kl_weight values,
+#: and checks taken at different kl_weight come from different objectives.
 MONITOR = "objective_validation_percell"
 
 __all__ = ["TCRIModel"]
@@ -151,13 +151,13 @@ warnings.filterwarnings(
     "ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*"
 )
 
-# NEW-5: neither of these belongs at import time.
+# Neither the SLURM environment nor root-logger configuration belongs at import time.
 #
 # Deleting SLURM_NTASKS/SLURM_NTASKS_PER_NODE from os.environ stops Lightning's SLURM
-# auto-detection from hijacking the trainer -- but doing it on `import tcri` mutates the
+# auto-detection from hijacking the trainer, but doing it on `import tcri` mutates the
 # environment for the WHOLE process, so anything else that sizes work from those variables
 # (a joblib/dask pool, a subprocess srun, another Trainer) silently sees them missing. It is
-# now scoped to train() and restored afterwards; see _slurm_autodetect_disabled.
+# scoped to train() and restored afterwards; see _slurm_autodetect_disabled.
 #
 # logging.basicConfig() configures the ROOT logger, which is the application's decision, not
 # a library's. Importing tcri would switch on INFO logging for everything in the process. A
@@ -240,11 +240,11 @@ class TCRIModel(BaseModelClass):
     ) -> None:
         """Register clonotype/phenotype/covariate/batch/count fields with scvi.
 
-        Registration only. Writes ``obs['indices']`` (scvi glue that the
-        training/validation steps consume via ``batch['indices']``) and records the
-        layer, but performs **no** analysis/label ``obs`` mutation and does **not**
-        stash the ``AnnDataManager`` in ``uns`` (the retired ``tcri_manager`` hack) —
-        learned outputs are written solely by :meth:`to_anndata`.
+        Registration only. Writes ``obs['indices']`` (scvi glue that the training/validation
+        steps consume via ``batch['indices']``), records the clonotype, phenotype, covariate,
+        batch, replicate and layer choices on the registry, and mirrors a named layer in
+        ``uns['tcri_layer']`` (clearing it when ``layer`` is ``None``). No analysis or label
+        ``obs`` column is written here — learned outputs come solely from :meth:`to_anndata`.
         """
         if clonotype_key == "auto":
             _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
@@ -315,7 +315,7 @@ class TCRIModel(BaseModelClass):
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
         K: int = 10,
-        gate_prob: Optional[float] = 0.5,  # π (gating weight, methods §Generative Model); None = additive
+        gate_prob: Optional[float] = 0.5,  # π (gating weight); None = additive
         kl_weight_max: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
@@ -330,12 +330,11 @@ class TCRIModel(BaseModelClass):
         phenotype label is wrong. With it on (the default) each cell's label is an observation
         of its latent phenotype with reliability 1-ε, which is what lets the clone x covariate
         distributions learn from the cells. ``None`` switches the readout off and fits the
-        label-free surrogate alone (the pre-2026-09 model). Must be in ``[0, 1 - 1/P)``.
+        label-free surrogate alone. Must be in ``[0, 1 - 1/P)``.
 
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
         two models can be fitted in one session without overwriting each other. ``""`` is the
-        historical unnamed layout, which every session saved before 0.12 uses and which stays
-        byte-identical.
+        unnamed layout: this model's parameters keep their bare store names.
 
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
@@ -350,12 +349,10 @@ class TCRIModel(BaseModelClass):
         #: back to ``train()``'s defaults.
         self._train_kwargs: dict = {}
 
-        # DE-19: network init and minibatch order were unseeded, so two fits with the same
-        # nominal seed differed by ~1.8e-3 in reported NMI -- larger than the effect of several
-        # defects being fixed in this stack, which makes those effects unmeasurable from a
-        # paired fit. `seed` is on __init__ rather than train() deliberately: the networks are
-        # built here, so seeding in train() would be too late, and adding it to train() would
-        # be an API-contract change to _contract.pyi.
+        # `seed` is on __init__ rather than train() deliberately: the networks are built here,
+        # so seeding in train() would be too late, and unseeded network init leaves two fits at
+        # the same nominal seed differing by more than the effects a paired fit is meant to
+        # measure. Adding it to train() would also change governance/API_CONTRACT.md.
         self._seed = int(seed) if seed is not None else None
         self._n_train_calls = 0
         if self._seed is not None:
@@ -366,10 +363,10 @@ class TCRIModel(BaseModelClass):
         # weights, so it starts from the previous fit instead of from scratch. We warn
         # rather than clearing, because clearing here would destroy the params of a
         # model loaded earlier in the session (load_tcri_session restores the store
-        # after construction). Proper per-instance namespacing is a design change.
-        # Scoped to THIS model's namespace. An unnamed model owns exactly the legacy bare
+        # after construction).
+        # The check is scoped to THIS model's namespace. An unnamed model owns exactly the bare
         # names; a named one owns exactly the keys under "<name>.". Without the scoping the
-        # warning fires for every other model's parameters -- which, now that two models can
+        # warning fires for every other model's parameters -- which, since two models can
         # coexist, is the normal state rather than the problem it is meant to flag.
         _tcri_params = [k for k in pyro.get_param_store().keys()
                         if _owns_param(self._name, k)]
@@ -478,9 +475,10 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
-        # B3: patience is counted in EPOCHS, guaranteed by check_val_every_n_epoch=1 in
-        # train(). `patience` is accepted as a deprecated alias -- it appears in init_params_,
-        # so dropping it outright breaks load_tcri_session() on every previously saved model.
+        # Patience is counted in EPOCHS, guaranteed by check_val_every_n_epoch=1 in train();
+        # governance/TRAINING_CONTRACT.md fixes that unit. `patience` is accepted as a
+        # deprecated alias -- it appears in init_params_, so dropping it outright breaks
+        # load_tcri_session() on models saved before the rename.
         if "patience" in kwargs:
             legacy = int(kwargs.pop("patience"))
             if patience_epochs != 300:
@@ -526,12 +524,11 @@ class TCRIModel(BaseModelClass):
 
         _pl.seed_everything(seed, workers=True, verbose=False)
         pyro.set_rng_seed(seed)
-        # DE-19: scvi builds the train/val split from `np.random.RandomState(scvi.settings.seed)`
+        # scvi builds the train/val split from `np.random.RandomState(scvi.settings.seed)`
         # (scvi/dataloaders/_data_splitting.py), and that setting defaults to None -- i.e. OS
-        # entropy. Seeding lightning and pyro is NOT sufficient: which cells land in the
-        # validation split stayed random, leaving a ~1.6e-3 spread between "identical" fits.
-        # The determinism test only passed because tests/test_model_classifier.py happens to set
-        # scvi.settings.seed process-globally earlier in the run.
+        # entropy. Seeding lightning and pyro is NOT sufficient: without this line, which cells
+        # land in the validation split stays random and two fits at one seed differ.
+        # tests/test_model_determinism.py covers this.
         _scvi.settings.seed = seed
 
     def train(
@@ -543,16 +540,58 @@ class TCRIModel(BaseModelClass):
         n_steps_kl_warmup: int = 2000,
         **kwargs,
     ):
-        """
-        We split the data into train/val, define a UnifiedTrainingPlan with
-        validation_step, and let scvi handle early stopping automatically
-        by passing early_stopping parameters to TrainRunner.
+        """Fit the model on the registered AnnData.
+
+        The cells are split 0.9/0.1 into train and validation, SVI runs through
+        ``UnifiedTrainingPlan`` (Pyro ``Adam``, with no weight decay on the guide
+        concentrations), and the parameters that scored best on the validation criterion are
+        restored when the fit ends.
+
+        Parameters
+        ----------
+        max_epochs
+            Epoch budget. Reaching it means the stopping rule never engaged, so the fit is
+            truncated rather than converged; that case warns.
+        batch_size
+            Cells per optimizer step. ``batch_size >= n_obs`` warns, because each epoch is then
+            a single gradient update and ``max_epochs`` becomes the number of updates.
+        lr
+            Learning rate of the Pyro optimizer, for the networks and the guide alike.
+        reconstruction_loss_scale
+            Weight on the ZINB likelihood of the counts; set on the module for the whole fit.
+        n_steps_kl_warmup
+            Optimizer steps over which ``kl_weight`` ramps to ``kl_weight_max``; ``<= 0``
+            disables annealing. The counter lives on the module, so a second ``train()``
+            continues the schedule instead of restarting it -- construct a new model for a
+            fresh ramp.
+        kwargs
+            Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``
+            and ``early_stopping_monitor``/``_mode``/``_patience``. An unrecognised name raises
+            ``TypeError`` here rather than several frames deep in scvi. The train/validation
+            split is fixed at 0.9 and is not configurable.
+
+        Notes
+        -----
+        scvi's own early stopping is switched off and replaced by two callbacks:
+        ``RampGatedEarlyStopping``, which ignores every check taken before the KL ramp
+        completes, and ``BestObjectiveSnapshot``, which restores the best-scoring module state
+        and guide concentrations at the end of the fit. The monitored criterion is
+        ``objective_validation_percell``, minimised, with patience ``patience_epochs``;
+        ``check_val_every_n_epoch`` defaults to 1, so one check is one epoch.
+
+        If the ramp does not complete within the fit, no checkpoint is selected, the final
+        weights are kept, and the call warns: checks taken at different ``kl_weight`` values
+        come from different objectives and are not comparable.
+
+        Sets ``training_record_`` -- epochs run, warmup steps taken, steps per epoch, the epoch
+        and score selected, whether the fit stopped before ``max_epochs``, and the seed -- and
+        stores the arguments this fit ran with, so ``tcri.null.*`` can fit a null the same way.
         """
 
         # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
         # **kwargs to TrainRunner and on into Trainer.__init__, so a name this package does not
         # accept surfaces as a TypeError raised four frames deep in scvi with no mention of tcri
-        # -- which is exactly how `validation_size=0.1` killed a 17-minute run, after training.
+        # -- and only once the fit has already finished, which is the expensive way to find out.
         _unknown = sorted(set(kwargs) - _accepted_train_kwargs())
         if _unknown:
             raise TypeError(
@@ -567,17 +606,17 @@ class TCRIModel(BaseModelClass):
             self._apply_seed(self._seed + self._n_train_calls)
         self._n_train_calls += 1
 
-        # DE-4: the KL ramp is carried on the module, so a second train() CONTINUES the
-        # schedule instead of restarting it. There is deliberately no reset knob -- adding one
-        # to train() would be an API-contract change to _contract.pyi, and restarting the ramp
-        # is the behaviour this defect removes. Construct a new model for a fresh schedule.
+        # The KL ramp is carried on the module, so a second train() CONTINUES the schedule
+        # instead of restarting it, which is what training-contract B1 requires. There is
+        # deliberately no reset knob -- adding one would change governance/API_CONTRACT.md, and
+        # a restarted ramp makes checks from before and after it incomparable. Construct a new
+        # model for a fresh schedule.
 
-        # Create a train/val split
         self.module.reconstruction_loss_scale = reconstruction_loss_scale
 
         # batch_size >= n_obs means ONE optimizer step per epoch, so the fixed
-        # per-epoch overhead is paid per gradient update — the pathology behind the
-        # "9-hour" synthetic run (1000 cells, batch_size=20000, max_epochs=1e6).
+        # per-epoch overhead is paid per gradient update and `max_epochs` becomes
+        # the number of gradient updates rather than a pass count.
         n_obs = self.adata.n_obs
         if batch_size >= n_obs:
             warnings.warn(
@@ -618,15 +657,11 @@ class TCRIModel(BaseModelClass):
         # passing e.g. accelerator="gpu" through train(**kwargs) works instead of raising
         # "got multiple values for keyword".
         #
-        # B3: check_val_every_n_epoch=1 so that a check IS an epoch and `patience_epochs` means
-        # what it says. Deliberately not solved by dividing patience at the call site -- two
-        # units with a silent conversion between them is the same trap in a new place. Costs a
-        # measured +7.6% wall clock on the worst-case fixture (2 training batches per epoch).
-        #
-        # Historic note: the old defaults made early stopping unreachable. patience=300 with
-        # check_val_every_n_epoch=5 is 1500 epochs of non-improvement, against a max_epochs of
-        # 1000, so every default run trained to the budget. That is why DE-2 and DE-3 never
-        # produced a wrong number for anyone to notice.
+        # check_val_every_n_epoch=1 so that a check IS an epoch and `patience_epochs` means
+        # what it says; governance/TRAINING_CONTRACT.md fixes that unit. Deliberately not
+        # solved by dividing patience at the call site -- two units with a silent conversion
+        # between them is the same trap in a new place. Validating every epoch costs wall
+        # clock when an epoch is only a few batches.
         kwargs.setdefault("check_val_every_n_epoch", 1)
         kwargs.setdefault("accelerator", "auto")
         kwargs.setdefault("devices", "auto")
@@ -669,16 +704,17 @@ class TCRIModel(BaseModelClass):
         # Lightning only captures and restores the per-submodule train/eval flags around
         # validation; it never forces train mode. scvi's TrainRunner calls module.eval() when a
         # fit ENDS, and predict()/to_anndata()/get_latent_representation()/a session load do
-        # the same. So a train() that followed any of those used to run the ENTIRE fit in eval
-        # mode -- classifier dropout off, encoder BatchNorm frozen at its running statistics --
-        # silently and bit-reproducibly, which is why a seed check could not see it. Measured on
-        # the example cohort: latent spread 0.0075 in that state vs 0.045 in train mode.
+        # the same. Without this line a train() that followed any of those runs the ENTIRE fit
+        # in eval mode -- classifier dropout off, encoder BatchNorm frozen at its running
+        # statistics -- silently and bit-reproducibly, which is why a seed check cannot see it.
+        # test_train_resets_module_mode pins it.
         self.module.train()
         with _slurm_autodetect_disabled():
             runner()
 
-        # B9: a fit records what actually happened. `steps_per_epoch` is read from the counter
-        # rather than computed from batch_size, so a partial final batch cannot skew it.
+        # A fit records what actually happened -- the provenance fields required by
+        # governance/TRAINING_CONTRACT.md. `steps_per_epoch` is read from the counter rather
+        # than computed from batch_size, so a partial final batch cannot skew it.
         epochs_run = max(int(runner.trainer.current_epoch), 1)
         steps_per_epoch = max(self.module._kl_warmup_step / epochs_run, 1e-9)
         ramp_done = ramp_is_complete(plan)
@@ -706,14 +742,9 @@ class TCRIModel(BaseModelClass):
         if epochs_run >= max_epochs:
             # Hitting the cap means early stopping never fired -- the model was still
             # improving when the budget ran out, so this fit is truncated rather than
-            # converged. It is silent otherwise: the run looks identical to a converged one.
-            #
-            # This is not hypothetical. On a 100k-cell dataset the metric kept climbing well
-            # past the default: mutual information read 0.236 at 200 epochs, 0.290 at 600,
-            # 0.328 at 1000, and 0.342 once the rule finally engaged at epoch 1208 of a 2000
-            # budget. Every run at or below 1000 epochs hit its cap, and the default is 1000.
-            # A user taking the default there would have understated MI by about 31% with no
-            # indication anything was wrong.
+            # converged. It is silent otherwise: the run looks identical to a converged one,
+            # and a metric read from it can be understated by however far the fit still had to
+            # go, so the warning is the only signal a caller gets.
             warnings.warn(
                 f"training stopped because it reached max_epochs={max_epochs}, not because "
                 f"it converged -- the early-stopping rule never engaged, so the model was "
@@ -769,11 +800,9 @@ class TCRIModel(BaseModelClass):
         Combines classifier logits with ``log p_ct`` exactly as in training: if
         ``self.module.gate_prob`` is set (``use_gate``),
         ``gate_prob * cls_logits + (1 - gate_prob) * log(prior)``; otherwise the
-        additive rule ``cls_logits + log(prior)``. Renamed from
-        ``get_cell_phenotype_probs`` (which returned a bare ``ndarray``). The module
-        is put in ``eval`` mode so classifier dropout is off and the result is
-        deterministic; the sequential loader keeps the row order aligned to
-        ``obs_names``.
+        additive rule ``cls_logits + log(prior)``. The module is put in ``eval`` mode so
+        classifier dropout is off and the result is deterministic; the sequential loader keeps
+        the row order aligned to ``obs_names``.
         """
         adata = self._validate_anndata(adata)
         self.module.eval()
@@ -787,21 +816,15 @@ class TCRIModel(BaseModelClass):
         for tensors in scdl:
             x = tensors[REGISTRY_KEYS.X_KEY].to(device)
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
-            # NEW-1: bind each cell to ITS OWN clonotype x covariate group, via the global
-            # cell id the loader carries -- never by position in this loader.
+            # Bind each cell to ITS OWN clonotype x covariate group, via the global cell id
+            # the loader carries -- never by position in this loader. `ct_array` is indexed by
+            # TRAINING cell id, so a positional index is right only when the passed adata is a
+            # contiguous prefix of the training data in its original order; for any other
+            # subset, a reordered view, or a per-patient slice -- all legal under the frozen
+            # contract -- cell i would silently get the prior of the i-th TRAINING cell.
             #
-            # This used to be `ct_array[current_idx : current_idx + n]` with a running offset.
-            # `ct_array` is indexed by TRAINING cell id, so the offset is only the right index
-            # when the passed adata is a contiguous prefix of the training data in its original
-            # order. For any other subset, a reordered view, or a per-patient slice -- all legal
-            # under the frozen contract -- cell i silently received the prior of the i-th
-            # TRAINING cell. Measured on a reversed view of a 200-cell fixture: max |delta p|
-            # = 0.3696 against the same cells predicted from the full object. It read 0.0000 on
-            # a prefix, which is why it survived.
-            #
-            # model() already does exactly this (`ct_idx = self.ct_array[indices]`), and
-            # test_alignment_target_uses_global_indices pins it there; predict() and
-            # to_anndata() were the two places that did not.
+            # model() does the same (`ct_idx = self.ct_array[indices]`), and
+            # test_alignment_target_uses_global_indices pins it there.
             idx = tensors["indices"].long().view(-1).to(device)
             clone_cov_posterior = p_ct[ct_array[idx]]
             z_loc, _, _ = self.module.encoder(x, b)
@@ -822,14 +845,13 @@ class TCRIModel(BaseModelClass):
     def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False,
                    fit: Optional[str] = None) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
-        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it. Replaces the old
-        ``preprocessing.register_model``; writes no manager stash.
+        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it.
 
         ``fit`` names a SECOND fit on the same object: every per-fit key is written under that
         prefix (``tcri_null.phenotype_p_ct`` and so on), the shared keys are left alone, and the
-        name is appended to ``uns[METADATA]["fits"]``. ``None`` is the main fit and behaves
-        exactly as it did in 0.11. One object holds one main fit and as many named fits as you
-        like; a second model calling this with ``fit=None`` overwrites the first.
+        name is appended to ``uns[METADATA]["fits"]``. ``None`` writes the main fit. One object
+        holds one main fit and as many named fits as you like; a second model calling this with
+        ``fit=None`` overwrites the first.
 
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
@@ -906,8 +928,8 @@ class TCRIModel(BaseModelClass):
             "train": dict(self._train_kwargs),
             **categories,
         }
-        # DE-5b: the guide's actual concentration, so credible intervals come from the
-        # fitted posterior rather than from a reconstructed local_scale * mean.
+        # The guide's actual concentration, so credible intervals come from the fitted
+        # posterior rather than from a reconstructed local_scale * mean.
         adata.uns[_key(K.CONC_CT)] = self.module.get_conc_ct().detach().cpu().numpy()
         gp = self.module.gate_prob
         adata.uns[_key(K.GATE_PROB)] = float(gp) if gp is not None else float("nan")
@@ -918,7 +940,7 @@ class TCRIModel(BaseModelClass):
             adata=adata, batch_size=batch_size
         ).astype("float32")
 
-        # 4) per-cell logits + additive log-posterior (folds _compute_logits_and_prior)
+        # 4) per-cell logits + additive log-posterior -------------------------
         loader = self._make_data_loader(adata=adata, batch_size=batch_size)
         p_ct_t = self.module.get_p_ct().to(device)
         ct_arr_t = self.module.ct_array.to(device)
@@ -928,7 +950,7 @@ class TCRIModel(BaseModelClass):
             b = tensors[REGISTRY_KEYS.BATCH_KEY].long().to(device)
             z_loc, _, _ = self.module.encoder(x, b)
             logits_buf.append(self.module.classifier(z_loc).cpu())
-            # NEW-1, as in predict(): index by the cell's own global id, not by position.
+            # As in predict(): index by the cell's own global id, not by position.
             idx = tensors["indices"].long().view(-1).to(device)
             prior_buf.append(torch.log(p_ct_t[ct_arr_t[idx]] + 1e-8).cpu())
         cls_logits = torch.cat(logits_buf).numpy().astype("float32")

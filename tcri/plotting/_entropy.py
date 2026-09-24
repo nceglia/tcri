@@ -1,4 +1,4 @@
-"""``pl.clonotypic_entropy`` / ``pl.phenotypic_entropy`` (§8.1) — cache renderers.
+"""``pl.clonotypic_entropy`` / ``pl.phenotypic_entropy`` — cache renderers.
 
 The two differ in one thing, and it is a property of the metric rather than a style choice:
 H(c|phi) has one value per PHENOTYPE, a handful of named categories that belong on the x

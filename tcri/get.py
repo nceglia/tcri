@@ -18,7 +18,7 @@ equal rather than being the same objects). :func:`params` reads the provenance s
 from __future__ import annotations
 
 # Aliased private: this module IS the public accessor namespace, so anything bound at module
-# scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` advertised K,
+# scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` would advertise K,
 # load_result and load_result_params -- the storage internals the accessors exist to hide.
 from ._state import keys as _K
 from ._state.storage import load_result as _load_result, load_result_params as _load_result_params
@@ -88,8 +88,8 @@ def _require(adata, name, key, fit=None):
     """Resolve the uns key, or raise naming the exact call that would fill it.
 
     With ``pl`` reading the cache instead of recomputing, "I plotted before I computed" is
-    now the most common way to get this wrong — so the message has to be the fix, not a
-    description of the problem. ``run the matching tcri.tl tool first`` was neither.
+    the most common way to get this wrong, so the message names the exact call that fills the
+    key.
     """
     fit = _K.resolve_fit(adata, fit)
     resolved = _resolve_key(name, key, fit)

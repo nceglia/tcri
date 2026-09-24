@@ -5,11 +5,9 @@ needs (true HDI, signed-direction probability).
 
 ``auc_and_label_permutation`` and ``bootstrap_auc`` are re-exported as ``tcri.ut.*``. They
 are complementary -- a permutation p-value against shuffled labels, and a bootstrap CI on
-the AUC itself -- and were reachable only through this private module, which is why nothing
-called them.
+the AUC itself.
 
-``eti`` (equal-tailed interval) is gone: it had no caller outside its own unit test, and the
-package reports HDIs. ``hdi`` is the primitive everything actually uses.
+``hdi`` is the interval primitive the metric layer uses.
 """
 from __future__ import annotations
 
@@ -50,8 +48,7 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
         AUC = (Σ ranks[pos] − n_pos(n_pos+1)/2) / (n_pos·n_neg)
 
     which is exact (midranks reproduce ``roc_auc_score``'s tie handling) and turns
-    each draw from an O(n log n) re-sort into an O(n_pos) sum. Measured 137× on the
-    Monte-Carlo path (191 s → 1.4 s at the default ``n_perm``).
+    each draw from an O(n log n) re-sort into an O(n_pos) sum.
     """
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels)
@@ -63,7 +60,7 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
     n_pos = int(y.sum())
     n_neg = n - n_pos
 
-    if n_pos == 0 or n_neg == 0:  # AUROC undefined; keep the old failure mode
+    if n_pos == 0 or n_neg == 0:  # AUROC is undefined with only one class present
         perm_stats = np.array([])
         return obs_auc, float("nan"), perm_stats, "degenerate"
 
@@ -113,8 +110,9 @@ def bootstrap_auc(scores, labels, pos_label=None, n_boot=5000, seed=42):
 def hdi(samples, *, prob: float = 0.94):
     """True highest-density interval: the *narrowest* window holding ``prob`` mass.
 
-    Sounder than ``eti`` for the bounded, skewed entropy/flux posteriors, but
-    noisier from few draws near a boundary (use ``n_samples ≳ 500`` when tight).
+    Sounder than an equal-tailed interval for the bounded, skewed entropy/flux
+    posteriors, but noisier from few draws near a boundary (use ``n_samples ≳ 500``
+    when tight).
     """
     s = np.sort(np.asarray(samples, float))
     n = s.size
