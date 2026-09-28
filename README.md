@@ -137,7 +137,7 @@ joint. The full generative model and its plate diagram are documented under
 
 If you use TCRi in your research, please cite:
 
-> **TCRi: An Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing**
+> **An information-theoretic framework for inferring T-cell dynamics from single-cell RNA and T-cell receptor sequencing**
 >
 > Nicholas Ceglia, Sohrab Salehi, et al.
 >
@@ -148,7 +148,7 @@ If you use TCRi in your research, please cite:
 
 ```bibtex
 @article{ceglia2026tcri,
-  title   = {TCRi: An Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing},
+  title   = {An information-theoretic framework for inferring T-cell dynamics from single-cell RNA and T-cell receptor sequencing},
   author  = {Ceglia, Nicholas and Salehi, Sohrab and others},
   journal = {Nature Genetics},
   year    = {2026},
