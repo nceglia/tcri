@@ -141,7 +141,7 @@ If you use TCRi in your research, please cite:
 >
 > Nicholas Ceglia, Sohrab Salehi, et al.
 >
-> _bioRxiv_ 2022. doi: [10.1101/2022.10.01.510457](https://doi.org/10.1101/2022.10.01.510457)
+> _Nature Genetics_, In Press 2026.
 
 <details>
 <summary>BibTeX</summary>

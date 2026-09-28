@@ -71,8 +71,7 @@ contracts/index
 If you use TCRi, please cite:
 
 > **TCRi: An Information Theoretic Framework for Paired Single Cell Gene Expression and TCR
-> Sequencing.** Ceglia N., Salehi S., _et al._ _bioRxiv_ 2022.
-> doi: [10.1101/2022.10.01.510457](https://doi.org/10.1101/2022.10.01.510457)
+> Sequencing.** Ceglia N., Salehi S., _et al._ _Nature Genetics_, In Press 2026.
 
 ## Links
 
