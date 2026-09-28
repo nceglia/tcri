@@ -381,7 +381,7 @@ def simulate_from_fit_params(
                    else [f"clone_{i}" for i in z])
 
     # As above: declare the label space rather than letting pandas infer it.
-    phen_levels = [f"phen_{p}" for p in range(n_phenotypes)]
+    phen_levels = [f"phen_{p}" for p in range(P)]
     clone_levels_all = ([str(c) for c in clone_levels] if clone_levels is not None
                         else [f"clone_{i}" for i in range(n_clones)])
     obs = pd.DataFrame({
