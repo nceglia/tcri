@@ -147,12 +147,12 @@ If you use TCRi in your research, please cite:
 <summary>BibTeX</summary>
 
 ```bibtex
-@article{ceglia2022tcri,
+@article{ceglia2026tcri,
   title   = {TCRi: An Information Theoretic Framework for Paired Single Cell Gene Expression and TCR Sequencing},
   author  = {Ceglia, Nicholas and Salehi, Sohrab and others},
-  journal = {bioRxiv},
-  year    = {2022},
-  doi     = {10.1101/2022.10.01.510457}
+  journal = {Nature Genetics},
+  year    = {2026},
+  note    = {In press}
 }
 ```
 
