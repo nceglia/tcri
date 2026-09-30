@@ -108,7 +108,9 @@ schedules or stopping; they change with a recorded reason.
   `train()`, or raises. The constructor raises for an unknown name; a saved record's
   `kl_weight_max` maps to `max_kl_weight`, and its `patience_epochs`/`patience` are dropped,
   both with a warning; its `use_enumeration` is dropped, with a warning only when it is true.
-  `test_train_rejects_arguments_it_replaces`,
+  `num_particles` and `early_stopping_patience` are integers `>= 1`; a bool, a string or a
+  float raises instead of being truncated. `test_train_rejects_arguments_it_replaces`,
+  `test_count_arguments_must_be_integers`,
   `test_every_scvi_trainer_argument_is_forwarded_or_replaced`,
   `test_an_unknown_constructor_argument_raises`, `test_a_saved_use_enumeration_is_dropped`.
 

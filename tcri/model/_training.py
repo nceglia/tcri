@@ -107,7 +107,8 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # draws are not vectorized). Passed explicitly so the plan declares it rather than
         # inheriting scvi's default. The model has no discrete latent to enumerate -- the
         # phenotype in the label readout is summed out in closed form -- so an enumerating ELBO
-        # would compute the same objective. test_svi_steps_on_the_plans_loss pins it.
+        # would compute the same objective. test_svi_steps_on_the_plans_loss pins the hand-off,
+        # test_num_particles_averages_that_many_draws the averaging.
         super().__init__(
             module,
             loss_fn=Trace_ELBO(num_particles=int(num_particles)),

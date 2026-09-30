@@ -216,15 +216,20 @@ def test_svi_steps_on_the_plans_loss(adata):
     """Contract I1: SVI descends the estimator the plan declares, a one-particle Trace_ELBO.
 
     A loss the plan builds but does not hand to SVI is invisible to every other test, because
-    the fit still runs on whatever SVI was given. So this checks the object SVI holds, and that
-    the loss SVI evaluates on a batch equals a one-particle Trace_ELBO on the same batch and
-    draw, which a different particle count would not.
+    the fit still runs on whatever SVI was given. scvi's own default is also a one-particle
+    Trace_ELBO, so the hand-off is checked on a plan built with two particles, which only a
+    declared loss can give SVI. The loss SVI evaluates on a batch must then equal a
+    one-particle Trace_ELBO on the same batch and draw.
     """
     from pyro.infer import Trace_ELBO
+
+    from tcri.model._training import UnifiedTrainingPlan
 
     m, plan, batch = _plan_and_batch(adata)
     assert plan.svi.loss.__self__ is plan.loss_fn, "SVI does not step on the plan's loss"
     assert isinstance(plan.loss_fn, Trace_ELBO) and plan.loss_fn.num_particles == 1
+    two = UnifiedTrainingPlan(module=m.module, n_steps_kl_warmup=8, num_particles=2)
+    assert two.svi.loss.__self__.num_particles == 2, "the plan's loss did not reach SVI"
 
     args, kwargs = plan.module._get_fn_args_from_batch(batch)
     with torch.random.fork_rng(devices=[]), torch.no_grad():
@@ -262,6 +267,16 @@ def test_num_particles_averages_that_many_draws(adata):
     assert got == pytest.approx(sum(draws) / n, rel=1e-5), (
         f"SVI evaluates {got}; the mean of {n} draws is {sum(draws) / n}, one draw {draws[0]}"
     )
+
+    # The validation criterion takes one draw whatever the count (I1, I3), so early stopping
+    # reads the same quantity at any num_particles.
+    from tcri.model._training import UnifiedTrainingPlan
+
+    batch = next(iter(loader))
+    plan.module.eval()
+    crit = {k: float(UnifiedTrainingPlan(module=plan.module, n_steps_kl_warmup=4, num_particles=k)
+                     .validation_step(batch, 0)["loss"]) for k in (1, n)}
+    assert crit[n] == crit[1], f"the validation criterion depends on num_particles: {crit}"
 
 
 def test_monitor_is_invariant_to_ramp_position(adata):
