@@ -44,7 +44,7 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_n_layers: int = 3,
         n_hidden: int = 128,
         n_layers: int = 3,
-        kl_weight_max: float = 1.0,
+        max_kl_weight: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
@@ -84,7 +84,7 @@ class TCRIModule(PyroBaseModuleClass):
         self.eps = 1e-6
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout
-        self.kl_weight_max = kl_weight_max
+        self.max_kl_weight = max_kl_weight
         self.classifier_n_layers = classifier_n_layers
         self.guide_init_scale = guide_init_scale
         self.classifier_temperature = classifier_temperature

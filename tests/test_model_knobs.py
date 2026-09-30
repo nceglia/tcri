@@ -100,7 +100,7 @@ def _train(model, **kw):
     ("classifier_temperature", 2.0, lambda m: m.module.classifier_temperature),
     ("classifier_dropout", 0.3, lambda m: m.module.classifier.mlp[2].p),
     ("classifier_hidden", 12, lambda m: m.module.classifier.mlp[0].out_features),
-    ("kl_weight_max", 0.7, lambda m: m.module.kl_weight_max),
+    ("max_kl_weight", 0.7, lambda m: m.module.max_kl_weight),
     ("guide_init_scale", 4.0, lambda m: m.module.guide_init_scale),
     ("phenotype_kl_weight", 3.0, lambda m: m.module.phenotype_kl_weight),
 ])
@@ -163,14 +163,71 @@ def test_reconstruction_loss_scale_reaches_the_module(adata):
 
 
 def test_max_epochs_and_patience_reach_the_trainer(adata):
-    m = _model(adata, patience=4)
-    _train(m, max_epochs=5)
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
+    m = _model(adata)
+    _train(m, max_epochs=5, early_stopping_patience=4)
     assert m.trainer.max_epochs == 5
-    # scvi installs its own EarlyStopping subclass (LoudEarlyStopping), so match on
-    # the attribute rather than the class name.
-    es = [cb for cb in m.trainer.callbacks if hasattr(cb, "patience")]
-    assert es, f"no early-stopping callback installed: {[type(c).__name__ for c in m.trainer.callbacks]}"
-    assert es[0].patience == 4, "patience did not reach the early-stopping callback"
+    es = [cb for cb in m.trainer.callbacks if isinstance(cb, RampGatedEarlyStopping)]
+    assert len(es) == 1, f"expected one stopping callback: {[type(c).__name__ for c in m.trainer.callbacks]}"
+    assert es[0].patience == 4, "early_stopping_patience did not reach the early-stopping callback"
+
+
+def test_min_delta_reaches_the_early_stopping_callback(adata):
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
+    m = _model(adata)
+    _train(m, max_epochs=2, early_stopping_min_delta=0.25)
+    es = [cb for cb in m.trainer.callbacks if isinstance(cb, RampGatedEarlyStopping)]
+    assert len(es) == 1, f"expected one stopping callback: {[type(c).__name__ for c in m.trainer.callbacks]}"
+    # Lightning keeps the threshold with the sign of the comparison: negative when minimizing.
+    assert es[0].min_delta == -0.25, "early_stopping_min_delta did not reach the callback"
+
+
+@pytest.mark.parametrize("kw", [
+    {"early_stopping_min_delta": -1e-3},
+    {"early_stopping_min_delta": float("nan")},
+    {"early_stopping_min_delta": float("inf")},
+    {"early_stopping_patience": 0},
+])
+def test_stopping_arguments_are_validated_before_the_fit(adata, kw):
+    m = _model(adata)
+    with pytest.raises(ValueError, match=next(iter(kw))):
+        _train(m, **kw)
+    assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
+
+
+def test_early_stopping_off_installs_no_stopping_rule(adata):
+    from tcri.model._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping
+
+    m = _model(adata)
+    _train(m, max_epochs=2, early_stopping=False)
+    kinds = [type(cb) for cb in m.trainer.callbacks]
+    assert RampGatedEarlyStopping not in kinds, "early_stopping=False still installed the rule"
+    assert BestObjectiveSnapshot in kinds, "the best-check restore must run either way"
+
+
+def test_a_saved_record_with_old_argument_names_still_constructs(adata):
+    """A saved constructor record can carry ``kl_weight_max``, ``patience_epochs`` or
+    ``patience``, and a reload replays it through ``TCRIModel(**record)``. ``kl_weight_max``
+    maps to ``max_kl_weight`` and the patience names, a ``train()`` setting, are dropped. Both
+    warn, and the record the model keeps carries current names only."""
+    with pytest.warns(FutureWarning) as caught:
+        m = _model(adata, kl_weight_max=0.7, patience_epochs=300, patience=4)
+    msgs = " ".join(str(w.message) for w in caught)
+    assert "max_kl_weight" in msgs and "early_stopping_patience" in msgs, msgs
+    assert m.module.max_kl_weight == pytest.approx(0.7)
+    names = set(m.init_params_["non_kwargs"]) | set(m.init_params_["kwargs"].get("kwargs", {}))
+    assert not names & {"kl_weight_max", "patience_epochs", "patience"}, names
+    assert m.init_params_["non_kwargs"]["max_kl_weight"] == pytest.approx(0.7)
+    with pytest.raises(TypeError, match="not both"):
+        _model(adata, kl_weight_max=0.7, max_kl_weight=0.5)
+
+
+def test_an_unknown_constructor_argument_raises(adata):
+    """``**kwargs`` would otherwise swallow a misspelling and fit with the default."""
+    with pytest.raises(TypeError, match="n_latnet"):
+        _model(adata, n_latnet=4)
 
 
 def test_network_geometry_knobs_are_wired(adata):
@@ -189,7 +246,7 @@ def test_batch_size_reaches_the_dataloader(adata):
 
 
 def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
-    """The warmup must actually anneal module.kl_weight from ~0 up to kl_weight_max.
+    """The warmup must actually anneal module.kl_weight from ~0 up to max_kl_weight.
 
     NOTE the warmup is counted in optimizer STEPS while max_epochs is in epochs; with
     batch_size >= n_obs that is one step per epoch (``governance/TRAINING_CONTRACT.md`` B2,
@@ -212,7 +269,7 @@ def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
     warm = seen[:20]                      # the ramp itself; it plateaus afterwards
     assert warm[0] < warm[len(warm) // 2] < warm[-1], f"kl_weight did not ramp: {warm[:6]}"
     assert all(b >= a - 1e-12 for a, b in zip(seen, seen[1:])), "ramp must be monotonic"
-    assert max(seen) == pytest.approx(m.module.kl_weight_max), "ramp must reach the ceiling"
+    assert max(seen) == pytest.approx(m.module.max_kl_weight), "ramp must reach the ceiling"
     assert seen[0] < 1e-3, "ramp must start near zero"
 
 

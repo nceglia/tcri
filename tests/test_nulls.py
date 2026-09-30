@@ -229,6 +229,38 @@ def test_null_is_the_parent_model_on_permuted_labels(fitted):
         assert kp == kn and torch.equal(vp, vn), f"initial weights differ at {kp}"
 
 
+def test_a_null_stops_under_its_parents_rule():
+    """The null is fitted under its parent's recorded stopping arguments (B4, B10).
+
+    The parent's threshold is so large that no check after the first gated one counts as an
+    improvement, so under that rule a fit stops exactly ``early_stopping_patience`` checks after
+    it, whatever the values. The null is fitted with no stopping override and must stop there
+    too.
+    """
+    from ._stopping import GatedSeries, stop_index
+
+    patience = 2
+    a = _adata()
+    _setup(a)
+    parent = TCRIModel(a, name="stoprule", **KNOBS)
+    spy = GatedSeries()
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        parent.train(**{**TRAIN, "max_epochs": 10, "early_stopping_min_delta": 1e6,
+                        "early_stopping_patience": patience})
+        parent.to_anndata(a)
+        null = tcri.null.phenotype(parent, a, callbacks=[spy])
+
+    assert len(spy.values) == patience + 1, (
+        f"the null ran {len(spy.values)} gated checks; under its parent's rule it stops after "
+        f"{patience + 1}"
+    )
+    assert null.training_record_["stopped_early"] is True
+    assert stop_index(spy.values, 0.0, patience) is None, (
+        "with no threshold the rule would have stopped here too; the fixture no longer discriminates"
+    )
+
+
 def test_fitting_a_null_does_not_move_the_parent():
     """Every parent store leaf and module tensor is bitwise unchanged by its null's fit.
 

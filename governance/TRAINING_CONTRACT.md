@@ -18,7 +18,7 @@ schedules or stopping; they change with a recorded reason.
   `test_validation_does_not_update_parameters`, `test_validation_step_does_not_call_training_step`.
 - **I3 The monitored quantity is a fixed objective.** `objective_validation_percell` is the
   per-cell block only, `latent` + `phenotype_alignment` + `phenotype_label` + `obs`, over the
-  validation split, divided by the plate size; evaluated at `kl_weight_max`, in eval mode,
+  validation split, divided by the plate size; evaluated at `max_kl_weight`, in eval mode,
   with a fixed particle count, the same split every check, and a forked fixed RNG seed. The
   global sites `p_c` and `p_ct` are excluded because their KL is identical whatever is held out.
   It is not an ELBO and is not called one. `test_monitor_is_invariant_to_ramp_position`,
@@ -42,15 +42,31 @@ schedules or stopping; they change with a recorded reason.
 ## Bounds
 
 - **B1** The `kl_weight` schedule is non-decreasing within and across `train()` calls and
-  reaches `kl_weight_max` in finite steps. `train()` has no reset knob; construct a new model
+  reaches `max_kl_weight` in finite steps. `train()` has no reset knob; construct a new model
   for a fresh schedule. `test_no_reset_knob_on_train`.
 - **B2** `n_steps_kl_warmup` counts optimizer steps; a run records its epoch equivalent.
-- **B3** Patience is in epochs: `check_val_every_n_epoch=1` and the knob is `patience_epochs`
-  (`patience` is a deprecated alias).
-- **B3a** `max_epochs` defaults to 2000. A fit that reaches the cap warns and records
-  `stopped_early: False`.
-- **B4** `min_delta` must exceed the monitor's noise; the fixed evaluation seed removes the
-  Monte-Carlo component.
+- **B3** Patience is in epochs: `train()` validates once per epoch and the knob is
+  `train(early_stopping_patience=...)`, default 150. `early_stopping_patience` checks in a row
+  without an improvement stop the fit (B4 defines one). `early_stopping=False` installs no
+  stopping rule and trains for `max_epochs`; the best check is restored either way (I4).
+  `test_fit_stops_once_improvements_fall_below_min_delta`, `test_restored_model_is_the_selected_one`.
+- **B3a** `max_epochs` defaults to 2000. With early stopping on, a fit that reaches the cap
+  warns and records `stopped_early: False`.
+- **B4** A check is an improvement only if it is below the best check so far by more than
+  `train(early_stopping_min_delta=...)`, in the monitor's own units (per cell).
+  `early_stopping_min_delta` must exceed the monitor's noise; the fixed evaluation seed removes
+  the Monte-Carlo component, so what remains is the epoch-to-epoch movement of the fit. The
+  defaults come from fits of `tcri.datasets.simulate_tcri(n_clones=1000, n_phenotypes=6,
+  n_cells=13700, n_covariates=6, omega_concentration=0.4, fuzziness=0.1, seed=0)` at 150, 500
+  and 2000 genes, a parent and a phenotype null at each and a second parent seed at 500, at
+  `train()` defaults with stopping off for 3000 epochs. Noise is 1.4826 x MAD of the residuals
+  from a 101-check centered rolling median on the post-ramp plateau. It did not grow with the
+  monitor's magnitude, so the threshold is absolute, and `early_stopping_min_delta` defaults to
+  0.05, twice the largest noise, rounded up. `early_stopping_patience` is the smallest of 25,
+  50, 100, 150, 200, 300 under which every one of those fits selects a checkpoint within its
+  noise of the one a threshold of 0 with patience 300 selects.
+  `test_fit_stops_once_improvements_fall_below_min_delta`,
+  `test_a_null_stops_under_its_parents_rule`.
 - **B5** Selection begins only after the ramp completes, read from one counter by both the
   stopping and the snapshot callback. If the ramp never completes: warn, do not raise, and
   record `selection_criterion = "last epoch (ramp incomplete)"`.
@@ -68,14 +84,27 @@ schedules or stopping; they change with a recorded reason.
   `test_weight_decay_does_not_reach_the_guide_concentrations`.
 - **B9** A fit records provenance in `training_record_`: epochs actually run, warmup steps and
   their epoch equivalent, `ramp_completes_at_epoch`, `ramp_completed`, `selection_criterion`,
-  `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch.
+  `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch. `stopped_early`
+  is true only when the stopping rule ended the fit; a fit ended by another limit, such as
+  `max_steps`, records false and warns. `test_a_fit_ended_by_another_limit_is_not_an_early_stop`.
 - **B10** A permutation null is fitted with the parent's knobs, the parent's seed and the
   parent's train/validation split; only the permutation draws from a stream of its own, keyed by
   the kind so that two kinds never share one. `train()` records the arguments it actually ran
-  with and a null replays them, because a null fitted at `train()`'s defaults is not the parent's
-  model on permuted labels. The permutation is stored beside the fit it produced. A null's
+  with, the stopping arguments included, and a null replays them, because a null fitted at
+  `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. A null's
   parameter namespace is its own, so I4 and B8 apply per namespace and neither the parent nor
   any other null is touched by its fit. `tests/test_nulls.py`.
+- **B11** No argument is accepted and then ignored. `train()` raises for a Trainer argument
+  this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
+  `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,
+  `checkpointing_monitor`) and for `check_val_every_n_epoch` other than 1 or
+  `val_check_interval` other than 1.0, which would change what patience counts. Every argument
+  scvi's Trainer adds to Lightning's is either forwarded with its plain meaning, set by
+  `train()`, or raises. The constructor raises for an unknown name; a saved record's
+  `kl_weight_max` maps to `max_kl_weight`, and its `patience_epochs`/`patience` are dropped,
+  both with a warning. `test_train_rejects_arguments_it_replaces`,
+  `test_every_scvi_trainer_argument_is_forwarded_or_replaced`,
+  `test_an_unknown_constructor_argument_raises`.
 
 ## The stopping policy in one paragraph
 

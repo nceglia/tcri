@@ -47,7 +47,7 @@ def ramp_is_complete(pl_module) -> bool:
     """The single predicate. One counter, one unit (optimizer steps), read by both callbacks.
 
     ``n_steps_kl_warmup <= 0`` disables annealing entirely, in which case every check is already
-    at ``kl_weight_max`` and selection may begin immediately.
+    at ``max_kl_weight`` and selection may begin immediately.
     """
     n_warmup = int(getattr(pl_module, "n_steps_kl_warmup", 0) or 0)
     if n_warmup <= 0:
@@ -59,14 +59,25 @@ class RampGatedEarlyStopping(EarlyStopping):
     """Early stopping that ignores every check taken before the KL ramp completes.
 
     I3 makes each check well-posed; this makes the *series* comparable, by ensuring every entry
-    in it came from the same objective ``L_(kl_weight_max)``. Without the gate, the argmin can
+    in it came from the same objective ``L_(max_kl_weight)``. Without the gate, the argmin can
     land on an early check that scored well only because the KL term was still switched off.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        #: Whether this rule stopped the fit, as opposed to the epoch budget or a Lightning limit.
+        self.fired = False
 
     def _run_early_stopping_check(self, trainer):
         if not ramp_is_complete(trainer.lightning_module):
             return
         super()._run_early_stopping_check(trainer)
+
+    def _evaluate_stopping_criteria(self, current):
+        should_stop, reason = super()._evaluate_stopping_criteria(current)
+        if should_stop:
+            self.fired = True
+        return should_stop, reason
 
 
 class BestObjectiveSnapshot(Callback):
