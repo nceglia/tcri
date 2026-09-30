@@ -212,6 +212,58 @@ def _plan_and_batch(adata, n_steps_kl_warmup=8):
     return m, plan, next(iter(loader))
 
 
+def test_svi_steps_on_the_plans_loss(adata):
+    """Contract I1: SVI descends the estimator the plan declares, a one-particle Trace_ELBO.
+
+    A loss the plan builds but does not hand to SVI is invisible to every other test, because
+    the fit still runs on whatever SVI was given. So this checks the object SVI holds, and that
+    the loss SVI evaluates on a batch equals a one-particle Trace_ELBO on the same batch and
+    draw, which a different particle count would not.
+    """
+    from pyro.infer import Trace_ELBO
+
+    m, plan, batch = _plan_and_batch(adata)
+    assert plan.svi.loss.__self__ is plan.loss_fn, "SVI does not step on the plan's loss"
+    assert isinstance(plan.loss_fn, Trace_ELBO) and plan.loss_fn.num_particles == 1
+
+    args, kwargs = plan.module._get_fn_args_from_batch(batch)
+    with torch.random.fork_rng(devices=[]), torch.no_grad():
+        torch.manual_seed(0)
+        got = plan.svi.evaluate_loss(*args, **kwargs)
+        torch.manual_seed(0)
+        ref = Trace_ELBO(num_particles=1).loss(plan.module.model, plan.module.guide, *args, **kwargs)
+    assert got == pytest.approx(ref, rel=1e-6), f"SVI evaluates {got}, a one-particle ELBO {ref}"
+
+
+def test_num_particles_averages_that_many_draws(adata):
+    """Contract I1: ``train(num_particles=n)`` makes each step's ELBO the mean of ``n`` draws.
+
+    The fit's own SVI, evaluated on a batch from a fixed seed, must equal the mean of ``n``
+    one-draw ELBOs taken in sequence from the same seed; a count that did not reach SVI gives
+    one draw instead. The count is recorded with the other arguments, so a null replays it.
+    """
+    from pyro.infer import Trace_ELBO
+
+    n = 3
+    m = _fresh(adata)
+    m.train(max_epochs=1, batch_size=128, n_steps_kl_warmup=4, num_particles=n,
+            accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    assert m._train_kwargs["num_particles"] == n, "num_particles is not recorded for nulls"
+    plan = m.trainer.lightning_module
+    loader = m._make_data_loader(adata=m.adata, batch_size=128, shuffle=False)
+    args, kwargs = plan.module._get_fn_args_from_batch(next(iter(loader)))
+    one = Trace_ELBO(num_particles=1)
+    with torch.random.fork_rng(devices=[]), torch.no_grad():
+        torch.manual_seed(0)
+        got = plan.svi.evaluate_loss(*args, **kwargs)
+        torch.manual_seed(0)
+        draws = [one.loss(plan.module.model, plan.module.guide, *args, **kwargs) for _ in range(n)]
+    assert len(set(draws)) == n, "the draws coincide; the comparison cannot tell 1 from n"
+    assert got == pytest.approx(sum(draws) / n, rel=1e-5), (
+        f"SVI evaluates {got}; the mean of {n} draws is {sum(draws) / n}, one draw {draws[0]}"
+    )
+
+
 def test_monitor_is_invariant_to_ramp_position(adata):
     """I3: the monitored quantity is a fixed function of the parameters.
 

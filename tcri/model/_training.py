@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from scvi.train import PyroTrainingPlan
 from pyro import poutine
-from pyro.infer import TraceEnum_ELBO, Trace_ELBO
+from pyro.infer import Trace_ELBO
 from sklearn.cluster import KMeans
 
 from ._module import TCRIModule
@@ -78,19 +78,10 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         module: TCRIModule,
         n_steps_kl_warmup: int = 2000,   # must match TCRIModel.train, which overrides it
         reconstruction_loss_scale: float = 1e-2,
-        num_particles: int = 5,
+        num_particles: int = 1,
         optimizer_config: dict = None,
         **kwargs,
     ):
-        self.num_particles = num_particles
-        if module.use_enumeration:
-            print("Using Enumeration")
-            self._loss_fn = TraceEnum_ELBO(
-                max_plate_nesting=3, num_particles=self.num_particles
-            )
-        else:
-            self._loss_fn = Trace_ELBO()
-
         if optimizer_config is None:
             optimizer_config = {"lr": 1e-3, "betas": (0.9, 0.999), "eps": 1e-5,
                                 "weight_decay": 1e-4}
@@ -111,8 +102,15 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
             "eps": optimizer_config["eps"],
             "weight_decay": optimizer_config["weight_decay"],
         }
+        # The estimator of the objective SVI descends: Trace_ELBO averaged over `num_particles`
+        # draws of the latents, one at a time (the model indexes its leading dimension, so the
+        # draws are not vectorized). Passed explicitly so the plan declares it rather than
+        # inheriting scvi's default. The model has no discrete latent to enumerate -- the
+        # phenotype in the label readout is summed out in closed form -- so an enumerating ELBO
+        # would compute the same objective. test_svi_steps_on_the_plans_loss pins it.
         super().__init__(
             module,
+            loss_fn=Trace_ELBO(num_particles=int(num_particles)),
             n_steps_kl_warmup=n_steps_kl_warmup,
             optim=pyro.optim.Adam(_per_param_optim_args(base_optim_args)),
             optim_kwargs=base_optim_args,
@@ -124,10 +122,6 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         #: I3's forked evaluation seed, fixed across every check, so the monitored series is a
         #: function of the parameters rather than of the draw. Not the fit seed: evaluation only.
         self._validation_seed = 0
-
-    @property
-    def loss(self):
-        return self._loss_fn
 
     # NOTE: configure_optimizers is deliberately NOT overridden — scvi's base class
     # returns a shim over a single dummy parameter purely to advance Lightning's step

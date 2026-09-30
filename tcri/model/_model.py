@@ -175,9 +175,6 @@ _REPLACED_TRAIN_ARGS = {
 __all__ = ["TCRIModel"]
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
-warnings.filterwarnings(
-    "ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*"
-)
 
 # Neither the SLURM environment nor root-logger configuration belongs at import time.
 #
@@ -333,7 +330,6 @@ class TCRIModel(BaseModelClass):
         local_scale: float = 3.0,
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
-        use_enumeration: bool = False,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
@@ -389,6 +385,11 @@ class TCRIModel(BaseModelClass):
             max_kl_weight = kwargs.pop("kl_weight_max")
             warnings.warn("`kl_weight_max` is deprecated; use `max_kl_weight`.",
                           FutureWarning, stacklevel=2)
+        # A saved record always carries use_enumeration; it never changed the fit (the model has
+        # no discrete latent to enumerate), so only a record that set it to True is worth a word.
+        if kwargs.pop("use_enumeration", False):
+            warnings.warn("`use_enumeration` is not a model argument and is ignored; it never "
+                          "changed the fit.", FutureWarning, stacklevel=2)
         for old, new in _MOVED_TO_TRAIN.items():
             if old in kwargs:
                 kwargs.pop(old)
@@ -510,7 +511,6 @@ class TCRIModel(BaseModelClass):
             mixture_concentration=torch.from_numpy(self.centers),
             prior_temperature=prior_temperature,
             guide_temperature=guide_temperature,
-            use_enumeration=use_enumeration,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             gate_prob=gate_prob,
@@ -540,7 +540,7 @@ class TCRIModel(BaseModelClass):
         )
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
-            f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
+            f"global_scale={global_scale}, local_scale={local_scale}, "
             f"prior_temperature={prior_temperature}, guide_temperature={guide_temperature}."
         )
 
@@ -571,6 +571,7 @@ class TCRIModel(BaseModelClass):
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 2000,
+        num_particles: int = 1,
         early_stopping: bool = True,
         early_stopping_patience: int = 150,
         early_stopping_min_delta: float = 0.05,
@@ -600,6 +601,10 @@ class TCRIModel(BaseModelClass):
             disables annealing. The counter lives on the module, so a second ``train()``
             continues the schedule instead of restarting it -- construct a new model for a
             fresh ramp.
+        num_particles
+            Draws of the latent variables averaged per optimizer step to estimate the ELBO and
+            its gradient. Each step costs about this many times as much. The validation
+            criterion uses one draw regardless, so early stopping reads the same quantity.
         early_stopping
             Stop once the validation criterion stops improving. ``False`` trains for
             ``max_epochs``; the best check's weights are restored either way.
@@ -663,6 +668,8 @@ class TCRIModel(BaseModelClass):
                 f"early_stopping_min_delta must be finite and >= 0, "
                 f"got {early_stopping_min_delta!r}"
             )
+        if int(num_particles) < 1:
+            raise ValueError(f"num_particles must be >= 1, got {num_particles!r}")
         if int(early_stopping_patience) < 1:
             raise ValueError(
                 f"early_stopping_patience must be >= 1, got {early_stopping_patience!r}"
@@ -725,6 +732,7 @@ class TCRIModel(BaseModelClass):
             module=self.module,
             n_steps_kl_warmup=n_steps_kl_warmup,
             reconstruction_loss_scale=reconstruction_loss_scale,
+            num_particles=int(num_particles),
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
@@ -766,6 +774,7 @@ class TCRIModel(BaseModelClass):
             "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
             "reconstruction_loss_scale": reconstruction_loss_scale,
             "n_steps_kl_warmup": n_steps_kl_warmup,
+            "num_particles": int(num_particles),
             "early_stopping": bool(early_stopping),
             "early_stopping_patience": int(early_stopping_patience),
             "early_stopping_min_delta": float(early_stopping_min_delta),
