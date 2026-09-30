@@ -139,10 +139,38 @@ def _apply_permutation(codes, axis: str, permutation):
 
 
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
-#: per-cell block only, at a pinned kl_weight_max under a fixed evaluation seed. The name
+#: per-cell block only, at a pinned max_kl_weight under a fixed evaluation seed. The name
 #: says so on purpose: a quantity called an ELBO invites comparison across kl_weight values,
 #: and checks taken at different kl_weight come from different objectives.
 MONITOR = "objective_validation_percell"
+
+#: Constructor names a saved record can carry for settings that are ``train()`` arguments. They
+#: are dropped with a warning; any other unknown constructor name raises.
+_MOVED_TO_TRAIN = {
+    "patience_epochs": "early_stopping_patience",
+    "patience": "early_stopping_patience",
+}
+
+#: ``train()`` arguments that scvi's or Lightning's Trainer accepts but tcri replaces, with what
+#: to use instead. They raise rather than pass through: forwarded, each would be ignored or
+#: would change what another setting means.
+_REPLACED_TRAIN_ARGS = {
+    "early_stopping_warmup_epochs":
+        "selection and stopping start when the KL ramp completes; set n_steps_kl_warmup",
+    "early_stopping_monitor":
+        f"the monitored quantity is fixed to {MONITOR!r}, and early_stopping_min_delta is in "
+        f"its units",
+    "early_stopping_mode": f"{MONITOR!r} is always minimized",
+    "trainer_config":
+        "it bypasses this check and train() overrides its values; pass Trainer arguments as "
+        "keywords",
+    "learning_rate_monitor":
+        "the Lightning optimizer is a placeholder; Pyro's optimizer takes train(lr=...)",
+    "enable_checkpointing":
+        "a Lightning checkpoint holds neither the guide concentrations nor the KL ramp position; "
+        "the best check is restored in memory at the end of the fit",
+    "checkpointing_monitor": "checkpointing is not supported; see enable_checkpointing",
+}
 
 __all__ = ["TCRIModel"]
 
@@ -188,11 +216,7 @@ def _accepted_train_kwargs() -> set[str]:
     """
     import inspect
 
-    names = {
-        # popped by train() itself before anything is forwarded
-        "early_stopping_monitor", "early_stopping_mode", "early_stopping_patience",
-        "callbacks", "early_stopping",
-    }
+    names = {"callbacks"}  # consumed by train() itself
     for obj in _train_kwarg_sources():
         try:
             names |= set(inspect.signature(obj).parameters)
@@ -310,13 +334,12 @@ class TCRIModel(BaseModelClass):
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
         use_enumeration: bool = False,
-        patience_epochs: int = 300,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
         K: int = 10,
         gate_prob: Optional[float] = 0.5,  # π (gating weight); None = additive
-        kl_weight_max: float = 1.0,
+        max_kl_weight: float = 1.0,
         guide_init_scale: float = 10.0,
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
@@ -331,6 +354,12 @@ class TCRIModel(BaseModelClass):
         of its latent phenotype with reliability 1-ε, which is what lets the clone x covariate
         distributions learn from the cells. ``None`` switches the readout off and fits the
         label-free surrogate alone. Must be in ``[0, 1 - 1/P)``.
+
+        ``max_kl_weight``: the weight the KL terms reach at the end of the warmup, and the weight
+        at which every validation check is evaluated.
+
+        An argument this constructor does not take raises ``TypeError``. The early-stopping rule
+        is set in :meth:`train`.
 
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
         two models can be fitted in one session without overwriting each other. ``""`` is the
@@ -348,6 +377,30 @@ class TCRIModel(BaseModelClass):
         #: an in-memory attribute would not survive a reload and the null would silently fall
         #: back to ``train()``'s defaults.
         self._train_kwargs: dict = {}
+
+        # Names a saved constructor record can carry, resolved before init_params_ is captured so
+        # the record holds the current names only; everything else unknown is rejected, because
+        # **kwargs would otherwise swallow a misspelled argument and fit with its default.
+        if "kl_weight_max" in kwargs:
+            if max_kl_weight != 1.0:
+                raise TypeError(
+                    "pass either `max_kl_weight` or the deprecated `kl_weight_max`, not both"
+                )
+            max_kl_weight = kwargs.pop("kl_weight_max")
+            warnings.warn("`kl_weight_max` is deprecated; use `max_kl_weight`.",
+                          FutureWarning, stacklevel=2)
+        for old, new in _MOVED_TO_TRAIN.items():
+            if old in kwargs:
+                kwargs.pop(old)
+                warnings.warn(
+                    f"`{old}` is not a model argument and is ignored: early stopping is set in "
+                    f"train({new}=...).",
+                    FutureWarning, stacklevel=2,
+                )
+        if kwargs:
+            raise TypeError(
+                f"TCRIModel() got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+            )
 
         # `seed` is on __init__ rather than train() deliberately: the networks are built here,
         # so seeding in train() would be too late, and unseeded network init leaves two fits at
@@ -461,7 +514,7 @@ class TCRIModel(BaseModelClass):
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             gate_prob=gate_prob,
-            kl_weight_max=kl_weight_max,
+            max_kl_weight=max_kl_weight,
             n_pseudo_obs=n_pseudo_obs,
             guide_init_scale=guide_init_scale,
             classifier_temperature=classifier_temperature,
@@ -475,26 +528,6 @@ class TCRIModel(BaseModelClass):
         ct_array_torch = torch.tensor(ct_array_np, dtype=torch.long)
         ct_to_c_torch = torch.tensor(ct_to_c_list, dtype=torch.long)
         ct_to_cov_torch = torch.tensor(ct_to_cov_list, dtype=torch.long)
-        # Patience is counted in EPOCHS, guaranteed by check_val_every_n_epoch=1 in train();
-        # governance/TRAINING_CONTRACT.md fixes that unit. `patience` is accepted as a
-        # deprecated alias -- it appears in init_params_, so dropping it outright breaks
-        # load_tcri_session() on models saved before the rename.
-        if "patience" in kwargs:
-            legacy = int(kwargs.pop("patience"))
-            if patience_epochs != 300:
-                raise TypeError(
-                    "pass either `patience_epochs` or the deprecated `patience`, not both"
-                )
-            patience_epochs = legacy
-            warnings.warn(
-                "`patience` is deprecated; use `patience_epochs`. The unit is now epochs, "
-                "enforced by check_val_every_n_epoch=1. Previously it was counted in "
-                "VALIDATION CHECKS, so patience=300 under the old cv=5 meant 1500 epochs -- "
-                "more than the default max_epochs of 1000, which is why early stopping could "
-                "never fire.",
-                FutureWarning, stacklevel=2,
-            )
-        self.patience_epochs = int(patience_epochs)
         self.module.prepare_two_level_params(
             c_count=c_count,
             ct_count=ct_count,
@@ -538,6 +571,9 @@ class TCRIModel(BaseModelClass):
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 2000,
+        early_stopping: bool = True,
+        early_stopping_patience: int = 150,
+        early_stopping_min_delta: float = 0.05,
         **kwargs,
     ):
         """Fit the model on the registered AnnData.
@@ -550,8 +586,8 @@ class TCRIModel(BaseModelClass):
         Parameters
         ----------
         max_epochs
-            Epoch budget. Reaching it means the stopping rule never engaged, so the fit is
-            truncated rather than converged; that case warns.
+            Epoch budget. With early stopping on, reaching it means the stopping rule never
+            engaged, so the fit is truncated rather than converged; that case warns.
         batch_size
             Cells per optimizer step. ``batch_size >= n_obs`` warns, because each epoch is then
             a single gradient update and ``max_epochs`` becomes the number of updates.
@@ -560,15 +596,28 @@ class TCRIModel(BaseModelClass):
         reconstruction_loss_scale
             Weight on the ZINB likelihood of the counts; set on the module for the whole fit.
         n_steps_kl_warmup
-            Optimizer steps over which ``kl_weight`` ramps to ``kl_weight_max``; ``<= 0``
+            Optimizer steps over which ``kl_weight`` ramps to ``max_kl_weight``; ``<= 0``
             disables annealing. The counter lives on the module, so a second ``train()``
             continues the schedule instead of restarting it -- construct a new model for a
             fresh ramp.
+        early_stopping
+            Stop once the validation criterion stops improving. ``False`` trains for
+            ``max_epochs``; the best check's weights are restored either way.
+        early_stopping_patience
+            Epochs in a row without an improvement that stop the fit. There is one validation
+            check per epoch.
+        early_stopping_min_delta
+            A check is an improvement only if the criterion is below the best check so far by
+            more than this, in the criterion's own units (per cell). Finite and ``>= 0``.
         kwargs
-            Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``
-            and ``early_stopping_monitor``/``_mode``/``_patience``. An unrecognised name raises
-            ``TypeError`` here rather than several frames deep in scvi. The train/validation
-            split is fixed at 0.9 and is not configurable.
+            Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``.
+            An unrecognised name raises ``TypeError`` here rather than several frames deep in
+            scvi, and so does a name those accept but this model replaces:
+            ``early_stopping_warmup_epochs``, ``early_stopping_monitor``,
+            ``early_stopping_mode``, ``trainer_config``, ``learning_rate_monitor``,
+            ``enable_checkpointing`` and ``checkpointing_monitor``. ``check_val_every_n_epoch``
+            other than 1 and ``val_check_interval`` other than 1.0 raise, because patience is
+            counted in epochs. The train/validation split is fixed at 0.9.
 
         Notes
         -----
@@ -576,17 +625,48 @@ class TCRIModel(BaseModelClass):
         ``RampGatedEarlyStopping``, which ignores every check taken before the KL ramp
         completes, and ``BestObjectiveSnapshot``, which restores the best-scoring module state
         and guide concentrations at the end of the fit. The monitored criterion is
-        ``objective_validation_percell``, minimised, with patience ``patience_epochs``;
-        ``check_val_every_n_epoch`` defaults to 1, so one check is one epoch.
+        ``objective_validation_percell``, minimized.
+
+        The stopping arguments are recorded with the others, so ``tcri.null.*`` fits a null
+        under the same rule.
 
         If the ramp does not complete within the fit, no checkpoint is selected, the final
         weights are kept, and the call warns: checks taken at different ``kl_weight`` values
         come from different objectives and are not comparable.
 
         Sets ``training_record_`` -- epochs run, warmup steps taken, steps per epoch, the epoch
-        and score selected, whether the fit stopped before ``max_epochs``, and the seed -- and
+        and score selected, whether the early-stopping rule ended the fit, and the seed -- and
         stores the arguments this fit ran with, so ``tcri.null.*`` can fit a null the same way.
         """
+
+        # Names scvi's or Lightning's Trainer accepts but this model replaces. The unknown-kwarg
+        # guard below would let them through, and each would then be ignored or would change what
+        # another setting means. tests/test_training_invariants.py checks that every scvi Trainer
+        # argument is either forwarded with its plain meaning or listed here.
+        replaced = sorted(set(kwargs) & set(_REPLACED_TRAIN_ARGS))
+        if replaced:
+            name = replaced[0]
+            raise TypeError(f"train() does not take {name}: {_REPLACED_TRAIN_ARGS[name]}.")
+        if kwargs.get("check_val_every_n_epoch", 1) != 1:
+            raise TypeError(
+                "train() validates every epoch: early_stopping_patience is counted in epochs, "
+                f"so check_val_every_n_epoch={kwargs['check_val_every_n_epoch']!r} would change "
+                "its unit."
+            )
+        if kwargs.get("val_check_interval", 1.0) != 1.0:
+            raise TypeError(
+                "train() validates once per epoch: early_stopping_patience is counted in epochs, "
+                f"so val_check_interval={kwargs['val_check_interval']!r} would change its unit."
+            )
+        if not (math.isfinite(early_stopping_min_delta) and early_stopping_min_delta >= 0):
+            raise ValueError(
+                f"early_stopping_min_delta must be finite and >= 0, "
+                f"got {early_stopping_min_delta!r}"
+            )
+        if int(early_stopping_patience) < 1:
+            raise ValueError(
+                f"early_stopping_patience must be >= 1, got {early_stopping_patience!r}"
+            )
 
         # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
         # **kwargs to TrainRunner and on into Trainer.__init__, so a name this package does not
@@ -657,12 +737,12 @@ class TCRIModel(BaseModelClass):
         # passing e.g. accelerator="gpu" through train(**kwargs) works instead of raising
         # "got multiple values for keyword".
         #
-        # check_val_every_n_epoch=1 so that a check IS an epoch and `patience_epochs` means
-        # what it says; governance/TRAINING_CONTRACT.md fixes that unit. Deliberately not
-        # solved by dividing patience at the call site -- two units with a silent conversion
-        # between them is the same trap in a new place. Validating every epoch costs wall
-        # clock when an epoch is only a few batches.
-        kwargs.setdefault("check_val_every_n_epoch", 1)
+        # check_val_every_n_epoch=1 so that a check IS an epoch and `early_stopping_patience`
+        # means what it says; governance/TRAINING_CONTRACT.md fixes that unit, and any other
+        # value was rejected above. Deliberately not solved by dividing patience at the call
+        # site -- two units with a silent conversion between them is the same trap in a new
+        # place. Validating every epoch costs wall clock when an epoch is only a few batches.
+        kwargs["check_val_every_n_epoch"] = 1
         kwargs.setdefault("accelerator", "auto")
         kwargs.setdefault("devices", "auto")
 
@@ -670,16 +750,13 @@ class TCRIModel(BaseModelClass):
         # be ignored until the KL ramp completes, and I4 requires a snapshot spanning both the
         # module state_dict AND the Pyro param store, which no stock callback carries.
         kwargs["early_stopping"] = False
-        monitor = kwargs.pop("early_stopping_monitor", MONITOR)
-        mode = kwargs.pop("early_stopping_mode", "min")
-        patience = kwargs.pop("early_stopping_patience", self.patience_epochs)
-
-        snapshot = BestObjectiveSnapshot(monitor=monitor, mode=mode)
+        snapshot = BestObjectiveSnapshot(monitor=MONITOR, mode="min")
+        stopper = (RampGatedEarlyStopping(monitor=MONITOR, mode="min",
+                                          patience=int(early_stopping_patience),
+                                          min_delta=float(early_stopping_min_delta))
+                   if early_stopping else None)
         callbacks = list(kwargs.pop("callbacks", []) or [])
-        callbacks += [
-            RampGatedEarlyStopping(monitor=monitor, mode=mode, patience=patience),
-            snapshot,
-        ]
+        callbacks += [cb for cb in (stopper, snapshot) if cb is not None]
         kwargs["callbacks"] = callbacks
 
         # What this fit actually ran with. `tcri.null.*` replays it so a null is fitted the
@@ -689,6 +766,9 @@ class TCRIModel(BaseModelClass):
             "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
             "reconstruction_loss_scale": reconstruction_loss_scale,
             "n_steps_kl_warmup": n_steps_kl_warmup,
+            "early_stopping": bool(early_stopping),
+            "early_stopping_patience": int(early_stopping_patience),
+            "early_stopping_min_delta": float(early_stopping_min_delta),
             "accelerator": kwargs.get("accelerator", "auto"),
             "devices": kwargs.get("devices", "auto"),
         }
@@ -729,17 +809,26 @@ class TCRIModel(BaseModelClass):
             "ramp_completes_at_epoch": (int(n_steps_kl_warmup) / steps_per_epoch
                                         if n_steps_kl_warmup > 0 else 0.0),
             "ramp_completed": ramp_done,
-            "selection_criterion": (monitor if ramp_done
+            "selection_criterion": (MONITOR if ramp_done
                                     else "last epoch (ramp incomplete)"),
             "selected_epoch": snapshot.best_epoch,
             "selected_score": snapshot.best_score,
-            # Did the stopping rule ever engage, or did we simply run out of budget? Without
-            # this the two are indistinguishable in the record, and they mean opposite things
+            # Did the stopping rule end the fit, or did something else: the budget, or a
+            # Lightning limit such as max_steps or max_time? Read from the rule itself, because
+            # epochs_run < max_epochs cannot tell those apart, and they mean opposite things
             # about whether the fit is finished.
-            "stopped_early": bool(epochs_run < max_epochs),
+            "stopped_early": bool(stopper is not None and stopper.fired),
             "seed": self._seed,
         }
-        if epochs_run >= max_epochs:
+        if early_stopping and epochs_run < max_epochs and not stopper.fired:
+            warnings.warn(
+                f"training ended after {epochs_run} epochs, before max_epochs={max_epochs}, "
+                f"without the early-stopping rule firing: a Lightning limit (max_steps, "
+                f"max_time, fast_dev_run) or an interrupt ended it. The fit is truncated, not "
+                f"converged; `model.training_record_['stopped_early']` is False.",
+                stacklevel=2,
+            )
+        if early_stopping and epochs_run >= max_epochs:
             # Hitting the cap means early stopping never fired -- the model was still
             # improving when the budget ran out, so this fit is truncated rather than
             # converged. It is silent otherwise: the run looks identical to a converged one,
@@ -763,8 +852,8 @@ class TCRIModel(BaseModelClass):
                 f"~{self.training_record_['ramp_completes_at_epoch']:.0f} epochs). No checkpoint "
                 f"was selected and the final weights are kept, because no two checks in this run "
                 f"came from the same objective. The fitted prior is scaled by "
-                f"kl_weight={self.module.kl_weight:.3g}, not kl_weight_max="
-                f"{self.module.kl_weight_max:.3g}.",
+                f"kl_weight={self.module.kl_weight:.3g}, not max_kl_weight="
+                f"{self.module.max_kl_weight:.3g}.",
                 UserWarning,
                 stacklevel=2,
             )

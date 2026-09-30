@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 
 # Deliberately NOT slow-marked. CI runs a bare `pytest tests/`, so a module-level `slow` marker
 # would skip the tests governance/TRAINING_CONTRACT.md names as the enforcement for I2, I3, I4,
-# I5, B1 and B5 on every pull request. An invariant whose proof CI skips is unchecked.
+# I5, B1, B3, B4 and B5 on every pull request. An invariant whose proof CI skips is unchecked.
 
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
@@ -51,7 +51,7 @@ def adata():
                          omega_concentration=0.4, fuzziness=0.1, seed=0)
 
 
-def _fresh(adata):
+def _fresh(adata, **kw):
     from tcri.model._model import TCRIModel
 
     pyro.clear_param_store()
@@ -60,7 +60,7 @@ def _fresh(adata):
         covariate_key="covariate", batch_key="batch",
     )
     return TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1,
-                     classifier_n_layers=1, classifier_hidden=16, K=5, seed=0)
+                     classifier_n_layers=1, classifier_hidden=16, K=5, seed=0, **kw)
 
 
 class _ValidationWatcher(torch.nn.Module):
@@ -241,7 +241,7 @@ def test_monitor_is_invariant_to_ramp_position(adata):
         for name, p in pyro.get_param_store().named_parameters():
             p.data.copy_(store_before[name])
     plan.module._kl_warmup_step = 10_000     # ramp long finished
-    plan.module.kl_weight = plan.module.kl_weight_max
+    plan.module.kl_weight = plan.module.max_kl_weight
     second = float(plan.validation_step(batch, 0)["loss"])
 
     assert first == second, (
@@ -254,7 +254,7 @@ def test_monitor_is_invariant_to_ramp_position(adata):
 def test_validation_pin_restores_the_training_schedule(adata):
     """Contract B1: the pin is scoped to the check.
 
-    validation_step raises kl_weight to kl_weight_max to make the criterion well-posed. If it
+    validation_step raises kl_weight to max_kl_weight to make the criterion well-posed. If it
     left it there, the next training step would read a kl_weight it never scheduled, and the
     ramp would jump to its endpoint the first time anything validated.
     """
@@ -333,9 +333,17 @@ def test_restored_model_is_the_selected_one(adata):
     # default lr the criterion is still descending at the final epoch, so "keep the final
     # weights" would pass by accident -- the assertion below fails if the fixture ever drifts
     # back to monotone.
+    # Stopping is switched off so that what is checked here is the restore alone, whatever the
+    # stopping defaults are; test_fit_stops_once_improvements_fall_below_min_delta covers the
+    # restore in a fit that stopped. The patience of 2 would end this fit long before epoch 60
+    # (the argmin is well before the last check, asserted below), so reaching 60 shows the
+    # switch removed the rule rather than the rule never firing.
     m = _fresh(adata)
     m.train(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
-            callbacks=[_Spy()], enable_progress_bar=False, enable_model_summary=False)
+            early_stopping=False, early_stopping_patience=2, callbacks=[_Spy()],
+            enable_progress_bar=False, enable_model_summary=False)
+    assert m.training_record_["epochs_run"] == 60, "early_stopping=False must train to max_epochs"
+    assert m.training_record_["stopped_early"] is False
 
     assert len(seen) > 2, f"only {len(seen)} gated checks ran; the test asserted nothing"
     best_score, best_ct, best_net, best_bn = min(seen, key=lambda r: r[0])
@@ -357,6 +365,151 @@ def test_restored_model_is_the_selected_one(adata):
         "in state_dict() but NOT in named_parameters(), and read by predict() in eval mode. "
         "Snapshotting named_parameters() restores a model no check evaluated (I4)."
     )
+
+
+def _discriminating_min_delta(values, patience):
+    """A threshold under which the rule stops strictly earlier than it does without one.
+
+    Candidates are midpoints between the sizes of successive changes in the series, smallest
+    first. One is taken only if the stop it gives is the same at 1% either side of it, so the
+    float32 comparison inside the callback and the float64 replay here cannot disagree.
+    """
+    from ._stopping import stop_index
+
+    stop_at_zero = stop_index(values, 0.0, patience)
+    steps = sorted({abs(b - a) for a, b in zip(values, values[1:]) if b != a})
+    for lo, hi in zip(steps, steps[1:]):
+        delta = 0.5 * (lo + hi)
+        stop = stop_index(values, delta, patience)
+        if stop is None or (stop_at_zero is not None and stop >= stop_at_zero):
+            continue
+        if stop_index(values, 0.99 * delta, patience) == stop == stop_index(values, 1.01 * delta, patience):
+            return delta
+    return None
+
+
+def test_fit_stops_once_improvements_fall_below_min_delta(adata):
+    """Contract B3 and B4: a check restarts the patience count only when it beats the best check
+    by more than ``early_stopping_min_delta``, and ``early_stopping_patience`` such checks in a
+    row stop the fit.
+
+    Two fits of one seed in one process. The first, with stopping switched off, records the
+    gated series and picks a threshold under which the rule stops strictly earlier than it
+    would with none: at that stop, some check inside the patience window was a new minimum by
+    less than the threshold. The second fit runs with that threshold and patience and must run
+    the same series (B7) and stop exactly where the rule says.
+    The weights it ends on are still the lowest check's (I4), which lies after the last
+    improvement the rule counted.
+    """
+    from ._stopping import GatedSeries, stop_index
+
+    patience = 5
+    fit = dict(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+               enable_progress_bar=False, enable_model_summary=False)
+
+    probe = GatedSeries()
+    _fresh(adata).train(early_stopping=False, callbacks=[probe], **fit)
+    series = probe.values
+    assert len(series) > 2 * patience, f"only {len(series)} gated checks; nothing is asserted"
+    delta = _discriminating_min_delta(series, patience)
+    assert delta is not None, (
+        "no min_delta makes the rule stop earlier than it does without one on this series; "
+        "the fixture no longer discriminates"
+    )
+
+    spy = GatedSeries()
+    m = _fresh(adata)
+    m.train(early_stopping_min_delta=delta, early_stopping_patience=patience, callbacks=[spy], **fit)
+    got = spy.values
+
+    assert got == series[:len(got)], "same seed, different series (B7); the comparison is void"
+    assert len(got) - 1 == stop_index(series, delta, patience), (
+        f"the fit stopped after {len(got)} gated checks; with min_delta={delta:.3g} and "
+        f"patience {patience} the rule stops after {stop_index(series, delta, patience) + 1}"
+    )
+    rec = m.training_record_
+    assert rec["stopped_early"] is True
+    assert rec["selected_score"] == min(got), "the fit did not end on its lowest check (I4)"
+
+
+@pytest.mark.parametrize("kw", [
+    {"early_stopping_warmup_epochs": 10},
+    {"early_stopping_monitor": "elbo_validation"},
+    {"early_stopping_mode": "max"},
+    {"trainer_config": {"check_val_every_n_epoch": 3}},
+    {"learning_rate_monitor": True},
+    {"enable_checkpointing": True},
+    {"checkpointing_monitor": "objective_validation_percell"},
+    {"check_val_every_n_epoch": 5},
+    {"check_val_every_n_epoch": None},
+    {"val_check_interval": 0.5},
+])
+def test_train_rejects_arguments_it_replaces(adata, kw):
+    """Contract B11: a Trainer argument this model replaces raises instead of passing through.
+
+    Each is accepted by scvi's or Lightning's Trainer, so the unknown-name guard alone would let
+    it through; forwarded, it would be ignored, overwritten, or would change what patience
+    counts. The error must come before any fit and name the argument.
+    """
+    m = _fresh(adata)
+    with pytest.raises(TypeError, match=next(iter(kw))):
+        m.train(max_epochs=1, batch_size=128, accelerator="cpu", **kw)
+    assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
+
+
+def test_every_scvi_trainer_argument_is_forwarded_or_replaced():
+    """Contract B11: each argument scvi's Trainer and TrainRunner add to Lightning's is either
+    forwarded with its plain meaning, set by ``train()`` itself, or raises.
+
+    scvi's own early-stopping and checkpointing arguments only act when scvi's stopping is on,
+    which ``train()`` switches off, so an unreviewed one passes the unknown-name guard and does
+    nothing. An scvi upgrade that adds an argument fails here until it is sorted into one of
+    these sets.
+    """
+    import inspect
+
+    from lightning.pytorch import Trainer as LightningTrainer
+    from scvi.train import Trainer as ScviTrainer
+    from scvi.train import TrainRunner
+
+    from tcri.model._model import TCRIModel, _REPLACED_TRAIN_ARGS
+
+    forwarded = {"accelerator", "devices", "benchmark", "max_epochs", "default_root_dir",
+                 "num_sanity_val_steps", "enable_model_summary", "enable_progress_bar",
+                 "progress_bar_refresh_rate", "simple_progress_bar", "logger",
+                 "log_every_n_steps", "log_save_dir", "check_val_every_n_epoch"}
+    set_by_train = {"model", "training_plan", "data_splitter", "early_stopping",
+                    "early_stopping_patience", "early_stopping_min_delta"}
+    lightning = set(inspect.signature(LightningTrainer.__init__).parameters)
+    scvi_added = (set(inspect.signature(ScviTrainer.__init__).parameters)
+                  | set(inspect.signature(TrainRunner.__init__).parameters)) - lightning
+    scvi_added -= {"self", "kwargs", "trainer_kwargs"}
+    unsorted = sorted(scvi_added - forwarded - set_by_train - set(_REPLACED_TRAIN_ARGS))
+    assert not unsorted, (
+        f"scvi Trainer/TrainRunner arguments nobody has sorted: {unsorted}. Forward each with its "
+        f"plain meaning, or add it to _REPLACED_TRAIN_ARGS with what to use instead."
+    )
+    own = set(inspect.signature(TCRIModel.train).parameters)
+    assert {"early_stopping", "early_stopping_patience", "early_stopping_min_delta"} <= own
+
+
+def test_a_fit_ended_by_another_limit_is_not_an_early_stop(adata):
+    """Contract B9: ``stopped_early`` says whether the stopping rule ended the fit.
+
+    A Lightning limit such as ``max_steps`` also ends a fit before ``max_epochs``; recording that
+    as an early stop would report a truncated fit as converged.
+    """
+    import warnings as _w
+
+    m = _fresh(adata)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        m.train(max_epochs=20, max_steps=6, batch_size=128, n_steps_kl_warmup=0,
+                accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    rec = m.training_record_
+    assert rec["epochs_run"] < 20, "max_steps did not end the fit; the test asserts nothing"
+    assert rec["stopped_early"] is False, "a max_steps cut was recorded as an early stop"
+    assert any("without the early-stopping rule firing" in str(c.message) for c in caught)
 
 
 def test_monitor_excludes_the_global_block(adata):
@@ -384,7 +537,7 @@ def test_monitor_excludes_the_global_block(adata):
     args, kwargs = plan.module._get_fn_args_from_batch(batch)
     prev = plan.module.kl_weight
     try:
-        plan.module.kl_weight = plan.module.kl_weight_max
+        plan.module.kl_weight = plan.module.max_kl_weight
         with torch.random.fork_rng(devices=[]), torch.no_grad():
             torch.manual_seed(plan._validation_seed)
             per_cell, global_block = plan._objective_blocks(*args, **kwargs)
@@ -570,7 +723,7 @@ def test_minibatch_objective_is_unbiased_for_the_full_batch(adata):
     m = _fresh(adata)
     mod = m.module
     mod.eval()
-    mod.kl_weight = mod.kl_weight_max
+    mod.kl_weight = mod.max_kl_weight
     n, B = adata.n_obs, 50
     assert n % B == 0, "the partition must be into equal batches for the identity to be exact"
     assert mod.plate_size() == n, "a fresh model's plate spans every cell"
@@ -662,7 +815,7 @@ def test_validation_step_does_not_call_training_step():
     src = _body_source(UnifiedTrainingPlan.validation_step)
     assert "super().training_step" not in src, "validation_step reaches SVI.step() again (DE-1)"
     assert "_objective_blocks" in src, "validation_step must evaluate through _objective_blocks"
-    assert "kl_weight_max" in src and "finally" in src, "the kl_weight pin and its restore (I3, B1)"
+    assert "max_kl_weight" in src and "finally" in src, "the kl_weight pin and its restore (I3, B1)"
     assert "fork_rng" in src and "manual_seed" in src, "the fixed evaluation seed (I3)"
 
 

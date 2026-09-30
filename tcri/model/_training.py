@@ -69,7 +69,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     validation_step that logs 'objective_validation_percell' for scvi's early stopping.
 
     That monitor is NOT an ELBO and the name says so deliberately: it is the per-cell block
-    only, evaluated at a pinned ``kl_weight_max`` under a fixed seed. See ``_objective_blocks``
+    only, evaluated at a pinned ``max_kl_weight`` under a fixed seed. See ``_objective_blocks``
     and training-contract I3.
     """
 
@@ -137,9 +137,9 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # ── KL warmup ────────────────────────────────────────────
         step = self.module._kl_warmup_step
         if self.n_steps_kl_warmup > 0 and step < self.n_steps_kl_warmup:
-            kl_weight = max(1e-6, self.module.kl_weight_max * (step / self.n_steps_kl_warmup))
+            kl_weight = max(1e-6, self.module.max_kl_weight * (step / self.n_steps_kl_warmup))
         else:
-            kl_weight = self.module.kl_weight_max
+            kl_weight = self.module.max_kl_weight
         self.module.kl_weight = kl_weight
 
         # ── Pyro ELBO step ───────────────────────────────────────
@@ -237,9 +237,9 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         Pyro's param store, are not reachable from ``parameters()``, and are therefore outside
         the gradient zeroing Lightning does around the validation loop.
 
-        I3. The check pins ``kl_weight`` to ``kl_weight_max``, runs in eval mode (Lightning's
+        I3. The check pins ``kl_weight`` to ``max_kl_weight``, runs in eval mode (Lightning's
         evaluation loop sets it), and draws under a forked, fixed seed. The pin keeps every
-        entry in the monitored series on one objective, the one at ``kl_weight_max``; the fixed
+        entry in the monitored series on one objective, the one at ``max_kl_weight``; the fixed
         seed keeps that series a function of the parameters rather than of the draw, since the
         minimum of a Monte-Carlo estimator redrawn each check is noise.
 
@@ -253,7 +253,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         prev_kl = self.module.kl_weight
         fork_devices = [device.index] if device.type == "cuda" else []
         try:
-            self.module.kl_weight = self.module.kl_weight_max
+            self.module.kl_weight = self.module.max_kl_weight
             with torch.random.fork_rng(devices=fork_devices), torch.no_grad():
                 torch.manual_seed(self._validation_seed)
                 per_cell, global_block = self._objective_blocks(*args, **kwargs)
