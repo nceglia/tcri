@@ -38,7 +38,6 @@ class TCRIModule(PyroBaseModuleClass):
         gate_prob: Optional[float] = 0.5,  # None = additive (no gating)
         mixture_concentration: torch.Tensor = None,
         n_pseudo_obs: int = 10,
-        use_enumeration: bool = False,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         classifier_n_layers: int = 3,
@@ -80,7 +79,6 @@ class TCRIModule(PyroBaseModuleClass):
         assert (
             self.mixture_concentration is not None
         ), "mixture_concentration must be provided"
-        self.use_enumeration = use_enumeration
         self.eps = 1e-6
         self.classifier_hidden = classifier_hidden
         self.classifier_dropout = classifier_dropout

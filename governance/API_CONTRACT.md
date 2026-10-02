@@ -134,8 +134,8 @@ class TCRIModel:
         self, adata: AnnData, n_latent: int = ..., n_hidden: int = ..., n_layers: int = ...,
         classifier_n_layers: int = ..., global_scale: float = ..., local_scale: float = ...,
         prior_temperature: float = ..., guide_temperature: float = ...,
-        use_enumeration: bool = ..., classifier_hidden: int = ...,
-        classifier_dropout: float = ..., n_pseudo_obs: int = ..., K: int = ...,
+        classifier_hidden: int = ..., classifier_dropout: float = ...,
+        n_pseudo_obs: int = ..., K: int = ...,
         gate_prob: Optional[float] = ..., max_kl_weight: float = ...,
         guide_init_scale: float = ..., classifier_temperature: float = ...,
         phenotype_kl_weight: float = ..., label_error_rate: Optional[float] = ...,
@@ -151,7 +151,7 @@ class TCRIModel:
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
         reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ...,
-        early_stopping: bool = ..., early_stopping_patience: int = ...,
+        num_particles: int = ..., early_stopping: bool = ..., early_stopping_patience: int = ...,
         early_stopping_min_delta: float = ..., **kwargs: Any,
     ) -> None: ...
     def get_latent_representation(

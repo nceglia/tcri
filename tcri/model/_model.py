@@ -13,6 +13,7 @@ modules; this file holds only the high-level `BaseModelClass` API
 import contextlib
 import logging
 import math
+import operator
 import os
 import warnings
 
@@ -175,9 +176,6 @@ _REPLACED_TRAIN_ARGS = {
 __all__ = ["TCRIModel"]
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
-warnings.filterwarnings(
-    "ignore", category=UserWarning, message=".*enumerate.*TraceEnum_ELBO.*"
-)
 
 # Neither the SLURM environment nor root-logger configuration belongs at import time.
 #
@@ -205,6 +203,20 @@ def _slurm_autodetect_disabled():
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+def _positive_int(name: str, value) -> int:
+    """``value`` as an ``int >= 1``. A bool, a string or a float raises ``TypeError`` rather than
+    being truncated, which would run the fit with a different value than the one asked for."""
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be an integer, got {value!r}")
+    try:
+        value = operator.index(value)
+    except TypeError:
+        raise TypeError(f"{name} must be an integer, got {value!r}") from None
+    if value < 1:
+        raise ValueError(f"{name} must be >= 1, got {value!r}")
+    return value
 
 
 def _accepted_train_kwargs() -> set[str]:
@@ -333,7 +345,6 @@ class TCRIModel(BaseModelClass):
         local_scale: float = 3.0,
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
-        use_enumeration: bool = False,
         classifier_hidden: int = 128,
         classifier_dropout: float = 0.1,
         n_pseudo_obs: int = 10,
@@ -389,6 +400,12 @@ class TCRIModel(BaseModelClass):
             max_kl_weight = kwargs.pop("kl_weight_max")
             warnings.warn("`kl_weight_max` is deprecated; use `max_kl_weight`.",
                           FutureWarning, stacklevel=2)
+        # A saved constructor record can carry use_enumeration, which the model does not take: it
+        # has no discrete latent to enumerate. It is dropped; True warns, because that record asked
+        # for something the model does not do.
+        if kwargs.pop("use_enumeration", False):
+            warnings.warn("`use_enumeration` is not a model argument and is ignored: the model has "
+                          "no discrete latent to enumerate.", FutureWarning, stacklevel=2)
         for old, new in _MOVED_TO_TRAIN.items():
             if old in kwargs:
                 kwargs.pop(old)
@@ -510,7 +527,6 @@ class TCRIModel(BaseModelClass):
             mixture_concentration=torch.from_numpy(self.centers),
             prior_temperature=prior_temperature,
             guide_temperature=guide_temperature,
-            use_enumeration=use_enumeration,
             classifier_hidden=classifier_hidden,
             classifier_dropout=classifier_dropout,
             gate_prob=gate_prob,
@@ -540,7 +556,7 @@ class TCRIModel(BaseModelClass):
         )
         logger.info(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
-            f"global_scale={global_scale}, local_scale={local_scale}, use_enumeration={use_enumeration}, "
+            f"global_scale={global_scale}, local_scale={local_scale}, "
             f"prior_temperature={prior_temperature}, guide_temperature={guide_temperature}."
         )
 
@@ -571,6 +587,7 @@ class TCRIModel(BaseModelClass):
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
         n_steps_kl_warmup: int = 2000,
+        num_particles: int = 1,
         early_stopping: bool = True,
         early_stopping_patience: int = 150,
         early_stopping_min_delta: float = 0.05,
@@ -600,12 +617,16 @@ class TCRIModel(BaseModelClass):
             disables annealing. The counter lives on the module, so a second ``train()``
             continues the schedule instead of restarting it -- construct a new model for a
             fresh ramp.
+        num_particles
+            Draws of the latent variables averaged per optimizer step to estimate the ELBO and
+            its gradient; an integer ``>= 1``. Each step costs about this many times as much. The validation
+            criterion uses one draw regardless, so early stopping reads the same quantity.
         early_stopping
             Stop once the validation criterion stops improving. ``False`` trains for
             ``max_epochs``; the best check's weights are restored either way.
         early_stopping_patience
-            Epochs in a row without an improvement that stop the fit. There is one validation
-            check per epoch.
+            Epochs in a row without an improvement that stop the fit; an integer ``>= 1``. There
+            is one validation check per epoch.
         early_stopping_min_delta
             A check is an improvement only if the criterion is below the best check so far by
             more than this, in the criterion's own units (per cell). Finite and ``>= 0``.
@@ -663,10 +684,8 @@ class TCRIModel(BaseModelClass):
                 f"early_stopping_min_delta must be finite and >= 0, "
                 f"got {early_stopping_min_delta!r}"
             )
-        if int(early_stopping_patience) < 1:
-            raise ValueError(
-                f"early_stopping_patience must be >= 1, got {early_stopping_patience!r}"
-            )
+        num_particles = _positive_int("num_particles", num_particles)
+        early_stopping_patience = _positive_int("early_stopping_patience", early_stopping_patience)
 
         # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
         # **kwargs to TrainRunner and on into Trainer.__init__, so a name this package does not
@@ -725,6 +744,7 @@ class TCRIModel(BaseModelClass):
             module=self.module,
             n_steps_kl_warmup=n_steps_kl_warmup,
             reconstruction_loss_scale=reconstruction_loss_scale,
+            num_particles=num_particles,
             optimizer_config={
                 "lr": lr,
                 "betas": (0.9, 0.999),
@@ -752,7 +772,7 @@ class TCRIModel(BaseModelClass):
         kwargs["early_stopping"] = False
         snapshot = BestObjectiveSnapshot(monitor=MONITOR, mode="min")
         stopper = (RampGatedEarlyStopping(monitor=MONITOR, mode="min",
-                                          patience=int(early_stopping_patience),
+                                          patience=early_stopping_patience,
                                           min_delta=float(early_stopping_min_delta))
                    if early_stopping else None)
         callbacks = list(kwargs.pop("callbacks", []) or [])
@@ -766,8 +786,9 @@ class TCRIModel(BaseModelClass):
             "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
             "reconstruction_loss_scale": reconstruction_loss_scale,
             "n_steps_kl_warmup": n_steps_kl_warmup,
+            "num_particles": num_particles,
             "early_stopping": bool(early_stopping),
-            "early_stopping_patience": int(early_stopping_patience),
+            "early_stopping_patience": early_stopping_patience,
             "early_stopping_min_delta": float(early_stopping_min_delta),
             "accelerator": kwargs.get("accelerator", "auto"),
             "devices": kwargs.get("devices", "auto"),

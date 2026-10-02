@@ -189,12 +189,26 @@ def test_min_delta_reaches_the_early_stopping_callback(adata):
     {"early_stopping_min_delta": float("nan")},
     {"early_stopping_min_delta": float("inf")},
     {"early_stopping_patience": 0},
+    {"num_particles": 0},
 ])
 def test_stopping_arguments_are_validated_before_the_fit(adata, kw):
     m = _model(adata)
     with pytest.raises(ValueError, match=next(iter(kw))):
         _train(m, **kw)
     assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
+
+
+@pytest.mark.parametrize("name", ["num_particles", "early_stopping_patience"])
+@pytest.mark.parametrize("bad", [1.9, 2.0, True, "3"])
+def test_count_arguments_must_be_integers(adata, name, bad):
+    """A count that is not an integer raises rather than being truncated to one the caller did
+    not ask for; a numpy integer is accepted."""
+    m = _model(adata)
+    with pytest.raises(TypeError, match=name):
+        _train(m, **{name: bad})
+    assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
+    _train(m, max_epochs=1, **{name: np.int64(2)})
+    assert m._train_kwargs[name] == 2 and type(m._train_kwargs[name]) is int
 
 
 def test_early_stopping_off_installs_no_stopping_rule(adata):
@@ -273,17 +287,21 @@ def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
     assert seen[0] < 1e-3, "ramp must start near zero"
 
 
-def test_use_enumeration_selects_the_elbo(adata):
-    """use_enumeration picks TraceEnum_ELBO vs Trace_ELBO."""
-    from pyro.infer import TraceEnum_ELBO, Trace_ELBO
+def test_a_saved_use_enumeration_is_dropped(adata):
+    """A saved constructor record can carry ``use_enumeration``. It is dropped on load, with a
+    warning only when the record set it to True, and the kept record does not carry it."""
+    import warnings as _w
 
-    plain = UnifiedTrainingPlan(module=_model(adata, use_enumeration=False).module,
-                                n_steps_kl_warmup=1, reconstruction_loss_scale=1e-3)
-    assert isinstance(plain.loss, Trace_ELBO)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        off = _model(adata, use_enumeration=False)
+    assert not [w for w in caught if "use_enumeration" in str(w.message)], "False warned"
     pyro.clear_param_store()
-    enum = UnifiedTrainingPlan(module=_model(adata, use_enumeration=True).module,
-                               n_steps_kl_warmup=1, reconstruction_loss_scale=1e-3)
-    assert isinstance(enum.loss, TraceEnum_ELBO)
+    with pytest.warns(FutureWarning, match="use_enumeration"):
+        on = _model(adata, use_enumeration=True)
+    for m in (off, on):
+        names = set(m.init_params_["non_kwargs"]) | set(m.init_params_["kwargs"].get("kwargs", {}))
+        assert "use_enumeration" not in names, names
 
 
 # ══════════════════════════ BEHAVIOR ════════════════════════════════════════
