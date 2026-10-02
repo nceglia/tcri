@@ -78,7 +78,8 @@ towncrier build --draft --version <next version>
 ## Pull request check
 
 Every pull request runs `check-pr`, which reports a missing linked issue, milestone or release note,
-and release-note files that are misnamed, named for another pull request, or longer than one line.
+release-note files that are misnamed or longer than one line, and a release note it adds for another
+pull request. Editing a merged pull request's note, to correct it, passes.
 It runs again when the description, labels or milestone change, and it has to pass before a pull
 request can merge.
 

@@ -589,8 +589,8 @@ class TCRIModel(BaseModelClass):
         n_steps_kl_warmup: int = 2000,
         num_particles: int = 1,
         early_stopping: bool = True,
-        early_stopping_patience: int = 150,
-        early_stopping_min_delta: float = 0.05,
+        early_stopping_patience: int = 300,
+        early_stopping_min_delta: float = 0.0,
         **kwargs,
     ):
         """Fit the model on the registered AnnData.
@@ -629,7 +629,9 @@ class TCRIModel(BaseModelClass):
             is one validation check per epoch.
         early_stopping_min_delta
             A check is an improvement only if the criterion is below the best check so far by
-            more than this, in the criterion's own units (per cell). Finite and ``>= 0``.
+            more than this, in the criterion's own units (per cell). Finite and ``>= 0``. At 0,
+            every new low restarts the count. A positive value ends a fit that is still
+            descending, if it descends by less than this per ``early_stopping_patience`` epochs.
         kwargs
             Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``.
             An unrecognised name raises ``TypeError`` here rather than several frames deep in
