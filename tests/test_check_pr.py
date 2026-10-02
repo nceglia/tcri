@@ -68,6 +68,26 @@ def test_note_named_for_another_pull_request_is_reported():
     assert any("another pull request" in p for p in _problems(_pr(), notes=notes))
 
 
+@pytest.mark.parametrize("status", ["added", "renamed", "copied"])
+def test_another_pull_requests_note_added_here_is_reported(status):
+    pr = _pr(labels=("no release note",))
+    files = [("docs/release-notes/9.fix.md", status)]
+    assert any("another pull request" in p
+               for p in check_pr.problems(pr, files, lambda path: "Below.\n"))
+
+
+def test_editing_a_merged_pull_requests_note_passes():
+    pr = _pr(labels=("no release note",))
+    files = [("docs/release-notes/9.breaking.md", "modified")]
+    assert check_pr.problems(pr, files, lambda path: "Corrected.\n") == []
+
+
+def test_an_edited_note_is_checked_like_ones_own():
+    pr = _pr(labels=("no release note",))
+    files = [("docs/release-notes/9.breaking.md", "modified")]
+    assert any("one line" in p for p in check_pr.problems(pr, files, lambda path: "A.\nB.\n"))
+
+
 def test_unknown_type_is_reported():
     notes = {"docs/release-notes/10.docs.md": "Docs.\n"}
     assert any("not one of" in p for p in _problems(_pr(), notes=notes))
