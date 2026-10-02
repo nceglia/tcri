@@ -499,6 +499,40 @@ def test_fit_stops_once_improvements_fall_below_min_delta(adata):
     assert rec["selected_score"] == min(got), "the fit did not end on its lowest check (I4)"
 
 
+def test_default_threshold_counts_every_new_low(adata):
+    """Contract B4: at the default ``early_stopping_min_delta`` every new low restarts the count.
+
+    A fit with the default threshold must stop where the zero-threshold rule stops on the
+    series recorded with stopping off, or run to ``max_epochs`` if that rule never stops. The
+    fixture must be one on which some positive threshold stops strictly earlier, so the
+    comparison can tell a threshold from none.
+    """
+    from ._stopping import GatedSeries, stop_index
+
+    patience = 5
+    fit = dict(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+               enable_progress_bar=False, enable_model_summary=False)
+
+    probe = GatedSeries()
+    _fresh(adata).train(early_stopping=False, callbacks=[probe], **fit)
+    series = probe.values
+    assert _discriminating_min_delta(series, patience) is not None, (
+        "no positive min_delta stops earlier than none on this series; the fixture no longer "
+        "discriminates"
+    )
+
+    spy = GatedSeries()
+    _fresh(adata).train(early_stopping_patience=patience, callbacks=[spy], **fit)
+    got = spy.values
+    assert got == series[:len(got)], "same seed, different series (B7); the comparison is void"
+    stop = stop_index(series, 0.0, patience)
+    expected = len(series) if stop is None else stop + 1
+    assert len(got) == expected, (
+        f"the default threshold ran {len(got)} gated checks; with no threshold and patience "
+        f"{patience} the rule runs {expected}"
+    )
+
+
 @pytest.mark.parametrize("kw", [
     {"early_stopping_warmup_epochs": 10},
     {"early_stopping_monitor": "elbo_validation"},
