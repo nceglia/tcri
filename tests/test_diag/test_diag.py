@@ -45,6 +45,30 @@ def test_loss_and_archetypes(trained_model):
     assert tcri.diag.archetypes(model) is not None
 
 
+def test_loss_draws_the_validation_objective_on_its_own_axes(trained_model):
+    """The monitored series is per cell and the training loss is summed, so they get separate
+    axes, and the monitored one is labeled as the per-cell objective, not an ELBO."""
+    import matplotlib.pyplot as plt
+
+    model, _ = trained_model
+    train_ax = tcri.diag.loss(model)
+    fig = train_ax.figure
+    val = [a for a in fig.axes if "Validation objective" in a.get_title()]
+    assert len(val) == 1 and val[0] is not train_ax, [a.get_title() for a in fig.axes]
+    assert "per cell" in val[0].get_ylabel()
+    expected = np.asarray(model.history_["objective_validation_percell"].values, dtype=float).ravel()
+    np.testing.assert_allclose(val[0].lines[0].get_ydata(), expected)
+    labels = [line.get_label() for a in fig.axes for line in a.lines]
+    assert not [lab for lab in labels if "ELBO" in lab and "val" in lab.lower()], labels
+    selected = model.training_record_["selected_epoch"]
+    marks = [line for line in val[0].lines if line.get_label().startswith("selected epoch")]
+    if selected is None:
+        assert not marks, "a selected epoch was marked although the fit selected none"
+    else:
+        assert len(marks) == 1 and list(marks[0].get_xdata()) == [selected, selected]
+    plt.close(fig)
+
+
 def test_reconstruction_ppc_n_sims_is_wired(trained_model):
     """``n_sims`` must change the result, not merely be accepted.
 
