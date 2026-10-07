@@ -50,24 +50,30 @@ def problems(pr: dict, files: list[tuple[str, str]], read_file) -> list[str]:
         found.append(f"Unexpected files in docs/release-notes/: {', '.join(stray)}. A release note "
                      f"is named `<PR number>.<type>.md`.")
 
+    status = dict(files)
     notes = [(match, name) for name in present for match in [NOTE.fullmatch(name)] if match]
-    foreign = [name for match, name in notes if int(match[1]) != number]
+    # Another pull request's note is reported only when this one adds it: that is a note carried
+    # up from the pull request below in a stack. Editing a merged pull request's note is how a later
+    # change corrects it, so a modified one passes and is checked like this pull request's own.
+    foreign = [name for match, name in notes
+               if int(match[1]) != number and status[name] != "modified"]
     if foreign:
         found.append(f"Release notes named for another pull request: {', '.join(foreign)}. If the "
                      f"pull request below in a stack just merged, rebase this branch onto main.")
+    edited = [(match, name) for match, name in notes
+              if int(match[1]) != number and status[name] == "modified"]
 
-    if "no release note" not in labels:
-        mine = [(match, name) for match, name in notes if int(match[1]) == number]
-        if len(mine) != 1:
-            found.append(f"Add one release note, `docs/release-notes/{number}.<type>.md`, or the "
-                         f"`no release note` label.")
-        else:
-            match, name = mine[0]
-            if match[2] not in TYPES:
-                found.append(f"Release-note type `{match[2]}` is not one of {', '.join(TYPES)}.")
-            lines = [line for line in read_file(name).splitlines() if line.strip()]
-            if len(lines) != 1 or len(lines[0].strip()) > MAX_NOTE:
-                found.append(f"A release note is one line of at most {MAX_NOTE} characters: {name}.")
+    mine = [(match, name) for match, name in notes if int(match[1]) == number]
+    if "no release note" not in labels and len(mine) != 1:
+        found.append(f"Add one release note, `docs/release-notes/{number}.<type>.md`, or the "
+                     f"`no release note` label.")
+    checked = (mine if "no release note" not in labels and len(mine) == 1 else []) + edited
+    for match, name in checked:
+        if match[2] not in TYPES:
+            found.append(f"Release-note type `{match[2]}` is not one of {', '.join(TYPES)}.")
+        lines = [line for line in read_file(name).splitlines() if line.strip()]
+        if len(lines) != 1 or len(lines[0].strip()) > MAX_NOTE:
+            found.append(f"A release note is one line of at most {MAX_NOTE} characters: {name}.")
     return found
 
 

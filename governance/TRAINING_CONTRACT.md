@@ -51,27 +51,21 @@ schedules or stopping; they change with a recorded reason.
   for a fresh schedule. `test_no_reset_knob_on_train`.
 - **B2** `n_steps_kl_warmup` counts optimizer steps; a run records its epoch equivalent.
 - **B3** Patience is in epochs: `train()` validates once per epoch and the knob is
-  `train(early_stopping_patience=...)`, default 150. `early_stopping_patience` checks in a row
+  `train(early_stopping_patience=...)`, default 300. `early_stopping_patience` checks in a row
   without an improvement stop the fit (B4 defines one). `early_stopping=False` installs no
   stopping rule and trains for `max_epochs`; the best check is restored either way (I4).
   `test_fit_stops_once_improvements_fall_below_min_delta`, `test_restored_model_is_the_selected_one`.
 - **B3a** `max_epochs` defaults to 2000. With early stopping on, a fit that reaches the cap
   warns and records `stopped_early: False`.
 - **B4** A check is an improvement only if it is below the best check so far by more than
-  `train(early_stopping_min_delta=...)`, in the monitor's own units (per cell).
-  `early_stopping_min_delta` must exceed the monitor's noise; the fixed evaluation seed removes
-  the Monte-Carlo component, so what remains is the epoch-to-epoch movement of the fit. The
-  defaults come from fits of `tcri.datasets.simulate_tcri(n_clones=1000, n_phenotypes=6,
-  n_cells=13700, n_covariates=6, omega_concentration=0.4, fuzziness=0.1, seed=0)` at 150, 500
-  and 2000 genes, a parent and a phenotype null at each and a second parent seed at 500, at
-  `train()` defaults with stopping off for 3000 epochs. Noise is 1.4826 x MAD of the residuals
-  from a 101-check centered rolling median on the post-ramp plateau. It did not grow with the
-  monitor's magnitude, so the threshold is absolute, and `early_stopping_min_delta` defaults to
-  0.05, twice the largest noise, rounded up. `early_stopping_patience` is the smallest of 25,
-  50, 100, 150, 200, 300 under which every one of those fits selects a checkpoint within its
-  noise of the one a threshold of 0 with patience 300 selects.
+  `train(early_stopping_min_delta=...)`, in the monitor's own units (per cell). The default is
+  0: every new low restarts the count, so a fit ends `early_stopping_patience` checks after its
+  last one. The fixed evaluation seed removes the Monte-Carlo component, so what remains is the
+  epoch-to-epoch movement of the fit. A positive threshold ends a fit whose monitor is still
+  falling, if it falls by less than the threshold per `early_stopping_patience` checks, and can
+  keep a checkpoint with a higher criterion than the default rule reaches.
   `test_fit_stops_once_improvements_fall_below_min_delta`,
-  `test_a_null_stops_under_its_parents_rule`.
+  `test_default_threshold_counts_every_new_low`, `test_a_null_stops_under_its_parents_rule`.
 - **B5** Selection begins only after the ramp completes, read from one counter by both the
   stopping and the snapshot callback. If the ramp never completes: warn, do not raise, and
   record `selection_criterion = "last epoch (ramp incomplete)"`.
