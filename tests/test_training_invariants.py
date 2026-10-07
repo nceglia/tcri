@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 
 # Deliberately NOT slow-marked. CI runs a bare `pytest tests/`, so a module-level `slow` marker
 # would skip the tests governance/TRAINING_CONTRACT.md names as the enforcement for I2, I3, I4,
-# I5, B1, B3, B4 and B5 on every pull request. An invariant whose proof CI skips is unchecked.
+# I5, B1, B2, B3, B4 and B5 on every pull request. An invariant whose proof CI skips is unchecked.
 
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
@@ -179,15 +179,15 @@ def test_kl_ramp_is_monotone_across_resumed_training(adata):
     m = _fresh(adata)
     m.train(max_epochs=3, batch_size=128, accelerator="cpu",
             enable_progress_bar=False, enable_model_summary=False)
-    after_first = m.module._kl_warmup_step
+    after_first = m.module._kl_warmup_epochs
     weight_first = float(m.module.kl_weight)
 
     m.train(max_epochs=3, batch_size=128, accelerator="cpu",
             enable_progress_bar=False, enable_model_summary=False)
-    after_second = m.module._kl_warmup_step
+    after_second = m.module._kl_warmup_epochs
     weight_second = float(m.module.kl_weight)
 
-    assert after_first > 0, "no optimizer steps were counted in the first call"
+    assert after_first > 0, "no warmup epochs were counted in the first call"
     assert after_second > after_first, (
         f"the warmup counter restarted: {after_first} -> {after_second}. A resumed fit must "
         f"continue the schedule, not begin a second ramp."
@@ -200,14 +200,119 @@ def test_kl_ramp_is_monotone_across_resumed_training(adata):
 
 # ── the stopping policy: I3 and I4 ───────────────────────────────────────────
 
-def _plan_and_batch(adata, n_steps_kl_warmup=8):
+def _kl_weight_spy():
+    import lightning.pytorch as pl
+
+    class Spy(pl.Callback):
+        def __init__(self):
+            super().__init__()
+            self.weights, self.positions, self.batches = [], [], None
+
+        def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+            self.positions.append(
+                pl_module.module.kl_warmup_position(trainer.num_training_batches))
+
+        def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+            self.weights.append(float(pl_module.module.kl_weight))
+            self.batches = int(trainer.num_training_batches)
+
+    return Spy()
+
+
+def test_schedule_arguments_are_counted_in_epochs(adata):
+    """Contract B2: every schedule setting is counted in epochs.
+
+    Neither ``train()`` nor the training plan takes a schedule argument counted in optimizer
+    steps; the old step-counted warmup raises before any fit and names its replacement. Lightning's
+    ``max_steps`` limits a run rather than setting the schedule, so it stays accepted.
+    """
+    import inspect
+
+    from tcri.model._model import TCRIModel, _accepted_train_kwargs
+    from tcri.model._training import UnifiedTrainingPlan
+
+    for fn in (TCRIModel.train, UnifiedTrainingPlan.__init__):
+        steps = [name for name in inspect.signature(fn).parameters if "step" in name]
+        assert not steps, f"{fn.__qualname__} takes a step-counted schedule argument: {steps}"
+    m = _fresh(adata)
+    with pytest.raises(TypeError, match="n_epochs_kl_warmup"):
+        m.train(max_epochs=1, batch_size=128, accelerator="cpu", n_steps_kl_warmup=10)
+    assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
+    assert "max_steps" in _accepted_train_kwargs()
+
+
+def test_kl_weight_rises_within_an_epoch(adata):
+    """Contract B2: the warmup position is fractional within an epoch, so ``kl_weight`` rises at
+    every step. Three batches per epoch and two warmup epochs: k/6 of the ceiling at step k, then
+    the ceiling."""
+    spy = _kl_weight_spy()
+    m = _fresh(adata)
+    m.train(max_epochs=4, batch_size=128, n_epochs_kl_warmup=2, early_stopping=False,
+            accelerator="cpu", callbacks=[spy], enable_progress_bar=False,
+            enable_model_summary=False)
+    assert spy.batches == 3, f"the fixture has {spy.batches} batches per epoch, not 3"
+    top = m.module.max_kl_weight
+    expected = [max(1e-6, top * k / 6) for k in range(6)] + [top] * (len(spy.weights) - 6)
+    np.testing.assert_allclose(spy.weights, expected, rtol=1e-12)
+
+
+def test_the_ramp_ends_at_the_same_epoch_whatever_the_batches_per_epoch(adata):
+    """Contract B2/B5: a warmup counted in epochs opens selection at the same epoch whether an
+    epoch is 3 batches or 9, which a warmup counted in steps does not."""
+    from tcri.model._callbacks import ramp_is_complete
+    import lightning.pytorch as pl
+
+    class FirstGated(pl.Callback):
+        def __init__(self):
+            super().__init__()
+            self.epoch = None
+
+        def on_validation_end(self, trainer, pl_module):
+            if self.epoch is None and not trainer.sanity_checking and ramp_is_complete(pl_module):
+                self.epoch = int(trainer.current_epoch)
+
+    found = {}
+    for batch_size in (128, 32):
+        spy, gate = _kl_weight_spy(), FirstGated()
+        m = _fresh(adata)
+        m.train(max_epochs=4, batch_size=batch_size, n_epochs_kl_warmup=2, early_stopping=False,
+                accelerator="cpu", callbacks=[spy, gate], enable_progress_bar=False,
+                enable_model_summary=False)
+        found[spy.batches] = (gate.epoch, m.training_record_["ramp_completes_at_epoch"])
+    assert sorted(found) == [3, 9], f"the fixtures have {sorted(found)} batches per epoch"
+    assert found[3] == found[9] == (1, 2), f"selection opened at different epochs: {found}"
+
+
+def test_an_epoch_cut_short_counts_as_completed(adata):
+    """Contracts B1/B2: a ``train()`` stopped mid-epoch leaves a partial epoch, which the next
+    ``train()`` counts as completed, so the position and ``kl_weight`` only move up across the
+    calls."""
+    import warnings as _w
+
+    first, second = _kl_weight_spy(), _kl_weight_spy()
+    m = _fresh(adata)
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        m.train(max_epochs=10, max_steps=4, batch_size=128, n_epochs_kl_warmup=6,
+                accelerator="cpu", callbacks=[first], enable_progress_bar=False,
+                enable_model_summary=False)
+    assert (m.module._kl_warmup_epochs, m.module._kl_warmup_batch) == (1, 1), (
+        "max_steps=4 at 3 batches per epoch should stop one batch into the second epoch")
+    m.train(max_epochs=2, batch_size=128, n_epochs_kl_warmup=6, accelerator="cpu",
+            callbacks=[second], enable_progress_bar=False, enable_model_summary=False)
+    assert second.positions[0] == 2.0, f"the second call started at {second.positions[0]}"
+    weights = first.weights + second.weights
+    assert all(b >= a for a, b in zip(weights, weights[1:])), f"kl_weight went down: {weights}"
+
+
+def _plan_and_batch(adata, n_epochs_kl_warmup=3):
     """A fitted-enough model plus one validation batch, ready to evaluate."""
     from tcri.model._training import UnifiedTrainingPlan
 
     m = _fresh(adata)
-    m.train(max_epochs=2, batch_size=128, n_steps_kl_warmup=n_steps_kl_warmup,
+    m.train(max_epochs=2, batch_size=128, n_epochs_kl_warmup=n_epochs_kl_warmup,
             accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
-    plan = UnifiedTrainingPlan(module=m.module, n_steps_kl_warmup=n_steps_kl_warmup)
+    plan = UnifiedTrainingPlan(module=m.module, n_epochs_kl_warmup=n_epochs_kl_warmup)
     loader = m._make_data_loader(adata=m.adata, batch_size=128, shuffle=False)
     return m, plan, next(iter(loader))
 
@@ -228,7 +333,7 @@ def test_svi_steps_on_the_plans_loss(adata):
     m, plan, batch = _plan_and_batch(adata)
     assert plan.svi.loss.__self__ is plan.loss_fn, "SVI does not step on the plan's loss"
     assert isinstance(plan.loss_fn, Trace_ELBO) and plan.loss_fn.num_particles == 1
-    two = UnifiedTrainingPlan(module=m.module, n_steps_kl_warmup=8, num_particles=2)
+    two = UnifiedTrainingPlan(module=m.module, n_epochs_kl_warmup=3, num_particles=2)
     assert two.svi.loss.__self__.num_particles == 2, "the plan's loss did not reach SVI"
 
     args, kwargs = plan.module._get_fn_args_from_batch(batch)
@@ -251,7 +356,7 @@ def test_num_particles_averages_that_many_draws(adata):
 
     n = 3
     m = _fresh(adata)
-    m.train(max_epochs=1, batch_size=128, n_steps_kl_warmup=4, num_particles=n,
+    m.train(max_epochs=1, batch_size=128, n_epochs_kl_warmup=2, num_particles=n,
             accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
     assert m._train_kwargs["num_particles"] == n, "num_particles is not recorded for nulls"
     plan = m.trainer.lightning_module
@@ -274,7 +379,7 @@ def test_num_particles_averages_that_many_draws(adata):
 
     batch = next(iter(loader))
     plan.module.eval()
-    crit = {k: float(UnifiedTrainingPlan(module=plan.module, n_steps_kl_warmup=4, num_particles=k)
+    crit = {k: float(UnifiedTrainingPlan(module=plan.module, n_epochs_kl_warmup=2, num_particles=k)
                      .validation_step(batch, 0)["loss"]) for k in (1, n)}
     assert crit[n] == crit[1], f"the validation criterion depends on num_particles: {crit}"
 
@@ -298,7 +403,7 @@ def test_monitor_is_invariant_to_ramp_position(adata):
     before = {k: v.detach().clone() for k, v in plan.module.state_dict().items()}
     store_before = {n: p.detach().clone() for n, p in pyro.get_param_store().named_parameters()}
 
-    plan.module._kl_warmup_step = 1          # early in the ramp
+    plan.module._kl_warmup_epochs = 0         # early in the ramp
     plan.module.kl_weight = 1e-6
     first = float(plan.validation_step(batch, 0)["loss"])
 
@@ -307,7 +412,7 @@ def test_monitor_is_invariant_to_ramp_position(adata):
     with torch.no_grad():
         for name, p in pyro.get_param_store().named_parameters():
             p.data.copy_(store_before[name])
-    plan.module._kl_warmup_step = 10_000     # ramp long finished
+    plan.module._kl_warmup_epochs = 10_000    # ramp long finished
     plan.module.kl_weight = plan.module.max_kl_weight
     second = float(plan.validation_step(batch, 0)["loss"])
 
@@ -326,7 +431,7 @@ def test_validation_pin_restores_the_training_schedule(adata):
     ramp would jump to its endpoint the first time anything validated.
     """
     m, plan, batch = _plan_and_batch(adata)
-    plan.module._kl_warmup_step = 3
+    plan.module._kl_warmup_epochs = 1
     plan.module.kl_weight = 0.125
 
     plan.validation_step(batch, 0)
@@ -346,7 +451,7 @@ def test_selection_is_gated_until_the_ramp_completes(adata):
     """
     m = _fresh(adata)
     with pytest.warns(UserWarning, match="KL ramp did not complete"):
-        m.train(max_epochs=3, batch_size=128, n_steps_kl_warmup=10**6,
+        m.train(max_epochs=3, batch_size=128, n_epochs_kl_warmup=10**6,
                 accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
 
     rec = m.training_record_
@@ -406,7 +511,7 @@ def test_restored_model_is_the_selected_one(adata):
     # (the argmin is well before the last check, asserted below), so reaching 60 shows the
     # switch removed the rule rather than the rule never firing.
     m = _fresh(adata)
-    m.train(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+    m.train(max_epochs=60, batch_size=128, n_epochs_kl_warmup=2, lr=1e-2, accelerator="cpu",
             early_stopping=False, early_stopping_patience=2, callbacks=[_Spy()],
             enable_progress_bar=False, enable_model_summary=False)
     assert m.training_record_["epochs_run"] == 60, "early_stopping=False must train to max_epochs"
@@ -471,7 +576,7 @@ def test_fit_stops_once_improvements_fall_below_min_delta(adata):
     from ._stopping import GatedSeries, stop_index
 
     patience = 5
-    fit = dict(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+    fit = dict(max_epochs=60, batch_size=128, n_epochs_kl_warmup=2, lr=1e-2, accelerator="cpu",
                enable_progress_bar=False, enable_model_summary=False)
 
     probe = GatedSeries()
@@ -510,7 +615,7 @@ def test_default_threshold_counts_every_new_low(adata):
     from ._stopping import GatedSeries, stop_index
 
     patience = 5
-    fit = dict(max_epochs=60, batch_size=128, n_steps_kl_warmup=4, lr=1e-2, accelerator="cpu",
+    fit = dict(max_epochs=60, batch_size=128, n_epochs_kl_warmup=2, lr=1e-2, accelerator="cpu",
                enable_progress_bar=False, enable_model_summary=False)
 
     probe = GatedSeries()
@@ -605,7 +710,7 @@ def test_a_fit_ended_by_another_limit_is_not_an_early_stop(adata):
     m = _fresh(adata)
     with _w.catch_warnings(record=True) as caught:
         _w.simplefilter("always")
-        m.train(max_epochs=20, max_steps=6, batch_size=128, n_steps_kl_warmup=0,
+        m.train(max_epochs=20, max_steps=6, batch_size=128, n_epochs_kl_warmup=0,
                 accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
     rec = m.training_record_
     assert rec["epochs_run"] < 20, "max_steps did not end the fit; the test asserts nothing"
@@ -742,7 +847,7 @@ def test_weight_decay_does_not_reach_the_guide_concentrations(adata):
 
     m = _fresh(adata)
     plan = UnifiedTrainingPlan(
-        module=m.module, n_steps_kl_warmup=10, reconstruction_loss_scale=1e-2,
+        module=m.module, n_epochs_kl_warmup=4, reconstruction_loss_scale=1e-2,
         optimizer_config={"lr": 1e-2, "betas": (0.9, 0.999), "eps": 1e-5,
                           "weight_decay": 1e-4},
     )
@@ -890,7 +995,7 @@ def test_warmup_counter_is_owned_by_the_module_not_the_plan():
         "the plan owns a warmup counter again — a fresh plan per train() call means the ramp "
         "restarts (DE-4)"
     )
-    assert "self.module._kl_warmup_step" in inspect.getsource(UnifiedTrainingPlan.training_step)
+    assert "self.module.kl_warmup_position" in inspect.getsource(UnifiedTrainingPlan.training_step)
 
 
 def _body_source(fn) -> str:

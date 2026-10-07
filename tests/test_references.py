@@ -569,7 +569,7 @@ def test_oe_shape_smoke():
                       classifier_hidden=16, K=4, seed=0, name="oesmoke")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        model.train(max_epochs=30, batch_size=128, n_steps_kl_warmup=8, accelerator="cpu",
+        model.train(max_epochs=30, batch_size=128, n_epochs_kl_warmup=2, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
         tcri.null.all(model, adata, kinds=("phenotype", "condition"),

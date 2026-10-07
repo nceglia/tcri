@@ -103,12 +103,15 @@ class TCRIModule(PyroBaseModuleClass):
 
         # Defaults so model()/guide() work before train() sets them
         self.kl_weight = 1e-6
-        # The warmup counter lives on the MODULE, not the training plan: train() builds a fresh
+        # The warmup position lives on the MODULE, not the training plan: train() builds a fresh
         # UnifiedTrainingPlan per call, so a plan-local counter would restart the KL ramp on
         # every staged or resumed train(), giving a sawtooth kl_weight rather than B1's monotone
-        # ramp. A plain int, deliberately not a registered buffer: a buffer changes the
-        # state_dict key set and breaks load_state_dict(strict=True) against saved models.
-        self._kl_warmup_step = 0
+        # ramp. It is counted in epochs (B2), as two plain ints -- epochs completed under the
+        # ramp, and batches done in the current epoch -- so the gate compares whole epochs
+        # exactly. Deliberately not registered buffers: a buffer changes the state_dict key set
+        # and breaks load_state_dict(strict=True) against saved models.
+        self._kl_warmup_epochs = 0
+        self._kl_warmup_batch = 0
         self.reconstruction_loss_scale = 1e-2
 
         self.encoder = Encoder(
@@ -158,7 +161,7 @@ class TCRIModule(PyroBaseModuleClass):
         # ``TCRIModel.train``. It is the ``size`` of the data plate, so a minibatch's per-cell
         # terms are scaled by N_train/B and the batch ELBO is an unbiased estimate of eq 7
         # over the cells being fit. A plain attribute, deliberately not a buffer, for the same
-        # reason as ``_kl_warmup_step``: a buffer changes the state_dict key set. Unset (None)
+        # reason as ``_kl_warmup_epochs``: a buffer changes the state_dict key set. Unset (None)
         # means "every cell", which is what a loader over the whole object supplies.
         self.n_obs_training = None
 
@@ -208,6 +211,21 @@ class TCRIModule(PyroBaseModuleClass):
     @property
     def use_gate(self) -> bool:
         return self.gate_prob is not None
+
+    def kl_warmup_position(self, batches_per_epoch: int) -> float:
+        """Epochs trained under the KL ramp, fractional within the current epoch."""
+        return self._kl_warmup_epochs + self._kl_warmup_batch / max(int(batches_per_epoch), 1)
+
+    def complete_partial_warmup_epoch(self) -> None:
+        """Count an epoch cut short (``max_steps``, ``max_time``, an interrupt) as completed.
+
+        Called when a ``train()`` starts. The position only moves up, so ``kl_weight`` never
+        decreases across calls (B1) even if the next call has a different number of batches per
+        epoch.
+        """
+        if self._kl_warmup_batch > 0:
+            self._kl_warmup_epochs += 1
+            self._kl_warmup_batch = 0
 
     def plate_size(self) -> int:
         """``size`` of the data plate: the cells the objective sums over (eq 7's ``N``).

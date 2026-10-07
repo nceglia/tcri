@@ -39,7 +39,7 @@ def _fit(adata, name, *, seed=0, max_epochs=3):
     model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
                       classifier_hidden=16, K=3, seed=seed, name=name)
     with contextlib.redirect_stdout(io.StringIO()):
-        model.train(max_epochs=max_epochs, batch_size=64, n_steps_kl_warmup=4,
+        model.train(max_epochs=max_epochs, batch_size=64, n_epochs_kl_warmup=2,
                     accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
     return model
 

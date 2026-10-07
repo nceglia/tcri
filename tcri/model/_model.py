@@ -157,7 +157,7 @@ _MOVED_TO_TRAIN = {
 #: would change what another setting means.
 _REPLACED_TRAIN_ARGS = {
     "early_stopping_warmup_epochs":
-        "selection and stopping start when the KL ramp completes; set n_steps_kl_warmup",
+        "selection and stopping start when the KL ramp completes; set n_epochs_kl_warmup",
     "early_stopping_monitor":
         f"the monitored quantity is fixed to {MONITOR!r}, and early_stopping_min_delta is in "
         f"its units",
@@ -171,6 +171,7 @@ _REPLACED_TRAIN_ARGS = {
         "a Lightning checkpoint holds neither the guide concentrations nor the KL ramp position; "
         "the best check is restored in memory at the end of the fit",
     "checkpointing_monitor": "checkpointing is not supported; see enable_checkpointing",
+    "n_steps_kl_warmup": "the KL warmup is counted in epochs; use n_epochs_kl_warmup",
 }
 
 __all__ = ["TCRIModel"]
@@ -205,17 +206,17 @@ def _slurm_autodetect_disabled():
                 os.environ[k] = v
 
 
-def _positive_int(name: str, value) -> int:
-    """``value`` as an ``int >= 1``. A bool, a string or a float raises ``TypeError`` rather than
-    being truncated, which would run the fit with a different value than the one asked for."""
+def _int_at_least(name: str, value, minimum: int) -> int:
+    """``value`` as an ``int >= minimum``. A bool, a string or a float raises ``TypeError`` rather
+    than being truncated, which would run the fit with a different value than the one asked for."""
     if isinstance(value, bool):
         raise TypeError(f"{name} must be an integer, got {value!r}")
     try:
         value = operator.index(value)
     except TypeError:
         raise TypeError(f"{name} must be an integer, got {value!r}") from None
-    if value < 1:
-        raise ValueError(f"{name} must be >= 1, got {value!r}")
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {value!r}")
     return value
 
 
@@ -586,7 +587,7 @@ class TCRIModel(BaseModelClass):
         batch_size: int = 1000,
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
-        n_steps_kl_warmup: int = 2000,
+        n_epochs_kl_warmup: int = 150,
         num_particles: int = 1,
         early_stopping: bool = True,
         early_stopping_patience: int = 300,
@@ -612,11 +613,12 @@ class TCRIModel(BaseModelClass):
             Learning rate of the Pyro optimizer, for the networks and the guide alike.
         reconstruction_loss_scale
             Weight on the ZINB likelihood of the counts; set on the module for the whole fit.
-        n_steps_kl_warmup
-            Optimizer steps over which ``kl_weight`` ramps to ``max_kl_weight``; ``<= 0``
-            disables annealing. The counter lives on the module, so a second ``train()``
-            continues the schedule instead of restarting it -- construct a new model for a
-            fresh ramp.
+        n_epochs_kl_warmup
+            Epochs over which ``kl_weight`` rises to ``max_kl_weight``, smoothly within each
+            epoch; an integer ``>= 0``, and ``0`` disables annealing. Selection and the
+            early-stopping count start when the ramp completes. The position lives on the
+            module, so a second ``train()`` continues the ramp instead of restarting it --
+            construct a new model for a fresh ramp.
         num_particles
             Draws of the latent variables averaged per optimizer step to estimate the ELBO and
             its gradient; an integer ``>= 1``. Each step costs about this many times as much. The validation
@@ -686,8 +688,9 @@ class TCRIModel(BaseModelClass):
                 f"early_stopping_min_delta must be finite and >= 0, "
                 f"got {early_stopping_min_delta!r}"
             )
-        num_particles = _positive_int("num_particles", num_particles)
-        early_stopping_patience = _positive_int("early_stopping_patience", early_stopping_patience)
+        num_particles = _int_at_least("num_particles", num_particles, 1)
+        early_stopping_patience = _int_at_least("early_stopping_patience", early_stopping_patience, 1)
+        n_epochs_kl_warmup = _int_at_least("n_epochs_kl_warmup", n_epochs_kl_warmup, 0)
 
         # Reject unknown kwargs HERE rather than letting them reach Lightning. train() forwards
         # **kwargs to TrainRunner and on into Trainer.__init__, so a name this package does not
@@ -711,7 +714,10 @@ class TCRIModel(BaseModelClass):
         # instead of restarting it, which is what training-contract B1 requires. There is
         # deliberately no reset knob -- adding one would change governance/API_CONTRACT.md, and
         # a restarted ramp makes checks from before and after it incomparable. Construct a new
-        # model for a fresh schedule.
+        # model for a fresh schedule. An epoch the previous call cut short counts as completed, so
+        # the position only moves up (B1, B2).
+        self.module.complete_partial_warmup_epoch()
+        warmup_at_start = self.module._kl_warmup_epochs
 
         self.module.reconstruction_loss_scale = reconstruction_loss_scale
 
@@ -744,7 +750,7 @@ class TCRIModel(BaseModelClass):
 
         plan = UnifiedTrainingPlan(
             module=self.module,
-            n_steps_kl_warmup=n_steps_kl_warmup,
+            n_epochs_kl_warmup=n_epochs_kl_warmup,
             reconstruction_loss_scale=reconstruction_loss_scale,
             num_particles=num_particles,
             optimizer_config={
@@ -787,7 +793,7 @@ class TCRIModel(BaseModelClass):
         self._train_kwargs = {
             "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
             "reconstruction_loss_scale": reconstruction_loss_scale,
-            "n_steps_kl_warmup": n_steps_kl_warmup,
+            "n_epochs_kl_warmup": n_epochs_kl_warmup,
             "num_particles": num_particles,
             "early_stopping": bool(early_stopping),
             "early_stopping_patience": early_stopping_patience,
@@ -816,21 +822,22 @@ class TCRIModel(BaseModelClass):
             runner()
 
         # A fit records what actually happened -- the provenance fields required by
-        # governance/TRAINING_CONTRACT.md. `steps_per_epoch` is read from the counter rather
-        # than computed from batch_size, so a partial final batch cannot skew it.
+        # governance/TRAINING_CONTRACT.md. `steps_per_epoch` is Lightning's count of training
+        # batches, the same number the ramp divides an epoch by.
         epochs_run = max(int(runner.trainer.current_epoch), 1)
-        steps_per_epoch = max(self.module._kl_warmup_step / epochs_run, 1e-9)
+        steps_per_epoch = int(runner.trainer.num_training_batches)
         ramp_done = ramp_is_complete(plan)
         self.training_record_ = {
             "epochs_run": epochs_run,
-            "warmup_steps_taken": int(self.module._kl_warmup_step),
-            "n_steps_kl_warmup": int(n_steps_kl_warmup),
+            "n_epochs_kl_warmup": n_epochs_kl_warmup,
+            "warmup_epochs_taken": self.module.kl_warmup_position(steps_per_epoch),
             "steps_per_epoch": steps_per_epoch,
-            # The one number that says which regime a run was in. A ramp finishing early leaves
-            # most of the fit at a stationary objective; one that never finishes means the prior
-            # was substantially switched off throughout.
-            "ramp_completes_at_epoch": (int(n_steps_kl_warmup) / steps_per_epoch
-                                        if n_steps_kl_warmup > 0 else 0.0),
+            # The one number that says which regime a run was in: the epochs of this call before
+            # the gate opens (0 when annealing is off or a previous call finished the ramp). A
+            # ramp finishing early leaves most of the fit at a stationary objective; one that
+            # never finishes means the prior was substantially switched off throughout.
+            "ramp_completes_at_epoch": max(0, n_epochs_kl_warmup - warmup_at_start)
+                                       if n_epochs_kl_warmup > 0 else 0,
             "ramp_completed": ramp_done,
             "selection_criterion": (MONITOR if ramp_done
                                     else "last epoch (ramp incomplete)"),
@@ -869,10 +876,10 @@ class TCRIModel(BaseModelClass):
             )
         if not ramp_done:
             warnings.warn(
-                f"the KL ramp did not complete: {self.module._kl_warmup_step} of "
-                f"{n_steps_kl_warmup} warmup steps taken in {epochs_run} epochs "
-                f"(~{steps_per_epoch:.1f} steps/epoch, so it needs "
-                f"~{self.training_record_['ramp_completes_at_epoch']:.0f} epochs). No checkpoint "
+                f"the KL ramp did not complete: "
+                f"{self.training_record_['warmup_epochs_taken']:.3g} of {n_epochs_kl_warmup} "
+                f"warmup epochs after this fit's {epochs_run} epochs; it needs "
+                f"{self.training_record_['ramp_completes_at_epoch']} epochs of it. No checkpoint "
                 f"was selected and the final weights are kept, because no two checks in this run "
                 f"came from the same objective. The fitted prior is scaled by "
                 f"kl_weight={self.module.kl_weight:.3g}, not max_kl_weight="

@@ -5,14 +5,9 @@ Writes a JSON per run so a sweep can be collected afterwards. Times each stage s
 training, the per-cell pass, the posterior draw, each metric family -- because they sit on
 different hardware paths and a single wall-clock number cannot say which knob to turn.
 
-**`--ramp-by-epoch` rather than `--n-steps-kl-warmup`.** The KL warmup counts OPTIMIZER STEPS,
-so at a fixed step count a larger batch means fewer steps per epoch and a ramp that finishes
-far later in training -- at ``batch_size = n_obs`` the 2000-step default becomes a 2000-EPOCH
-warmup and a normal run trains almost entirely with the prior scaled to nothing. Comparing two
-batch sizes at a fixed step count therefore compares two different models. This derives the
-step count from ``ceil(n_obs * (1 - val) / batch) * ramp_by_epoch`` so every configuration
-completes its ramp at the same point in training, and records what actually happened.
-(DE-17/DUX-2 in the training contract, open.)
+**`--ramp-by-epoch`.** The KL warmup is counted in epochs, so ``n_epochs_kl_warmup`` is set to
+``epochs * ramp_by_epoch`` and every configuration, whatever its batch size, completes its ramp at
+the same point in training. The steps per epoch are recorded beside it.
 """
 from __future__ import annotations
 
@@ -101,18 +96,13 @@ def main():
         adata = ad.read_h5ad(args.data)
     rec.update(n_obs=int(adata.n_obs), n_vars=int(adata.n_vars))
 
-    # the ramp has to finish at the same point in training for every batch size, or the
-    # configurations are not comparable -- see the module docstring
-    # 0.9 is not a guess: TCRIModel.train() constructs its DataSplitter with train_size=0.9,
-    # so this MUST track that constant or the KL ramp lands at a different epoch than intended
-    # and batch sizes stop being comparable.
+    # Steps per epoch, recorded beside the ramp; 0.9 is TCRIModel.train()'s train_size.
     n_train = adata.n_obs * TRAIN_SIZE
     steps_per_epoch = max(1, math.ceil(n_train / args.batch_size))
-    n_steps_kl_warmup = max(1, int(round(steps_per_epoch * args.epochs * args.ramp_by_epoch)))
-    rec.update(steps_per_epoch=steps_per_epoch, n_steps_kl_warmup=n_steps_kl_warmup)
+    n_epochs_kl_warmup = max(1, int(round(args.epochs * args.ramp_by_epoch)))
+    rec.update(steps_per_epoch=steps_per_epoch, n_epochs_kl_warmup=n_epochs_kl_warmup)
     print(f"    batch={args.batch_size} -> {steps_per_epoch} steps/epoch, "
-          f"n_steps_kl_warmup={n_steps_kl_warmup} "
-          f"(ramp done by epoch {args.epochs * args.ramp_by_epoch:.0f})", flush=True)
+          f"n_epochs_kl_warmup={n_epochs_kl_warmup}", flush=True)
 
     with s("setup"):
         pyro.clear_param_store()
@@ -126,7 +116,7 @@ def main():
 
     with s("train"), contextlib.redirect_stdout(io.StringIO()):
         model.train(max_epochs=args.epochs, batch_size=args.batch_size,
-                    n_steps_kl_warmup=n_steps_kl_warmup, accelerator=accelerator,
+                    n_epochs_kl_warmup=n_epochs_kl_warmup, accelerator=accelerator,
                     enable_progress_bar=False, enable_model_summary=False)
     rec["training_record"] = {k: (v if isinstance(v, (int, float, str, bool, type(None)))
                                   else str(v))

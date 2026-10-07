@@ -139,7 +139,7 @@ def test_train_knobs_reach_the_optimizer_and_plan(adata):
     """
     m = _model(adata)
     plan = UnifiedTrainingPlan(
-        module=m.module, n_steps_kl_warmup=123, reconstruction_loss_scale=5e-3,
+        module=m.module, n_epochs_kl_warmup=123, reconstruction_loss_scale=5e-3,
         optimizer_config={"lr": 0.07, "betas": (0.8, 0.99), "eps": 1e-6,
                           "weight_decay": 2e-4},
     )
@@ -152,7 +152,7 @@ def test_train_knobs_reach_the_optimizer_and_plan(adata):
     assert args["eps"] == 1e-6
     guide = plan.optim.pt_optim_args("q_p_c_raw")
     assert guide["weight_decay"] == 0.0 and guide["lr"] == 0.07 and guide["betas"] == (0.8, 0.99)
-    assert plan.n_steps_kl_warmup == 123
+    assert plan.n_epochs_kl_warmup == 123
     assert plan.reconstruction_loss_scale == 5e-3
 
 
@@ -259,12 +259,11 @@ def test_batch_size_reaches_the_dataloader(adata):
         assert next(iter(loader))["X"].shape[0] == bs
 
 
-def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
+def test_n_epochs_kl_warmup_ramps_the_kl_weight(adata):
     """The warmup must actually anneal module.kl_weight from ~0 up to max_kl_weight.
 
-    NOTE the warmup is counted in optimizer STEPS while max_epochs is in epochs; with
-    batch_size >= n_obs that is one step per epoch (``governance/TRAINING_CONTRACT.md`` B2,
-    which is why a run records the epoch equivalent).
+    The warmup is counted in epochs (``governance/TRAINING_CONTRACT.md`` B2): at 5 batches per
+    epoch, 4 warmup epochs are 20 steps of ramp.
     """
     m = _model(adata)
     seen = []
@@ -277,7 +276,7 @@ def test_n_steps_kl_warmup_ramps_the_kl_weight(adata):
 
     UnifiedTrainingPlan.training_step = spy
     try:
-        _train(m, max_epochs=12, batch_size=64, n_steps_kl_warmup=20)
+        _train(m, max_epochs=12, batch_size=64, n_epochs_kl_warmup=4)
     finally:
         UnifiedTrainingPlan.training_step = orig
     warm = seen[:20]                      # the ramp itself; it plateaus afterwards

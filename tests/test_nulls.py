@@ -37,7 +37,7 @@ from tcri.model._model import TCRIModel, _owns_param
 from tcri.null import _permute
 from tcri.null._rebuild import rebuild
 
-TRAIN = dict(max_epochs=3, batch_size=64, n_steps_kl_warmup=4, accelerator="cpu",
+TRAIN = dict(max_epochs=3, batch_size=64, n_epochs_kl_warmup=2, accelerator="cpu",
              enable_progress_bar=False, enable_model_summary=False)
 KNOBS = dict(n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
              classifier_hidden=16, K=3, seed=0)

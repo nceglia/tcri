@@ -7,7 +7,7 @@ the inner one becomes **dead** — reachable only by constructing the inner obje
 which is exactly what a test fixture or a downstream user does.
 
 Four knobs are declared in both layers and so are pinned by value below:
-``reconstruction_loss_scale``, ``local_scale``, ``n_steps_kl_warmup`` and ``global_scale`` (α).
+``reconstruction_loss_scale``, ``local_scale``, ``n_epochs_kl_warmup`` and ``global_scale`` (α).
 
 A test that a value *arrives* at its target cannot catch this, because it does arrive. The
 defect is that the two declared defaults differ, so a caller reading one signature is misled
@@ -70,5 +70,5 @@ def test_the_known_drifted_knobs_are_pinned():
 
     assert model["local_scale"] == module["local_scale"] == 3.0
     assert model["global_scale"] == module["global_scale"] == 5.0
-    assert train["n_steps_kl_warmup"] == plan["n_steps_kl_warmup"] == 2000
+    assert train["n_epochs_kl_warmup"] == plan["n_epochs_kl_warmup"] == 150
     assert train["reconstruction_loss_scale"] == 1e-2
