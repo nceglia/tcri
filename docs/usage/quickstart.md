@@ -64,9 +64,9 @@ model.train(max_epochs=200, batch_size=512)
 ```
 
 ```{tip}
-`max_epochs` interacts with the KL warmup (`n_steps_kl_warmup`, default 2000 **optimizer
-steps**). On small datasets a step is only a few cells, so the ramp can need many epochs to
-complete — `model.train` warns if it did not. See [the training contract](../contracts/index.md).
+The KL warmup (`n_epochs_kl_warmup`, default 150) is counted in epochs, like `max_epochs` and
+the early-stopping patience; selection starts when it completes, and `model.train` warns if it
+did not complete within `max_epochs`. See [the training contract](../contracts/index.md).
 ```
 
 ## 4. Write results onto the AnnData

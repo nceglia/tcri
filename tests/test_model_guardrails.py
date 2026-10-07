@@ -113,7 +113,7 @@ def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
 
     model = _model(tiny_adata, K=5)
     plan = UnifiedTrainingPlan(
-        module=model.module, n_steps_kl_warmup=10, reconstruction_loss_scale=1e-3,
+        module=model.module, n_epochs_kl_warmup=4, reconstruction_loss_scale=1e-3,
         optimizer_config={"lr": 0.05, "betas": (0.9, 0.999), "eps": 1e-5,
                           "weight_decay": 1e-4},
     )

@@ -8,11 +8,11 @@ Two objects, one shared gate:
 ``BestObjectiveSnapshot``
     Records the argmin weights and writes them back at ``on_fit_end``.
 
-Why both read the SAME counter: a gate expressed twice, in two units, can disagree by a check
-at the boundary — one callback would then be selecting from a series the other had already
-started recording. scvi ships an ``early_stopping_warmup_epochs`` that counts EPOCHS while the
-ramp counts OPTIMIZER STEPS; using it alongside this gate would be exactly that bug. So it is
-deliberately not used.
+Why both read the SAME counter: a gate expressed twice can disagree by a check at the
+boundary — one callback would then be selecting from a series the other had already started
+recording. scvi ships an ``early_stopping_warmup_epochs`` that counts the epochs of one
+``train()`` call, while the ramp's position lives on the module and continues across calls;
+using it alongside this gate would be exactly that bug. So it is deliberately not used.
 """
 from __future__ import annotations
 
@@ -44,15 +44,16 @@ def _is_own_guide_param(module, store_name: str) -> bool:
 
 
 def ramp_is_complete(pl_module) -> bool:
-    """The single predicate. One counter, one unit (optimizer steps), read by both callbacks.
+    """The single predicate. One counter, one unit (epochs), read by both callbacks.
 
-    ``n_steps_kl_warmup <= 0`` disables annealing entirely, in which case every check is already
-    at ``max_kl_weight`` and selection may begin immediately.
+    Whole epochs: a check is an epoch, so the gate opens at the first check after the ramp's last
+    epoch. ``n_epochs_kl_warmup <= 0`` disables annealing entirely, in which case every check is
+    already at ``max_kl_weight`` and selection may begin immediately.
     """
-    n_warmup = int(getattr(pl_module, "n_steps_kl_warmup", 0) or 0)
+    n_warmup = int(getattr(pl_module, "n_epochs_kl_warmup", 0) or 0)
     if n_warmup <= 0:
         return True
-    return int(getattr(pl_module.module, "_kl_warmup_step", 0)) >= n_warmup
+    return int(getattr(pl_module.module, "_kl_warmup_epochs", 0)) >= n_warmup
 
 
 class RampGatedEarlyStopping(EarlyStopping):

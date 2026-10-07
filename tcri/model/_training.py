@@ -76,7 +76,7 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     def __init__(
         self,
         module: TCRIModule,
-        n_steps_kl_warmup: int = 2000,   # must match TCRIModel.train, which overrides it
+        n_epochs_kl_warmup: int = 150,   # must match TCRIModel.train, which overrides it
         reconstruction_loss_scale: float = 1e-2,
         num_particles: int = 1,
         optimizer_config: dict = None,
@@ -112,13 +112,16 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         super().__init__(
             module,
             loss_fn=Trace_ELBO(num_particles=int(num_particles)),
-            n_steps_kl_warmup=n_steps_kl_warmup,
+            # This plan owns the KL schedule (training_step); scvi's own never runs, because
+            # TCRIModule.model takes no kl_weight. Neither of scvi's warmup lengths is used.
+            n_steps_kl_warmup=None,
+            n_epochs_kl_warmup=None,
             optim=pyro.optim.Adam(_per_param_optim_args(base_optim_args)),
             optim_kwargs=base_optim_args,
             **kwargs,
         )
 
-        self.n_steps_kl_warmup = n_steps_kl_warmup
+        self.n_epochs_kl_warmup = n_epochs_kl_warmup
         self.reconstruction_loss_scale = reconstruction_loss_scale
         #: I3's forked evaluation seed, fixed across every check, so the monitored series is a
         #: function of the parameters rather than of the draw. Not the fit seed: evaluation only.
@@ -129,10 +132,11 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
     # counter. All real optimization happens in Pyro's SVI (see __init__).
 
     def training_step(self, batch, batch_idx):
-        # ── KL warmup ────────────────────────────────────────────
-        step = self.module._kl_warmup_step
-        if self.n_steps_kl_warmup > 0 and step < self.n_steps_kl_warmup:
-            kl_weight = max(1e-6, self.module.max_kl_weight * (step / self.n_steps_kl_warmup))
+        # ── KL warmup, in epochs (B2) ────────────────────────────
+        n_batches = self.trainer.num_training_batches
+        position = self.module.kl_warmup_position(n_batches)      # before this step
+        if self.n_epochs_kl_warmup > 0 and position < self.n_epochs_kl_warmup:
+            kl_weight = max(1e-6, self.module.max_kl_weight * position / self.n_epochs_kl_warmup)
         else:
             kl_weight = self.module.max_kl_weight
         self.module.kl_weight = kl_weight
@@ -172,7 +176,12 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
         # finished -- nothing in the record says whether the ramp ever completed.
         self.log("kl_weight", float(kl_weight), prog_bar=False, on_epoch=True)
 
-        self.module._kl_warmup_step += 1
+        # The epoch rolls over here, on its last batch, not in on_train_epoch_end: Lightning runs
+        # the epoch's validation -- and with it the gate -- before on_train_epoch_end.
+        self.module._kl_warmup_batch += 1
+        if self.module._kl_warmup_batch >= n_batches:
+            self.module._kl_warmup_epochs += 1
+            self.module._kl_warmup_batch = 0
         return loss_dict
     
     #: Sites in the hierarchical branch. Both plates are declared at FULL size with no
