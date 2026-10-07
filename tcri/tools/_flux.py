@@ -69,7 +69,7 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
     return point, drawsd
 
 
-@tl_result(key=K.PHENOTYPIC_FLUX, version=1, schema=schemas.PhenotypicFlux,
+@tl_result(key=K.PHENOTYPIC_FLUX, version=2, schema=schemas.PhenotypicFlux,
            default_null="condition")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, weighted=False, distance_metric="kl",

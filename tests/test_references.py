@@ -13,9 +13,9 @@ defaults: `groupby`, `splitby`, `clones`, `weighted`, `normalized`, `normalize_m
 `n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change the estimand, so a
 reference at defaults is a different quantity subtracted from a different quantity.
 
-And `excess` is **a difference of two summaries, never a summary of a difference**. Draws are
+And `adjusted` is **a difference of two summaries, never a summary of a difference**. Draws are
 not paired across two fits -- there is no correspondence between the parent's draw 7 and the
-null's -- so the excess carries no sd and no interval, and nothing here asks for one.
+null's -- so the adjusted value carries no sd and no interval, and nothing here asks for one.
 
 `null_model=None` reproduces the values and the `uns` key set of a run with no reference at all.
 Four shape changes fire unconditionally, and `test_rule_9_shape_changes_are_the_only_ones` pins
@@ -51,13 +51,14 @@ def _cov(adata):
 
 # ── the columns, and what they mean ──────────────────────────────────────────
 
-def test_excess_is_value_minus_null(ref):
+def test_a_metric_with_a_reference_reports_adjusted(ref):
     """Per value column, on every scored metric and on the perturbation, to 1e-12.
 
-    Also the shape rule: one ``null_*`` per native column and one ``excess*`` per native column
-    that is not a denominator. A denominator has a reference -- both are needed to recover the
-    bit values -- and no excess, because a difference of two normalisers is not a quantity
-    anyone reports.
+    Also the shape rule: one ``null_*`` per native column and one ``adjusted*`` per native
+    column that is not a denominator. A denominator has a reference -- both are needed to
+    recover the bit values -- and no adjusted column, because a difference of two normalizers
+    is not a quantity anyone reports. And no frame carries the retired word: ``result``,
+    ``table`` and ``stats`` have no ``excess*`` column.
     """
     model, adata = ref
     a, b = _cov(adata)[:2]
@@ -75,20 +76,26 @@ def test_excess_is_value_minus_null(ref):
     }
     for name, call in calls.items():
         fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
-        result = call()["result"]
+        payload = call()
+        for slot in ("result", "table", "stats"):
+            frame = payload.get(slot)
+            if frame is not None:
+                assert not [c for c in frame.columns if str(c).startswith("excess")], (
+                    f"{name}: {slot} carries {list(frame.columns)}")
+        result = payload["result"]
         if not len(result):
             continue
         pairs = _reference.column_pairs(fn.tcri_values, fn.tcri_denominators)
-        for native, null, excess in pairs:
+        for native, null, adjusted in pairs:
             assert null in result.columns, f"{name}: no {null}"
-            if excess is None:
-                assert f"excess_{native}" not in result.columns
+            if adjusted is None:
+                assert f"adjusted_{native}" not in result.columns
                 continue
-            got = result[excess].to_numpy(dtype=float)
+            got = result[adjusted].to_numpy(dtype=float)
             want = (result[native].to_numpy(dtype=float)
                     - result[null].to_numpy(dtype=float))
             np.testing.assert_allclose(got, want, atol=1e-12, equal_nan=True,
-                                       err_msg=f"{name}: {excess} != {native} - {null}")
+                                       err_msg=f"{name}: {adjusted} != {native} - {null}")
 
 
 def test_null_value_is_the_metric_of_the_null(ref):
@@ -131,13 +138,13 @@ def test_the_reference_forwards_every_argument(ref):
                           float(odd["null_denom"].iloc[0]), atol=1e-9)
 
 
-def test_excess_of_a_fit_against_itself_is_zero(ref):
-    """Point a metric's reference at its own fit and the excess is exactly zero.
+def test_the_adjusted_value_of_a_fit_against_itself_is_zero(ref):
+    """Point a metric's reference at its own fit and the adjusted value is exactly zero.
 
-    The cleanest statement of what `excess` is. Asserted at ``n_samples=0`` and again at
+    The cleanest statement of what `adjusted` is. Asserted at ``n_samples=0`` and again at
     ``n_samples=30`` with a fixed seed, because the second is where an unforwarded
-    ``random_state`` shows up: two independent samples of the same fit differ, and the excess
-    would be sampling noise rather than zero.
+    ``random_state`` shows up: two independent samples of the same fit differ, and the
+    adjusted value would be sampling noise rather than zero.
     """
     _, adata = ref
     a = _cov(adata)[0]
@@ -145,12 +152,12 @@ def test_excess_of_a_fit_against_itself_is_zero(ref):
         res = tcri.tl.mutual_information(
             adata, covariate=a, groupby="patient", n_samples=n_samples, random_state=3,
             fit="null.phenotype", null_model="null.phenotype", inplace=False)["result"]
-        np.testing.assert_allclose(res["excess"].to_numpy(dtype=float), 0.0, atol=1e-12,
+        np.testing.assert_allclose(res["adjusted"].to_numpy(dtype=float), 0.0, atol=1e-12,
                                    err_msg=f"n_samples={n_samples}")
 
 
-def test_delta_excess_is_closed_within_its_own_result(ref):
-    """``excess - (excess_to - excess_from)`` equals ``value - (value_to - value_from)``.
+def test_a_delta_adjusted_value_is_closed_within_its_own_result(ref):
+    """``adjusted - (adjusted_to - adjusted_from)`` equals ``value - (value_to - value_from)``.
 
     The reference introduces no gap that was not already there. It is deliberately NOT asserted
     to be zero: ``value == value_to - value_from`` already fails when a draw has a non-finite
@@ -161,7 +168,7 @@ def test_delta_excess_is_closed_within_its_own_result(ref):
     a, b = _cov(adata)[:2]
     r = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
                                          inplace=False)["result"]
-    lhs = (r["excess"] - (r["excess_to"] - r["excess_from"])).to_numpy(dtype=float)
+    lhs = (r["adjusted"] - (r["adjusted_to"] - r["adjusted_from"])).to_numpy(dtype=float)
     rhs = (r["value"] - (r["value_to"] - r["value_from"])).to_numpy(dtype=float)
     np.testing.assert_allclose(lhs, rhs, atol=1e-12, equal_nan=True)
 
@@ -213,7 +220,7 @@ def test_null_model_none_is_the_old_result(ref):
 
     for slot in ("table", "result"):
         cols = set(bare[slot].columns)
-        assert not {c for c in cols if c.startswith(("null_", "excess"))}, cols
+        assert not {c for c in cols if c.startswith(("null_", "adjusted"))}, cols
     assert bare["stats"] is None or set(bare["stats"]["quantity"]) == {"value"}
 
     withref = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
@@ -396,28 +403,66 @@ def test_the_two_nulls_stay_distinct(ref):
 
 # ── the frames, read back ────────────────────────────────────────────────────
 
-def test_stats_carry_both_quantities(ref):
-    """One row per (contrast, quantity); each ``stat`` is a Mann-Whitney on that column; and
-    ``n_a``/``n_b`` are identical between quantities, which holds only because the collapse runs
-    once over both."""
+def test_stats_carry_the_adjusted_quantity(ref):
+    """One row per contrast, on the adjusted value: ``quantity`` says so and each ``stat`` is a
+    Mann-Whitney on ``result["adjusted"]`` per arm. Without a reference the one row is on the
+    value, which is how a reader of a stored frame tells the two cases apart."""
     from scipy.stats import mannwhitneyu
 
     _, adata = ref
     a = _cov(adata)[0]
-    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
-                                     splitby="disease_status", inplace=False)
+    kw = dict(covariate=a, groupby="patient", splitby="disease_status", inplace=False)
+    res = tcri.tl.mutual_information(adata, **kw)
     stats, result = res["stats"], res["result"]
-    assert set(stats["quantity"]) == {"value", "excess"}
-    assert len(stats) == 2
-    assert stats["n_a"].nunique() == 1 and stats["n_b"].nunique() == 1
+    arms = result["disease_status"].astype(str).nunique()
+    assert set(stats["quantity"]) == {"adjusted"}
+    assert len(stats) == arms * (arms - 1) // 2
 
     for _, row in stats.iterrows():
-        q = row["quantity"]
-        va = result.loc[result["disease_status"] == row["level_a"], q].to_numpy(dtype=float)
-        vb = result.loc[result["disease_status"] == row["level_b"], q].to_numpy(dtype=float)
+        va = result.loc[result["disease_status"] == row["level_a"],
+                        "adjusted"].to_numpy(dtype=float)
+        vb = result.loc[result["disease_status"] == row["level_b"],
+                        "adjusted"].to_numpy(dtype=float)
         U, p = mannwhitneyu(va, vb, alternative="two-sided")
         assert float(row["stat"]) == pytest.approx(float(U))
         assert float(row["p"]) == pytest.approx(float(p))
+
+    bare = tcri.tl.mutual_information(adata, **kw, null_model=None)["stats"]
+    assert set(bare["quantity"]) == {"value"}
+    assert len(bare) == len(stats)
+
+
+def test_a_delta_contrasts_only_the_adjusted_value(ref):
+    """A delta's ``stats`` has exactly one row per contrast, on ``adjusted``, and no row about
+    an endpoint: ``adjusted_from`` and ``adjusted_to`` are inputs, like ``value_from`` and
+    ``value_to``, and inputs carry no contrast."""
+    _, adata = ref
+    a, b = _cov(adata)[:2]
+    res = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                                           splitby="disease_status", inplace=False)
+    stats, result = res["stats"], res["result"]
+    assert stats is not None and len(stats)
+    arms = result["disease_status"].astype(str).nunique()
+    assert len(stats) == arms * (arms - 1) // 2
+    assert set(stats["quantity"]) == {"adjusted"}
+
+
+def test_restat_is_idempotent(ref):
+    """Two `restat` calls on one payload leave one frame with the same rows and the same
+    ``quantity``, for a referenced result and for ``null_model=None``: the frame is rebuilt from
+    ``result`` each time, never appended to."""
+    from tcri._state import _reference as R
+
+    _, adata = ref
+    a = _cov(adata)[0]
+    kw = dict(covariate=a, groupby="patient", splitby="disease_status", inplace=False)
+    for null_model, quantity in (("auto", "adjusted"), (None, "value")):
+        payload = tcri.tl.mutual_information(adata, **kw, null_model=null_model)
+        once = payload["stats"].copy()
+        assert set(once["quantity"]) == {quantity}
+        R.restat(payload, groupby="patient", splitby="disease_status")
+        R.restat(payload, groupby="patient", splitby="disease_status")
+        pd.testing.assert_frame_equal(payload["stats"], once)
 
 
 def test_an_empty_result_is_not_a_missing_reference(ref):
@@ -429,13 +474,17 @@ def test_an_empty_result_is_not_a_missing_reference(ref):
     """
     from tcri._compute._tables import build_result
 
-    empty = build_result(pd.DataFrame(), value="value", extra_values=("null_value", "excess"))
-    assert list(empty.columns) == ["value", "null_value", "excess"]
+    empty = build_result(pd.DataFrame(), value="value", extra_values=("null_value", "adjusted"))
+    assert list(empty.columns) == ["value", "null_value", "adjusted"]
     assert _reference.label_for(empty, "value", "flux") == "flux"
+    assert _reference.label_for(empty, "adjusted", "flux") == "flux"
     assert _reference.label_for(pd.DataFrame({"value": [1.0]}), "value", "flux") == \
         "flux (no reference)"
     assert _reference.label_for(pd.DataFrame({"value": [1.0], "null_value": [0.5]}),
                                 "value", "flux") == "flux"
+    assert _reference.label_for(pd.DataFrame({"value": [1.0], "null_value": [0.5],
+                                              "adjusted": [0.5]}), "adjusted", "flux") == \
+        "adjusted flux"
 
 
 def test_old_results_render_without_a_reference(ref):
@@ -449,7 +498,7 @@ def test_old_results_render_without_a_reference(ref):
     ax = tcri.pl.mutual_information(adata)
     assert "no reference" in ax.get_ylabel()
     with pytest.raises(ValueError, match="null_model=None"):
-        tcri.pl.mutual_information(adata, quantity="excess")
+        tcri.pl.mutual_information(adata, quantity="adjusted")
 
 
 def test_h5ad_round_trip(ref, tmp_path):
@@ -466,8 +515,8 @@ def test_h5ad_round_trip(ref, tmp_path):
     assert set(K.fits(back)) == set(K.fits(adata))
     assert K.fit_key(K.MUTUAL_INFORMATION, "null.phenotype") in back.uns
     np.testing.assert_allclose(
-        tcri.get.result(back, "mutual_information")["result"]["excess"].to_numpy(dtype=float),
-        tcri.get.result(adata, "mutual_information")["result"]["excess"].to_numpy(dtype=float),
+        tcri.get.result(back, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
+        tcri.get.result(adata, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
         atol=1e-12)
     assert tcri.get.params(back, "mutual_information")["null_model"] == "null.phenotype"
 
@@ -475,8 +524,8 @@ def test_h5ad_round_trip(ref, tmp_path):
 # ── the figures ──────────────────────────────────────────────────────────────
 
 def test_pl_draws_the_reference_behind_the_value(ref):
-    """The grey mark sits at the value's own x positions, the tick labels do not move, and
-    ``quantity="excess"`` draws a zero rule and no interval."""
+    """On the value panel the grey mark sits at the value's own x positions and the tick labels
+    do not move; the adjusted panel draws a zero rule and no reference."""
     import matplotlib
     matplotlib.use("Agg")
     from tcri.plotting._base import REFERENCE_LABEL
@@ -485,7 +534,7 @@ def test_pl_draws_the_reference_behind_the_value(ref):
     a = _cov(adata)[0]
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
 
-    ax = tcri.pl.mutual_information(adata)
+    ax = tcri.pl.mutual_information(adata, quantity="value")
     ticks = [t.get_text() for t in ax.get_xticklabels()]
     value_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                               if c.get_label() != REFERENCE_LABEL])
@@ -495,11 +544,11 @@ def test_pl_draws_the_reference_behind_the_value(ref):
     np.testing.assert_allclose(np.sort(grey_x), np.sort(value_x))
     assert [t.get_text() for t in ax.get_xticklabels()] == ticks
 
-    excess_ax = tcri.pl.mutual_information(adata, quantity="excess")
-    assert any(round(float(ln.get_ydata()[0]), 12) == 0.0 for ln in excess_ax.lines), \
-        "no zero rule on the excess panel"
-    assert not [c for c in excess_ax.collections if c.get_label() == REFERENCE_LABEL], \
-        "the excess panel drew a reference; zero IS the reference there"
+    adjusted_ax = tcri.pl.mutual_information(adata, quantity="adjusted")
+    assert any(round(float(ln.get_ydata()[0]), 12) == 0.0 for ln in adjusted_ax.lines), \
+        "no zero rule on the adjusted panel"
+    assert not [c for c in adjusted_ax.collections if c.get_label() == REFERENCE_LABEL], \
+        "the adjusted panel drew a reference; zero IS the reference there"
 
     # ...and absent entirely when there was no reference
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
@@ -507,16 +556,166 @@ def test_pl_draws_the_reference_behind_the_value(ref):
     assert not [c for c in plain.collections if c.get_label() == REFERENCE_LABEL]
 
 
-def test_the_shift_heatmap_refuses_an_excess(ref):
+def test_pl_draws_the_adjusted_quantity_by_default(ref):
+    """The default panel is the adjusted value against a zero rule, alone. ``quantity="value"``
+    is the value with one grey null pass behind it and no zero rule; and with no reference the
+    default is the value, labeled as having none.
+
+    The tick labels are compared as a SET: each panel orders x by its own quantity's median,
+    so the two panels may order the patients differently.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    from tcri.plotting._base import REFERENCE_LABEL, REFERENCE_LEGEND
+
+    _, adata = ref
+    a = _cov(adata)[0]
+    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient")["result"]
+
+    def grey(ax):
+        return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+
+    def colored_y(ax):
+        return np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
+                                       if c.get_label() != REFERENCE_LABEL]))
+
+    def zero_rule(ax):
+        return any(len(ln.get_ydata()) == 2 and np.allclose(ln.get_ydata(), 0.0)
+                   for ln in ax.lines)
+
+    def ticks(ax):
+        return {t.get_text() for t in ax.get_xticklabels()}
+
+    def entries(ax):
+        legend = ax.get_legend()
+        return [t.get_text() for t in legend.get_texts()] if legend is not None else []
+
+    default = tcri.pl.mutual_information(adata)
+    np.testing.assert_allclose(colored_y(default),
+                               np.sort(res["adjusted"].to_numpy(dtype=float)))
+    assert default.get_ylabel().startswith("adjusted"), default.get_ylabel()
+    assert zero_rule(default), "no zero rule on the adjusted panel"
+    assert not grey(default), "the adjusted panel drew a reference; zero IS the reference there"
+    assert not entries(default)
+
+    value = tcri.pl.mutual_information(adata, quantity="value")
+    np.testing.assert_allclose(colored_y(value), np.sort(res["value"].to_numpy(dtype=float)))
+    assert len(grey(value)) == 1, "the value panel draws one grey pass"
+    assert not zero_rule(value)
+    assert entries(value) == [REFERENCE_LEGEND]
+    assert ticks(value) == ticks(default)
+
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
+    plain = tcri.pl.mutual_information(adata)
+    np.testing.assert_allclose(colored_y(plain), colored_y(value))
+    assert not grey(plain) and not zero_rule(plain)
+    assert "no reference" in plain.get_ylabel()
+
+
+def test_the_value_panel_of_a_referenced_result_carries_no_star(ref):
+    """The star is about the quantity on the axis. ``stats`` of a referenced result contrasts
+    the adjusted value, so the default panel carries that row's label and the value panel
+    carries no text at all, rather than a star about a different column."""
+    import matplotlib
+    matplotlib.use("Agg")
+
+    _, adata = ref
+    a = _cov(adata)[0]
+    stats = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
+                                       splitby="disease_status")["stats"]
+    rows = stats.loc[stats["quantity"] == "adjusted"]
+    assert len(rows) == 1
+    label = str(rows["stars"].iloc[0] or "ns")
+
+    default = tcri.pl.mutual_information(adata)
+    assert [t.get_text() for t in default.texts] == [label]
+    value = tcri.pl.mutual_information(adata, quantity="value")
+    assert not value.texts, [t.get_text() for t in value.texts]
+
+
+def test_the_quantity_argument_is_checked_before_the_data(ref):
+    """A misspelled ``quantity`` is an argument error, so it raises whether or not a result
+    exists and whether or not ``return_df`` was passed. And ``return_df=True`` hands back the
+    frame before any quantity is read, so ``quantity="adjusted"`` on an unreferenced result
+    returns it rather than raising about a column nothing was going to draw."""
+    model, adata = ref
+    a, b = _cov(adata)[:2]
+    for key in (K.MUTUAL_INFORMATION, K.DELTA_PHENOTYPIC_ENTROPY, K.GENE_IMPORTANCE):
+        adata.uns.pop(key, None)
+    twins = {
+        "mutual_information": lambda **kw: tcri.pl.mutual_information(adata, **kw),
+        "delta_phenotypic_entropy": lambda **kw: tcri.pl.delta_phenotypic_entropy(adata, **kw),
+        "gene_importance": lambda **kw: tcri.pl.gene_importance(adata, **kw),
+    }
+    for name, twin in twins.items():
+        with pytest.raises(KeyError, match="not found"):
+            twin(return_df=True)
+        for kw in ({}, {"return_df": True}):
+            with pytest.raises(ValueError, match="quantity must be"):
+                twin(quantity="exces", **kw)
+
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
+    tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                                     null_model=None)
+    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]),
+                                 null_model=None)
+    for name, twin in twins.items():
+        frame = twin(quantity="adjusted", return_df=True)
+        assert isinstance(frame, pd.DataFrame) and "adjusted" not in frame.columns, name
+        with pytest.raises(ValueError, match="quantity must be"):
+            twin(quantity="exces", return_df=True)
+        with pytest.raises(ValueError, match="null_model=None"):
+            twin(quantity="adjusted")
+
+
+def test_an_empty_referenced_result_draws_the_no_data_panel(ref):
+    """An empty ``result`` reaches the "no data" panel at every accepted quantity, explicit
+    ``"adjusted"`` included, with the value's label and no raise.
+
+    `attach` returns early on an empty frame, so an empty result carries no adjusted column
+    however it was computed. Resolving the quantity before the empty-frame branch would turn
+    that into "computed with null_model=None", which misattributes the cause.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    from tcri._compute._tables import build_result
+    from tcri._state.storage import _encode
+
+    model, adata = ref
+    a = _cov(adata)[0]
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
+    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]))
+    empty = build_result(pd.DataFrame(), value="value",
+                         extra_values=("null_value", "adjusted"))
+    for key, name in ((K.MUTUAL_INFORMATION, "mutual_information"),
+                      (K.GENE_IMPORTANCE, "gene_importance")):
+        blob = adata.uns[key]
+        payload = tcri.get.result(adata, name)
+        payload["result"] = empty
+        payload["table"] = payload["table"].iloc[:0]
+        adata.uns[key] = {**_encode(payload), "params": blob["params"],
+                          "version": blob["version"]}
+
+    for quantity in ("auto", "value", "adjusted"):
+        ax = tcri.pl.mutual_information(adata, quantity=quantity)
+        assert [t.get_text() for t in ax.texts] == ["no data for mutual_information"], quantity
+        assert ax.get_ylabel() == "mutual information (bits)", quantity
+        ax = tcri.pl.gene_importance(adata, quantity=quantity)
+        assert [t.get_text() for t in ax.texts] == ["no data for gene_importance"], quantity
+        assert not ax.get_ylabel().startswith("adjusted"), quantity
+        assert "no reference" not in ax.get_ylabel(), quantity
+
+
+def test_the_shift_heatmap_refuses_the_adjusted_value(ref):
     """``kind="shift"`` decomposes the importance across phenotypes and the reference has no
-    such decomposition stored, so an "excess shift" would have to be invented."""
+    such decomposition stored, so an adjusted shift would have to be invented."""
     import matplotlib
     matplotlib.use("Agg")
 
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:5]))
     with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="excess")
+        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
     assert tcri.pl.gene_importance(adata, kind="shift") is not None
 
 
@@ -548,7 +747,7 @@ def test_both_gene_panels_rank_alike(ref):
 def test_oe_shape_smoke():
     """A cohort fit, its references, and two metrics read off it, end to end.
 
-    Not an accuracy claim: it asserts that the excess is finite everywhere and that mutual
+    Not an accuracy claim: it asserts that the adjusted value is finite everywhere and that mutual
     information clears its own floor, which is the shape a reported figure rests on. It is the
     only test here that fits a model rather than reusing a fixture, so it is the one that would
     catch a reference that silently returned NaN on a frame with groups, a split and a covariate
@@ -578,15 +777,15 @@ def test_oe_shape_smoke():
     levels = list(adata.uns[K.COVARIATE_CATEGORIES])
     mi = tcri.tl.mutual_information(adata, covariate=levels[-1], groupby="patient",
                                     inplace=False)["result"]
-    assert np.isfinite(mi["excess"]).all(), mi
-    assert float(mi["excess"].mean()) > 0.0, (
+    assert np.isfinite(mi["adjusted"]).all(), mi
+    assert float(mi["adjusted"].mean()) > 0.0, (
         f"the fitted model carries no more clone-phenotype information than its phenotype "
-        f"null: {mi[['value', 'null_value', 'excess']].to_string()}")
+        f"null: {mi[['value', 'null_value', 'adjusted']].to_string()}")
 
     flux = tcri.tl.phenotypic_flux(adata, cov_from=levels[0], cov_to=levels[-1],
                                    groupby="patient", inplace=False)["result"]
     if len(flux):
-        assert np.isfinite(flux["excess"]).any(), flux
+        assert np.isfinite(flux["adjusted"]).any(), flux
 
 
 # ── the reference on the reading and the plotting paths ──────────────────────
@@ -594,18 +793,18 @@ def test_oe_shape_smoke():
 def test_a_label_column_named_like_a_reference_column_is_still_a_label(ref):
     """`groupby` is an arbitrary obs column name, so excluding join keys by PREFIX drops one.
 
-    A groupby column called `excess_patient` would be dropped from the merge keys, and the
+    A groupby column called `adjusted_patient` would be dropped from the merge keys, and the
     reference join would then fan the result out to a multiple of its rows. The exclusion is by
     exact name, which is what this asserts.
     """
     _, adata = ref
-    adata.obs["excess_patient"] = adata.obs["patient"]
+    adata.obs["adjusted_patient"] = adata.obs["patient"]
     adata.obs["null_arm"] = adata.obs["disease_status"]
     a = _cov(adata)[0]
-    bare = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="excess_patient",
+    bare = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
                                       splitby="null_arm", null_model=None,
                                       inplace=False)["result"]
-    withref = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="excess_patient",
+    withref = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
                                          splitby="null_arm", inplace=False)["result"]
     assert len(withref) == len(bare), (
         f"the reference merge fanned out: {len(withref)} rows against {len(bare)}")
@@ -630,12 +829,15 @@ def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
 
 
 def test_a_non_finite_reference_does_not_delete_the_stats(ref):
-    """The shared collapse mask must not take the value rows down with the reference.
+    """A reference that is non-finite everywhere is no reference, and the stored ``stats`` says
+    so rather than disappearing.
 
-    `collapse_to_replicates` drops a row when ANY listed quantity is non-finite, which is what
-    keeps the two quantities on one replicate set. A reference that is non-finite EVERYWHERE
-    empties that mask, and rebuilding `stats` from an empty mask would return None — deleting a
-    frame the metric legitimately has.
+    `restat` receives a payload whose ``stats`` may already be the adjusted frame -- from the
+    decorator's first pass, or from a direct call like this one. With nothing finite in
+    ``adjusted`` it rebuilds on the value instead of leaving that frame alone, so the frame
+    names the column its p-value is about and a reader never meets an adjusted contrast on a
+    result with no usable adjustment. And it never replaces the frame with nothing: the metric
+    legitimately has one.
     """
     from tcri._state import _reference as R
 
@@ -644,40 +846,65 @@ def test_a_non_finite_reference_does_not_delete_the_stats(ref):
     payload = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
                                          splitby="disease_status", inplace=False)
     before = payload["stats"].copy()
-    payload["result"]["excess"] = np.nan
-    R.restat(payload, groupby="patient", splitby="disease_status", values=("value", "denom"),
-             denominators=("denom",))
+    assert set(before["quantity"]) == {"adjusted"}
+    payload["result"]["adjusted"] = np.nan
+    R.restat(payload, groupby="patient", splitby="disease_status")
     assert payload["stats"] is not None and len(payload["stats"])
-    assert set(payload["stats"]["quantity"]) <= {"value", "excess"}
-    assert len(payload["stats"]) >= len(before.query("quantity == 'value'"))
+    assert set(payload["stats"]["quantity"]) == {"value"}
+    assert len(payload["stats"]) == len(before)
 
 
 def test_an_all_nan_reference_is_no_reference(ref):
     """A reference column with nothing finite in it is not a reference.
 
-    Two ways that can go wrong. On the replicate path the shared collapse empties the frame and
-    the panel renders with no marks at all; on the item path seaborn is handed an all-NaN y and
-    raises. What the panel should show is the value, drawn normally, with "no reference" on the
-    label.
+    Both stored columns are blanked, ``null_value`` and ``adjusted``, so the default panel has
+    no usable adjustment and resolves to the value. Two ways that can go wrong from there. On
+    the replicate path the shared collapse empties the frame and the panel renders with no
+    marks at all; on the box-and-strip path seaborn is handed an all-NaN y and raises. What the
+    panel should show is the value, drawn normally, with "no reference" on the label and
+    nothing grey named in the legend -- on `render_metric` and on `pl.gene_importance`, which
+    is a second implementation of the same rule.
     """
     import matplotlib
     matplotlib.use("Agg")
-
-    _, adata = ref
-    a = _cov(adata)[0]
-    # the REPLICATE branch, which is the one that collapses over both columns: an item axis
-    # (clonotype) that has to be averaged to one value per patient first
-    tcri.tl.phenotypic_entropy(adata, covariate=a, groupby="patient")
-    blob = adata.uns[K.PHENOTYPIC_ENTROPY]
-    payload = tcri.get.result(adata, "phenotypic_entropy")
-    payload["result"]["null_value"] = np.nan
     from tcri._state.storage import _encode
-    adata.uns[K.PHENOTYPIC_ENTROPY] = {**_encode(payload), "params": blob["params"],
-                                       "version": blob["version"]}
-    from tcri.plotting._base import REFERENCE_LABEL
+    from tcri.plotting._base import REFERENCE_LABEL, REFERENCE_LEGEND
+
+    model, adata = ref
+    a = _cov(adata)[0]
+
+    def blank_the_reference(key, name):
+        blob = adata.uns[key]
+        payload = tcri.get.result(adata, name)
+        payload["result"]["null_value"] = np.nan
+        payload["result"]["adjusted"] = np.nan
+        adata.uns[key] = {**_encode(payload), "params": blob["params"],
+                          "version": blob["version"]}
+
+    def grey(ax):
+        return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+
+    def entries(ax):
+        legend = ax.get_legend()
+        return [t.get_text() for t in legend.get_texts()] if legend is not None else []
+
+    # the REPLICATE branch, which collapses the quantity with its reference under one mask: an
+    # item axis (clonotype) that has to be averaged to one value per patient first
+    tcri.tl.phenotypic_entropy(adata, covariate=a, groupby="patient")
+    blank_the_reference(K.PHENOTYPIC_ENTROPY, "phenotypic_entropy")
     ax = tcri.pl.phenotypic_entropy(adata)
     assert ax.collections, "the value marks were dropped along with the reference"
-    assert not [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+    assert not grey(ax)
+    assert "no reference" in ax.get_ylabel()
+
+    # the gene twin's box-and-strip path, where the reference is a second seaborn pass
+    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:4]),
+                                 groupby="patient")
+    blank_the_reference(K.GENE_IMPORTANCE, "gene_importance")
+    ax = tcri.pl.gene_importance(adata, n_top=4)
+    assert ax.collections, "the value marks were dropped along with the reference"
+    assert not grey(ax)
+    assert REFERENCE_LEGEND not in entries(ax)
     assert "no reference" in ax.get_ylabel()
 
 
@@ -696,7 +923,7 @@ def test_the_reference_dodges_with_the_value(ref):
     a = _cov(adata)[0]
     tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="patient",
                               splitby="disease_status")
-    ax = tcri.pl.clonotypic_entropy(adata)
+    ax = tcri.pl.clonotypic_entropy(adata, quantity="value")
     value_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                               if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
     grey_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
@@ -744,13 +971,14 @@ def test_the_perturbation_reference_dodges_too(ref):
 
 
 def test_the_draw_path_carries_the_reference_and_refuses_a_constant_violin(ref):
-    """`excess` is a per-group constant on `table`, so a violin of it is a spike.
+    """The adjusted value is a per-group constant on `table`, so a violin of it is a spike.
 
-    The draw branch therefore falls back to the group-level mark for a non-value quantity, and
-    for the value it draws the reference as the one number it is rather than ignoring it.
+    The default panel therefore falls back to the group-level mark, and the value panel draws
+    the violin with the reference behind it as the one number it is rather than ignoring it.
     """
     import matplotlib
     matplotlib.use("Agg")
+    from matplotlib.collections import PolyCollection
     from tcri.plotting._base import REFERENCE_LABEL
 
     _, adata = ref
@@ -758,18 +986,21 @@ def test_the_draw_path_carries_the_reference_and_refuses_a_constant_violin(ref):
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=6,
                                random_state=1)
     ax = tcri.pl.mutual_information(adata)
-    assert [c for c in ax.collections if c.get_label() == REFERENCE_LABEL], (
+    assert not [c for c in ax.collections if isinstance(c, PolyCollection)], (
+        "the adjusted value was drawn as a violin of a constant")
+    assert len(ax.collections), "the adjusted panel drew nothing"
+    assert not [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+
+    value_ax = tcri.pl.mutual_information(adata, quantity="value")
+    assert [c for c in value_ax.collections if isinstance(c, PolyCollection)], (
+        "the value panel drew no violins over the draws")
+    assert [c for c in value_ax.collections if c.get_label() == REFERENCE_LABEL], (
         "the draw path drew violins and no reference at all")
 
-    excess_ax = tcri.pl.mutual_information(adata, quantity="excess")
-    from matplotlib.collections import PolyCollection
-    assert not [c for c in excess_ax.collections if isinstance(c, PolyCollection)], (
-        "an excess was drawn as a violin of a constant")
-    assert len(excess_ax.collections), "the excess panel drew nothing"
 
-
-def test_the_endpoints_view_refuses_an_excess(ref):
-    """It draws the two levels a delta is taken between; a single excess axis would pick one."""
+def test_the_endpoints_view_refuses_the_adjusted_value(ref):
+    """It draws the two levels a delta is taken between; a single adjusted axis would pick
+    one."""
     import matplotlib
     matplotlib.use("Agg")
 
@@ -777,7 +1008,7 @@ def test_the_endpoints_view_refuses_an_excess(ref):
     a, b = _cov(adata)[:2]
     tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
     with pytest.raises(ValueError, match="kind='delta'"):
-        tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints", quantity="excess")
+        tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints", quantity="adjusted")
     assert tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints") is not None
 
 
@@ -826,16 +1057,18 @@ def test_the_grey_marks_are_named_in_the_legend(ref):
         legend = ax.get_legend()
         return [t.get_text() for t in legend.get_texts()] if legend is not None else []
 
-    # no hue: the reference is the only thing to name
+    # no hue: the reference is the only thing to name, and only the value panel draws it
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
-    assert entries(tcri.pl.mutual_information(adata)) == [REFERENCE_LEGEND]
+    assert entries(tcri.pl.mutual_information(adata)) == []
+    assert entries(tcri.pl.mutual_information(adata, quantity="value")) == [REFERENCE_LEGEND]
 
     # with a split: the arms keep their entries and the reference joins them, once
     tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="patient",
                                splitby="disease_status")
-    got = entries(tcri.pl.clonotypic_entropy(adata))
+    got = entries(tcri.pl.clonotypic_entropy(adata, quantity="value"))
     assert got[-1] == REFERENCE_LEGEND and len(got) > 1, got
     assert got.count(REFERENCE_LEGEND) == 1
+    assert REFERENCE_LEGEND not in entries(tcri.pl.clonotypic_entropy(adata))
 
     # the endpoints view keeps its size legend AND its title
     tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
@@ -844,18 +1077,17 @@ def test_the_grey_marks_are_named_in_the_legend(ref):
     assert entries(ax)[-1] == REFERENCE_LEGEND
 
     # ...and nothing is named when nothing grey was drawn
-    assert not entries(tcri.pl.mutual_information(adata, quantity="excess"))
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
     assert REFERENCE_LEGEND not in entries(tcri.pl.mutual_information(adata))
 
 
 def test_the_gene_ranking_is_corrected_by_default(ref):
-    """`pl.gene_importance` defaults to the EXCESS, alone among the twins.
+    """`pl.gene_importance` draws the ADJUSTED importance at its default.
 
     The bare ranking is not merely incomplete, it is dominated by something the question is not
     about: silencing a gene is an intervention whose size scales with the gene's counts, so the
-    bare ranking tracks expression and its null tracks it just as closely. The excess is what
-    removes that shared component.
+    bare ranking tracks expression and its null tracks it just as closely. The adjusted
+    importance is what removes that shared component.
 
     `"auto"` still means the bare value when there is no reference, and it means the bare value
     for `kind="shift"` whatever else is present -- otherwise the default call would raise
@@ -869,9 +1101,9 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient")
 
     auto = tcri.pl.gene_importance(adata, n_top=5)
-    assert auto.get_ylabel().endswith("- null"), auto.get_ylabel()
+    assert auto.get_ylabel().startswith("adjusted"), auto.get_ylabel()
     bare = tcri.pl.gene_importance(adata, n_top=5, quantity="value")
-    assert not bare.get_ylabel().endswith("- null")
+    assert not bare.get_ylabel().startswith("adjusted")
 
     # the two rankings are allowed to differ, and that difference is the point
     auto_genes = [t.get_text() for t in auto.get_xticklabels()]
@@ -881,10 +1113,10 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     # the heatmap still works at the default rather than raising against it
     assert tcri.pl.gene_importance(adata, kind="shift", n_top=5) is not None
     with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="excess")
+        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
 
     # ...and with no reference, "auto" is the bare value
     tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient",
                                  null_model=None)
     plain = tcri.pl.gene_importance(adata, n_top=5)
-    assert not plain.get_ylabel().endswith("- null")
+    assert not plain.get_ylabel().startswith("adjusted")

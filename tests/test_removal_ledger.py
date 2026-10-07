@@ -5,11 +5,20 @@ answer "is it *still* gone?" — the question that matters once the deleting bra
 merged. So the ledger is pinned here: a deleted symbol reappearing on the public surface, via a
 revert, a bad merge or a helpful re-export, fails this test instead of shipping.
 
-This asserts **absence from the public namespace**, not absence from the source tree: gone from
-the namespace, from ``__all__`` and from the imports. Two entries are deliberately narrower and
-are handled separately below: `compare_groups`, which was removed from the public surface but
-*kept* as an internal helper, and the delta pair, which was removed and then reinstated.
+Most entries assert **absence from the public namespace**: gone from the namespace, from
+``__all__`` and from the imports. Two entries are deliberately narrower and are handled separately
+below: `compare_groups`, which was removed from the public surface but *kept* as an internal
+helper, and the delta pair, which was removed and then reinstated.
+
+The ledger also pins removed **stored-result columns** and the word they were named after. A
+column has no namespace to be absent from, so it is checked on the payloads every tool stores;
+and a retired word survives longest in prose, so that one is a source-tree check over the
+package, the contracts and the docs.
 """
+import re
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
 import tcri
@@ -65,9 +74,9 @@ DELETED_MODULES = ["tcri._console", "tcri._keys", "tcri.tools._common", "tcri.to
 def test_removed_symbols_stay_removed(namespace, symbol):
     mod = getattr(tcri, namespace)
     assert not hasattr(mod, symbol), (
-        f"tcri.{namespace}.{symbol} is back. It is ticked as deleted in the Removal Ledger "
-        f"(dev/REFACTOR_AGENDA.md). If the reinstatement is deliberate, remove it from "
-        f"REMOVED here and say in the ledger what changed — do not delete this assertion."
+        f"tcri.{namespace}.{symbol} is back. It is listed as removed in REMOVED above (the "
+        f"removal rule in governance/RULES.md). If the reinstatement is deliberate, remove it "
+        f"from REMOVED here — do not delete this assertion."
     )
 
 
@@ -106,6 +115,62 @@ def test_top_level_surface_is_bounded_by_all():
     ``import x`` at module scope from silently becoming part of the surface."""
     undeclared = [n for n in dir(tcri) if not n.startswith("_") and n not in tcri.__all__]
     assert not undeclared, f"undeclared public names on tcri: {undeclared}"
+
+
+#: Columns removed from every stored ``tl`` payload. The adjusted value replaced them: one
+#: reported quantity per metric, named for what it is.
+REMOVED_COLUMNS = ["excess", "excess_from", "excess_to"]
+
+#: The word the removed columns were named after; retired from the package, the contracts and
+#: the docs with them. Release notes are exempt, since the note announcing the rename names it.
+RETIRED_WORDS = ["excess"]
+
+_SCANNED = ("tcri", "governance", "docs", "README.md")
+_TEXT_SUFFIXES = {".py", ".pyi", ".md", ".rst", ".txt", ".toml", ".yml"}
+_SKIPPED_PARTS = {"__pycache__", "_build", "release-notes"}
+
+
+def test_removed_columns_stay_removed(cohort):
+    """No slot of any stored result carries a removed column, at the widest call each tool has.
+
+    The maximal calls of the schema snapshot are reused so the check covers every column a
+    reference adds: ``groupby``, ``splitby``, draws, and the metric's default null.
+    """
+    from tests.test_result_schemas import _calls, _run
+
+    model, adata = cohort
+    for name, (_minimal, maximal) in _calls(adata).items():
+        payload = _run(name, maximal, model, adata)
+        for slot, frame in payload.items():
+            if not isinstance(frame, pd.DataFrame):
+                continue
+            bad = [c for c in frame.columns
+                   if c in REMOVED_COLUMNS or str(c).startswith("excess")]
+            assert not bad, f"{name}.{slot} carries removed columns {bad}"
+
+
+def test_the_retired_words_are_gone():
+    """A retired word appears in no text file of the package, the contracts or the docs.
+
+    Text files only, read as UTF-8: the docs carry images, and a test run leaves bytecode under
+    the package. Built docs and release notes are skipped.
+    """
+    root = Path(__file__).resolve().parents[1]
+    pattern = re.compile("|".join(re.escape(w) for w in RETIRED_WORDS), re.IGNORECASE)
+    hits = []
+    for base in _SCANNED:
+        path = root / base
+        files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.is_file())
+        for f in files:
+            rel = f.relative_to(root)
+            if f.suffix not in _TEXT_SUFFIXES or _SKIPPED_PARTS & set(rel.parts):
+                continue
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    hits.append(f"{rel}:{i}: {line.strip()[:80]}")
+    assert not hits, (
+        f"{len(hits)} mention(s) of a retired word; the first ten:\n  " + "\n  ".join(hits[:10])
+    )
 
 
 @pytest.mark.parametrize("mod", DELETED_MODULES)

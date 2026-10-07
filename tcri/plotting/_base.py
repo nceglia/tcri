@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from .._state import _reference
 from ._colors import resolve_colors
@@ -119,14 +118,51 @@ def _colors_for(adata, key, levels, palette):
 def filter_quantity(stats, quantity):
     """The rows of ``stats`` for one quantity, or ``stats`` unchanged when it carries none.
 
-    A ``stats`` frame holds one row per (contrast, quantity) once a reference has been
-    computed. Every reader of it needs a single row per contrast, so the quantity is selected
-    here rather than left to row order, which would make a SILENT choice between the value's
-    contrast and the excess's.
+    A ``stats`` frame holds one row per contrast and names the column it contrasted in
+    ``quantity``. The star a panel draws has to be about the quantity on its axis, so the rows
+    are selected by that name here: a value panel of a result whose contrast is on the adjusted
+    value gets no rows, and no star, rather than a star about a different column.
     """
     if stats is None or not len(stats) or "quantity" not in stats.columns:
         return stats
     return stats.loc[stats["quantity"] == quantity]
+
+
+def check_quantity(quantity, *, value_only=False, message=None):
+    """The ``quantity`` argument alone, before anything is loaded.
+
+    Rejects a name that is not ``"auto"``, ``"value"`` or ``"adjusted"``, and an explicit
+    ``"adjusted"`` on a view that can draw nothing but the value (the delta endpoints, the shift
+    heatmap), which raises with that view's own ``message``. An argument error never depends on
+    the data: it fires whether or not a result exists and whether or not ``return_df`` was
+    passed.
+    """
+    if quantity not in ("auto", "value", "adjusted"):
+        raise ValueError(f"quantity must be 'auto', 'value' or 'adjusted', got {quantity!r}")
+    if quantity == "adjusted" and value_only:
+        raise ValueError(message)
+
+
+def resolve_quantity(result, quantity, *, name, value_only=False):
+    """The column that goes on y, for a non-empty ``result``.
+
+    ``"auto"`` is ``adjusted`` when the result carries one with something finite in it, else
+    ``value``; on a value-only view it is always ``value``. An explicit ``"adjusted"`` with no
+    such column raises: the result was computed with ``null_model=None``. Called after
+    ``return_df`` and after the empty-frame branch, so a frame the caller asked for is handed
+    back untouched and an empty result draws its empty panel whatever the quantity.
+    """
+    if quantity == "auto":
+        if value_only or not _reference.usable_reference(result, "adjusted"):
+            return "value"
+        return "adjusted"
+    if quantity == "adjusted" and "adjusted" not in result.columns:
+        raise ValueError(
+            f"this {name} result has no 'adjusted' column: it was computed with "
+            f"null_model=None, so there is nothing to compare against. Re-run the metric with "
+            f"a reference (tcri.null.all(model, adata) first), or plot quantity='value'."
+        )
+    return quantity
 
 
 def _stat_label(stats, a, b, *, quantity="value"):
@@ -311,8 +347,9 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
     pass rather than by calling this twice -- two passes would re-sort the axis under the first.
 
     The interval is drawn only for ``y == "value"``. An HDI is the posterior spread of the
-    value: the reference has none to show here, and an excess cannot have one at all, because
-    an interval on a difference needs paired draws and draws are never paired across two fits.
+    value: the reference has none to show here, and the adjusted value cannot have one at all,
+    because an interval on a difference needs paired draws and draws are never paired across
+    two fits.
     """
     d = d.sort_values(y, ascending=False) if order is None else \
         d.set_index(d[x].astype(str)).reindex([str(o) for o in order]).dropna(subset=[y])
@@ -343,25 +380,27 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
     return ax
 
 
-def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=None,
+def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=False, key=None,
                   order=None, hue_order=None, palette=None, ax=None, figsize=(8, 4),
                   save=None, show=None, return_df=False, annotate=True, rotation=90,
-                  decorate=None, quantity="value"):
+                  decorate=None):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
     items are a handful of phenotypes, wrong for phenotypic entropy, whose items are every
     clone in the repertoire.
 
-    ``quantity`` selects what goes on y. ``"value"`` draws the metric with its permutation
-    reference behind it, grey and hollow, when the result carries one. ``"excess"`` draws
-    ``value - null_value`` against a zero rule and no interval. Nothing switches on its own:
-    the ``stats`` frame carries both, and the star drawn is always the one for the quantity on
-    the axis.
+    ``quantity`` selects what goes on y. ``"auto"``, the twins' default, is the adjusted value
+    when the result carries one and the raw value otherwise. ``"adjusted"`` draws
+    ``value - null_value`` against a zero rule and no interval; ``"value"`` draws the metric
+    with its permutation reference behind it, grey and hollow, when the result carries one. The
+    star drawn is always the one for the quantity on the axis, so a value panel of a result
+    whose ``stats`` is on the adjusted value carries none.
     """
     from .. import get as _get
     from .._compute._tables import collapse_to_replicates
 
+    check_quantity(quantity)
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)
     result = payload["result"]
@@ -377,26 +416,22 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
     if result is None or not len(result) or "value" not in result.columns:
         ylabel = _reference.label_for(result, quantity, ylabel)
         return _finish(fig, _empty(ax, f"no data for {name}", ylabel), save=save, show=show)
-    if quantity not in result.columns:
-        raise ValueError(
-            f"this {name} result has no {quantity!r} column: it was computed with "
-            f"null_model=None, so there is nothing to compare against. Re-run the metric with "
-            f"a reference (tcri.null.all(model, adata) first), or plot quantity='value'."
-        )
+    quantity = resolve_quantity(result, quantity, name=name)
     d = result.dropna(subset=[quantity])
     if not len(d):
         return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show)
-    #: The reference column for this quantity: drawn behind the value, and meaningless on an
-    #: excess panel, where zero is the reference and the zero rule already says so. A column
-    #: with nothing finite in it is NOT a reference: seaborn raises on an all-NaN y, and the
-    #: honest panel is the value with "no reference" on the label rather than a blank axes.
-    ref = "null_value" if (quantity == "value" and "null_value" in d.columns) else None
-    if ref is not None and not np.isfinite(
-            pd.to_numeric(d[ref], errors="coerce").to_numpy(dtype=float)).any():
-        ref = None
-        result = result.drop(columns=["null_value"])
+    # The reference is drawn behind the value and nowhere else: on the adjusted panel zero is
+    # the reference, and the zero rule says so. A column with nothing finite in it is not a
+    # reference either: seaborn raises on an all-NaN y, so the panel is the value with
+    # "(no reference)" on the label rather than a blank axes.
+    ref = None
+    if quantity == "value" and "null_value" in d.columns:
+        if _reference.usable_reference(d):
+            ref = "null_value"
+        else:
+            result = result.drop(columns=["null_value"])
     ylabel = _reference.label_for(result, quantity, ylabel)
-    if quantity != "value":
+    if quantity == "adjusted":
         decorate = decorate or _zero_rule
 
     has_groups = groupby is not None and groupby in d.columns
@@ -423,10 +458,9 @@ def render_metric(adata, name, *, ylabel, item_col=None, item_as_x=False, key=No
     unit = _sample_unit(d, table, x=x, groupby=groupby if has_groups else None,
                         item_col=item_col)
     if unit == "draw" and quantity != "value":
-        # `excess` is a difference of two SUMMARIES, so `attach` broadcasts one number per row
-        # group onto every draw: a violin of it is a spike at that number, and five of six
-        # groups collapse to a degenerate KDE seaborn declines to draw. The quantity exists per
-        # group, so the group-level mark is the honest one.
+        # The adjusted value in `table` is a per-group constant, so a violin of it is a spike
+        # at one number and a degenerate KDE seaborn declines to draw. The quantity exists per
+        # group, so the panel takes the group-level mark.
         unit = "item" if (item_col is not None and item_col in d.columns) else None
 
     if unit == "replicate":
@@ -553,7 +587,7 @@ def _size_legend(ax, counts):
               loc="upper left", frameon=False, fontsize=8, title_fontsize=8, labelspacing=1.1)
 
 
-def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value",
+def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
                  item_as_x=False, entity_matched=False, key=None, order=None, hue_order=None,
                  palette=None, ax=None, figsize=(8, 4), save=None, show=None,
                  return_df=False, rotation=90):
@@ -575,13 +609,14 @@ def render_delta(adata, name, *, ylabel, item_col, kind="delta", quantity="value
 
     if kind not in ("delta", "endpoints"):
         raise ValueError(f"kind must be 'delta' or 'endpoints', got {kind!r}")
-    if kind == "endpoints" and quantity != "value":
-        raise ValueError(
-            f"kind='endpoints' has no {quantity!r}: the view draws the two levels a delta is "
-            f"taken between, and it draws the reference's own two endpoints beside them. A "
-            f"single excess axis would have to pick one of the two. Use kind='delta', "
-            f"quantity={quantity!r}, or kind='endpoints', quantity='value'."
-        )
+    # The endpoints view draws the two levels a delta is taken between and never reads
+    # `quantity` again, so the argument check is all it needs; the delta view resolves inside
+    # `render_metric`.
+    check_quantity(quantity, value_only=(kind == "endpoints"), message=(
+        f"kind='endpoints' has no {quantity!r}: the view draws the two levels a delta is "
+        f"taken between, and it draws the reference's own two endpoints beside them. A "
+        f"single adjusted axis would have to pick one of the two. Use kind='delta', "
+        f"quantity={quantity!r}, or kind='endpoints', quantity='value'."))
 
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)

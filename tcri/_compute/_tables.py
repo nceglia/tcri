@@ -370,7 +370,7 @@ def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep
     ``value`` may be a LIST, and when it is, every listed column is collapsed under ONE mask:
     a row is dropped if ANY of them is non-finite. Averaging each column over its own mask
     means the value and its reference rest on different replicate sets, and then
-    ``mean(excess)`` stops equalling ``mean(value) - mean(null_value)``. A single-column call
+    ``mean(adjusted)`` stops equalling ``mean(value) - mean(null_value)``. A single-column call
     returns a frame with that one value column.
     """
     if result is None or not len(result) or groupby is None or groupby not in result.columns:
@@ -391,13 +391,11 @@ def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep
 
 
 def build_stats(result, *, groupby, splitby, value="value"):
-    """The between-split contrast, or ``None`` when ``splitby`` is not set.
+    """The between-split contrast on one quantity, or ``None`` when ``splitby`` is not set.
 
-    ``value`` may be a LIST of quantities -- ``("value", "excess")`` once a reference has been
-    computed. The frame then carries one row per (contrast, quantity) and a ``quantity``
-    column saying which is which. Nothing switches automatically on the presence of a
-    reference: the plot selects, so the marks and the star it carries are always the same
-    quantity.
+    ``value`` names the column contrasted -- ``"value"``, or ``"adjusted"`` once a reference has
+    been computed -- and the frame carries it back in a ``quantity`` column, so a reader of a
+    stored ``stats`` knows which column the p-value is about without the payload around it.
 
     The replicate unit is the GROUP. When the metric has an item axis, ``result`` holds one row
     per (group, item) -- so the item rows are averaged to one value per group FIRST, and the
@@ -412,46 +410,35 @@ def build_stats(result, *, groupby, splitby, value="value"):
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
-    from .._stats import compare_groups
-
-    quantities = [value] if isinstance(value, str) else list(value)
-    quantities = [q for q in quantities if q in result.columns]
-    if not quantities:
+    if value not in result.columns:
         return None
+    from .._stats import compare_groups
 
     # THE pseudoreplication step. Everything after this sees one number per group. Shared with
     # the plotting layer so the marks cannot describe a different unit from the p-value.
-    #
-    # ONE collapse over EVERY quantity, not one per quantity: a per-column mask would drop a
-    # different non-finite set for `value` than for `excess`, so `n_a`/`n_b` would differ
-    # between the two rows of one stats frame and each row would describe a different set of
-    # replicates. The rows are then directly comparable, which is what lets a plot switch
-    # quantity and keep its own star honest.
-    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby,
-                                       value=quantities)
+    per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
+    contrasts = compare_groups(per_group, value=value, splitby=splitby)
+    if contrasts is None or not len(contrasts):
+        return None
     rows = []
-    for quantity in quantities:
-        contrasts = compare_groups(per_group, value=quantity, splitby=splitby)
-        if contrasts is None or not len(contrasts):
-            continue
-        for _, c in contrasts.iterrows():
-            a, b = c["group_a"], c["group_b"]
-            row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
-                   "replicate_unit": groupby, "quantity": quantity}
-            for suffix, level in (("a", a), ("b", b)):
-                arm = across_groups(per_group.loc[per_group[splitby] == level, quantity])
-                row[f"mean_{suffix}"] = arm["value"]
-                row[f"sd_{suffix}"] = arm["sd"]
-                row[f"ci_low_{suffix}"] = arm["ci_low"]
-                row[f"ci_high_{suffix}"] = arm["ci_high"]
-                row[f"n_{suffix}"] = arm["n_groups"]
-            row["delta"] = float(c["delta"])
-            row["stat"] = float(c["U"])
-            row["p"] = float(c["p"])
-            row["stars"] = c["stars"]
-            rows.append(row)
-    return pd.DataFrame(rows) if rows else None
+    for _, c in contrasts.iterrows():
+        a, b = c["group_a"], c["group_b"]
+        row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
+               "replicate_unit": groupby, "quantity": value}
+        for suffix, level in (("a", a), ("b", b)):
+            arm = across_groups(per_group.loc[per_group[splitby] == level, value])
+            row[f"mean_{suffix}"] = arm["value"]
+            row[f"sd_{suffix}"] = arm["sd"]
+            row[f"ci_low_{suffix}"] = arm["ci_low"]
+            row[f"ci_high_{suffix}"] = arm["ci_high"]
+            row[f"n_{suffix}"] = arm["n_groups"]
+        row["delta"] = float(c["delta"])
+        row["stat"] = float(c["U"])
+        row["p"] = float(c["p"])
+        row["stars"] = c["stars"]
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, compute,

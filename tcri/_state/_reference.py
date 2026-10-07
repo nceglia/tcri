@@ -2,8 +2,9 @@
 
 A model-based number on its own says nothing about whether the structure it measures is there.
 Every scored metric therefore computes a **reference**: the same functional, at the caller's own
-arguments, on a permutation null of the same fit. ``excess = value - null_value`` is the part of
-the observed number the structure accounts for.
+arguments, on a permutation null of the same fit. ``adjusted = value - null_value`` is the part
+of the observed number the structure accounts for, and the one quantity a scored metric reports;
+``value`` and ``null_value`` are stored beside it as its inputs.
 
 Two rules do the work here, and both exist because the obvious shortcut is wrong.
 
@@ -14,10 +15,10 @@ estimand, so a reference computed at defaults is a different quantity subtracted
 different quantity. The arguments are taken from the decorator's own ``bind``, so the forwarded
 set cannot drift from the signature.
 
-**``excess`` is a difference of two summaries, never a summary of a difference.** Draws are
+**``adjusted`` is a difference of two summaries, never a summary of a difference.** Draws are
 never paired across two fits -- there is no correspondence between the parent's draw 7 and the
-null's -- so the excess carries no ``sd`` and no interval, and nothing in this module produces
-one.
+null's -- so the adjusted value carries no ``sd`` and no interval, and nothing in this module
+produces one.
 """
 from __future__ import annotations
 
@@ -41,18 +42,33 @@ def null_column(value: str) -> str:
     return f"null_{value}"
 
 
-def excess_column(value: str) -> str:
-    """``value`` -> ``excess``, ``value_from`` -> ``excess_from``, ``value_to`` -> ``excess_to``."""
+def adjusted_column(value: str) -> str:
+    """``value`` -> ``adjusted``, ``value_from`` -> ``adjusted_from``, ``value_to`` ->
+    ``adjusted_to``."""
     if not value.startswith("value"):
         raise ValueError(f"a native value column must start with 'value', got {value!r}")
-    return "excess" + value[len("value"):]
+    return "adjusted" + value[len("value"):]
 
 
 def column_pairs(values, denominators=()):
-    """``(native, null, excess)`` per native value column; ``excess`` is ``None`` for a
-    denominator, which has a reference but no excess -- a difference of two normalisers is not
-    a quantity anyone reports."""
-    return [(v, null_column(v), None if v in denominators else excess_column(v)) for v in values]
+    """``(native, null, adjusted)`` per native value column; ``adjusted`` is ``None`` for a
+    denominator, which has a reference but no adjusted column -- a difference of two normalizers
+    is not a quantity anyone reports."""
+    return [(v, null_column(v), None if v in denominators else adjusted_column(v))
+            for v in values]
+
+
+def usable_reference(frame, column="null_value") -> bool:
+    """Whether ``frame[column]`` is a reference: present, with something finite in it.
+
+    A column with nothing finite is not a reference. ``stats`` is then contrasted on the value
+    rather than on an all-NaN adjustment, and a panel draws the value with "(no reference)" on
+    the label rather than handing seaborn an all-NaN y, which it refuses.
+    """
+    if frame is None or not len(frame) or column not in frame.columns:
+        return False
+    return bool(np.isfinite(
+        pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)).any())
 
 
 def resolve_reference(adata, *, null_model, fit, default_null, metric):
@@ -126,7 +142,7 @@ def _labels(result, values, reference_columns=()):
     """The columns that identify a row: not a value, not a summary of one.
 
     Excluded by EXACT NAME, never by prefix. `groupby` and `splitby` are arbitrary `obs` column
-    names, so a user column called `excess_patient` or `null_arm` is a perfectly legitimate row
+    names, so a user column called `adjusted_patient` or `null_arm` is a perfectly legitimate row
     label; excluding it by prefix drops a join key and the merge fans out.
     """
     drop = set(values) | set(SUMMARY_COLUMNS) | set(reference_columns)
@@ -134,7 +150,7 @@ def _labels(result, values, reference_columns=()):
 
 
 def attach(payload, reference, *, values, denominators=()):
-    """Add the reference and difference columns to ``table`` and ``result``, in place.
+    """Add the reference and adjusted columns to ``table`` and ``result``, in place.
 
     The reference frame is joined on the row LABELS, never positionally: a null's rows are the
     parent's by construction, but a join says so and an alignment by position only assumes
@@ -149,7 +165,7 @@ def attach(payload, reference, *, values, denominators=()):
     if not present:
         return payload
     pairs = column_pairs(present, denominators)
-    created = [c for _, n, e in pairs for c in (n, e) if c]
+    created = [c for _, n, a in pairs for c in (n, a) if c]
     labels = [c for c in _labels(result, values, created) if c in ref_result.columns]
     renames = {v: n for v, n, _ in pairs}
 
@@ -165,17 +181,18 @@ def attach(payload, reference, *, values, denominators=()):
                 f"cannot join a reference with no label columns onto {len(result)} rows"
             )
         merged = result.assign(**{c: ref[c].iloc[0] for c in renames.values()})
-    for native, null, excess in pairs:
-        if excess is not None:
-            merged[excess] = merged[native].to_numpy(dtype=float) - merged[null].to_numpy(dtype=float)
+    for native, null, adjusted in pairs:
+        if adjusted is not None:
+            merged[adjusted] = (merged[native].to_numpy(dtype=float)
+                                - merged[null].to_numpy(dtype=float))
     payload["result"] = merged
 
     # `table` carries them too, broadcast to every draw: the violin path reads `table` rather
-    # than `result`, so without this `quantity="excess"` is a seaborn KeyError on any metric
+    # than `result`, so without this the adjusted panel is a seaborn KeyError on any metric
     # whose coarsest varying unit is the draw.
     table = payload.get("table")
     if table is not None and len(table):
-        cols = [c for _, c, _ in pairs] + [e for _, _, e in pairs if e is not None]
+        cols = [c for _, c, _ in pairs] + [a for _, _, a in pairs if a is not None]
         keep = [c for c in labels if c in table.columns]
         if keep:
             payload["table"] = table.merge(merged[keep + cols].drop_duplicates(keep),
@@ -185,37 +202,31 @@ def attach(payload, reference, *, values, denominators=()):
     return payload
 
 
-def restat(payload, *, groupby, splitby, values, denominators=(), per_gene=False):
-    """Recompute ``stats`` over the value AND its excess, under one collapse.
+def restat(payload, *, groupby, splitby, per_gene=False):
+    """Recompute ``stats`` on the quantity this result reports: the adjusted value, or the
+    value when there is no usable adjustment.
 
-    Replaces the body's own single-quantity frame rather than appending to it, because the two
-    have to come from the same ``collapse_to_replicates`` call: a second collapse would drop a
-    different non-finite set and the two rows of one frame would describe different replicate
-    sets while looking directly comparable.
+    The frame is replaced, not appended to, so a result never carries two contrasts. The adjusted
+    column is contrasted only when something in it is finite: a reference that is non-finite
+    everywhere is no reference, and the frame then says ``"value"``. Rebuilding on the value
+    rather than leaving the payload's frame alone is what makes the stored frame self-describing,
+    and what makes this function idempotent: the payload it receives may already carry an
+    adjusted frame from an earlier pass.
     """
     if "stats" not in payload:
         return payload
     result = payload.get("result")
     if result is None or not len(result) or splitby is None:
         return payload
-    quantities = ["value"] + [e for _, _, e in column_pairs(values, denominators)
-                              if e is not None and e in result.columns]
-    # A quantity that is non-finite on every row would empty the SHARED collapse mask and take
-    # the value rows down with it, so the payload would lose a stats frame it legitimately had.
-    # Dropping it here keeps the frame the body already built.
-    quantities = [q for q in dict.fromkeys(quantities)
-                  if q in result.columns and np.isfinite(
-                      pd.to_numeric(result[q], errors="coerce").to_numpy(dtype=float)).any()]
-    if len(quantities) < 2:
-        return payload
+    target = "adjusted" if usable_reference(result, "adjusted") else "value"
     if per_gene:
         from ..perturbation._tables import stats_per_gene
-        rebuilt = stats_per_gene(result, groupby=groupby, splitby=splitby, value=quantities)
+        rebuilt = stats_per_gene(result, groupby=groupby, splitby=splitby, value=target)
     else:
         from .._compute._tables import build_stats
-        rebuilt = build_stats(result, groupby=groupby, splitby=splitby, value=quantities)
-    # Never replace a frame with nothing: the body's own single-quantity frame is still correct
-    # and still carries its `quantity` column.
+        rebuilt = build_stats(result, groupby=groupby, splitby=splitby, value=target)
+    # Never replace a frame with nothing: the frame already there is the one the result
+    # legitimately has.
     if rebuilt is not None and len(rebuilt):
         payload["stats"] = rebuilt
     return payload
@@ -229,8 +240,8 @@ def label_for(result, quantity, ylabel):
     """
     if result is None or not len(result):
         return ylabel
-    if quantity != "value":
-        return f"{ylabel} - null"
+    if quantity == "adjusted":
+        return f"adjusted {ylabel}"
     return ylabel if "null_value" in result.columns else f"{ylabel} (no reference)"
 
 

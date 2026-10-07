@@ -186,19 +186,19 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     assert split_ax.get_xlabel() == "disease_status"
 
     stats = tcri.get.result(adata, "mutual_information")["stats"]
-    # One row per (contrast, quantity) since the result carries a reference. The star drawn is
-    # the one for the quantity ON THE AXIS: the default panel draws `value`, so it must carry
-    # the value's star, and the excess panel the excess's. On this fixture the two differ.
-    assert stats is not None and set(stats["quantity"]) == {"value", "excess"}
-    row = stats.query("quantity == 'value'").iloc[0]
+    # One row per contrast, on the adjusted value, since the result carries a reference. The
+    # star drawn is the one for the quantity ON THE AXIS: the default panel draws `adjusted`,
+    # so it carries that row's star; the value panel has no row about its quantity, so it
+    # draws none rather than a star about a different column.
+    assert stats is not None and set(stats["quantity"]) == {"adjusted"}
+    assert len(stats) == 1, "one contrast between two arms is one row"
+    row = stats.iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3, "the contrast is not over the 3 patients per arm"
     assert [t.get_text() for t in split_ax.texts] == [row["stars"] or "ns"]
 
-    excess_row = stats.query("quantity == 'excess'").iloc[0]
-    excess_ax = tcri.pl.mutual_information(adata, quantity="excess")
-    assert [t.get_text() for t in excess_ax.texts] == [excess_row["stars"] or "ns"]
-    assert row["n_a"] == excess_row["n_a"] and row["n_b"] == excess_row["n_b"], (
-        "the two quantities were collapsed over different replicate sets")
+    value_ax = tcri.pl.mutual_information(adata, quantity="value")
+    assert value_ax.get_xlabel() == "disease_status"
+    assert not value_ax.texts, "the adjusted value's star was drawn over the value's marks"
 
     tcri.tl.mutual_information(adata, covariate=cov, groupby="patient")
     plain_ax = tcri.pl.mutual_information(adata)
@@ -269,8 +269,14 @@ def test_draws_become_violins_not_a_summary(trained_model):
     assert not any(isinstance(c, ErrorbarContainer) for c in plain.containers)
 
     tcri.tl.mutual_information(adata, covariate=cov, n_samples=30, random_state=0)
-    drawn = tcri.pl.mutual_information(adata)
+    drawn = tcri.pl.mutual_information(adata, quantity="value")
     assert _n_violins(drawn) == 1, "the draws were summarized away instead of drawn"
+
+    # the default panel draws the adjusted value, which `table` carries as one number per
+    # group: a violin of it would be a spike, so the panel takes the group-level mark instead
+    adjusted = tcri.pl.mutual_information(adata)
+    assert _n_violins(adjusted) == 0, "the adjusted value was drawn as a violin"
+    assert _n_points(adjusted) == 1
 
 
 def test_a_violin_never_spans_replicates(cohort):
@@ -293,9 +299,16 @@ def test_a_violin_never_spans_replicates(cohort):
     # ...and with the replicate ON x, each patient's own draws are its own violin
     tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
                                n_samples=30, random_state=0)
-    per_patient = tcri.pl.mutual_information(adata)
+    per_patient = tcri.pl.mutual_information(adata, quantity="value")
     assert per_patient.get_xlabel() == "patient"
     assert _n_violins(per_patient) == 6, "one violin per patient over its own draws"
+
+    # the default panel: the adjusted value is one number per patient in `table`, so the panel
+    # falls back to one mark per patient rather than drawing a spike as a violin
+    adjusted = tcri.pl.mutual_information(adata)
+    assert adjusted.get_xlabel() == "patient"
+    assert _n_violins(adjusted) == 0, "the adjusted value was drawn as a violin"
+    assert _n_points(adjusted) == 6, "the fallback is not one mark per patient"
 
 
 # ── colours ──────────────────────────────────────────────────────────────────
@@ -430,19 +443,36 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
     res = tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient",
                                      splitby="disease_status")
 
-    # the SAME collapse call the plot makes: over the quantity and its reference together, so
-    # the grey mark and the value mark rest on one replicate set
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    def _ys(ax, *, reference):
+        offs = [c.get_offsets()[:, 1] for c in ax.collections
+                if (c.get_label() == REFERENCE_LABEL) == reference]
+        return np.sort(np.concatenate(offs)) if offs else np.empty(0)
+
+    # the SAME collapse call the plot makes. The default panel draws the adjusted value alone,
+    # so its collapse is over that one column -- the same column `build_stats` collapses with
+    # the same helper, so the marks are the replicate values the contrast was run on.
+    expected = collapse_to_replicates(res["result"], groupby="patient",
+                                      splitby="disease_status", value=["adjusted"])
+    ax = tcri.pl.phenotypic_entropy(adata)
+    assert np.allclose(_ys(ax, reference=False), np.sort(expected["adjusted"].to_numpy()))
+    assert not len(_ys(ax, reference=True)), "a grey mark was drawn on the adjusted panel"
+    stats = res["stats"]
+    assert set(stats["quantity"]) == {"adjusted"}
+    row = stats.iloc[0]
+    assert len(expected) == row["n_a"] + row["n_b"], (
+        "the marks and the contrast rest on different replicate sets")
+
+    # the value panel collapses the value and its reference together, so the grey mark and
+    # the value mark rest on one replicate set
     expected = collapse_to_replicates(res["result"], groupby="patient",
                                       splitby="disease_status",
                                       value=["value", "null_value"])
-    ax = tcri.pl.phenotypic_entropy(adata)
-    from tcri.plotting._base import REFERENCE_LABEL
-    drawn = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
-                                    if c.get_label() != REFERENCE_LABEL]))
-    assert np.allclose(drawn, np.sort(expected["value"].to_numpy()))
-    grey = np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
-                                   if c.get_label() == REFERENCE_LABEL]))
-    assert np.allclose(grey, np.sort(expected["null_value"].to_numpy()))
+    value_ax = tcri.pl.phenotypic_entropy(adata, quantity="value")
+    assert np.allclose(_ys(value_ax, reference=False), np.sort(expected["value"].to_numpy()))
+    assert np.allclose(_ys(value_ax, reference=True),
+                       np.sort(expected["null_value"].to_numpy()))
 
 
 def test_nothing_connects_two_x_positions(cohort):

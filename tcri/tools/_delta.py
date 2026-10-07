@@ -124,7 +124,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
-@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=1, schema=schemas.DeltaClonotypicEntropy,
+@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=2, schema=schemas.DeltaClonotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, weighted=False,
@@ -144,7 +144,7 @@ def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
                          n_clones_ref=n_clones_ref, device=device, fit=fit)
 
 
-@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=1, schema=schemas.DeltaPhenotypicEntropy,
+@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=2, schema=schemas.DeltaPhenotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, weighted=False,

@@ -290,7 +290,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     recorded as provenance and the ``.h5ad`` write would fail on it.
 
     **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
-    a second time against a permutation null and adds the ``null_*``/``excess*`` columns
+    a second time against a permutation null and adds the ``null_*``/``adjusted*`` columns
     (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
     is not tidiness: the reference has to be *the caller's own call with two arguments changed*,
     and only the decorator holds the caller's bound arguments. A body re-invoking itself would
@@ -300,7 +300,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     ``values`` names the metric's NATIVE value columns, before any reference column exists --
     ``("value",)`` for the scalar metrics, ``("value", "value_from", "value_to")`` for the two
     deltas, ``("value", "denom")`` for mutual information. ``denominators`` names those that get
-    a reference but no excess. ``default_null`` is the metric's entry in the contract's
+    a reference but no adjusted column. ``default_null`` is the metric's entry in the contract's
     ``DEFAULT_NULL`` table, read back off the live function by the conformance test so the two
     cannot drift. ``reference_arg`` is the parameter the reference run substitutes: ``"fit"``
     for a metric that reads a substrate, or the name of the model parameter for a query on a
@@ -364,8 +364,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     _reference.attach(result, reference, values=values,
                                       denominators=denominators)
                     _reference.restat(result, groupby=arguments.get("groupby"),
-                                      splitby=arguments.get("splitby"), values=values,
-                                      denominators=denominators, per_gene=per_gene_stats)
+                                      splitby=arguments.get("splitby"), per_gene=per_gene_stats)
 
             if arguments.get("inplace", True):
                 blob = _encode(result)

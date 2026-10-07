@@ -76,10 +76,10 @@ def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
     """The x axis is the ``n_top`` most important genes in descending order, and every dot is a
     patient -- the replicate unit -- never a draw or a cell.
 
-    Ranked by the EXCESS at the default, because that is what this twin defaults to: the bare
-    importance scales with a gene's counts, so the bare ranking answers a different question.
-    `quantity="value"` gives the bare ranking back, and the two are asserted to be built the
-    same way off whichever column was asked for.
+    Ranked by the ADJUSTED importance at the default: the bare importance scales with a gene's
+    counts, so the bare ranking answers a different question. `quantity="value"` gives the bare
+    ranking back, and the two are asserted to be built the same way off whichever column was
+    asked for.
     """
     model, adata = cohort
     a = adata.copy()
@@ -90,7 +90,7 @@ def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
         return (res["result"].groupby("gene", observed=True)[col].mean()
                 .sort_values(ascending=False).index.tolist()[:5])
 
-    assert [t.get_text() for t in ax.get_xticklabels()] == ranked("excess")
+    assert [t.get_text() for t in ax.get_xticklabels()] == ranked("adjusted")
     bare = tcri.pl.gene_importance(a, n_top=5, quantity="value")
     assert [t.get_text() for t in bare.get_xticklabels()] == ranked("value")
     assert ax.get_xlabel() == "gene"
@@ -107,27 +107,20 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     res = tcri.perturb.gene_importance(model, a, splitby="disease_status")
     ax = tcri.pl.gene_importance(a, n_top=6)
     genes = [t.get_text() for t in ax.get_xticklabels()]
-    # filtered by quantity: `stats` carries one row per (gene, quantity), and a dict keyed by
-    # gene alone would take the last row -- the excess's star over the value's marks
-    stars = res["stats"].query("quantity == 'value'").set_index("gene")["stars"]
+    # `stats` carries one row per gene, on the adjusted importance. The default panel draws
+    # that quantity, so its stars are those rows'; the value panel has no row about the
+    # quantity on its axis, so it draws none rather than a star about a different column.
+    stats = res["stats"]
+    assert set(stats["quantity"]) == {"adjusted"}
+    stars = stats.set_index("gene")["stars"]
     assert [t.get_text() for t in ax.texts] == [stars[g] or "ns" for g in genes]
 
-    excess_stars = res["stats"].query("quantity == 'excess'").set_index("gene")["stars"]
-    excess_ax = tcri.pl.gene_importance(a, n_top=6, quantity="excess")
-    excess_genes = [t.get_text() for t in excess_ax.get_xticklabels()]
-    assert [t.get_text() for t in excess_ax.texts] == [excess_stars[g] or "ns"
-                                                       for g in excess_genes]
+    value_ax = tcri.pl.gene_importance(a, n_top=6, quantity="value")
+    assert not value_ax.texts, "the adjusted importance's star was drawn over the value's marks"
 
-    # a doubled frame with no `quantity` column to filter on is refused rather than silently
-    # choosing between the value's contrast and the excess's
-    from tcri.plotting._perturbation import _star_labels
-    doubled = res["stats"].drop(columns=["quantity"])
-    with pytest.raises(ValueError, match="no\n?\s*`quantity` column|`quantity` column"):
-        _star_labels(ax, doubled, genes, groupby="patient")
-
-    # ...while THREE split levels are a limitation of a one-star-per-gene panel,
-    # not an error: three contrasts per gene and one position to draw them in. Warn and draw
-    # nothing, rather than starring one pair as if it were the whole comparison.
+    # THREE split levels are a limitation of a one-star-per-gene panel, not an error: three
+    # contrasts per gene and one position to draw them in. Warn and draw nothing, rather than
+    # starring one pair as if it were the whole comparison.
     import warnings as _warnings
     three = a.copy()
     patients = sorted(three.obs["patient"].astype(str).unique())
@@ -143,7 +136,7 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     assert any("more than two levels" in str(w.message) for w in caught), [
         str(w.message) for w in caught]
     assert ax.get_legend() is not None, "the split levels need a legend"
-    # the zero rule of an excess panel spans the axis by design and carries BRACKET_LABEL,
+    # the zero rule of the default panel spans the axis by design and carries BRACKET_LABEL,
     # which is what that label exists to distinguish from a claim about two genes
     from tcri.plotting._base import BRACKET_LABEL
     assert not [l for l in ax.lines
@@ -163,14 +156,16 @@ def test_rank_view_without_groups_falls_back_to_points_then_violins(cohort):
     assert _n_points(pts) == 4 and _n_violins(pts) == 0
 
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], n_samples=6, random_state=0)
-    # `quantity="value"`, because the draws are a distribution of the VALUE. The excess is a
-    # difference of two summaries broadcast to every draw, so a violin of it would be a spike,
-    # which is why the draw path refuses a non-value quantity and falls back to the group mark.
+    # `quantity="value"` draws the violins, because the draws are a distribution of the VALUE.
+    # The adjusted value in `table` is a per-group constant, so a violin of it would be a
+    # spike; the default panel falls back to one mark per gene instead.
     vio = tcri.pl.gene_importance(a, quantity="value")
     assert _n_violins(vio) == 4, "with only draws varying, each gene is a violin of its draws"
     from matplotlib.collections import PolyCollection
-    assert not [c for c in tcri.pl.gene_importance(a).collections
-                if isinstance(c, PolyCollection)], "the excess was drawn as a violin"
+    adjusted = tcri.pl.gene_importance(a)
+    assert not [c for c in adjusted.collections if isinstance(c, PolyCollection)], (
+        "the adjusted value was drawn as a violin")
+    assert _n_points(adjusted) == 4, "the default panel did not fall back to one mark per gene"
 
 
 def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
@@ -187,9 +182,9 @@ def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
     assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
 
     genes = [t.get_text() for t in ax.get_yticklabels()]
-    # the corrected ranking, which is what both panels use at the default (see
+    # the adjusted ranking, which is what both panels use at the default (see
     # tests/test_references.py::test_both_gene_panels_rank_alike)
-    ranked = (res["result"].groupby("gene", observed=True)["excess"].mean()
+    ranked = (res["result"].groupby("gene", observed=True)["adjusted"].mean()
               .sort_values(ascending=False).index.tolist()[:7])
     assert genes == ranked
     want = (res["shift"][res["shift"]["gene"] == genes[0]]

@@ -19,17 +19,19 @@ Every metric returns the same two payload keys:
 **Reference columns.** When the metric ran with a reference — ``null_model`` not ``None``,
 which is the default — ``result`` and ``table`` each gain, beside every native value column
 ``v``, a ``null_v`` (the same functional on the permutation null, at the same arguments) and an
-``excess`` (``value - null_value``; ``excess_from``/``excess_to`` for the delta endpoints). A
-DENOMINATOR gets ``null_denom`` and no excess. At ``null_model=None`` none of them exist, on
-either frame. The ``excess`` carries no ``sd`` and no interval: it is a difference of two
-summaries, and draws are never paired across two fits.
+``adjusted`` (``value - null_value``; ``adjusted_from``/``adjusted_to`` for the delta
+endpoints). The adjusted value is the one quantity a scored metric reports; ``value`` and
+``null_value`` are its inputs and stay stored beside it. A DENOMINATOR gets ``null_denom`` and
+no adjusted column. At ``null_model=None`` none of them exist, on either frame. The adjusted
+value carries no ``sd`` and no interval: it is a difference of two summaries, and draws are
+never paired across two fits.
 
 **The ``stats`` slot.** Every metric except :class:`JointDistribution` returns it. Only three
 of the ``TypedDict``s below declare it, and a declared key is a required one, so the rest accept
-a payload with or without it. It carries one row per (contrast, ``quantity``), the quantity being
-``"value"`` or ``"excess"``; without a reference it carries only ``"value"``. Nothing switches
-automatically on the presence of a reference: the plot selects, so the star and the marks are
-always the same quantity.
+a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
+the column contrasted: ``"adjusted"`` when the result carries a usable adjustment, ``"value"``
+otherwise (no reference, or one that is non-finite everywhere). ``pl`` stars the quantity on its
+axis, so a panel of the value carries no star when the contrast is on the adjusted value.
 """
 from __future__ import annotations
 
@@ -62,8 +64,8 @@ class MutualInformation(TypedDict):
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value, denom
     result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
-                            # (across groups) + denom, and null_value/null_denom/excess with
-                            # a reference. The contrast lives in `stats`.
+                            # (across groups) + denom, and null_value/null_denom/adjusted
+                            # with a reference. The contrast lives in `stats`.
                             # `denom` is the normaliser this MI was divided by: the null does
                             # not share it, so both are stored and value*denom recovers bits
 
@@ -72,14 +74,14 @@ class ClonotypicEntropy(TypedDict):
     """H(c | phi) — one value per PHENOTYPE, not per clone."""
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], phenotype, draw, value
-    result: pd.DataFrame    # + null_value/excess with a reference
+    result: pd.DataFrame    # + null_value/adjusted with a reference
 
 
 class PhenotypicEntropy(TypedDict):
     """H(phi | c) — one value per clone."""
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame    # + null_value/excess with a reference
+    result: pd.DataFrame    # + null_value/adjusted with a reference
 
 
 class PhenotypicFlux(TypedDict):
@@ -89,7 +91,7 @@ class PhenotypicFlux(TypedDict):
     """
 
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame    # + null_value/excess with a reference
+    result: pd.DataFrame    # + null_value/adjusted with a reference
 
 
 class DeltaClonotypicEntropy(TypedDict):
@@ -103,8 +105,8 @@ class DeltaClonotypicEntropy(TypedDict):
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], phenotype, draw,
                             #       value, value_from, value_to
     result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
-                            #   excess/excess_from/excess_to with a reference
-    stats: object           # one row per (contrast, quantity)
+                            #   adjusted/adjusted_from/adjusted_to with a reference
+    stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class DeltaPhenotypicEntropy(TypedDict):
@@ -117,8 +119,8 @@ class DeltaPhenotypicEntropy(TypedDict):
     table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw,
                             #       value, value_from, value_to
     result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
-                            #   excess/excess_from/excess_to with a reference
-    stats: object           # one row per (contrast, quantity)
+                            #   adjusted/adjusted_from/adjusted_to with a reference
+    stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class GeneImportance(TypedDict):
@@ -132,9 +134,9 @@ class GeneImportance(TypedDict):
 
     table: pd.DataFrame     # cols: gene, [covariate], [groupby], [splitby], draw, value
     result: pd.DataFrame    # one row per (gene[, covariate][, group]); value + sd/hdi_*,
-                            #   + null_value/excess with a reference
+                            #   + null_value/adjusted with a reference
     stats: object           # per-gene contrast over groups when splitby is set, else None;
-                            #   one row per (gene, contrast, quantity)
+                            #   one row per (gene, contrast); `quantity` names the column
     shift: pd.DataFrame     # cols: gene, phenotype, [covariate], [groupby], [splitby],
                             #       baseline, perturbed, shift
 
