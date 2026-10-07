@@ -156,8 +156,16 @@ for any clone x phenotype table, an entropy is a number whatever the table says,
 two fits is non-zero whenever the two differ at all, and an in-silico knockout moves the
 phenotype call for every gene. **So no model-based number is reported bare.** Each scored metric
 is read against a permutation reference: the same model, the same knobs, the same seed, the same
-training arguments, fitted on one permuted label vector, and `excess = value - null_value` is the
-part of the observed number the permuted structure accounts for.
+training arguments, fitted on one permuted label vector, and `adjusted = value - null_value` is
+the part of the observed number the permuted structure accounts for.
+
+**One reported quantity per metric.** A scored metric reports `adjusted` and stores its two inputs,
+`value` and `null_value`, beside it; they are what a reader checking the correction needs, not
+alternative answers. `stats` contrasts `adjusted`, or `value` when no usable reference was computed
+(`null_model=None`, or a reference that is non-finite everywhere), and names the column it
+contrasted in `quantity`. A delta's `adjusted_from` and `adjusted_to` are its endpoints and carry no
+contrast, as `value_from` and `value_to` do not. A denominator has a reference (`null_denom`) and no
+adjusted column: a difference of two normalizers is not a quantity anyone reports.
 
 | quantity | read against | what the reference destroys |
 |---|---|---|
@@ -181,8 +189,9 @@ a per-draw mean of 0.4429281. Take the bits per draw from `table` when the diffe
 The null's MI is never computed with the parent's denominator: that would break the one thing
 `null_value` means, which is the metric OF the null.
 
-**A delta's excess is closed within its own result.** `excess - (excess_to - excess_from)` equals
-`value - (value_to - value_from)`: the reference introduces no gap that was not already there.
+**A delta's adjusted value is closed within its own result.** `adjusted - (adjusted_to -
+adjusted_from)` equals `value - (value_to - value_from)`: the reference introduces no gap that was
+not already there.
 It is not zero, because `value == value_to - value_from` already fails when a draw has a
 non-finite endpoint, and the two sides use different masks.
 
