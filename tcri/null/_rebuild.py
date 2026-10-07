@@ -87,6 +87,9 @@ def rebuild(model, adata, fit):
 
     # Then the parameters, from the store into the module's own tensors.
     pyro.module(null.module.pname("scvi"), null.module, update_module_params=True)
+    # The parameters now sit on whatever device the store was loaded onto; the buffers copied above
+    # are still on the constructor's. Moving the module puts both on one device.
+    null.module.to(next(null.module.parameters()).device)
     null.module.eval()
     null.is_trained_ = True
     return null

@@ -393,6 +393,57 @@ def test_null_is_recoverable_from_the_parent_session(fitted, tmp_path):
     np.testing.assert_allclose(back.predict(loaded_adata).to_numpy(), expected, atol=1e-6)
 
 
+def test_a_rebuilt_null_is_on_the_device_of_the_store():
+    """A null's parameters come from the store, so its buffers must end on the store's device.
+
+    The second device is ``meta`` (tensors with a shape and no data), which stands in for a GPU
+    on a machine without one: a null split across devices shows up as tensors left on the CPU.
+    """
+    a = _adata()
+    model = _parent(a, "metadev")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.phenotype(model, a)
+    namespace = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["namespace"]
+    store = pyro.get_param_store()
+    keys = [k for k in store.keys() if k.startswith(f"{namespace}.")]
+    assert keys, "the null registered no parameters"
+    try:
+        for k in keys:
+            store[k] = store[k].detach().to("meta")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            back = rebuild(model, a, "phenotype")
+        off = [n for n, t in [*back.module.named_parameters(), *back.module.named_buffers()]
+               if t.device.type != "meta"]
+        assert not off, f"rebuilt null tensors not on the store's device: {off[:5]}"
+    finally:
+        for k in [k for k in store.keys() if _owns_param("metadev", k)]:
+            del store[k]
+
+
+@pytest.mark.gpu
+def test_a_null_rebuilt_after_a_gpu_session_load_is_on_the_parents_device(fitted, tmp_path):
+    """A session loaded onto the GPU rebuilds its null on the GPU, buffers included, so a
+    perturbation that reads the null runs. The parent and the store are both on the GPU here."""
+    from tcri.utils import load_tcri_session, save_tcri_session
+
+    model, adata, _ = fitted
+    with contextlib.redirect_stdout(io.StringIO()):
+        save_tcri_session(model, adata, str(tmp_path / "run"))
+    pyro.clear_param_store()
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded, loaded_adata = load_tcri_session(str(tmp_path / "run"), map_location="cuda")
+        back = rebuild(loaded, loaded_adata, "phenotype")
+        device = next(loaded.module.parameters()).device
+        assert device.type == "cuda", "the parent did not load onto the GPU; nothing is tested"
+        off = [n for n, t in [*back.module.named_parameters(), *back.module.named_buffers()]
+               if t.device != device]
+        assert not off, f"rebuilt null tensors not on {device}: {off[:5]}"
+        tcri.perturb.gene_importance(loaded, loaded_adata, genes=list(loaded_adata.var_names[:2]))
+
+
 def test_rebuild_names_the_missing_namespace(fitted):
     """With the store cleared, ``rebuild`` raises and names both fixes rather than handing back
     a randomly initialised model that answers every question without complaint."""
