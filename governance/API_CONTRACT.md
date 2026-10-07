@@ -150,7 +150,7 @@ class TCRIModel:
     ) -> None: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
-        reconstruction_loss_scale: float = ..., n_steps_kl_warmup: int = ...,
+        reconstruction_loss_scale: float = ..., n_epochs_kl_warmup: int = ...,
         num_particles: int = ..., early_stopping: bool = ..., early_stopping_patience: int = ...,
         early_stopping_min_delta: float = ..., **kwargs: Any,
     ) -> None: ...

@@ -34,8 +34,8 @@ schedules or stopping; they change with a recorded reason.
   space, restricted to the module's OWN namespace: with a namespace per model the store holds
   other fits' concentrations too, and restoring those would write another fit's parameters over
   this one's. `test_restored_model_is_the_selected_one`.
-- **I5 Annealing is schedule-only.** The warmup counter lives on the module, so a resumed
-  `train()` continues the ramp rather than restarting it.
+- **I5 Annealing is schedule-only.** The warmup position, in epochs, lives on the module, so a
+  resumed `train()` continues the ramp rather than restarting it.
   `test_kl_ramp_is_monotone_across_resumed_training`, `test_warmup_counter_is_owned_by_the_module_not_the_plan`.
 - **I7 A declared knob changes an observable.** `tests/test_model_knobs.py`; partial.
 - **I8 A minibatch is an unbiased estimate of eq 7.** The data plate is declared at the size
@@ -47,9 +47,20 @@ schedules or stopping; they change with a recorded reason.
 ## Bounds
 
 - **B1** The `kl_weight` schedule is non-decreasing within and across `train()` calls and
-  reaches `max_kl_weight` in finite steps. `train()` has no reset knob; construct a new model
-  for a fresh schedule. `test_no_reset_knob_on_train`.
-- **B2** `n_steps_kl_warmup` counts optimizer steps; a run records its epoch equivalent.
+  reaches `max_kl_weight` in `n_epochs_kl_warmup` epochs. `train()` has no reset knob; construct
+  a new model for a fresh schedule. `test_no_reset_knob_on_train`,
+  `test_an_epoch_cut_short_counts_as_completed`.
+- **B2 One unit for the schedule.** Every schedule setting of a fit is counted in epochs: the KL
+  warmup (`n_epochs_kl_warmup`, default 150), patience (`early_stopping_patience`) and the budget
+  (`max_epochs`); a validation check is one epoch (B3). The warmup's position is the epochs
+  trained under the ramp, fractional within an epoch (epochs completed plus batches done over
+  batches per epoch), so `kl_weight` rises at every step; it is kept on the module (I5), and an
+  epoch cut short is counted as completed when the next `train()` starts. `train()` takes no
+  schedule argument counted in optimizer steps; `n_steps_kl_warmup` raises, naming
+  `n_epochs_kl_warmup`. Lightning's `max_steps` and `max_time` limit a run and are not schedule
+  settings (B9 records a fit they end as not an early stop).
+  `test_schedule_arguments_are_counted_in_epochs`, `test_kl_weight_rises_within_an_epoch`,
+  `test_the_ramp_ends_at_the_same_epoch_whatever_the_batches_per_epoch`.
 - **B3** Patience is in epochs: `train()` validates once per epoch and the knob is
   `train(early_stopping_patience=...)`, default 300. `early_stopping_patience` checks in a row
   without an improvement stop the fit (B4 defines one). `early_stopping=False` installs no
@@ -66,8 +77,9 @@ schedules or stopping; they change with a recorded reason.
   keep a checkpoint with a higher criterion than the default rule reaches.
   `test_fit_stops_once_improvements_fall_below_min_delta`,
   `test_default_threshold_counts_every_new_low`, `test_a_null_stops_under_its_parents_rule`.
-- **B5** Selection begins only after the ramp completes, read from one counter by both the
-  stopping and the snapshot callback. If the ramp never completes: warn, do not raise, and
+- **B5** Selection begins only after the ramp completes, read from one counter, the module's
+  completed warmup epochs, by both the stopping and the snapshot callback; the stopping count
+  starts there. If the ramp never completes: warn, do not raise, and
   record `selection_criterion = "last epoch (ramp incomplete)"`.
   `test_selection_is_gated_until_the_ramp_completes`.
 - **B6** Every advertised knob has a behavioural test, never a wiring check.
@@ -81,8 +93,9 @@ schedules or stopping; they change with a recorded reason.
   exemption matches the parameter's TAIL under any namespace (`x.q_p_ct_raw` as well as
   `q_p_ct_raw`); an exact match would silently reinstate that prior for every named model.
   `test_weight_decay_does_not_reach_the_guide_concentrations`.
-- **B9** A fit records provenance in `training_record_`: epochs actually run, warmup steps and
-  their epoch equivalent, `ramp_completes_at_epoch`, `ramp_completed`, `selection_criterion`,
+- **B9** A fit records provenance in `training_record_`: epochs actually run,
+  `n_epochs_kl_warmup`, `warmup_epochs_taken`, `steps_per_epoch`, `ramp_completes_at_epoch` (the
+  epochs of this call before selection opens), `ramp_completed`, `selection_criterion`,
   `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch. `stopped_early`
   is true only when the stopping rule ended the fit; a fit ended by another limit, such as
   `max_steps`, records false and warns. `test_a_fit_ended_by_another_limit_is_not_an_early_stop`.
