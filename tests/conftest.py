@@ -33,15 +33,24 @@ def pytest_configure(config):
         "slow: statistical-recovery test that fits models over several configs; "
         "skipped unless --runslow is passed",
     )
+    config.addinivalue_line(
+        "markers",
+        "gpu: needs a CUDA device; skipped without one. Run them with `pytest -m gpu`",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip ``@pytest.mark.slow`` unless ``--runslow``.
+    """Skip ``@pytest.mark.slow`` unless ``--runslow``, and ``@pytest.mark.gpu`` without CUDA.
 
     Recovery tests fit real models across a grid, so they are minutes-scale and do
     not belong in the per-commit suite — but they are the only tests with an
     accuracy oracle, so they must stay runnable (nightly / pre-release).
     """
+    if not torch.cuda.is_available():
+        skip_gpu = pytest.mark.skip(reason="needs a CUDA device")
+        for item in items:
+            if "gpu" in item.keywords:
+                item.add_marker(skip_gpu)
     if config.getoption("--runslow"):
         return
     skip_slow = pytest.mark.skip(reason="needs --runslow")
