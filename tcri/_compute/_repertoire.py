@@ -13,13 +13,20 @@ layers.
 - :func:`_size_counts`: cells per (clonotype, covariate level), the unit the model builds.
 - The derivation record in ``uns[K.CLONOTYPE_DERIVATIONS]``: one writer,
   :func:`_record_derivation`, and two readers, :func:`_clonotype_source` and :func:`_pool_labels`.
+- :func:`_pool_rare_clones`: each group's rare clones pooled into one label per group.
 """
 from __future__ import annotations
+
+import logging
+import operator
+import warnings
 
 import numpy as np
 import pandas as pd
 
 from .._state import keys as K
+
+logger = logging.getLogger(__name__)
 
 
 class TCRIDataWarning(UserWarning):
@@ -428,3 +435,163 @@ def _pool_labels(adata, clonotype_key: str) -> list[str]:
     if step is None or step["function"] != _POOL or not step["pool_labels"]:
         return []
     return step["pool_labels"].split("|")
+
+
+# ── pooling rare clones ──────────────────────────────────────────────────────────────────────
+
+def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
+                      samples: str | None = None, key_added: str | None = None) -> None:
+    """Pool each group's rare clones into one ``pooled@{group}`` label per group.
+
+    Cells are counted per (group, clonotype), so a clonotype carried by two groups is two
+    clones. A clone is rare when it has fewer than ``min_cells`` cells and all of them come from
+    one sample. Without ``samples`` every clone counts as coming from one sample, and the rule
+    is ``min_cells`` alone; a clone seen in two or more samples is never rare.
+
+    Writes ``obs[key_added]``, a categorical with sorted categories. The cells of a kept clone
+    carry ``{clonotype}@{group}``, built by :func:`_make_clonotypes_replicate_specific`, so an
+    id that already ends in ``@{group}`` is not suffixed again; every other cell of a group
+    carries ``pooled@{group}``. The source column is never modified. Records one step through
+    :func:`_record_derivation`, with ``suffixed`` true when any kept id gained the suffix, the
+    pool labels, and the numbers of clones and cells pooled; running again with the same
+    ``key_added`` replaces that step. Logs one line per group on the ``tcri`` logger: clones
+    kept, clones pooled, and cells pooled with their share of the group.
+
+    Parameters
+    ----------
+    adata
+        The object whose ``obs`` holds the columns.
+    clonotype_key
+        The source clonotype column.
+    groupby
+        The column naming each cell's group: the individual, usually the replicate.
+    min_cells
+        A clone with fewer cells than this, all from one sample, is pooled. An integer >= 1; at
+        1 nothing is pooled, and the step is still recorded.
+    samples
+        The column naming each cell's capture unit, its 10x sample or library, or ``None``.
+    key_added
+        The column to write; ``f"{clonotype_key}_pooled"`` when ``None``.
+
+    Warns
+    -----
+    TCRIDataWarning
+        For each group that keeps no clone, naming the group.
+
+    Raises
+    ------
+    KeyError
+        When ``clonotype_key``, ``groupby`` or ``samples`` is not a column of ``obs``.
+    TypeError
+        When ``min_cells`` is not an integer; a bool is not one.
+    ValueError
+        When ``min_cells`` is below 1; when ``key_added`` is ``clonotype_key``; when cells have
+        no clonotype (see :func:`_missing_clonotypes`), no group or no sample, naming the column
+        and the number of cells; and when two kept clones of one group would get the same id.
+        Nothing is written to ``adata`` when it raises.
+    """
+    if isinstance(min_cells, bool):
+        raise TypeError(f"min_cells must be an integer, got {min_cells!r}")
+    try:
+        min_cells = operator.index(min_cells)
+    except TypeError:
+        raise TypeError(f"min_cells must be an integer, got {min_cells!r}") from None
+    if min_cells < 1:
+        raise ValueError(f"min_cells must be >= 1, got {min_cells!r}")
+    if key_added is None:
+        key_added = f"{clonotype_key}_pooled"
+    if key_added == clonotype_key:
+        raise ValueError(
+            f"key_added must differ from clonotype_key ({clonotype_key!r}): the pooled labels go "
+            f"to a column of their own, and the source column is never modified."
+        )
+
+    obs = adata.obs
+    columns = {"clonotype_key": clonotype_key, "groupby": groupby}
+    if samples is not None:
+        columns["samples"] = samples
+    for name, column in columns.items():
+        if column not in obs.columns:
+            raise KeyError(f"{name}={column!r} is not a column of adata.obs")
+
+    missing = _missing_clonotypes(obs[clonotype_key])
+    if missing.any():
+        raise ValueError(
+            f"{int(missing.sum())} of {adata.n_obs} cells have no clonotype in "
+            f"adata.obs[{clonotype_key!r}] (NaN or None, an empty or whitespace-only string, "
+            f"or the string 'nan'). A cell without a clonotype belongs to no clone, so it can be "
+            f"neither kept nor pooled. Keep only the cells that have one, for example:\n"
+            f"    labels = adata.obs[{clonotype_key!r}].astype(str)\n"
+            f"    missing = adata.obs[{clonotype_key!r}].isna() | labels.str.strip().eq('') "
+            f"| labels.eq('nan')\n"
+            f"    adata = adata[~missing].copy()"
+        )
+    needs = {"groupby": "Clones are counted within each group, so every cell needs one.",
+             "samples": "A clone seen in more than one sample is never pooled, so every cell "
+                        "needs one."}
+    for name, column in columns.items():
+        if name == "clonotype_key":
+            continue
+        n_missing = int(obs[column].isna().sum())
+        if n_missing:
+            raise ValueError(
+                f"{n_missing} of {adata.n_obs} cells have no value in adata.obs[{column!r}] "
+                f"(NaN or None). {needs[name]} Keep only the cells that have one, for example:\n"
+                f"    adata = adata[adata.obs[{column!r}].notna()].copy()"
+            )
+
+    clonotypes, groups = obs[clonotype_key], obs[groupby]
+    by = [groups.to_numpy(dtype=object), clonotypes.to_numpy(dtype=object)]
+    n_cells = clonotypes.groupby(by, sort=False).transform("size").to_numpy()
+    rare = n_cells < min_cells
+    if samples is not None:
+        rare &= obs[samples].groupby(by, sort=False).transform("nunique").to_numpy() < 2
+    kept = ~rare
+
+    kept_ids = np.asarray(_make_clonotypes_replicate_specific(clonotypes[kept], groups[kept]),
+                          dtype=object)
+    suffixed = bool(np.any(kept_ids != clonotypes.astype(str).to_numpy(dtype=object)[kept]))
+    ids = np.empty(adata.n_obs, dtype=object)
+    ids[kept] = kept_ids
+    pools = "pooled@" + groups.astype(str).to_numpy(dtype=object)
+    labels = np.where(rare, pools, ids)
+
+    # Cells and clones per group, in the group column's category order. `first` marks one cell
+    # of each clone, so that each clone is counted once.
+    group = groups.astype("category")
+    codes = group.cat.codes.to_numpy()
+    first = ~pd.MultiIndex.from_arrays(by).duplicated()
+    n_levels = len(group.cat.categories)
+    per_group = {
+        "cells": np.bincount(codes, minlength=n_levels),
+        "cells_pooled": np.bincount(codes[rare], minlength=n_levels),
+        "clones_kept": np.bincount(codes[first & kept], minlength=n_levels),
+        "clones_pooled": np.bincount(codes[first & rare], minlength=n_levels),
+    }
+    pool_labels = np.unique(labels[rare]).tolist()
+
+    _record_derivation(adata, function=_POOL, source=clonotype_key, key_added=key_added,
+                       groupby=groupby, min_cells=min_cells, samples=samples, suffixed=suffixed,
+                       pool_labels=pool_labels,
+                       n_clones_pooled=int(per_group["clones_pooled"].sum()),
+                       n_cells_pooled=int(rare.sum()))
+    adata.obs[key_added] = pd.Categorical(labels, categories=np.unique(labels))
+
+    for i, level in enumerate(group.cat.categories):
+        cells, cells_pooled = int(per_group["cells"][i]), int(per_group["cells_pooled"][i])
+        if not cells:
+            continue
+        clones_kept = int(per_group["clones_kept"][i])
+        logger.info(
+            f"pool_rare_clones: {groupby} {level!r}: clones kept {clones_kept:,}, clones pooled "
+            f"{int(per_group['clones_pooled'][i]):,}, cells pooled {cells_pooled:,} of "
+            f"{cells:,} ({cells_pooled / cells:.1%})."
+        )
+        if not clones_kept:
+            seen = " and come from one sample" if samples is not None else ""
+            warnings.warn(
+                f"{groupby} {level!r} keeps no clone: all of its clones have fewer than "
+                f"{min_cells} cells{seen}, so every cell of the group is pooled into "
+                f"'pooled@{level}'.",
+                TCRIDataWarning, stacklevel=3,
+            )
