@@ -63,7 +63,7 @@ def main():
     ap.add_argument("--n-hidden", type=int, default=128)
     ap.add_argument("--n-layers", type=int, default=2)
     ap.add_argument("--k", type=int, default=8)
-    ap.add_argument("--clonotype-key", default="trb_unique")
+    ap.add_argument("--clonotype-key", default="trb_pooled")
     ap.add_argument("--phenotype-key", default="CellType")
     ap.add_argument("--covariate-key", default="treatment")
     ap.add_argument("--batch-key", default="patient_ID")

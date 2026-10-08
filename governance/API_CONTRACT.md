@@ -38,6 +38,19 @@ is NaN or None, which covers `obs` edited after setup and every null, since a nu
 its parent's registration without running setup again. No clone × covariate row is built for a
 cell without a clonotype or a covariate level.
 
+**Rare clones.** `pp.pool_rare_clones` runs on the source clonotype column, before setup. It
+counts cells per (`groupby` group, clonotype), so a clonotype carried by two groups is two
+clones. A clone is rare when it has fewer than `min_cells` cells (default 3) and all of them come
+from one sample: `samples` names each cell's capture, and without it the rule is `min_cells`
+alone. A clone seen in two or more samples is never rare. It writes `obs[key_added]` (default
+`{clonotype_key}_pooled`), a categorical with sorted categories, in which each group's rare clones
+are `pooled@{group}` and every other clone is `{clonotype}@{group}`, an id already ending in
+`@{group}` unchanged; the source column is never modified. Each call records one step in
+`uns["tcri_clonotype_derivations"]` with the columns it used, `min_cells`, the pool labels and the
+numbers of clones and cells pooled; a later call with the same `key_added` replaces it. Missing
+clonotypes, as defined above, and NaN or None in `groupby` or `samples` raise `ValueError`
+naming the column and the number of cells; a group that keeps no clone warns.
+
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
@@ -182,9 +195,9 @@ class TCRIModel:
 
 # ── preprocessing (pp) ───────────────────────────────────────────────────────
 class pp:
-    def group_singletons(
-        adata: AnnData, *, clonotype_key: str = ..., groupby: str = ...,
-        target_col: str = ..., min_clone_size: int = ...,
+    def pool_rare_clones(
+        adata: AnnData, *, clonotype_key: str, groupby: str, min_cells: int = ...,
+        samples: Optional[str] = ..., key_added: Optional[str] = ...,
     ) -> None: ...
     def clone_size(adata: AnnData, *, key_added: str = ..., return_counts: bool = ...) -> Any: ...
     def from_mudata(

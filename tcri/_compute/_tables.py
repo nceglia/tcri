@@ -255,8 +255,9 @@ def _validate_group_clones(labels, groups, groupby, hint=""):
         raise ValueError(
             f"groupby={groupby!r}: clonotype {c!r} spans groups {spans[0]!r} and {spans[1]!r}. "
             f"The metric groupby restricts by clone id (clones=), which requires clones "
-            f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
-            f"clone-disjoint groupby, or pre-filter with `clones=`.{hint}"
+            f"to be disjoint across groups (e.g. the patient-specific ids "
+            f"`tcri.pp.pool_rare_clones` writes). Use a clone-disjoint groupby, or pre-filter "
+            f"with `clones=`.{hint}"
         )
 
 
