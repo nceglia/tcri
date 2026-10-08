@@ -583,7 +583,7 @@ class TCRIModel(BaseModelClass):
 
     def train(
         self,
-        max_epochs: int = 5000,
+        max_epochs: int = 10000,
         batch_size: int = 1000,
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
