@@ -209,6 +209,11 @@ class pp:
         adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,
         covariate_key: Optional[str] = ..., phenotype_key: Optional[str] = ...,
     ) -> pd.DataFrame: ...
+    def clone_persistence(
+        adata: AnnData, *, clonotype_key: str, covariate_key: str,
+        cov_from: Optional[str] = ..., cov_to: Optional[str] = ...,
+        groupby: Optional[str] = ..., per_clone: bool = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
