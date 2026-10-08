@@ -34,6 +34,7 @@ from scvi.model.base import BaseModelClass
 from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
+from .._compute._repertoire import _missing_clonotypes
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_source
 from ._module import TCRIModule
@@ -137,6 +138,27 @@ def _apply_permutation(codes, axis: str, permutation):
             f"it must be a permutation of range(n_obs) for THIS object"
         )
     return np.asarray(codes)[perm]
+
+
+def _label_codes(series, column: str, label: str):
+    """The category codes of ``series``, refusing a cell that has no label.
+
+    A NaN or None label has code -1, and -1 indexes a category list from the end: a clonotype or
+    covariate code of -1 becomes a clone x covariate row that reads back as the last clone or the
+    last covariate level, and a phenotype code of -1 adds the cell to the last phenotype in the
+    clone x phenotype prior. So the codes are refused before anything is derived from them.
+    ``setup_anndata`` refuses such cells first; this covers ``obs`` edited after setup and models
+    built without running setup, which is how every null is built.
+    """
+    codes = series.cat.codes.values
+    n_missing = int((codes < 0).sum())
+    if n_missing:
+        raise ValueError(
+            f"{n_missing} of {len(codes)} cells have no {label} in adata.obs[{column!r}] "
+            f"(NaN or None). Every cell registered with TCRIModel must have a {label}. Keep only "
+            f"the cells that have one and run TCRIModel.setup_anndata again."
+        )
+    return codes
 
 
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
@@ -282,6 +304,10 @@ class TCRIModel(BaseModelClass):
         batch, replicate and layer choices on the registry, and mirrors a named layer in
         ``uns['tcri_layer']`` (clearing it when ``layer`` is ``None``). No analysis or label
         ``obs`` column is written here — learned outputs come solely from :meth:`to_anndata`.
+
+        Every cell must have a clonotype. A cell whose ``clonotype_key`` value is NaN or None,
+        an empty or whitespace-only string, or the string ``"nan"`` raises ``ValueError``
+        before anything is registered.
         """
         if clonotype_key == "auto":
             _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
@@ -294,6 +320,20 @@ class TCRIModel(BaseModelClass):
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
                 raise ValueError(f"{col} not in adata.obs!")
+        # A cell without a clonotype belongs to no clone, so it has no clone x covariate row to
+        # sit in. It is refused here, before anything is registered.
+        missing = _missing_clonotypes(adata.obs[clonotype_key])
+        if missing.any():
+            raise ValueError(
+                f"{int(missing.sum())} of {adata.n_obs} cells have no clonotype in "
+                f"adata.obs[{clonotype_key!r}] (NaN or None, an empty or whitespace-only string, "
+                f"or the string 'nan'). Every cell registered with TCRIModel must have a "
+                f"clonotype. Keep only the cells that have one, for example:\n"
+                f"    labels = adata.obs[{clonotype_key!r}].astype(str)\n"
+                f"    missing = adata.obs[{clonotype_key!r}].isna() | labels.str.strip().eq('') "
+                f"| labels.eq('nan')\n"
+                f"    adata = adata[~missing].copy()"
+            )
         # `replicate` names the independent unit for statistics -- the column a metric uses
         # when `groupby` is left implicit. Registering it once here means it is not retyped at
         # every call, and it is recorded as the EFFECTIVE value of groupby in each result's
@@ -380,7 +420,11 @@ class TCRIModel(BaseModelClass):
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
         changes. Built by ``tcri.null.*``; passing it by hand is legal but the strata are then
-        yours to get right."""
+        yours to get right.
+
+        A cell whose registered clonotype, phenotype or covariate is NaN or None raises
+        ``ValueError``; this happens when ``obs`` is edited after :meth:`setup_anndata`, which
+        refuses such cells itself."""
         super().__init__(adata)
         self._name = str(name)
         self._permutation = permutation
@@ -462,7 +506,8 @@ class TCRIModel(BaseModelClass):
         # The three code vectors, each permuted if this model is a null of that axis. The
         # categories are never touched, so P, the label space and every downstream index are
         # the parent's; only which cell carries which label moves.
-        pvals_np = _apply_permutation(ph_series.cat.codes.values, "phenotype", permutation)
+        pvals_np = _apply_permutation(_label_codes(ph_series, phenotype_col, "phenotype"),
+                                      "phenotype", permutation)
         target_codes = torch.tensor(pvals_np, dtype=torch.long)
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
@@ -470,7 +515,8 @@ class TCRIModel(BaseModelClass):
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
-        c_array_np = _apply_permutation(cvals.cat.codes.values, "clonotype", permutation)
+        c_array_np = _apply_permutation(_label_codes(cvals, clonotype_col, "clonotype"),
+                                        "clonotype", permutation)
         clone_phenotype_prior = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
             clone_phenotype_prior[c_array_np[i], pvals_np[i]] += 1
@@ -491,7 +537,8 @@ class TCRIModel(BaseModelClass):
             K = c_count
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
-        cov_array_np = _apply_permutation(cov_series.cat.codes.values, "condition", permutation)
+        cov_array_np = _apply_permutation(_label_codes(cov_series, covariate_col, "covariate"),
+                                          "condition", permutation)
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
         combos = df_ct.drop_duplicates().sort_values(["c", "t"])
         ct_list = combos.values.tolist()

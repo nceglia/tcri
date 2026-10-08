@@ -133,15 +133,36 @@ def clone_col(adata):
     return adata.uns[K.METADATA]["clone_col"]
 
 
+def _clone_codes(adata, fit):
+    """The fit's stored clone code for each clone x covariate row (``ct_to_c``).
+
+    Raises ``ValueError`` when a code is negative. Such a row was built from cells without a
+    clonotype, and read through the category list it would name the last clone. The model also
+    fitted that row under the last clone, so masking it would not make the rest of the substrate
+    right; the fit has to be redone.
+    """
+    key = K.fit_key(K.CT_TO_C, fit)
+    ct_to_c = np.asarray(adata.uns[key])
+    if (ct_to_c < 0).any():
+        raise ValueError(
+            f"uns[{key!r}] holds a negative clone code: this fit has a clone x covariate row for "
+            f"cells without a clonotype, and that row cannot be read as a clone. Redo the fit: "
+            f"keep only the cells that have a clonotype, run TCRIModel.setup_anndata, train, and "
+            f"write the substrate again with to_anndata()."
+        )
+    return ct_to_c
+
+
 def fit_clone_labels(adata, fit=None):
     """Per-cell clone id **as the fit saw it**, indexed by ``obs_names``.
 
-    ``CLONOTYPE_CATEGORIES[ct_to_c[ct_array]]``, with ``pd.NA`` wherever ``ct_to_c < 0`` (the
-    unassigned rows today's callers drop). On the main fit this equals ``obs[clone_col]`` cell
-    for cell; under a clonotype null it does not, and THAT is the point. `metric_table` restricts
-    the engine by clone id while the engine's rows come from the permuted codes, so a clone list
-    built from ``obs`` selects the wrong null rows whenever a permutation stratum spans more than
-    one group -- silently, because the parent's ``obs`` passes every disjointness check.
+    ``CLONOTYPE_CATEGORIES[ct_to_c[ct_array]]``. On the main fit this equals ``obs[clone_col]``
+    cell for cell; under a clonotype null it does not, and THAT is the point. `metric_table`
+    restricts the engine by clone id while the engine's rows come from the permuted codes, so a
+    clone list built from ``obs`` selects the wrong null rows whenever a permutation stratum spans
+    more than one group -- silently, because the parent's ``obs`` passes every disjointness check.
+
+    Raises ``ValueError`` when the fit stores a negative clone code (see :func:`_clone_codes`).
     """
     ct_array = np.asarray(adata.uns[K.fit_key(K.CT_ARRAY, fit)])
     if len(ct_array) != adata.n_obs:
@@ -152,11 +173,9 @@ def fit_clone_labels(adata, fit=None):
             f"full-space uns arrays misalign against the subset obsm/obs. Re-run "
             f"model.to_anndata(...) on the filtered object."
         )
-    ct_to_c = np.asarray(adata.uns[K.fit_key(K.CT_TO_C, fit)])
+    ct_to_c = _clone_codes(adata, fit)
     cats = np.asarray(adata.uns[K.CLONOTYPE_CATEGORIES], dtype=object)
-    codes = ct_to_c[ct_array]
-    labels = np.where(codes >= 0, cats[np.clip(codes, 0, len(cats) - 1)], None)
-    return pd.Series(labels, index=adata.obs_names, dtype=object).where(pd.notna(labels), pd.NA)
+    return pd.Series(cats[ct_to_c[ct_array]], index=adata.obs_names, dtype=object)
 
 
 def clones_at(adata, covariate, *, fit=None, group_clones=None):
@@ -165,16 +184,17 @@ def clones_at(adata, covariate, *, fit=None, group_clones=None):
     Returned in ascending clone-code order, which is the substrate's order and not ``obs``
     first-appearance order. No metric value depends on it -- the entropies sum a column,
     `joint_draws` reorders its ids by the requested ``clones=`` list, and `build_result` groups.
+
+    Raises ``ValueError`` when the fit stores a negative clone code (see :func:`_clone_codes`).
     """
     meta = adata.uns[K.METADATA]
+    ct_to_c = _clone_codes(adata, fit)
     cov_cats = [str(c) for c in adata.uns[K.COVARIATE_CATEGORIES]]
     if str(covariate) not in cov_cats:
         return []
     m = cov_cats.index(str(covariate))
-    ct_to_c = np.asarray(adata.uns[K.fit_key(K.CT_TO_C, fit)])
     ct_to_cov = np.asarray(adata.uns[K.fit_key(K.CT_TO_COV, fit)])
-    codes = ct_to_c[ct_to_cov == m]
-    codes = np.unique(codes[codes >= 0])
+    codes = np.unique(ct_to_c[ct_to_cov == m])
     cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
     at = [cats[c] for c in codes]
     if group_clones is None:

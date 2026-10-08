@@ -29,6 +29,15 @@ namespaces them: a model called `x` owns exactly the store keys under `x.`, and 
 default) owns the unnamed layout every session saved before 0.12 uses. Two named models can be
 fitted in one process without overwriting each other. `TCRIModel.name` reads it back.
 
+**Registration.** Every cell `setup_anndata` registers must have a clonotype. NaN or None, an
+empty or whitespace-only string, and the literal string `"nan"` in the `clonotype_key` column
+are missing clonotypes: setup raises `ValueError` before registering anything, naming the
+column and the number of cells, and the caller keeps only the cells that have one. The
+constructor raises the same way for a cell whose registered clonotype, phenotype or covariate
+is NaN or None, which covers `obs` edited after setup and every null, since a null is built on
+its parent's registration without running setup again. No clone × covariate row is built for a
+cell without a clonotype or a covariate level.
+
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
