@@ -9,10 +9,10 @@ of the observed number the structure accounts for, and the one quantity a scored
 Two rules do the work here, and both exist because the obvious shortcut is wrong.
 
 **The reference run is the caller's own call with two arguments changed.** Not a call at
-defaults. ``groupby``, ``splitby``, ``clones``, ``weighted``, ``normalized``, ``normalize_mode``,
-``n_clones_ref``, ``distance_metric``, ``temperature`` and ``n_samples`` each change the
-estimand, so a reference computed at defaults is a different quantity subtracted from a
-different quantity. The arguments are taken from the decorator's own ``bind``, so the forwarded
+defaults. ``groupby``, ``splitby``, ``clones``, ``exclude_pools``, ``weighted``, ``normalized``,
+``normalize_mode``, ``n_clones_ref``, ``distance_metric``, ``temperature`` and ``n_samples`` each
+change the estimand, so a reference computed at defaults is a different quantity subtracted from
+a different quantity. The arguments are taken from the decorator's own ``bind``, so the forwarded
 set cannot drift from the signature.
 
 **``adjusted`` is a difference of two summaries, never a summary of a difference.** Draws are

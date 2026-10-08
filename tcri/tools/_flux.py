@@ -72,9 +72,9 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
 @tl_result(key=K.PHENOTYPIC_FLUX, version=2, schema=schemas.PhenotypicFlux,
            default_null="condition")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
-                    temperature=1.0, clones=None, weighted=False, distance_metric="kl",
-                    random_state=None, device=None, null_model="auto", fit=None,
-                    key_added=None, inplace=True):
+                    temperature=1.0, clones=None, exclude_pools=True, weighted=False,
+                    distance_metric="kl", random_state=None, device=None, null_model="auto",
+                    fit=None, key_added=None, inplace=True):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
     kl/jsd) — computed once, cached, returned.
 
@@ -88,6 +88,12 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     ``null_model`` names the permutation reference; ``"auto"`` is the CONDITION null, because
     what a flux measures is movement between conditions and the reference has to be a fit in
     which that movement is absent. ``fit`` selects which fit the number is computed on.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the flux counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -104,7 +110,8 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
         return [{c: vals[d] for c, vals in drawsd.items()} for d in range(n_draws)]
 
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
-                         item_col="clonotype", compute=_compute, fit=fit,
+                         exclude_pools=exclude_pools, item_col="clonotype", compute=_compute,
+                         fit=fit,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
     if not len(table):
         # Say WHY rather than returning a silently empty frame. The overwhelmingly likely cause
