@@ -31,8 +31,6 @@ import pyro as _pyro
 import numpy as np
 
 
-# `stars`, `auc_and_label_permutation` and `bootstrap_auc` live in tcri/_stats/_core.py.
-
 
 #: Star-imported by ``tcri/utils/__init__.py``. Without this, `import *` would pull in every
 #: module-level name the file happens to bind -- numpy, os, sys, matplotlib, typing

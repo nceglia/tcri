@@ -377,13 +377,6 @@ class ut:
     def load_tcri_session(
         run_dir: str, *, adata_path: Optional[str] = ..., map_location: Any = ..., layer: Optional[str] = ...,
     ) -> Any: ...
-    def auc_and_label_permutation(
-        scores: Any, labels: Any, pos_label: Any = ..., n_perm: int = ..., seed: int = ...,
-        max_exact: int = ...,
-    ) -> tuple: ...
-    def bootstrap_auc(
-        scores: Any, labels: Any, pos_label: Any = ..., n_boot: int = ..., seed: int = ...,
-    ) -> tuple: ...
 
 
 # ── synthetic data (datasets) ────────────────────────────────────────────────
