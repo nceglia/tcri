@@ -50,6 +50,7 @@ REMOVED = {
     "ut": [
         "probabilities", "write_adata_safely", "_pop_nonserializables",
         "build_nested_tcri_pgm", "draw_tcri_pgm_nested",
+        "auc_and_label_permutation", "bootstrap_auc",
     ],
     # model/utils cleanup
     "ml": ["plot_loss", "plot_archetypes"],
