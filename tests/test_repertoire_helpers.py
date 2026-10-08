@@ -487,8 +487,8 @@ def test_validate_group_clones_message_and_hint_unchanged():
     message = (
         "groupby='patient': clonotype 'c1' spans groups 'P1' and 'P2'. The metric groupby "
         "restricts by clone id (clones=), which requires clones to be disjoint across groups "
-        "(e.g. patient-specific `trb_unique`). Use a clone-disjoint groupby, or pre-filter with "
-        "`clones=`."
+        "(e.g. the patient-specific ids `tcri.pp.pool_rare_clones` writes). Use a "
+        "clone-disjoint groupby, or pre-filter with `clones=`."
     )
     with pytest.raises(ValueError) as exc:
         _validate_group_clones(labels, groups, "patient")

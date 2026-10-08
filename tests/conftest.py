@@ -209,8 +209,9 @@ def synthetic_adata():
     base_clone = rng.choice([f"clone_{i}" for i in range(n_clones)], size=n_cells)
 
     obs = pd.DataFrame({
-        # patient-specific clone ids (disjoint across patients), as real `trb_unique` is —
-        # so metric groupby='patient' is valid (clones don't span groups).
+        # patient-specific clone ids (disjoint across patients), like the ids
+        # `pp.pool_rare_clones` writes — so metric groupby='patient' is valid (clones don't
+        # span groups).
         "unique_clone_id": [f"{c}_{p}" for c, p in zip(base_clone, patient)],
         "phenotype_col": rng.choice(phenotypes, size=n_cells),
         "timepoint": rng.choice(covariates, size=n_cells),
