@@ -22,6 +22,11 @@ file is what the code does.
 | x_i | `obs` | ε | `label_error_rate` |
 | y_i | `phenotype_label` | g(i), h(m) | `ct_array`, `ct_to_c` |
 
+Every cell has a clonotype, a covariate level and a phenotype label, so both index maps are
+total: g(i) is the clonotype × covariate group of cell i, h(m) is the clonotype of group m, and
+no group stands for cells without a clonotype or a covariate level. `TCRIModel` refuses a cell
+missing any of the three (`API_CONTRACT.md`, "Registration").
+
 ## The generative model
 
 ```
