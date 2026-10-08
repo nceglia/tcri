@@ -15,6 +15,7 @@ import pandas as pd
 
 from .._state import keys as K
 from .._stats import hdi
+from ._repertoire import _clonotype_sharing
 # NOTE: ``tools._joint`` is imported lazily inside the functions that need it, never at module
 # level. ``_compute`` is the lower layer — every tools/* metric imports *down* into this module —
 # so a module-level import back up into ``tools`` inverts the layering and makes the package
@@ -243,18 +244,20 @@ def _validate_group_clones(labels, groups, groupby, hint=""):
     measured, or ``obs[clone_col]`` for a caller that means the raw column) and the group labels
     — rather than an ``obs`` and two column names, because a fit's clone labels are not a column
     of ``obs`` at all.
+
+    Which clonotypes span groups is decided by :func:`._repertoire._clonotype_sharing`, tcri's
+    one rule for it. The error names the first shared clonotype in order of appearance and the
+    first two groups it appears in.
     """
-    seen = {}
-    for g in groups.dropna().unique().tolist():
-        for c in labels[(groups == g).to_numpy()].dropna().unique():
-            if c in seen and seen[c] != g:
-                raise ValueError(
-                    f"groupby={groupby!r}: clonotype {c!r} spans groups {seen[c]!r} and {g!r}. "
-                    f"The metric groupby restricts by clone id (clones=), which requires clones "
-                    f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
-                    f"clone-disjoint groupby, or pre-filter with `clones=`.{hint}"
-                )
-            seen[c] = g
+    shared = _clonotype_sharing(labels, groups)
+    if shared:
+        c, spans = next(iter(shared.items()))
+        raise ValueError(
+            f"groupby={groupby!r}: clonotype {c!r} spans groups {spans[0]!r} and {spans[1]!r}. "
+            f"The metric groupby restricts by clone id (clones=), which requires clones "
+            f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
+            f"clone-disjoint groupby, or pre-filter with `clones=`.{hint}"
+        )
 
 
 def resolve_groupby(adata, groupby):

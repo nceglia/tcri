@@ -19,6 +19,8 @@ COVARIATE_CATEGORIES = "tcri_covariate_categories"
 CLONOTYPE_CATEGORIES = "tcri_clonotype_categories"
 PHENOTYPE_CATEGORIES = "tcri_phenotype_categories"
 
+CLONOTYPE_DERIVATIONS = "tcri_clonotype_derivations"  # how tcri derived each clonotype column
+
 # ── obsm ─────────────────────────────────────────────────────────────────────
 X_TCRI = "X_tcri"                          # latent posterior mean z
 X_LOGITS = "X_tcri_logits"                 # per-cell classifier logits
@@ -28,6 +30,7 @@ X_UMAP = "X_umap"
 
 # ── obs ──────────────────────────────────────────────────────────────────────
 PHENOTYPE = "tcri_phenotype"               # hard phenotype label
+CLONOTYPE = "tcri_clonotype"               # registered clonotype id
 CLONE_SIZE = "clone_size"
 INDICES = "indices"                        # scvi registration glue
 
