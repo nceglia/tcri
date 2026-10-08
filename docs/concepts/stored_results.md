@@ -121,14 +121,14 @@ ambiguous name raises rather than silently preferring one.
 
 When a metric declares `null_model`, the decorator runs the whole call a second time against the
 named reference fit, with every other argument forwarded verbatim, and joins the two: the result
-gains `null_*` columns and, for the value columns, `excess*` columns. Forwarding verbatim is the
-point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the estimand,
-and a reference computed at defaults would be a different quantity subtracted from a different
-quantity.
+gains `null_*` columns and, for the value columns, `adjusted*` columns. Forwarding verbatim is
+the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
+estimand, and a reference computed at defaults would be a different quantity subtracted from a
+different quantity.
 
 The reference run is itself a stored result under its own fit key, so it is plottable with
-`key=`, readable through `tcri.get`, and never computed twice. `pl` draws `quantity="value"`
-with the reference behind it, or `quantity="excess"` against a zero rule.
+`key=`, readable through `tcri.get`, and never computed twice. `pl` draws the adjusted value
+against a zero rule by default, or `quantity="value"` with the reference behind it.
 
 ## Surviving `.h5ad`
 

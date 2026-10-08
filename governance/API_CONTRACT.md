@@ -67,16 +67,17 @@ being the group, so items are averaged to one value per group before the test.
 included. `table` has one row per (covariate, group, item, draw) and is never reduced;
 `result` reduces over draw only and carries `mean`, `sd`, `hdi_low`, `hdi_high` (a true
 highest-density interval, NaN at `n_samples ≤ 1`); `stats` is `None` without `splitby` and
-otherwise carries one row per (contrast, `quantity`). Every
+otherwise carries one row per contrast, with `quantity` naming the column contrasted. Every
 frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw values as rows
 with a `draw` column. Read back with `tcri.get.result(adata, name)` and
 `tcri.get.params(adata, name)`.
 
 **References.** Every scored metric takes `null_model`, defaulting to `"auto"`: the reference is
-computed and `result` gains `null_value` and `excess = value - null_value` beside every native
-value column (`null_denom` has no excess; a denominator is not a reported quantity). `table`
-carries them too, broadcast to every draw. `null_model=None` computes no reference and creates
-no column. The reference is the caller's own call with two arguments changed — `fit` set to the
+computed and `result` gains `null_value` and `adjusted = value - null_value` beside every native
+value column (`null_denom` has no adjusted column; a denominator is not a reported quantity).
+`table` carries them too, broadcast to every draw. The adjusted value is the quantity a metric
+reports: `stats` is computed on it, and `value` and `null_value` stay stored as its inputs.
+`null_model=None` computes no reference and creates no column, and `stats` is then on the value. The reference is the caller's own call with two arguments changed — `fit` set to the
 null and `null_model=None` — every other argument forwarded verbatim, so both sides are the same
 functional at the same arguments. `joint_distribution` returns a matrix rather than a scored
 quantity and takes no `null_model`.
@@ -91,8 +92,10 @@ kind resolves to the fit that carries it.
 **Plotting.** Each `pl` twin renders the result its `tl` twin stored; the covariate, groups,
 splits and distance it draws are the ones `tl` used, read from `params`. `pl` functions take
 no metric arguments. A mark shows one variance component: the coarsest unit that varies within
-an x position (replicate over item over draw). Connecting lines are drawn only between points
-sharing an identity across the compared levels.
+an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
+result carries one, against a zero rule, and `quantity="value"` draws the value with its null
+behind it; the star a panel draws is always about the quantity on its axis. Connecting lines are
+drawn only between points sharing an identity across the compared levels.
 
 **Diagnostics.** `reconstruction_ppc`, `loss` and `archetypes` take the model; the rest read the
 stored substrate. `joint_distribution_ppc` and `phenotype_calibration` read PER-FIT keys and
@@ -115,9 +118,9 @@ null from the parameter store and this object.
 `METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `kind="rank"` is the top
 `n_top` genes under the mark rule, with each gene's own contrast starred above it when a
 split was used; `kind="shift"` is the gene × phenotype `shift`, averaged over groups, on a
-diverging scale centred on zero. Every twin takes `quantity`, selecting the value (with its
-reference drawn behind it) or the excess (against a zero rule, with no interval);
-`kind="shift"` accepts only the value, because the reference has no per-phenotype
+diverging scale centered on zero. Every twin takes `quantity`: the default is the adjusted value
+against a zero rule, with no interval, and `quantity="value"` is the value with its reference
+drawn behind it; `kind="shift"` draws only the value, because the reference has no per-phenotype
 decomposition stored.
 
 ## The stub

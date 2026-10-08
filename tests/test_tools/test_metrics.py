@@ -153,7 +153,8 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
 
     Two copies of "rank-test two levels and star the p" would be free to drift apart. This
     asserts they cannot: the delta and p in ``stats`` equal what ``compare_groups`` returns on
-    the per-group frame.
+    the per-group frame of the column ``stats`` says it contrasted (``quantity``: the adjusted
+    value, since the fixture carries a reference).
     """
     from tcri._stats import compare_groups
 
@@ -163,10 +164,12 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
                                      splitby="disease_status")
     stats, result = res["stats"], res["result"]
 
-    per_group = (result.groupby(["patient", "disease_status"], observed=True)["value"]
-                 .mean().reset_index())
-    direct = compare_groups(per_group, value="value", splitby="disease_status").iloc[0]
     row = stats.iloc[0]
+    quantity = row["quantity"]
+    assert quantity == "adjusted"
+    per_group = (result.groupby(["patient", "disease_status"], observed=True)[quantity]
+                 .mean().reset_index())
+    direct = compare_groups(per_group, value=quantity, splitby="disease_status").iloc[0]
     assert row["p"] == pytest.approx(float(direct["p"]))
     assert row["delta"] == pytest.approx(float(direct["delta"]))
     assert row["stat"] == pytest.approx(float(direct["U"]))

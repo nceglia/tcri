@@ -4,26 +4,28 @@ Visualization twins that mirror the `tcri.tl` metrics by name — each renders t
 result of its `tl` counterpart (no metric math lives here) — plus the shared color
 helpers. Exposed as ``tcri.pl``.
 
-## The reference mark, and `quantity`
+## One quantity, and `quantity`
 
-Every twin takes `quantity`. The default, `"value"`, draws the metric with its permutation
-reference behind it — the same mark, grey and hollow, at the same x positions — when the cached
-result carries one. `quantity="excess"` puts `value - null_value` on y against a zero rule.
+Every twin takes `quantity`. The default draws the adjusted value, `value - null_value`, on y
+against a zero rule when the cached result carries a reference; `quantity="adjusted"` asks for
+that panel by name. `quantity="value"` draws the raw value with its permutation reference behind
+it — the same mark, grey and hollow, at the same x positions.
 
 ```python
-tcri.pl.mutual_information(adata)                     # value, reference behind it
-tcri.pl.mutual_information(adata, quantity="excess")  # the difference
+tcri.pl.mutual_information(adata)                    # the adjusted value, on a zero rule
+tcri.pl.mutual_information(adata, quantity="value")  # the value, reference behind it
 ```
 
 Three details are deliberate. The x order is computed once and given to every mark, so the
-reference pass cannot re-sort the axis under marks already drawn. The excess panel carries no
+reference pass cannot re-sort the axis under marks already drawn. The adjusted panel carries no
 error bar: an interval on a difference needs paired draws, and draws are not paired across two
 fits. And the endpoint view of a delta draws its grey dots at a fixed size with no connector —
 the null's matched clone count is provably its parent's, so sizing it would repeat one number,
 and a line between grey dots would assert matched identity across a permuted fit.
 
-A result computed with `null_model=None` has no reference: the y label says so, and asking for
-`quantity="excess"` raises rather than drawing an empty panel.
+A result computed with `null_model=None` has no reference: the default draws the value, with
+"(no reference)" on the y label, and asking for `quantity="adjusted"` raises rather than drawing
+an empty panel.
 
 ## Entropy plots
 

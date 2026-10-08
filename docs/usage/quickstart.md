@@ -97,7 +97,7 @@ mutual information and gene importance, so this is one prerequisite rather than 
 
 All entropies and mutual information are in **bits**. Each carries its reference: `value` is the
 number, `null_value` is what the same model gives on permuted labels, and
-`excess = value - null_value` is the part the structure accounts for.
+`adjusted = value - null_value` is the part the structure accounts for.
 
 ```python
 # mutual information between clonotype and phenotype at one covariate

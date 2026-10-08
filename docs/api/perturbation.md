@@ -60,36 +60,34 @@ the gene is silenced. Read any slot back with `tcri.get.gene_importance(adata, w
 Silencing a gene moves the phenotype call for every gene, so the importance is read against a
 permutation reference like every scored metric. `null_model` defaults to `"auto"`: the phenotype
 null, rebuilt from the parameter store and this object and run on the same genes, the same cells
-and the same rule, so `excess = value - null_value` is the part of a gene's importance that its
-relationship to phenotype accounts for rather than its expression level.
+and the same rule, so `adjusted = value - null_value` is the part of a gene's importance that
+its relationship to phenotype accounts for rather than its expression level.
 
 ```python
 tcri.null.all(model, adata)                       # once, after to_anndata
-gi = tcri.perturb.gene_importance(model, adata)   # value, null_value, excess
-tcri.pl.gene_importance(adata)                    # ranked by excess, by default
+gi = tcri.perturb.gene_importance(model, adata)   # value, null_value, adjusted
+tcri.pl.gene_importance(adata)                    # ranked by the adjusted importance
 tcri.pl.gene_importance(adata, quantity="value")  # the bare ranking, for comparison
 ```
 
-**This is the one twin whose default is the corrected quantity.** Everywhere else `quantity`
-defaults to the value with its reference drawn behind it; here it defaults to the excess,
-because the bare ranking is not merely incomplete. Silencing a gene is an intervention whose
-size scales with the gene's counts, and the encoder responds to that whatever the gene says
-about phenotype.
+The correction matters most here. Silencing a gene is an intervention whose size scales with the
+gene's counts, and the encoder responds to that whatever the gene says about phenotype, so the
+bare ranking is not merely incomplete: it is dominated by something the question is not about.
 
 Measured on a real fit of 2,000 genes: the bare importance and its null are 0.901
 rank-correlated, and the bare top ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal
-proteins. Ranked by excess the same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2 and KLRC4, and
-only 17 of the top 50 genes are shared. A reader shown the first list reasonably concludes the
-perturbation is broken.
+proteins. Ranked by the adjusted importance the same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2
+and KLRC4, and only 17 of the top 50 genes are shared. A reader shown the first list reasonably
+concludes the perturbation is broken.
 
 Which genes are SHOWN and which quantity is DRAWN are separate decisions. The gene set is
-ranked by the excess whenever the result carries one, unless you explicitly ask for
+ranked by the adjusted importance whenever the result carries one, unless you explicitly ask for
 `quantity="value"`, so `kind="rank"` and `kind="shift"` always describe the same genes.
 
 There is no `fit=` here. This is a query on a MODEL rather than on a stored substrate, so a
 different fit is reached by handing it a different model — and a fitted `TCRIModel` passed as
 `null_model` is used directly, skipping the rebuild.
 
-`kind="shift"` accepts only `quantity="value"`. The heatmap decomposes an importance across
-phenotypes and the reference has no such decomposition stored, so an "excess shift" would have
-to be invented rather than read.
+`kind="shift"` draws only the value, and `quantity="adjusted"` is refused there. The heatmap
+decomposes an importance across phenotypes and the reference has no such decomposition stored,
+so an adjusted shift would have to be invented rather than read.

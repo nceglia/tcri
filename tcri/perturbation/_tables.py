@@ -129,9 +129,8 @@ def stats_per_gene(result, *, groupby, splitby, value="value"):
     column. Uncorrected across genes, as every contrast in the package is uncorrected across
     pairs; multiplicity is the caller's.
 
-    ``value`` may be a LIST of quantities, which reaches ``build_stats`` unchanged: the frame
-    then carries one row per (gene, contrast, quantity) and the collapse happens once over all
-    of them, so a panel can switch quantity and keep its own star honest.
+    ``value`` names the column contrasted, as in ``build_stats``; the frame carries one row per
+    (gene, contrast) and a ``quantity`` column naming that column.
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None

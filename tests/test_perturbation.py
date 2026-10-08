@@ -246,37 +246,33 @@ def test_use_gate_false_ignores_n_samples_with_a_warning(cohort):
 # ── groups, contrasts, storage ───────────────────────────────────────────────
 
 def test_splitby_contrast_is_per_gene_over_groups(cohort):
-    """Catches pseudoreplication: ``stats`` has one row per gene AND QUANTITY, its ``n`` is the
-    number of patients per arm, and ``stat``/``p`` are a Mann-Whitney over the per-patient
-    values of that quantity.
+    """Catches pseudoreplication: ``stats`` has one row per gene, its ``n`` is the number of
+    patients per arm, and ``stat``/``p`` are a Mann-Whitney over the per-patient adjusted
+    values of that gene.
 
-    Both quantities are carried and nothing switches automatically. A frame that silently
-    became the excess while every panel still drew the value would star one quantity's contrast
-    over the other's marks, which is a mislabelled figure rather than a failing test.
+    One quantity per frame. The ``quantity`` column names the column each row contrasted, and
+    a panel keeps only the rows whose name matches the column on its axis, so the star it draws
+    is always about the marks beneath it. With no reference there is no adjusted column, and the
+    frame names ``"value"`` at the same size.
     """
     model, adata = cohort
     res = tcri.perturb.gene_importance(model, adata, splitby="disease_status", inplace=False)
     stats, result = res["stats"], res["result"]
     assert stats is not None
-    assert set(stats["quantity"]) == {"value", "excess"}
-    assert len(stats) == 2 * adata.n_vars
+    assert set(stats["quantity"]) == {"adjusted"}
+    assert len(stats) == adata.n_vars
+    assert stats["gene"].is_unique
     assert (stats["replicate_unit"] == "patient").all()
     assert (stats["n_a"] == 3).all() and (stats["n_b"] == 3).all()
 
-    gene = adata.var_names[4]
-    for quantity in ("value", "excess"):
-        row = stats.query("gene == @gene and quantity == @quantity").iloc[0]
+    for gene in adata.var_names:
+        row = stats.query("gene == @gene").iloc[0]
         per = result.query("gene == @gene")
-        va = per.loc[per["disease_status"] == row["level_a"], quantity].to_numpy()
-        vb = per.loc[per["disease_status"] == row["level_b"], quantity].to_numpy()
+        va = per.loc[per["disease_status"] == row["level_a"], "adjusted"].to_numpy()
+        vb = per.loc[per["disease_status"] == row["level_b"], "adjusted"].to_numpy()
         U, p = mannwhitneyu(va, vb, alternative="two-sided")
         assert float(row["stat"]) == pytest.approx(float(U))
         assert float(row["p"]) == pytest.approx(float(p))
-
-    # ...and the two rows describe the SAME replicates, which holds only because the collapse
-    # runs once over both quantities. Per-column masks would let n move with the null's NaNs.
-    per_gene = stats.query("gene == @gene")
-    assert per_gene["n_a"].nunique() == 1 and per_gene["n_b"].nunique() == 1
 
     bare = tcri.perturb.gene_importance(model, adata, splitby="disease_status",
                                         null_model=None, inplace=False)["stats"]

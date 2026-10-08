@@ -90,8 +90,8 @@ def blocks():
         # as `null_model=None` at the thirty-odd call sites below. This file is about the
         # AXES -- covariate, groupby, splitby, clones, weighted, temperature, n_samples -- and
         # each of those assertions is now also an assertion that the reference run forwards
-        # that axis, since a reference computed at defaults would move the excess but not the
-        # value and nothing here would notice.
+        # that axis, since a reference computed at defaults would move the adjusted column
+        # but not the value and nothing here would notice.
         import tcri
         tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
     logging.disable(logging.NOTSET)

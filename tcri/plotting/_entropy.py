@@ -12,7 +12,7 @@ from ._base import render_metric
 __all__ = ["clonotypic_entropy", "phenotypic_entropy"]
 
 
-def clonotypic_entropy(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None,
+def clonotypic_entropy(adata, *, quantity="auto", key=None, order=None, hue_order=None, palette=None,
                        ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-phenotype clonotypic entropy (bits) from the cached ``tl.clonotypic_entropy``."""
     return render_metric(adata, "clonotypic_entropy", ylabel="clonotypic entropy (bits)",
@@ -21,7 +21,7 @@ def clonotypic_entropy(adata, *, quantity="value", key=None, order=None, hue_ord
                          save=save, show=show, return_df=return_df)
 
 
-def phenotypic_entropy(adata, *, quantity="value", key=None, order=None, hue_order=None, palette=None,
+def phenotypic_entropy(adata, *, quantity="auto", key=None, order=None, hue_order=None, palette=None,
                        ax=None, figsize=(8, 4), save=None, show=None, return_df=False):
     """Per-clone phenotypic entropy — plasticity — from the cached ``tl.phenotypic_entropy``."""
     return render_metric(adata, "phenotypic_entropy", ylabel="phenotypic entropy (bits)",

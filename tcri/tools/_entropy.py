@@ -102,7 +102,7 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
-@tl_result(key=K.CLONOTYPIC_ENTROPY, version=1, schema=schemas.ClonotypicEntropy,
+@tl_result(key=K.CLONOTYPIC_ENTROPY, version=2, schema=schemas.ClonotypicEntropy,
            default_null="phenotype")
 def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,
@@ -122,7 +122,7 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
                            device=device, fit=fit)
 
 
-@tl_result(key=K.PHENOTYPIC_ENTROPY, version=1, schema=schemas.PhenotypicEntropy,
+@tl_result(key=K.PHENOTYPIC_ENTROPY, version=2, schema=schemas.PhenotypicEntropy,
            default_null="phenotype")
 def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, weighted=False, normalized=True,

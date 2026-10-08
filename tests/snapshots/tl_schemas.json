@@ -7,8 +7,8 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "covariate",
-              "excess",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -73,9 +73,9 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "covariate",
               "draw",
-              "excess",
               "null_value",
               "phenotype",
               "value"
@@ -98,7 +98,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.clonotypic_entropy"
     },
     "tcri_delta_clonotypic_entropy": {
@@ -108,11 +108,11 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
               "cov_from",
               "cov_to",
-              "excess",
-              "excess_from",
-              "excess_to",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -184,12 +184,12 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
               "cov_from",
               "cov_to",
               "draw",
-              "excess",
-              "excess_from",
-              "excess_to",
               "null_value",
               "null_value_from",
               "null_value_to",
@@ -219,7 +219,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.delta_clonotypic_entropy"
     },
     "tcri_delta_phenotypic_entropy": {
@@ -229,12 +229,12 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
               "clonotype",
               "cov_from",
               "cov_to",
-              "excess",
-              "excess_from",
-              "excess_to",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -305,13 +305,13 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
               "clonotype",
               "cov_from",
               "cov_to",
               "draw",
-              "excess",
-              "excess_from",
-              "excess_to",
               "null_value",
               "null_value_from",
               "null_value_to",
@@ -340,7 +340,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.delta_phenotypic_entropy"
     },
     "tcri_gene_importance": {
@@ -350,7 +350,7 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
-              "excess",
+              "adjusted",
               "gene",
               "hdi_high",
               "hdi_low",
@@ -444,8 +444,8 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "draw",
-              "excess",
               "gene",
               "null_value",
               "value"
@@ -467,7 +467,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.perturb.gene_importance"
     },
     "tcri_joint_distribution": {
@@ -526,9 +526,9 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "covariate",
               "denom",
-              "excess",
               "hdi_high",
               "hdi_low",
               "null_denom",
@@ -593,10 +593,10 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "covariate",
               "denom",
               "draw",
-              "excess",
               "null_denom",
               "null_value",
               "value"
@@ -619,7 +619,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.mutual_information"
     },
     "tcri_phenotypic_entropy": {
@@ -629,9 +629,9 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "clonotype",
               "covariate",
-              "excess",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -695,10 +695,10 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "clonotype",
               "covariate",
               "draw",
-              "excess",
               "null_value",
               "value"
             ],
@@ -720,7 +720,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.phenotypic_entropy"
     },
     "tcri_phenotypic_flux": {
@@ -730,10 +730,10 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "clonotype",
               "cov_from",
               "cov_to",
-              "excess",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -798,11 +798,11 @@
             "maximal": [
               "<groupby>",
               "<splitby>",
+              "adjusted",
               "clonotype",
               "cov_from",
               "cov_to",
               "draw",
-              "excess",
               "null_value",
               "value"
             ],
@@ -825,7 +825,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.phenotypic_flux"
     }
   }

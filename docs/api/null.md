@@ -30,12 +30,13 @@ counts, the permutation seed, the training arguments and the parent.
 
 Once they are there, every scored metric picks them up on its own. `null_model` defaults to
 `"auto"`, which is the metric's entry in the table above; `result` gains `null_value` and
-`excess = value - null_value`; `null_model=None` reports the bare value and creates no column.
+`adjusted = value - null_value`, the quantity the metric reports; `null_model=None` reports the
+bare value and creates no column.
 
 ```python
-mi = tcri.tl.mutual_information(adata, covariate="post")   # value, null_value, excess
-tcri.pl.mutual_information(adata)                          # the reference drawn behind it
-tcri.pl.mutual_information(adata, quantity="excess")       # the difference, on a zero rule
+mi = tcri.tl.mutual_information(adata, covariate="post")   # value, null_value, adjusted
+tcri.pl.mutual_information(adata)                          # the adjusted value, on a zero rule
+tcri.pl.mutual_information(adata, quantity="value")        # the value, reference drawn behind it
 ```
 
 Nulls are explicit. No metric fits one for you: a metric reads its reference from the substrate

@@ -20,7 +20,7 @@ from ._base import render_delta
 __all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
 
 
-def delta_clonotypic_entropy(adata, *, kind="delta", quantity="value", key=None, order=None, hue_order=None,
+def delta_clonotypic_entropy(adata, *, kind="delta", quantity="auto", key=None, order=None, hue_order=None,
                              palette=None, ax=None, figsize=(8, 4), save=None, show=None,
                              return_df=False):
     """ΔH[P(c|φ)] per phenotype, from the cached ``tl.delta_clonotypic_entropy``.
@@ -38,7 +38,7 @@ def delta_clonotypic_entropy(adata, *, kind="delta", quantity="value", key=None,
                         save=save, show=show, return_df=return_df)
 
 
-def delta_phenotypic_entropy(adata, *, kind="delta", quantity="value", key=None, order=None, hue_order=None,
+def delta_phenotypic_entropy(adata, *, kind="delta", quantity="auto", key=None, order=None, hue_order=None,
                              palette=None, ax=None, figsize=(8, 4), save=None, show=None,
                              return_df=False):
     """ΔH[P(φ|c)] per clone, from the cached ``tl.delta_phenotypic_entropy``.

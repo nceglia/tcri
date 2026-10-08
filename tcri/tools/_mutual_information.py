@@ -54,7 +54,7 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
     return (value, denom) if return_denom else value
 
 
-@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation,
+@tl_result(key=K.MUTUAL_INFORMATION, version=2, schema=schemas.MutualInformation,
            values=("value", "denom"), denominators=("denom",), default_null="phenotype")
 def mutual_information(
     adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
