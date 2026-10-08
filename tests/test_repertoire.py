@@ -225,6 +225,8 @@ def test_repertoire_summary_raises_on_a_missing_or_clashing_column():
 CALLS = {
     "repertoire_summary": dict(clonotype_key="clone_id_pooled", groupby="patient",
                                covariate_key="covariate", phenotype_key="phenotype"),
+    "clone_persistence": dict(clonotype_key="clone_id_pooled", covariate_key="covariate",
+                              cov_from="t0", cov_to="t1", groupby="patient"),
 }
 
 
