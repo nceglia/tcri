@@ -3,8 +3,7 @@
 Pyro's parameter store is process-global, so two `TCRIModule`s registered under the same names
 share one fit: the second overwrites the first, and the first goes on predicting from
 parameters it never learned. `name` is what separates them -- a model owns exactly the store
-keys under `f"{name}."`, and `""` is the unnamed layout that a session saved before namespaces
-existed restores into.
+keys under `f"{name}."`, and a model built without a name is given a generated one.
 
 These are the tests a null rests on, since a permutation reference is a second fit of the same
 model living beside its parent (`governance/MODEL_CONTRACT.md`, "A null is this model").
@@ -109,47 +108,34 @@ def test_fitting_b_does_not_move_a():
         assert torch.equal(v, a_state[k]), f"b's fit moved a.module.{k}"
 
 
-def test_unnamed_is_the_legacy_layout():
-    """`name=""` registers exactly the names a session saved before namespaces existed was
-    written under.
+def test_a_model_built_without_a_name_gets_its_own():
+    """`name=""` generates a name. The model's keys live under it and its constructor record
+    carries it, so a load rebuilds the model under the same one; two such models share no key."""
+    a = _fit(_adata(0), "", seed=0)
+    keys_a = _keys()
+    b = _fit(_adata(1), "", seed=1)
+    keys_b = _keys() - keys_a
 
-    Pinned as a literal set rather than a property, because this is a compatibility claim about
-    files on disk: such a session restores by key, so a rename here makes every one of them
-    silently load into nothing.
+    assert a.name and b.name and a.name != b.name
+    assert keys_a and all(k.startswith(f"{a.name}.") for k in keys_a), sorted(keys_a)[:5]
+    assert keys_b and all(k.startswith(f"{b.name}.") for k in keys_b), sorted(keys_b)[:5]
+    assert a.init_params_["non_kwargs"]["name"] == a.name
+
+
+def test_ownership_is_an_exact_namespace_match():
+    """A model owns its own keys and nothing else.
+
+    Written as a unit test on the predicate because both obvious implementations are wrong.
+    `key.startswith(name)` lets `a` claim `ab.`'s keys. `key.startswith(f"{name}.")` claims
+    DOWNWARD: a null's namespace is `f"{parent}.null.{kind}"`, so a parent would own its own
+    nulls' parameters and warn that it is about to continue its own fit.
     """
-    model = _fit(_adata(0), "", seed=0)
-    keys = _keys()
-
-    assert "q_p_c_raw" in keys and "q_p_ct_raw" in keys
-    assert all(k in ("q_p_c_raw", "q_p_ct_raw") or k.startswith("scvi$$$") for k in keys), (
-        f"unnamed model registered something outside the legacy layout: "
-        f"{sorted(k for k in keys if k not in ('q_p_c_raw', 'q_p_ct_raw') and not k.startswith('scvi$$$'))}"
-    )
-    assert model.name == "" and model.module.pname("q_p_ct_raw") == "q_p_ct_raw"
-
-
-def test_ownership_is_not_a_bare_prefix_test():
-    """`""` must not own every named model's keys.
-
-    Written as a unit test on the predicate because the obvious implementation --
-    `key.startswith(name)` -- is correct for every named model and wrong only for the
-    unnamed one, which is the default. It would make the constructor warn on every second
-    model and make the best-weight snapshot restore another fit's concentrations.
-    """
-    assert _owns_param("", "q_p_ct_raw") and _owns_param("", "scvi$$$encoder.weight")
-    assert not _owns_param("", "a.q_p_ct_raw"), "the unnamed model claimed a named model's key"
-    assert _owns_param("a", "a.q_p_ct_raw")
+    assert _owns_param("a", "a.q_p_ct_raw") and _owns_param("a", "a.scvi$$$encoder.weight")
     assert not _owns_param("a", "q_p_ct_raw")
     assert not _owns_param("a", "ab.q_p_ct_raw"), "prefix match without the separator"
-
-    # ...and it must not claim DOWNWARD either. A null's namespace is `f"{parent}.null.{kind}"`,
-    # so plain `key.startswith(f"{name}.")` -- which is what the unnamed case above requires --
-    # makes a parent own its own nulls' parameters and warn that it is about to continue its
-    # own fit.
     assert not _owns_param("a", "a.null.phenotype.q_p_ct_raw"), "a parent claimed its null"
-    assert not _owns_param("", "null.phenotype.q_p_ct_raw"), "an unnamed parent claimed its null"
     assert _owns_param("a.null.phenotype", "a.null.phenotype.q_p_ct_raw")
-    assert _owns_param("null.phenotype", "null.phenotype.scvi$$$px_r")
+    assert _owns_param("a.null.phenotype", "a.null.phenotype.scvi$$$px_r")
 
 
 def test_session_round_trip_keeps_the_namespace(tmp_path):
@@ -190,11 +176,7 @@ def test_the_snapshot_restores_only_its_own_concentrations():
     assert _is_own_guide_param(m, "a.q_p_ct_raw") and _is_own_guide_param(m, "a.q_p_c_raw")
     assert not _is_own_guide_param(m, "b.q_p_ct_raw"), "would restore another fit's parameters"
     assert not _is_own_guide_param(m, "a.scvi$$$encoder.weight"), "a network parameter is not a concentration"
-
-    m.name = ""
-    assert _is_own_guide_param(m, "q_p_ct_raw")
-    assert not _is_own_guide_param(m, "a.q_p_ct_raw")
-    assert not _is_own_guide_param(m, "scvi$$$encoder.weight")
+    assert not _is_own_guide_param(m, "a.null.phenotype.q_p_ct_raw"), "a null's concentration"
 
 
 def test_the_weight_decay_exemption_survives_a_namespace():

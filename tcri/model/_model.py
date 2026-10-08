@@ -11,10 +11,12 @@ modules; this file holds only the high-level `BaseModelClass` API
 - :mod:`._training`   -- :class:`UnifiedTrainingPlan`, :func:`build_archetypes`
 """
 import contextlib
+import contextvars
 import logging
 import math
 import operator
 import os
+import uuid
 import warnings
 
 import numpy as np
@@ -44,8 +46,7 @@ from ._training import UnifiedTrainingPlan, build_archetypes
 #: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
 #: concentrations and the networks `pyro.module` normalises as ``scvi$$$<param>``. This is the
 #: whole of a model's store footprint, which is what makes ownership decidable by name alone:
-#: an unnamed model owns exactly these bare names, a named one exactly the same set under
-#: ``f"{name}."``, and nothing else may.
+#: a model owns exactly this set under ``f"{name}."``, and nothing else may.
 _PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
 
 
@@ -66,22 +67,33 @@ def expect_params(name: str):
         _EXPECTED_PARAMS.discard(str(name))
 
 
+#: True while ``TCRIModel.load`` builds a model. The constructor's collision warning describes a
+#: new fit continuing from entries already in the store; a load replaces those entries instead,
+#: and ``TCRIModule.restore_param_store`` warns about that.
+_LOADING = contextvars.ContextVar("tcri_loading", default=False)
+
+
+def _generated_name() -> str:
+    """A namespace for a model constructed without ``name=``: ``tcri-`` and 12 hex digits.
+
+    Drawn from ``uuid4``, which reads OS entropy, so no seed reproduces it and two models never
+    share one, whether they live in one process or are saved by different processes and loaded
+    side by side.
+    """
+    return f"tcri-{uuid.uuid4().hex[:12]}"
+
+
 def _owns_param(name: str, key: str) -> bool:
     """Does the model called ``name`` own the store entry ``key``?
 
-    Ownership is what the constructor warning keys on, and it has two ways to go wrong, both
-    of which the obvious implementations hit. ``key.startswith(name)`` is correct for every
-    named model and wrong for the unnamed one, whose keys every named model's start with.
-    ``key.startswith(f"{name}.")`` fixes that and is still wrong DOWNWARD: a null's namespace is
-    ``f"{parent}.null.{kind}"``, so a parent would claim its own nulls' parameters
-    and warn about a collision with itself. So the namespace has to match exactly, which means
-    stripping it and requiring what remains to be one of this model's own entries.
+    Ownership is what the constructor warning keys on. ``key.startswith(f"{name}.")`` alone is
+    wrong DOWNWARD: a null's namespace is ``f"{parent}.null.{kind}"``, so a parent would claim
+    its own nulls' parameters and warn about a collision with itself. So the namespace has to
+    match exactly, which means stripping it and requiring what remains to be one of this model's
+    own entries.
     """
-    if name:
-        if not key.startswith(f"{name}."):
-            return False
-        key = key[len(name) + 1:]
-    return key.startswith(_PARAM_BASES)
+    prefix = f"{name}."
+    return key.startswith(prefix) and key[len(prefix):].startswith(_PARAM_BASES)
 
 
 #: The three label axes a null may permute. Each names one code vector read from ``obs`` in
@@ -375,6 +387,25 @@ class TCRIModel(BaseModelClass):
         else:
             adata.uns["tcri_layer"] = layer
 
+    @classmethod
+    def load(cls, dir_path: str, adata: Optional[AnnData] = None, **kwargs):
+        """Load a model saved with ``save``.
+
+        scvi's loader, with the Pyro store handled per model: the model's two guide
+        concentrations and every parameter of its nulls come back from the store saved in
+        ``model.pt``, its networks from the saved weights, and other models' entries in the
+        process-global store are left as they are. If the store already holds this model's
+        entries, because it was fitted or loaded earlier in the session, they are replaced and
+        a warning says so. Raises ``ValueError`` when the file holds no posteriors for the
+        model. ``kwargs`` go to scvi's ``BaseModelClass.load`` (``accelerator``, ``device``,
+        ``prefix``, ...).
+        """
+        token = _LOADING.set(True)
+        try:
+            return super().load(dir_path, adata=adata, **kwargs)
+        finally:
+            _LOADING.reset(token)
+
     def __init__(
         self,
         adata: AnnData,
@@ -414,8 +445,9 @@ class TCRIModel(BaseModelClass):
         is set in :meth:`train`.
 
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
-        two models can be fitted in one session without overwriting each other. ``""`` is the
-        unnamed layout: this model's parameters keep their bare store names.
+        two models can be fitted in one session without overwriting each other. Left empty, a
+        name is generated (``tcri-`` and 12 hex digits) and recorded with the model, so a load
+        restores the model under the same one.
 
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
@@ -426,6 +458,8 @@ class TCRIModel(BaseModelClass):
         ``ValueError``; this happens when ``obs`` is edited after :meth:`setup_anndata`, which
         refuses such cells itself."""
         super().__init__(adata)
+        if not name:
+            name = _generated_name()
         self._name = str(name)
         self._permutation = permutation
         #: The arguments the last ``train()`` actually ran with. ``tcri.null.*`` replays them so
@@ -473,19 +507,17 @@ class TCRIModel(BaseModelClass):
         if self._seed is not None:
             self._apply_seed(self._seed)
 
-        # Pyro's param store is PROCESS-GLOBAL: a second TCRIModel in the same session
-        # silently inherits the first model's fitted q_p_c_raw/q_p_ct_raw and network
-        # weights, so it starts from the previous fit instead of from scratch. We warn
-        # rather than clearing, because clearing here would destroy the params of a
-        # model loaded earlier in the session (load_tcri_session restores the store
-        # after construction).
-        # The check is scoped to THIS model's namespace. An unnamed model owns exactly the bare
-        # names; a named one owns exactly the keys under "<name>.". Without the scoping the
-        # warning fires for every other model's parameters -- which, since two models can
-        # coexist, is the normal state rather than the problem it is meant to flag.
+        # Pyro's param store is PROCESS-GLOBAL: a model constructed under a name the store
+        # already holds silently inherits that fit's q_p_c_raw/q_p_ct_raw and network weights,
+        # so it starts from the previous fit instead of from scratch. Only a `name=` passed
+        # again can do that, since a generated name is new. We warn rather than clearing,
+        # because clearing here would destroy the params of a model loaded earlier in the
+        # session. The check is scoped to THIS model's namespace: other models' parameters are
+        # the normal state of a session, not the problem it is meant to flag. A load builds the
+        # model under its saved name and then replaces those entries, so it is not checked here.
         _tcri_params = [k for k in pyro.get_param_store().keys()
                         if _owns_param(self._name, k)]
-        if _tcri_params and self._name not in _EXPECTED_PARAMS:
+        if _tcri_params and self._name not in _EXPECTED_PARAMS and not _LOADING.get():
             warnings.warn(
                 f"The global Pyro param store already holds TCRI parameters for "
                 f"name={self._name!r} ({len(_tcri_params)} entries). This model will CONTINUE "
@@ -947,7 +979,8 @@ class TCRIModel(BaseModelClass):
 
     @property
     def name(self) -> str:
-        """The parameter-store namespace this model owns. ``""`` is the unnamed layout."""
+        """The parameter-store namespace this model owns: the ``name=`` it was constructed with,
+        or the one generated when none was given."""
         return self.module.name
 
     @property

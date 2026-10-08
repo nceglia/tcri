@@ -23,6 +23,7 @@ import contextlib
 import io
 import warnings
 
+import anndata
 import numpy as np
 import pandas as pd
 import pyro
@@ -591,3 +592,114 @@ def test_a_groupby_finer_than_the_strata_raises():
                                     fit="null.clonotype", null_model=None, inplace=False)
     except ValueError as exc:
         assert "null.clonotype" in str(exc) and "within=" in str(exc), str(exc)
+
+
+# ── nulls across a load ──────────────────────────────────────────────────────
+#
+# The parents below are built WITHOUT `name=`, the default path. A null's parameters live only in
+# the store, so these check that a load carries a parent's nulls and leaves other parents' alone.
+
+def _unnamed_parent(a):
+    _setup(a)
+    model = TCRIModel(a, **KNOBS)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.train(**TRAIN)
+        model.to_anndata(a)
+    return model
+
+
+def _fit_null(kind, model, a):
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return getattr(tcri.null, kind)(model, a)
+
+
+def _save_plain(model, a, path):
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.save(str(path), overwrite=True, save_anndata=False)
+    a.write_h5ad(path / "adata.h5ad")
+
+
+def _load_plain(path, adata_file="adata.h5ad"):
+    a = anndata.read_h5ad(path / adata_file)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return TCRIModel.load(str(path), adata=a), a
+
+
+def test_a_null_is_rebuilt_after_its_parent_is_reloaded_with_load(tmp_path):
+    """``TCRIModel.save``, clear the store, ``TCRIModel.load``, rebuild: the null predicts what
+    it predicted. The plain loader carries a parent's nulls as the session does."""
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    expected = _fit_null("phenotype", parent, a).predict(a).to_numpy()
+    _save_plain(parent, a, tmp_path / "p")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "p")
+    back = rebuild(loaded, b, "phenotype")
+
+    np.testing.assert_allclose(back.predict(b).to_numpy(), expected, atol=1e-6)
+
+
+def test_loading_another_model_leaves_the_parents_nulls(tmp_path):
+    """Load a parent, then an unrelated model: the parent's null still rebuilds and predicts what
+    it predicted.
+
+    The unrelated model is fitted and saved from a cleared store. Saved beside the parent, its
+    file would carry the parent's nulls and put them back, and this would pass on a load that
+    replaces the whole store.
+    """
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    expected = _fit_null("phenotype", parent, a).predict(a).to_numpy()
+    _save_plain(parent, a, tmp_path / "p")
+    pyro.clear_param_store()
+    q = _adata(seed=1)
+    _save_plain(_unnamed_parent(q), q, tmp_path / "q")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "p")
+    _load_plain(tmp_path / "q")
+    back = rebuild(loaded, b, "phenotype")
+
+    np.testing.assert_allclose(back.predict(b).to_numpy(), expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("cleared", [True, False], ids=["cleared", "in_process"])
+def test_a_null_fitted_after_the_save_names_the_save(tmp_path, cleared):
+    """A null fitted after its parent was saved is not in the save. After the parent is loaded,
+    rebuilding that null raises and says so; its record in ``uns`` is untouched, and a metric
+    still uses it as its reference.
+
+    In process, the load finds the null in the store, drops it, and its warning names it.
+    """
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    _fit_null("phenotype", parent, a)
+    _save_plain(parent, a, tmp_path / "p")
+    _fit_null("clonotype", parent, a)
+    a.write_h5ad(tmp_path / "p" / "after.h5ad")
+    if cleared:
+        pyro.clear_param_store()
+
+    b = anndata.read_h5ad(tmp_path / "p" / "after.h5ad")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        loaded = TCRIModel.load(str(tmp_path / "p"), adata=b)
+    dropped = [x for x in w if "Nulls the save does not have are dropped" in str(x.message)]
+    assert bool(dropped) is (not cleared)
+    assert all(f"{parent.name}.null.clonotype" in str(x.message) for x in dropped)
+
+    with pytest.raises(RuntimeError, match="fitted after the save"):
+        rebuild(loaded, b, "clonotype")
+    assert "null.clonotype" in K.fits(b)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = tcri.tl.mutual_information(b, covariate="cov_0", null_model="clonotype",
+                                         inplace=False)
+    assert np.isfinite(np.asarray(res["result"]["adjusted"], dtype=float)).all()
+

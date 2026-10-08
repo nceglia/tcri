@@ -117,7 +117,7 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
 
-    namespace = f"{model.name}.{fit}" if model.name else fit
+    namespace = f"{model.name}.{fit}"
     null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
                      **_init_params(model))
     null.train(**train_args)

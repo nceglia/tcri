@@ -50,6 +50,15 @@ def rebuild(model, adata, fit):
     axis = str(settings.get("kind")) if axis is None else str(axis)
 
     held = [k for k in pyro.get_param_store().keys() if k.startswith(f"{namespace}.")]
+    restored = getattr(model.module, "_restored_nulls", None)
+    if not held and restored is not None and namespace not in restored:
+        raise RuntimeError(
+            f"the store holds no parameters for {namespace!r}: this model was loaded from a "
+            f"save that does not include that null, which was fitted after the save was made. "
+            f"Its record in this AnnData is intact and metrics still read it; to rebuild the "
+            f"model, refit it with tcri.null.{settings.get('kind')}(model, adata), or load a "
+            f"save made after it."
+        )
     if not held:
         raise RuntimeError(
             f"the store holds no parameters for {namespace!r}; load the session that fitted it "
