@@ -108,21 +108,20 @@ plt.show()
 # %% [markdown]
 # ### Preprocessing
 #
-# `group_singletons` collapses clones below a size threshold into one pooled id *per group*.
-# On a heavy-tailed repertoire most clones are tiny, and a clone seen once carries no
-# information about its own phenotype distribution while still counting as a row in every
-# entropy normalizer. Pooling is one defensible answer; dropping them is another. This
-# notebook keeps every clone and only shows what the call would do.
+# `pool_rare_clones` pools each patient's rare clones into one `pooled@{patient}` label: a
+# clone is rare when it has fewer than `min_cells` cells and all of them come from one sample.
+# On a heavy-tailed repertoire most clones are tiny, and a clone seen through a cell or two says
+# little about its own phenotype distribution while still counting as a row in every entropy
+# normalizer. This notebook keeps every clone and only shows what the call would do.
 #
 # (`tcri.pp` also has `clone_size`, but it reads the registry that `to_anndata` writes, so it
 # runs *after* fitting rather than here — it appears in section 2.)
 
 # %%
 preview = adata.copy()
-tcri.pp.group_singletons(preview, clonotype_key="clone_id", groupby="patient",
-                         target_col="clone_id_grouped", min_clone_size=5)
+tcri.pp.pool_rare_clones(preview, clonotype_key="clone_id", groupby="patient")
 print(f"clones: {adata.obs['clone_id'].nunique()} -> "
-      f"{preview.obs['clone_id_grouped'].nunique()} if clones with <5 cells were pooled")
+      f"{preview.obs['clone_id_pooled'].nunique()} if clones with fewer than 3 cells were pooled")
 
 # %% [markdown]
 # ## 2. Register and fit

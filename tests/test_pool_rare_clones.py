@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 from anndata import AnnData, read_h5ad
 
+import tcri
 from tcri._compute._repertoire import (
     TCRIDataWarning,
     _clonotype_source,
@@ -342,3 +343,21 @@ def test_pool_step_in_derivation_record(tmp_path):
     assert _labels(back) == _labels(adata)
     assert list(back.obs["clone_id_pooled"].cat.categories) == \
         list(adata.obs["clone_id_pooled"].cat.categories)
+
+
+def test_public_function_forwards_every_argument():
+    """``tcri.pp.pool_rare_clones`` has the private function's signature and writes the same
+    column and record, with every argument away from its default."""
+    assert inspect.signature(tcri.pp.pool_rare_clones) == inspect.signature(_pool_rare_clones)
+    kwargs = dict(clonotype_key="clone_id", groupby="patient", min_cells=4, samples="sample",
+                  key_added="pooled")
+    public, private = _cohort(), _cohort()
+    for adata in (public, private):
+        adata.obs["sample"] = ["s1", "s1", "s1", "s1", "s2", "s1"] * 2
+    tcri.pp.pool_rare_clones(public, **kwargs)
+    _pool_rare_clones(private, **kwargs)
+    pd.testing.assert_frame_equal(public.obs, private.obs)
+    assert _derivation_steps(public) == _derivation_steps(private)
+    # c1 in P1 has three cells, under four; c2 has two, seen in two samples
+    assert _labels(public, "pooled") == (["pooled@P1"] * 3 + ["c2@P1"] * 2 + ["pooled@P1"]
+                                         + ["pooled@P2"] * 2 + ["c4@P2"] * 4)

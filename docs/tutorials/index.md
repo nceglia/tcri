@@ -56,16 +56,14 @@ p-value is bounded by the number of distinct orderings.
 
 ### Preprocessing
 
-{func}`tcri.pp.group_singletons` collapses clones below a size threshold into one pooled id
-*per group*. On a heavy-tailed repertoire most clones are tiny, and a clone seen once carries
-no information about its own phenotype distribution while still counting as a row in every
-entropy normalizer. Pooling is one defensible answer; dropping them is another.
+{func}`tcri.pp.pool_rare_clones` pools each patient's rare clones into one `pooled@{patient}`
+label. A clone is rare when it has fewer than `min_cells` cells and all of them come from one
+sample; every other clone is kept. On a heavy-tailed repertoire most clones are tiny, and a
+clone seen through a cell or two says little about its own phenotype distribution while still
+counting as a row in every entropy normalizer.
 
 ```python
-tcri.pp.group_singletons(
-    adata, clonotype_key="clone_id", groupby="patient",
-    target_col="clone_id_grouped", min_clone_size=5,
-)
+tcri.pp.pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
 ```
 
 {func}`tcri.pp.clone_size` also exists, but it reads the registry that `to_anndata` writes, so
