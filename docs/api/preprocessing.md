@@ -15,3 +15,10 @@ computed by `tcri.tl.joint_distribution` after `model.to_anndata`.
 .. automodule:: tcri.preprocessing._preprocessing
    :members:
 ```
+
+## Repertoire summaries
+
+```{eval-rst}
+.. automodule:: tcri.preprocessing._repertoire
+   :members:
+```

@@ -192,6 +192,9 @@ class pp:
         covariate_cols: Any = ..., drop_missing_clonotype: bool = ..., counts_layer: str = ...,
         fill_counts_from_X: bool = ..., strict: bool = ..., copy: bool = ...,
     ) -> AnnData: ...
+    def clonotype_sharing(
+        adata: AnnData, *, clonotype_key: str, groupby: str, per_clonotype: bool = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
