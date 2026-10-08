@@ -36,7 +36,7 @@ def fresh_trained_model(synthetic_adata):
     adata = synthetic_adata.copy()
     TCRIModel.setup_anndata(
         adata, clonotype_key="unique_clone_id", phenotype_key="phenotype_col",
-        covariate_key="timepoint", batch_key="patient",
+        covariate_key="timepoint", batch_key="patient", replicate="patient",
     )
     model = TCRIModel(
         adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
@@ -107,6 +107,12 @@ def test_session_round_trip(fresh_trained_model, tmp_path):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         loaded_model, loaded = load_tcri_session(str(out_dir))
+
+    # A metric with no explicit groupby must keep resolving the registered independent
+    # replicate after the model is reloaded, not silently lose its default axis.
+    saved_setup = json.loads((out_dir / "setup.json").read_text())
+    assert saved_setup["replicate"] == "patient"
+    assert loaded.uns[K.METADATA][K.Config.REPLICATE] == "patient"
 
     # 1) serialization: the saved AnnData survives the h5ad round-trip
     np.testing.assert_array_equal(
