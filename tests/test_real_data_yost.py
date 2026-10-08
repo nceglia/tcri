@@ -82,7 +82,8 @@ def test_dataset_shape_is_what_the_pipeline_assumes(yost):
     spans = yost.obs.groupby(CLONE, observed=True)[GROUP].nunique()
     assert int((spans > 1).sum()) == 0, (
         f"{int((spans > 1).sum())} clones appear in more than one patient; use a "
-        f"patient-scoped clone id (trb_unique) instead of {CLONE!r}"
+        f"patient-scoped clone id, such as the column tcri.pp.pool_rare_clones writes, "
+        f"instead of {CLONE!r}"
     )
     # response must be a property of the patient, or splitby is ill-defined
     assert yost.obs.groupby(GROUP, observed=True)[SPLIT].nunique().max() == 1

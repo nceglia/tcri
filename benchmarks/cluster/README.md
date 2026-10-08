@@ -9,6 +9,6 @@ publishes that site's layout and someone's account identifier, and it is useless
 else. Keep yours in `dev/`, which is gitignored.
 
     python benchmarks/cluster/prep_real.py --in RAW.h5ad --out PREPPED.h5ad \
-        --n-top-genes 2000 --clonotype-key CLONE_COL --target-col CLONE_COL --min-clone-size 10
+        --n-top-genes 2000 --clonotype-key CLONE_COL --key-added POOLED_COL --min-cells 3
 
     python benchmarks/cluster/profile_real.py --in PREPPED.h5ad --out RESULTS.json ...

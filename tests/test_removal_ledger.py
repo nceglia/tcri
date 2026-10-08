@@ -32,6 +32,7 @@ REMOVED = {
         "remove_meaningless_genes", "gene_entropy", "classify_phenotypes",
         "register_model", "register_phenotype_key", "register_clonotype_key",
         "_compute_logits_and_prior", "joint_distribution_posterior", "joint_distribution",
+        "group_singletons",  # rare clones are pooled by pp.pool_rare_clones
     ],
     # consolidated into the metric surface that replaced them
     "tl": [
@@ -50,6 +51,7 @@ REMOVED = {
     "ut": [
         "probabilities", "write_adata_safely", "_pop_nonserializables",
         "build_nested_tcri_pgm", "draw_tcri_pgm_nested",
+        "auc_and_label_permutation", "bootstrap_auc",
     ],
     # model/utils cleanup
     "ml": ["plot_loss", "plot_archetypes"],
