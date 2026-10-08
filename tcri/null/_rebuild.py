@@ -49,7 +49,29 @@ def rebuild(model, adata, fit):
     axis = settings.get("axis")
     axis = str(settings.get("kind")) if axis is None else str(axis)
 
-    held = [k for k in pyro.get_param_store().keys() if k.startswith(f"{namespace}.")]
+    from ..model._model import _is_generated_name
+    from ..model._module import _null_namespace
+
+    # Exactly this namespace: a key_added sibling's keys (`<namespace>.b.…`) share the prefix.
+    held = [k for k in pyro.get_param_store().keys() if _null_namespace(k) == namespace]
+    parent = settings.get("parent")
+    if not held and parent is not None and str(parent) != str(model.name):
+        kind = settings.get("kind")
+        keyed = str(settings.get("key_added", "") or "")
+        main = str((adata.uns.get(K.FIT_SETTINGS) or {}).get("name", ""))
+        if (not str(parent) or _is_generated_name(parent)) and _is_generated_name(model.name):
+            remedy = (f"Refit it for this model with tcri.null.{kind}(model, adata"
+                      + (f", key_added={keyed!r}" if keyed else "") + ")"
+                      + ("" if main == str(model.name) else
+                         ", after writing this model's main fit with model.to_anndata(adata)")
+                      + ".")
+        else:
+            remedy = (f"Fit this model's own beside it with tcri.null.{kind}(model, adata, "
+                      f"key_added=...).")
+        raise RuntimeError(
+            f"the store holds no parameters for {namespace!r}: fit {fit!r} on this object "
+            f"belongs to parent {str(parent)!r}, not to this model ({model.name!r}). {remedy}"
+        )
     restored = getattr(model.module, "_restored_nulls", None)
     if not held and restored is not None and namespace not in restored:
         raise RuntimeError(
@@ -101,4 +123,5 @@ def rebuild(model, adata, fit):
     null.module.to(next(null.module.parameters()).device)
     null.module.eval()
     null.is_trained_ = True
+    null._fit_name = fit
     return null

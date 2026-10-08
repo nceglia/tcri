@@ -34,7 +34,8 @@ import tcri
 from tcri._compute._tables import clones_at, fit_clone_labels
 from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
-from tcri.model._model import TCRIModel, _owns_param
+from tcri.model._model import (TCRIModel, _generated_name, _is_generated_name,
+                               _owns_param)
 from tcri.null import _permute
 from tcri.null._rebuild import rebuild
 
@@ -599,9 +600,9 @@ def test_a_groupby_finer_than_the_strata_raises():
 # The parents below are built WITHOUT `name=`, the default path. A null's parameters live only in
 # the store, so these check that a load carries a parent's nulls and leaves other parents' alone.
 
-def _unnamed_parent(a):
+def _unnamed_parent(a, seed=0):
     _setup(a)
-    model = TCRIModel(a, **KNOBS)
+    model = TCRIModel(a, **{**KNOBS, "seed": seed})
     with contextlib.redirect_stdout(io.StringIO()):
         model.train(**TRAIN)
         model.to_anndata(a)
@@ -702,4 +703,161 @@ def test_a_null_fitted_after_the_save_names_the_save(tmp_path, cleared):
         res = tcri.tl.mutual_information(b, covariate="cov_0", null_model="clonotype",
                                          inplace=False)
     assert np.isfinite(np.asarray(res["result"]["adjusted"], dtype=float)).all()
+
+
+# ── a refit on the same object ───────────────────────────────────────────────
+
+def _rewrites(w):
+    return [str(x.message) for x in w if "taken as a refit" in str(x.message)]
+
+
+def test_a_generated_name_is_recognized():
+    """``_is_generated_name`` accepts what ``_generated_name`` makes, and none of these."""
+    assert _is_generated_name(_generated_name())
+    for name in ("", "nullparent", "tcri-", "tcri-0123456789AB", "tcri-0123456789abc",
+                 "tcri-0123456789ab.null.phenotype"):
+        assert not _is_generated_name(name), name
+
+
+def test_a_refit_unnamed_parent_rewrites_its_null():
+    """Refit a model built without ``name=``, write its main fit, and re-run its null on the same
+    object: the null is rewritten as the new parent's, with the rewrite warning naming the old
+    parent, and every reader (the record, the substrate, a rebuild) sees the new one."""
+    a = _adata()
+    first = _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    old = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    second = _unnamed_parent(a, seed=1)
+
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        null = tcri.null.phenotype(second, a)
+
+    rewrites = _rewrites(w)
+    assert len(rewrites) == 1 and first.name in rewrites[0], [str(x.message) for x in w]
+    settings = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]
+    assert settings["parent"] == second.name
+    assert settings["namespace"] == null.name == f"{second.name}.null.phenotype"
+    new = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")])
+    assert not np.allclose(new, old), "the two nulls must differ to tell the rewrite apart"
+    np.testing.assert_allclose(new, null.get_p_ct(), atol=1e-6)
+    np.testing.assert_allclose(rebuild(second, a, "phenotype").predict(a).to_numpy(),
+                               null.predict(a).to_numpy(), atol=1e-6)
+
+
+def test_a_null_recorded_without_a_parent_name_is_rewritten():
+    """A record from an earlier release names its parent ``""``. A model built without
+    ``name=`` that wrote the main fit, re-running that null, rewrites it with the warning."""
+    a = _adata()
+    first = _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    key = K.fit_key(K.FIT_SETTINGS, "null.phenotype")
+    a.uns[key] = {**a.uns[key], "parent": ""}
+    second = _unnamed_parent(a, seed=1)
+
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        tcri.null.phenotype(second, a)
+
+    assert len(_rewrites(w)) == 1, [str(x.message) for x in w]
+    assert a.uns[key]["parent"] == second.name
+
+
+def test_an_unnamed_model_whose_main_fit_is_not_here_raises():
+    """Two models built without ``name=``, but the second never wrote its main fit to this
+    object: its null would sit beside the first model's values, so it raises and the held null
+    is left as it was."""
+    a = _adata()
+    first = _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    other = TCRIModel(a, **{**KNOBS, "seed": 1})
+    with contextlib.redirect_stdout(io.StringIO()):
+        other.train(**TRAIN)
+
+    with pytest.raises(ValueError, match="key_added"):
+        tcri.null.phenotype(other, a)
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
+    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
+
+
+@pytest.mark.parametrize("held, new", [("namedheld", None), (None, "namednew")],
+                         ids=["generated_over_named", "named_over_generated"])
+def test_a_named_parent_on_either_side_still_raises(held, new):
+    """Only two parents built without ``name=`` rewrite. With ``name=`` given to either, the
+    second raises and the held null is left as it was."""
+    a = _adata()
+    first = _parent(a, held) if held else _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    second = _parent(a, new) if new else _unnamed_parent(a, seed=1)
+    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+
+    with pytest.raises(ValueError, match="key_added"):
+        tcri.null.phenotype(second, a)
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
+    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
+
+
+@pytest.mark.parametrize("names, remedy", [((None, None), "Refit it for this model"),
+                                           (("alpha", "beta"), "key_added=")],
+                         ids=["unnamed", "named"])
+def test_rebuild_names_the_parent_a_null_belongs_to(tmp_path, names, remedy):
+    """A second model saved before running its own null, then loaded: rebuilding that null names
+    the first parent, and gives the remedy for the two names."""
+    pyro.clear_param_store()
+    a = _adata()
+    first = _parent(a, names[0]) if names[0] else _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    second = _parent(a, names[1]) if names[1] else _unnamed_parent(a, seed=1)
+    _save_plain(second, a, tmp_path / "second")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "second")
+
+    with pytest.raises(RuntimeError, match="belongs to parent") as e:
+        rebuild(loaded, b, "phenotype")
+    assert first.name in str(e.value) and loaded.name in str(e.value)
+    assert remedy in str(e.value)
+
+
+def test_a_null_object_this_object_no_longer_records_keeps_its_own_name():
+    """Pass a null as ``null_model`` after a refit rewrote its fit on this object: the reference
+    is recorded under the null's own name, and the reference cached for the fit is untouched."""
+    a = _adata()
+    first = _unnamed_parent(a)
+    stale = _fit_null("phenotype", first, a)
+    second = _unnamed_parent(a, seed=1)
+    _fit_null("phenotype", second, a)
+    genes = list(a.var_names[:3])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.perturb.gene_importance(second, a, genes=genes)
+        cached = tcri.get.result(a, "gene_importance", fit="null.phenotype")["result"].copy()
+
+        tcri.perturb.gene_importance(second, a, genes=genes, null_model=stale)
+
+    assert tcri.get.params(a, "gene_importance")["null_model"] == stale.name
+    pd.testing.assert_frame_equal(
+        tcri.get.result(a, "gene_importance", fit="null.phenotype")["result"], cached)
+
+
+def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_path):
+    """The save holds ``null.phenotype.b`` only, and ``null.phenotype`` is fitted after it. The
+    sibling's keys share its namespace's prefix; rebuilding ``null.phenotype`` must still raise
+    rather than return a model on fresh parameters."""
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.phenotype(parent, a, key_added="b")
+    _save_plain(parent, a, tmp_path / "p")
+    _fit_null("phenotype", parent, a)
+    a.write_h5ad(tmp_path / "p" / "after.h5ad")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "p", "after.h5ad")
+
+    with pytest.raises(RuntimeError, match="fitted after the save"):
+        rebuild(loaded, b, "phenotype")
 

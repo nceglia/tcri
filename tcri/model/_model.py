@@ -16,6 +16,7 @@ import logging
 import math
 import operator
 import os
+import re
 import uuid
 import warnings
 
@@ -81,6 +82,21 @@ def _generated_name() -> str:
     side by side.
     """
     return f"tcri-{uuid.uuid4().hex[:12]}"
+
+
+#: The form :func:`_generated_name` produces, defined beside it so the two change together.
+_GENERATED_NAME = re.compile(r"tcri-[0-9a-f]{12}")
+
+
+def _is_generated_name(name) -> bool:
+    """Is ``name`` of the form :func:`_generated_name` produces?
+
+    Read off the name itself, so the answer is the same for a model built in this process, one
+    rebuilt by a load (which passes the saved name back to the constructor), and a parent's name
+    read out of an AnnData that went through h5ad. A ``name=`` passed by hand in exactly this
+    form reads as generated.
+    """
+    return _GENERATED_NAME.fullmatch(str(name)) is not None
 
 
 def _owns_param(name: str, key: str) -> bool:
@@ -462,6 +478,10 @@ class TCRIModel(BaseModelClass):
             name = _generated_name()
         self._name = str(name)
         self._permutation = permutation
+        #: The fit name a null's substrate is written under on its AnnData (``null.phenotype``),
+        #: set by ``tcri.null.*`` and ``rebuild``; ``None`` otherwise. A null's ``name`` is its
+        #: parameter-store namespace, which is not that.
+        self._fit_name = None
         #: The arguments the last ``train()`` actually ran with. ``tcri.null.*`` replays them so
         #: a null is fitted the way its parent was; ``save_tcri_session`` persists them, because
         #: an in-memory attribute would not survive a reload and the null would silently fall
