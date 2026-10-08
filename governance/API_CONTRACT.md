@@ -205,6 +205,10 @@ class pp:
         covariate_cols: Any = ..., drop_missing_clonotype: bool = ..., counts_layer: str = ...,
         fill_counts_from_X: bool = ..., strict: bool = ..., copy: bool = ...,
     ) -> AnnData: ...
+    def repertoire_summary(
+        adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,
+        covariate_key: Optional[str] = ..., phenotype_key: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
