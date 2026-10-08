@@ -41,6 +41,9 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
                               n_perm=200_000, seed=42, max_exact=200_000):
     """Observed AUROC + a label-permutation p-value (exact when feasible).
 
+    Empty labels or a selected positive label leaving only one class return
+    ``(nan, nan, array([]), "degenerate")`` without warning.
+
     Under label permutation the *scores* never change, so the ranks are computed
     ONCE and each permuted AUROC is a rank-sum over the permuted positive set via
     the Mann–Whitney identity
@@ -52,17 +55,18 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
     """
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels)
+    if labels.size == 0:
+        return np.nan, np.nan, np.array([]), "degenerate"
     if pos_label is None:
         pos_label = sorted(set(labels))[-1]
     y = (labels == pos_label).astype(int)
-    obs_auc = roc_auc_score(y, scores)
     n = len(y)
     n_pos = int(y.sum())
     n_neg = n - n_pos
 
     if n_pos == 0 or n_neg == 0:  # AUROC is undefined with only one class present
-        perm_stats = np.array([])
-        return obs_auc, float("nan"), perm_stats, "degenerate"
+        return np.nan, np.nan, np.array([]), "degenerate"
+    obs_auc = roc_auc_score(y, scores)
 
     # midranks: ties get the average rank, matching roc_auc_score exactly
     ranks = rankdata(scores)
@@ -89,12 +93,20 @@ def auc_and_label_permutation(scores, labels, pos_label=None,
 
 
 def bootstrap_auc(scores, labels, pos_label=None, n_boot=5000, seed=42):
-    """Bootstrap 95% CI for AUROC."""
+    """Bootstrap 95% CI for AUROC.
+
+    Empty labels or a selected positive label leaving only one class return
+    ``array([nan, nan])`` without warning.
+    """
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels)
+    if labels.size == 0:
+        return np.array([np.nan, np.nan])
     if pos_label is None:
         pos_label = sorted(set(labels))[-1]
     y = (labels == pos_label).astype(int)
+    if not y.any() or y.all():
+        return np.array([np.nan, np.nan])
     rng = np.random.default_rng(seed)
     idx = np.arange(len(y))
     aucs = []

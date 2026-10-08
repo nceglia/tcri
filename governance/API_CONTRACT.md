@@ -23,6 +23,12 @@ know what a metric reduces to.
 
 ## Semantics that are not in a signature
 
+**AUROC utilities.** `ut.auc_and_label_permutation` and `ut.bootstrap_auc` compare
+`pos_label` against all other labels. Empty labels, a single observed class, or an absent
+`pos_label` leave fewer than two classes: the permutation helper returns
+`(nan, nan, array([]), "degenerate")` and the bootstrap helper returns `array([nan, nan])`,
+both without warning or resampling.
+
 **Parameter namespaces.** Pyro's parameter store is process-global, so the names a model
 registers are the only thing separating it from another model in the same session. `name`
 namespaces them: a model called `x` owns exactly the store keys under `x.`, and `""` (the

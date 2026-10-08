@@ -140,12 +140,40 @@ def test_auc_permutation_matches_sklearn_exactly_with_ties():
         np.testing.assert_allclose(sorted(perm), ref, atol=1e-12)
 
 
-def test_auc_permutation_degenerate_single_class():
-    """A single-class label vector has no defined AUROC — report, don't crash."""
-    auc, p, perm, mode = S.auc_and_label_permutation(
-        np.array([0.1, 0.2, 0.3]), np.array([1, 1, 1])
-    )
-    assert mode == "degenerate" and np.isnan(p) and perm.size == 0
+@pytest.fixture(params=[
+    pytest.param(([1, 1, 1], None), id="single-class-inferred"),
+    pytest.param(([0, 0, 0], None), id="zero-class-inferred"),
+    pytest.param(([1, 1, 1], 1), id="all-positive"),
+    pytest.param(([0, 0, 0], 1), id="all-negative"),
+    pytest.param(([0, 1, 1], 2), id="absent-positive-label"),
+    pytest.param(([], None), id="empty-inferred"),
+    pytest.param(([], 1), id="empty-explicit"),
+])
+def degenerate_auc_input(request):
+    labels, pos_label = request.param
+    return np.linspace(0.1, 0.9, len(labels)), np.asarray(labels), pos_label
+
+
+@pytest.mark.filterwarnings("error")
+def test_auc_permutation_degenerate_single_class(degenerate_auc_input):
+    """Without both mapped classes, every undefined result is explicit and warning-free."""
+    scores, labels, pos_label = degenerate_auc_input
+    auc, p, perm, mode = S.auc_and_label_permutation(scores, labels, pos_label=pos_label)
+    assert np.isnan(auc) and np.isnan(p) and mode == "degenerate"
+    assert isinstance(perm, np.ndarray) and perm.shape == (0,)
+
+
+@pytest.mark.filterwarnings("error")
+def test_bootstrap_auc_degenerate_single_class(degenerate_auc_input, monkeypatch):
+    """Undefined AUROC returns two NaNs without entering the bootstrap retry loop."""
+    def unexpected_bootstrap(*args, **kwargs):
+        pytest.fail("Degenerate labels must return before starting bootstrap resampling")
+
+    monkeypatch.setattr(np.random, "default_rng", unexpected_bootstrap)
+    scores, labels, pos_label = degenerate_auc_input
+    ci = S.bootstrap_auc(scores, labels, pos_label=pos_label)
+    assert isinstance(ci, np.ndarray) and ci.shape == (2,)
+    assert np.isnan(ci).all()
 
 
 def test_distance_kernels():
