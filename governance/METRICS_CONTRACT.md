@@ -18,6 +18,20 @@ Every metric is a function of a clone × phenotype joint at one covariate level,
 `API_CONTRACT.md` for the engine's arguments). All entropies and mutual information are in
 **bits**, log base 2.
 
+## Which clones count
+
+A clone is a label of the registered clonotype column. `pp.pool_rare_clones` gives each group's
+rare clones one `pooled@{group}` label and lists the pool labels in the derivation record. A pool
+is a mixture of many rare clones, not a clone, so at `exclude_pools=True` (the default) every
+metric counts the registered labels minus the pools: exactly the clones `pool_rare_clones` kept.
+An explicit `clones=` selects among them; `exclude_pools=False` counts each pool as one clone. A
+column with no pooling step has nothing to exclude, whatever its labels look like. No tool applies
+a second threshold, per condition or otherwise: the pooling rule is the only rule for which
+clones count.
+
+The counted clones are the rows of the joint, so they are the clones `weighted=False` gives equal
+mass, the clones a normalizer counts in `log₂ C`, and the support of a flux or a delta.
+
 ## Definitions
 
 ### `clonotypic_entropy`, one value per phenotype (eq 3)
@@ -65,9 +79,8 @@ D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
 ```
 
 `distance_metric="kl"` (default) is `Σ_φ p log₂(p/q)` in bits with both rows floored at 1e-12
-and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]; `"jsd"` is the Jensen–Shannon divergence
-in [0, 1] bit. A clone absent from either level is **NaN**. Not normalised: a divergence has no
-maximum-entropy reference.
+and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from either level is
+**NaN**. Not normalised: a divergence has no maximum-entropy reference.
 
 ### `delta_clonotypic_entropy`, `delta_phenotypic_entropy`
 
@@ -106,8 +119,9 @@ shift_j,p   = φ̄_C(X)_p − φ̄_C(X^(j))_p
 I_j         = Σ_p | shift_j,p |                                in [0, 2]
 ```
 
-`C` is every cell, or the cells at one `covariate` level, partitioned by `groupby` (one `I_j`
-per group, the replicate unit of the `splitby` contrast, which is **per gene**). `shift` sums
+`C` is every cell of a counted clone ("Which clones count": at `exclude_pools=True` the pools'
+cells are left out), or those at one `covariate` level, partitioned by `groupby` (one `I_j` per
+group, the replicate unit of the `splitby` contrast, which is **per gene**). `shift` sums
 to zero over phenotypes; a positive entry means silencing the gene removed mass from that
 phenotype. A gene whose column is already zero has `I_j = 0` exactly. At `n_samples > 0` the
 prior `p_ct` is drawn from the guide's Dirichlet posterior once, shared by every gene, and
@@ -174,9 +188,9 @@ adjusted column: a difference of two normalizers is not a quantity anyone report
 
 The reference is **the caller's own call with two arguments changed** -- the fit and
 `null_model=None` -- and every other argument forwarded verbatim. `groupby`, `splitby`, `clones`,
-`weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`, `temperature` and
-`n_samples` each change the estimand, so a reference computed at defaults is a different quantity
-subtracted from a different quantity.
+`exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`,
+`temperature` and `n_samples` each change the estimand, so a reference computed at defaults is a
+different quantity subtracted from a different quantity.
 
 **Both denominators are stored.** A normalised MI divides by a normaliser taken from the same
 joint it normalises: at `weighted=False` the engine row-normalises, so `h_c` is exactly
@@ -220,6 +234,7 @@ DEFAULTS = {
     "temperature": 1.0,
     "use_gate": True,
     "null_model": "auto",
+    "exclude_pools": True,
 }
 
 # the permutation axes, and the random stream each one's permutation is drawn from. Keyed by
@@ -249,6 +264,6 @@ GOLDEN = {
     "phenotypic_entropy": {"raw": [0.721928094887, 1.0, 0.591672778582], "normalized": [0.721928094887, 1.0, 0.591672778582]},
     "mutual_information": {"raw": 0.288703141426, "min": 0.293031766823, "average": 0.238914701013},
     # flux between row 0 and row 2 of the joint, as P(phi|c) at two levels
-    "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286, "jsd": 0.340842859252},
+    "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286},
 }
 ```

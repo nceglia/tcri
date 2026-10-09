@@ -11,10 +11,13 @@ modules; this file holds only the high-level `BaseModelClass` API
 - :mod:`._training`   -- :class:`UnifiedTrainingPlan`, :func:`build_archetypes`
 """
 import contextlib
+import contextvars
 import logging
 import math
 import operator
 import os
+import re
+import uuid
 import warnings
 
 import numpy as np
@@ -34,6 +37,7 @@ from scvi.model.base import BaseModelClass
 from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
+from .._compute._repertoire import _missing_clonotypes
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_source
 from ._module import TCRIModule
@@ -43,8 +47,7 @@ from ._training import UnifiedTrainingPlan, build_archetypes
 #: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
 #: concentrations and the networks `pyro.module` normalises as ``scvi$$$<param>``. This is the
 #: whole of a model's store footprint, which is what makes ownership decidable by name alone:
-#: an unnamed model owns exactly these bare names, a named one exactly the same set under
-#: ``f"{name}."``, and nothing else may.
+#: a model owns exactly this set under ``f"{name}."``, and nothing else may.
 _PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
 
 
@@ -65,22 +68,48 @@ def expect_params(name: str):
         _EXPECTED_PARAMS.discard(str(name))
 
 
+#: True while ``TCRIModel.load`` builds a model. The constructor's collision warning describes a
+#: new fit continuing from entries already in the store; a load replaces those entries instead,
+#: and ``TCRIModule.restore_param_store`` warns about that.
+_LOADING = contextvars.ContextVar("tcri_loading", default=False)
+
+
+def _generated_name() -> str:
+    """A namespace for a model constructed without ``name=``: ``tcri-`` and 12 hex digits.
+
+    Drawn from ``uuid4``, which reads OS entropy, so no seed reproduces it and two models never
+    share one, whether they live in one process or are saved by different processes and loaded
+    side by side.
+    """
+    return f"tcri-{uuid.uuid4().hex[:12]}"
+
+
+#: The form :func:`_generated_name` produces, defined beside it so the two change together.
+_GENERATED_NAME = re.compile(r"tcri-[0-9a-f]{12}")
+
+
+def _is_generated_name(name) -> bool:
+    """Is ``name`` of the form :func:`_generated_name` produces?
+
+    Read off the name itself, so the answer is the same for a model built in this process, one
+    rebuilt by a load (which passes the saved name back to the constructor), and a parent's name
+    read out of an AnnData that went through h5ad. A ``name=`` passed by hand in exactly this
+    form reads as generated.
+    """
+    return _GENERATED_NAME.fullmatch(str(name)) is not None
+
+
 def _owns_param(name: str, key: str) -> bool:
     """Does the model called ``name`` own the store entry ``key``?
 
-    Ownership is what the constructor warning keys on, and it has two ways to go wrong, both
-    of which the obvious implementations hit. ``key.startswith(name)`` is correct for every
-    named model and wrong for the unnamed one, whose keys every named model's start with.
-    ``key.startswith(f"{name}.")`` fixes that and is still wrong DOWNWARD: a null's namespace is
-    ``f"{parent}.null.{kind}"``, so a parent would claim its own nulls' parameters
-    and warn about a collision with itself. So the namespace has to match exactly, which means
-    stripping it and requiring what remains to be one of this model's own entries.
+    Ownership is what the constructor warning keys on. ``key.startswith(f"{name}.")`` alone is
+    wrong DOWNWARD: a null's namespace is ``f"{parent}.null.{kind}"``, so a parent would claim
+    its own nulls' parameters and warn about a collision with itself. So the namespace has to
+    match exactly, which means stripping it and requiring what remains to be one of this model's
+    own entries.
     """
-    if name:
-        if not key.startswith(f"{name}."):
-            return False
-        key = key[len(name) + 1:]
-    return key.startswith(_PARAM_BASES)
+    prefix = f"{name}."
+    return key.startswith(prefix) and key[len(prefix):].startswith(_PARAM_BASES)
 
 
 #: The three label axes a null may permute. Each names one code vector read from ``obs`` in
@@ -137,6 +166,27 @@ def _apply_permutation(codes, axis: str, permutation):
             f"it must be a permutation of range(n_obs) for THIS object"
         )
     return np.asarray(codes)[perm]
+
+
+def _label_codes(series, column: str, label: str):
+    """The category codes of ``series``, refusing a cell that has no label.
+
+    A NaN or None label has code -1, and -1 indexes a category list from the end: a clonotype or
+    covariate code of -1 becomes a clone x covariate row that reads back as the last clone or the
+    last covariate level, and a phenotype code of -1 adds the cell to the last phenotype in the
+    clone x phenotype prior. So the codes are refused before anything is derived from them.
+    ``setup_anndata`` refuses such cells first; this covers ``obs`` edited after setup and models
+    built without running setup, which is how every null is built.
+    """
+    codes = series.cat.codes.values
+    n_missing = int((codes < 0).sum())
+    if n_missing:
+        raise ValueError(
+            f"{n_missing} of {len(codes)} cells have no {label} in adata.obs[{column!r}] "
+            f"(NaN or None). Every cell registered with TCRIModel must have a {label}. Keep only "
+            f"the cells that have one and run TCRIModel.setup_anndata again."
+        )
+    return codes
 
 
 #: The early-stopping criterion fixed by training-contract I3. NOT an ELBO -- it is the
@@ -282,6 +332,10 @@ class TCRIModel(BaseModelClass):
         batch, replicate and layer choices on the registry, and mirrors a named layer in
         ``uns['tcri_layer']`` (clearing it when ``layer`` is ``None``). No analysis or label
         ``obs`` column is written here — learned outputs come solely from :meth:`to_anndata`.
+
+        Every cell must have a clonotype. A cell whose ``clonotype_key`` value is NaN or None,
+        an empty or whitespace-only string, or the string ``"nan"`` raises ``ValueError``
+        before anything is registered.
         """
         if clonotype_key == "auto":
             _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
@@ -294,6 +348,20 @@ class TCRIModel(BaseModelClass):
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
                 raise ValueError(f"{col} not in adata.obs!")
+        # A cell without a clonotype belongs to no clone, so it has no clone x covariate row to
+        # sit in. It is refused here, before anything is registered.
+        missing = _missing_clonotypes(adata.obs[clonotype_key])
+        if missing.any():
+            raise ValueError(
+                f"{int(missing.sum())} of {adata.n_obs} cells have no clonotype in "
+                f"adata.obs[{clonotype_key!r}] (NaN or None, an empty or whitespace-only string, "
+                f"or the string 'nan'). Every cell registered with TCRIModel must have a "
+                f"clonotype. Keep only the cells that have one, for example:\n"
+                f"    labels = adata.obs[{clonotype_key!r}].astype(str)\n"
+                f"    missing = adata.obs[{clonotype_key!r}].isna() | labels.str.strip().eq('') "
+                f"| labels.eq('nan')\n"
+                f"    adata = adata[~missing].copy()"
+            )
         # `replicate` names the independent unit for statistics -- the column a metric uses
         # when `groupby` is left implicit. Registering it once here means it is not retyped at
         # every call, and it is recorded as the EFFECTIVE value of groupby in each result's
@@ -335,6 +403,25 @@ class TCRIModel(BaseModelClass):
         else:
             adata.uns["tcri_layer"] = layer
 
+    @classmethod
+    def load(cls, dir_path: str, adata: Optional[AnnData] = None, **kwargs):
+        """Load a model saved with ``save``.
+
+        scvi's loader, with the Pyro store handled per model: the model's two guide
+        concentrations and every parameter of its nulls come back from the store saved in
+        ``model.pt``, its networks from the saved weights, and other models' entries in the
+        process-global store are left as they are. If the store already holds this model's
+        entries, because it was fitted or loaded earlier in the session, they are replaced and
+        a warning says so. Raises ``ValueError`` when the file holds no posteriors for the
+        model. ``kwargs`` go to scvi's ``BaseModelClass.load`` (``accelerator``, ``device``,
+        ``prefix``, ...).
+        """
+        token = _LOADING.set(True)
+        try:
+            return super().load(dir_path, adata=adata, **kwargs)
+        finally:
+            _LOADING.reset(token)
+
     def __init__(
         self,
         adata: AnnData,
@@ -374,16 +461,27 @@ class TCRIModel(BaseModelClass):
         is set in :meth:`train`.
 
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
-        two models can be fitted in one session without overwriting each other. ``""`` is the
-        unnamed layout: this model's parameters keep their bare store names.
+        two models can be fitted in one session without overwriting each other. Left empty, a
+        name is generated (``tcri-`` and 12 hex digits) and recorded with the model, so a load
+        restores the model under the same one.
 
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
         changes. Built by ``tcri.null.*``; passing it by hand is legal but the strata are then
-        yours to get right."""
+        yours to get right.
+
+        A cell whose registered clonotype, phenotype or covariate is NaN or None raises
+        ``ValueError``; this happens when ``obs`` is edited after :meth:`setup_anndata`, which
+        refuses such cells itself."""
         super().__init__(adata)
+        if not name:
+            name = _generated_name()
         self._name = str(name)
         self._permutation = permutation
+        #: The fit name a null's substrate is written under on its AnnData (``null.phenotype``),
+        #: set by ``tcri.null.*`` and ``rebuild``; ``None`` otherwise. A null's ``name`` is its
+        #: parameter-store namespace, which is not that.
+        self._fit_name = None
         #: The arguments the last ``train()`` actually ran with. ``tcri.null.*`` replays them so
         #: a null is fitted the way its parent was; ``save_tcri_session`` persists them, because
         #: an in-memory attribute would not survive a reload and the null would silently fall
@@ -429,19 +527,17 @@ class TCRIModel(BaseModelClass):
         if self._seed is not None:
             self._apply_seed(self._seed)
 
-        # Pyro's param store is PROCESS-GLOBAL: a second TCRIModel in the same session
-        # silently inherits the first model's fitted q_p_c_raw/q_p_ct_raw and network
-        # weights, so it starts from the previous fit instead of from scratch. We warn
-        # rather than clearing, because clearing here would destroy the params of a
-        # model loaded earlier in the session (load_tcri_session restores the store
-        # after construction).
-        # The check is scoped to THIS model's namespace. An unnamed model owns exactly the bare
-        # names; a named one owns exactly the keys under "<name>.". Without the scoping the
-        # warning fires for every other model's parameters -- which, since two models can
-        # coexist, is the normal state rather than the problem it is meant to flag.
+        # Pyro's param store is PROCESS-GLOBAL: a model constructed under a name the store
+        # already holds silently inherits that fit's q_p_c_raw/q_p_ct_raw and network weights,
+        # so it starts from the previous fit instead of from scratch. Only a `name=` passed
+        # again can do that, since a generated name is new. We warn rather than clearing,
+        # because clearing here would destroy the params of a model loaded earlier in the
+        # session. The check is scoped to THIS model's namespace: other models' parameters are
+        # the normal state of a session, not the problem it is meant to flag. A load builds the
+        # model under its saved name and then replaces those entries, so it is not checked here.
         _tcri_params = [k for k in pyro.get_param_store().keys()
                         if _owns_param(self._name, k)]
-        if _tcri_params and self._name not in _EXPECTED_PARAMS:
+        if _tcri_params and self._name not in _EXPECTED_PARAMS and not _LOADING.get():
             warnings.warn(
                 f"The global Pyro param store already holds TCRI parameters for "
                 f"name={self._name!r} ({len(_tcri_params)} entries). This model will CONTINUE "
@@ -462,7 +558,8 @@ class TCRIModel(BaseModelClass):
         # The three code vectors, each permuted if this model is a null of that axis. The
         # categories are never touched, so P, the label space and every downstream index are
         # the parent's; only which cell carries which label moves.
-        pvals_np = _apply_permutation(ph_series.cat.codes.values, "phenotype", permutation)
+        pvals_np = _apply_permutation(_label_codes(ph_series, phenotype_col, "phenotype"),
+                                      "phenotype", permutation)
         target_codes = torch.tensor(pvals_np, dtype=torch.long)
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
@@ -470,7 +567,8 @@ class TCRIModel(BaseModelClass):
 
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
-        c_array_np = _apply_permutation(cvals.cat.codes.values, "clonotype", permutation)
+        c_array_np = _apply_permutation(_label_codes(cvals, clonotype_col, "clonotype"),
+                                        "clonotype", permutation)
         clone_phenotype_prior = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
             clone_phenotype_prior[c_array_np[i], pvals_np[i]] += 1
@@ -491,7 +589,8 @@ class TCRIModel(BaseModelClass):
             K = c_count
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
-        cov_array_np = _apply_permutation(cov_series.cat.codes.values, "condition", permutation)
+        cov_array_np = _apply_permutation(_label_codes(cov_series, covariate_col, "covariate"),
+                                          "condition", permutation)
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
         combos = df_ct.drop_duplicates().sort_values(["c", "t"])
         ct_list = combos.values.tolist()
@@ -583,7 +682,7 @@ class TCRIModel(BaseModelClass):
 
     def train(
         self,
-        max_epochs: int = 2000,
+        max_epochs: int = 10000,
         batch_size: int = 1000,
         lr: float = 1e-3,
         reconstruction_loss_scale: float = 1e-2,
@@ -900,7 +999,8 @@ class TCRIModel(BaseModelClass):
 
     @property
     def name(self) -> str:
-        """The parameter-store namespace this model owns. ``""`` is the unnamed layout."""
+        """The parameter-store namespace this model owns: the ``name=`` it was constructed with,
+        or the one generated when none was given."""
         return self.module.name
 
     @property

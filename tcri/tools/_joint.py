@@ -14,6 +14,7 @@ from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
 from .._compute._joint import _joint_draws
+from .._compute._tables import _resolve_clones
 
 __all__ = ["joint_distribution"]
 
@@ -130,6 +131,7 @@ def joint_distribution(
     use_logits=True,
     weighted=False,
     clones=None,
+    exclude_pools=True,
     temperature=1.0,
     random_state=None,
     device=None,
@@ -154,6 +156,13 @@ def joint_distribution(
     weighted : bool
         ``False`` → each clone is one unit (per-clone simplex). ``True`` → each clone
         row is scaled by its (ct-keyed) cell count (cell-weighted).
+    exclude_pools : bool
+        ``True`` leaves out the pools of the registered clonotype column, the
+        ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones`` writes. A pool is a mixture
+        of many rare clones, not a clone, so by default its rows are dropped, the other rows
+        keep their order, and the table holds exactly the clones ``pool_rare_clones`` kept.
+        ``clones`` selects among them and orders the rows by its list. ``False`` keeps each
+        pool as one row. A column with no pooling step has nothing to leave out.
     temperature : float
         Tempers the base once; ``T=1`` is the identity (and reproduces ``predict()``
         on the ``use_logits=True`` path).
@@ -212,18 +221,22 @@ def joint_distribution(
 
     df = pd.concat(frames) if len(frames) > 1 else frames[0]
 
-    if clones is not None:
-        clones = list(clones)
+    counted = _resolve_clones(adata, clones, exclude_pools)
+    if counted is not None and clones is None:
+        # only the pools are left out and no order was asked for: the other rows keep the
+        # engine's order
+        df = df[df.index.get_level_values("clonotype").isin(counted)]
+    elif counted is not None:
         if isinstance(df.index, pd.MultiIndex):
             # filter to the listed clones (absent dropped, not all-zero) then order by the
             # requested list — stable within the sample_id/covariate levels, so this matches
             # the single-index reindex in the branch below.
-            keep = df.index.get_level_values("clonotype").isin(clones)
+            keep = df.index.get_level_values("clonotype").isin(counted)
             df = df[keep]
-            rank = pd.Index(df.index.get_level_values("clonotype")).map({c: i for i, c in enumerate(clones)})
+            rank = pd.Index(df.index.get_level_values("clonotype")).map({c: i for i, c in enumerate(counted)})
             df = df.iloc[np.argsort(np.asarray(rank), kind="stable")]
         else:
-            df = df.reindex([c for c in clones if c in df.index])
+            df = df.reindex([c for c in counted if c in df.index])
 
     # WIDE on purpose, unlike the four scalar metrics. A joint is a matrix -- clone x
     # phenotype, rows summing to 1 -- and forcing it into their long (item, draw, value) form

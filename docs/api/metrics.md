@@ -87,9 +87,9 @@ is the quantity the metric reports, on its own scale. There is no ratio: a ratio
 near-zero reference and hides effect size, and dividing two stored columns is yours.
 
 The reference is **the caller's own call with the fit changed** — every other argument forwarded
-verbatim, because `groupby`, `clones`, `weighted`, `normalized`, `normalize_mode`,
-`n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change what is being
-measured.
+verbatim, because `groupby`, `clones`, `exclude_pools`, `weighted`, `normalized`,
+`normalize_mode`, `n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change
+what is being measured.
 
 The adjusted value carries no `sd` and no interval. It is a difference of two summaries, and
 there is no correspondence between the parent's draw 7 and the null's, so nothing pairs them.

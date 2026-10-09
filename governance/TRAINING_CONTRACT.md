@@ -66,8 +66,11 @@ schedules or stopping; they change with a recorded reason.
   without an improvement stop the fit (B4 defines one). `early_stopping=False` installs no
   stopping rule and trains for `max_epochs`; the best check is restored either way (I4).
   `test_fit_stops_once_improvements_fall_below_min_delta`, `test_restored_model_is_the_selected_one`.
-- **B3a** `max_epochs` defaults to 2000. With early stopping on, a fit that reaches the cap
-  warns and records `stopped_early: False`.
+- **B3a** `max_epochs` defaults to 10000. On small data an epoch is one or two updates, and
+  simulated fits there kept improving for thousands of epochs before the stopping rule ended them;
+  at 10000 the stopping rule, not the cap, ends every one of them. The cap costs nothing for a fit
+  the stopping rule ends first. With early stopping on, a fit that reaches the cap warns and
+  records `stopped_early: False`.
 - **B4** A check is an improvement only if it is below the best check so far by more than
   `train(early_stopping_min_delta=...)`, in the monitor's own units (per cell). The default is
   0: every new low restarts the count, so a fit ends `early_stopping_patience` checks after its

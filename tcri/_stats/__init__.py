@@ -16,9 +16,7 @@ performs. ``tests/test_removal_ledger.py`` pins that distinction.
 """
 from __future__ import annotations
 
-from ._core import (auc_and_label_permutation, bootstrap_auc, hdi, mann_whitney,
-                    prob_direction, stars)
+from ._core import hdi, mann_whitney, prob_direction, stars
 from ._compare import compare_groups
 
-__all__ = ["hdi", "mann_whitney", "prob_direction", "stars",
-           "auc_and_label_permutation", "bootstrap_auc", "compare_groups"]
+__all__ = ["hdi", "mann_whitney", "prob_direction", "stars", "compare_groups"]

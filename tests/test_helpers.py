@@ -1,7 +1,7 @@
 """Unit tests for the shared private helpers. Pure and fast — no model.
 
 Covers the key constants in ``tcri._state.keys``, the statistics primitives in
-``tcri._stats._core`` (stars, HDI, AUROC permutation), the phenotype distances in
+``tcri._stats._core`` (stars, HDI), the phenotype distances in
 ``tcri._compute._distance``, and what ``import tcri`` is allowed to do to the process it is
 imported into.
 """
@@ -103,56 +103,9 @@ def test_prob_direction():
     assert abs(p_gt - 0.75) < 1e-9 and abs(p_lt - 0.25) < 1e-9
 
 
-def test_auc_helpers_on_perfect_separation():
-    scores = np.array([0.1, 0.2, 0.8, 0.9]); labels = np.array([0, 0, 1, 1])
-    auc, p_perm, perm, mode = S.auc_and_label_permutation(scores, labels)
-    assert auc == 1.0 and mode == "exact" and 0.0 <= p_perm <= 1.0
-    lo, hi = S.bootstrap_auc(scores, labels)
-    assert 0.0 <= lo <= hi <= 1.0
-
-
-def test_auc_permutation_matches_sklearn_exactly_with_ties():
-    """The Mann–Whitney rank-sum identity must reproduce ``roc_auc_score`` exactly.
-
-    Guards the O(n log n) -> O(n_pos) optimization of the permutation loop. Ties are
-    the failure mode that matters: the identity is only equivalent under *midranks*,
-    so scores are rounded here to force repeated values.
-    """
-    import itertools
-
-    from sklearn.metrics import roc_auc_score
-
-    rng = np.random.default_rng(0)
-    for _ in range(40):
-        n = int(rng.integers(4, 11))
-        scores = np.round(rng.normal(size=n), int(rng.integers(0, 2)))  # forces ties
-        labels = rng.integers(0, 2, n)
-        if labels.sum() in (0, n):
-            continue
-        auc, _, perm, mode = S.auc_and_label_permutation(scores, labels)
-        assert mode == "exact"
-        y = (labels == 1).astype(int)
-        assert auc == pytest.approx(roc_auc_score(y, scores), abs=1e-12)
-        ref = sorted(
-            roc_auc_score(np.isin(np.arange(n), idx).astype(int), scores)
-            for idx in itertools.combinations(range(n), int(y.sum()))
-        )
-        np.testing.assert_allclose(sorted(perm), ref, atol=1e-12)
-
-
-def test_auc_permutation_degenerate_single_class():
-    """A single-class label vector has no defined AUROC — report, don't crash."""
-    auc, p, perm, mode = S.auc_and_label_permutation(
-        np.array([0.1, 0.2, 0.3]), np.array([1, 1, 1])
-    )
-    assert mode == "degenerate" and np.isnan(p) and perm.size == 0
-
-
 def test_distance_kernels():
     assert abs(D.kl_divergence([1, 0], [1, 0])) < 1e-9        # KL(p‖p)=0
     assert D.kl_divergence([0.9, 0.1], [0.1, 0.9]) > 0        # asymmetric, positive
-    assert D.jensen_shannon([1, 0], [0, 1]) == pytest.approx(1.0, abs=1e-6)  # ~1 bit disjoint
-    assert D.jensen_shannon([0.5, 0.5], [0.5, 0.5]) < 1e-9    # symmetric, self=0
     assert D.l1_distance([1, 0], [0, 1]) == pytest.approx(2.0)
 
 
