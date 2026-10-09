@@ -28,14 +28,6 @@ tracking issue shows progress as sub-issues close.
 Before starting, compare the footprint with the open `tracking` issues. Where two touch the same
 file or public symbol, agree which lands first and note it on both issues.
 
-## Grouping changes
-
-Related fixes go in one pull request, which may close several issues: list each with its own
-`Closes #N`. A truly small fix, such as a typo or a one-line correction, can skip the issue and
-carry the `no issue` label. Anything left over from a milestone's work goes as a checklist line in
-that milestone's single "Loose ends" issue (`Loose ends: <version>`), not as a new issue; open that
-issue the first time a milestone needs one.
-
 ## Stacks
 
 Open one pull request from `main` whenever the pieces are independent.

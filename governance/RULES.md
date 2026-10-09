@@ -56,3 +56,5 @@ provenance, not a specification, and are not kept in the repository.
 - Run tests with the pinned venv: `MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q`.
 - `dev/` is gitignored scratch. `examples/` is an output of the package.
 - PRs describe what was done, compactly. Follow-up work goes to GitHub issues.
+- Docs, docstrings, issues and PR text describe the code and how to use it. They never quote
+  results or measurements from a real dataset, and they carry no asides.
