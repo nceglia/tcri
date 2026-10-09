@@ -134,6 +134,18 @@ def test_phenotypic_flux_over_common_clones(trained_model):
     assert (v >= -1e-9).all() and (v <= 2 + 1e-9).all()  # l1 on the simplex is bounded [0,2]
 
 
+@pytest.mark.parametrize("distance_metric", ["jsd", "js"])
+def test_phenotypic_flux_rejects_jensen_shannon(trained_model, distance_metric):
+    """Flux is the KL divergence, and Jensen–Shannon is not one of its distances: the name
+    raises, and the error lists the ones that are."""
+    _, adata = trained_model
+    cov = _cov(adata)
+    with pytest.raises(ValueError, match="distance_metric") as err:
+        tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=cov, distance_metric=distance_metric)
+    message = str(err.value)
+    assert all(f"'{name}'" in message for name in ("kl", "dkl", "l1")), message
+
+
 # ── the contrast: internal, and reached through `splitby` ────────────────────
 
 def test_compare_groups_is_not_public():
