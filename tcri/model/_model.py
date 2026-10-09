@@ -425,7 +425,7 @@ class TCRIModel(BaseModelClass):
         n_layers: int = 3,
         classifier_n_layers: int = 3,
         global_scale: float = 5.0,
-        local_scale: float = 3.0,
+        local_scale: float = 10.0,
         prior_temperature: float = 1.0,
         guide_temperature: float = 1.0,
         classifier_hidden: int = 128,

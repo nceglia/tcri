@@ -120,7 +120,7 @@ def build_pgm():
          "global_scale = α   (default 5.0)"),
         (r"$p_{ct} \sim \mathrm{Dirichlet}(\beta\, p_c)$",
          "its distribution at ONE covariate level — raise β to pin it to the clone",
-         "local_scale = β   (default 3.0)"),
+         "local_scale = β   (default 10.0)"),
         (r"$z_i^{\phi} \sim \mathrm{Cat}(\mathrm{softmax}\,\ell_i)$",
          r"$\ell_i = \pi\, f_{\mathrm{cls}}(z_i) + (1-\pi)\log p_{ct}$   —   π=1 pure classifier, π=0 pure prior",
          "gate_prob = π   (default 0.5)"),
