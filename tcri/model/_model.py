@@ -39,7 +39,7 @@ from scvi.dataloaders import DataSplitter
 
 from .._compute._repertoire import _missing_clonotypes
 from .._state import keys as K
-from .._state._resolution import resolve_clonotype_source
+from .._state._resolution import resolve_clonotype_key
 from ._module import TCRIModule
 from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
 from ._training import UnifiedTrainingPlan, build_archetypes
@@ -338,12 +338,7 @@ class TCRIModel(BaseModelClass):
         before anything is registered.
         """
         if clonotype_key == "auto":
-            _source, resolved_clone_key, _family, _candidates = resolve_clonotype_source(
-                {"adata": adata.obs},
-                clonotype_key="auto",
-                source_prefix="airr",
-            )
-            clonotype_key = resolved_clone_key
+            clonotype_key = resolve_clonotype_key(adata.obs)
 
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:

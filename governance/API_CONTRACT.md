@@ -211,9 +211,9 @@ class pp:
     ) -> None: ...
     def clone_size(adata: AnnData, *, key_added: str = ..., return_counts: bool = ...) -> Any: ...
     def from_mudata(
-        mdata: Any, *, key_profile: str = ..., keys: Any = ..., clonotype_key: str = ...,
-        covariate_cols: Any = ..., drop_missing_clonotype: bool = ..., counts_layer: str = ...,
-        fill_counts_from_X: bool = ..., strict: bool = ..., copy: bool = ...,
+        mdata: Any, *, clonotype_key: str, covariate_key: Optional[str] = ...,
+        gex_mod: str = ..., airr_mod: str = ..., counts_layer: str = ...,
+        drop_missing_clonotype: bool = ...,
     ) -> AnnData: ...
     def repertoire_summary(
         adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,

@@ -5,27 +5,16 @@ heavy imported here is paid for on every import of the package.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+import warnings
 
 import numpy as np
 import pandas as pd
 
-from .._compute._repertoire import _pool_rare_clones
+from .._compute._repertoire import TCRIDataWarning, _missing_clonotypes, _pool_rare_clones
 from .._state import keys as K
-from .._state._resolution import resolve_clonotype_source
+from .._state._resolution import clone_like_candidates
 
 __all__ = ["pool_rare_clones", "clone_size", "from_mudata"]
-
-
-_SCIRPY_KEYS = {
-    "gex_mod": "gex",
-    "airr_mod": "airr",
-    "sample_key": "sample",
-    "tissue_key": "tissue",
-    "site_key": "site",
-    "batch_key": "patient",
-    "clonotype_key": "clone_id",
-}
 
 
 def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
@@ -117,140 +106,216 @@ def clone_size(adata, *, key_added=K.CLONE_SIZE, return_counts=False):
         return clone_sizes
 
 
-def _coerce_keys(key_profile: str, keys: Mapping[str, str] | None) -> dict[str, str]:
-    if key_profile != "scirpy":
-        raise ValueError(
-            f"unknown key_profile={key_profile!r}; currently supported: 'scirpy'"
-        )
-    resolved = dict(_SCIRPY_KEYS)
-    if keys is None:
-        return resolved
-    if not isinstance(keys, Mapping):
-        raise TypeError("keys must be a mapping of adapter key names to column/modality names")
-    for k, v in keys.items():
-        if k not in resolved:
-            raise KeyError(
-                f"unknown keys override {k!r}; allowed: {sorted(resolved)}"
-            )
-        if not isinstance(v, str) or not v:
-            raise TypeError(f"keys[{k!r}] must be a non-empty string")
-        resolved[k] = v
-    return resolved
+def _read_column(mdata, key: str, *, gex_mod: str, airr_mod: str, argument: str,
+                 hint: bool = False) -> tuple[pd.Series, str]:
+    """The first column named ``key``, and where it was found.
+
+    The places are tried in order: the GEX modality's ``obs``, the AIRR modality's ``obs``, then
+    ``mdata.obs`` under ``key``, ``<gex_mod>:key`` and ``<airr_mod>:key``. The label names the
+    place, as ``mdata.mod['airr'].obs['clone_id']`` or ``mdata.obs['airr:clone_id']``. With
+    ``hint``, the KeyError lists the clone-like columns it saw.
+    """
+    gex_obs, airr_obs = mdata.mod[gex_mod].obs, mdata.mod[airr_mod].obs
+    places = [
+        (gex_obs, key, f"mdata.mod[{gex_mod!r}].obs[{key!r}]"),
+        (airr_obs, key, f"mdata.mod[{airr_mod!r}].obs[{key!r}]"),
+    ] + [
+        (mdata.obs, name, f"mdata.obs[{name!r}]")
+        for name in (key, f"{gex_mod}:{key}", f"{airr_mod}:{key}")
+    ]
+    for frame, column, label in places:
+        if column in frame.columns:
+            return frame[column], label
+    message = (
+        f"{argument}={key!r} was not found in mdata.mod[{gex_mod!r}].obs, "
+        f"mdata.mod[{airr_mod!r}].obs, or mdata.obs as {key!r}, {gex_mod + ':' + key!r} or "
+        f"{airr_mod + ':' + key!r}."
+    )
+    if hint:
+        seen = sorted({c for frame in (gex_obs, airr_obs, mdata.obs)
+                       for c in clone_like_candidates(frame, source_prefix=airr_mod)})
+        message += (f" Clone-like columns include: {', '.join(seen[:8])}." if seen
+                    else " No clone-like columns were found.")
+    raise KeyError(message)
+
+
+def _holds_counts(matrix) -> bool:
+    """Whether every stored value of ``matrix``, dense or sparse, is a non-negative integer."""
+    from scipy import sparse
+
+    values = matrix.data if sparse.issparse(matrix) else np.asarray(matrix)
+    if np.issubdtype(values.dtype, np.integer):
+        return bool((values >= 0).all())
+    return bool(np.isfinite(values).all() and (values >= 0).all()
+                and (values == np.round(values)).all())
 
 
 def from_mudata(
     mdata,
     *,
-    key_profile: str = "scirpy",
-    keys: Mapping[str, str] | None = None,
-    clonotype_key: str = "auto",
-    covariate_cols: str | None = None,
-    drop_missing_clonotype: bool = True,
+    clonotype_key: str,
+    covariate_key: str | None = None,
+    gex_mod: str = "gex",
+    airr_mod: str = "airr",
     counts_layer: str = "counts",
-    fill_counts_from_X: bool = True,
-    strict: bool = True,
-    copy: bool = True,
+    drop_missing_clonotype: bool = True,
 ):
-    """Return a tcri-ready AnnData from a MuData object (Scirpy defaults by default).
+    """Return a tcri-ready AnnData from a MuData object with a GEX and an AIRR modality.
 
-    The adapter aligns the GEX and AIRR modalities on ``obs_names``, selects a clonotype
-    column (explicitly or by ``clonotype_key='auto'``), optionally wires one covariate
-    column from ``obs``, and ensures a counts layer exists.
+    The output holds the cells of the GEX modality that are also in the AIRR modality, with the
+    GEX modality's ``X``, layers and ``obs``; GEX cells without AIRR data are dropped with a
+    warning. The clonotype column and, when given, the covariate column are each read from the
+    first place that has them: the GEX modality's ``obs``, the AIRR modality's ``obs``, then
+    ``mdata.obs`` under the bare name or with a ``<gex_mod>:`` or ``<airr_mod>:`` prefix. Each is
+    written to ``obs`` under the bare name, as a categorical with string categories. A categorical
+    covariate keeps its category order, less the categories no returned cell has; any other
+    column's categories are sorted. ``mdata`` is not modified.
 
-    It records only resolved adapter provenance under ``adata.uns['tcri_adapter']``; key-profile
-    defaults are not persisted globally.
+    A cell has no clonotype when its value is NaN or None, an empty or whitespace-only string, or
+    the string ``"nan"``; these are the cells ``TCRIModel.setup_anndata`` refuses.
+
+    Parameters
+    ----------
+    mdata
+        A MuData with a GEX and an AIRR modality, as Scirpy writes it.
+    clonotype_key
+        The clonotype column, by its bare name, such as ``"clone_id"`` or ``"cc_aa_tcrdist"``.
+    covariate_key
+        The covariate column, by its bare name; ``None`` reads no covariate. Build a composite
+        covariate as a single column first.
+    gex_mod
+        The gene-expression modality.
+    airr_mod
+        The AIRR modality.
+    counts_layer
+        The layer of the GEX modality that holds the raw counts, as non-negative integers.
+    drop_missing_clonotype
+        Drop the cells without a clonotype, with a warning. With ``False`` they raise.
+
+    Returns
+    -------
+    anndata.AnnData
+        A new object. ``uns['tcri_adapter']['resolved']`` records the modalities, each column's
+        key and where it was read from (``clonotype_source``, ``covariate_source``), the counts
+        layer, and the cell counts: ``n_obs_gex`` and ``n_obs_airr`` in the two modalities,
+        ``n_obs_shared`` in both, and ``n_obs_output`` returned.
+
+    Warns
+    -----
+    UserWarning
+        When GEX cells have no AIRR data, and when cells without a clonotype are dropped, each
+        with the number of cells dropped.
+
+    Raises
+    ------
+    KeyError
+        When a modality is missing, ``clonotype_key`` or ``covariate_key`` is in none of the
+        places above, or ``counts_layer`` is not a layer of the GEX modality.
+    ValueError
+        When the modalities share no cells, cells have no clonotype and
+        ``drop_missing_clonotype=False``, cells have no covariate value, or ``counts_layer``
+        holds negative or non-integer values. The message gives the number of cells.
+    TypeError
+        When ``clonotype_key``, or ``covariate_key`` when given, is not a non-empty string.
     """
-    resolved = _coerce_keys(key_profile, keys)
-    gex_mod = resolved["gex_mod"]
-    airr_mod = resolved["airr_mod"]
-    if gex_mod not in mdata.mod:
-        raise KeyError(f"mdata.mod has no {gex_mod!r} modality")
-    if airr_mod not in mdata.mod:
-        raise KeyError(f"mdata.mod has no {airr_mod!r} modality")
-
-    gex = mdata.mod[gex_mod]
-    airr = mdata.mod[airr_mod]
-    common = gex.obs_names.intersection(airr.obs_names)
-    if len(common) == 0:
+    if not isinstance(clonotype_key, str) or not clonotype_key:
+        raise TypeError(
+            f"clonotype_key must be one column name, a non-empty string; got {clonotype_key!r}."
+        )
+    if covariate_key is not None and (not isinstance(covariate_key, str) or not covariate_key):
+        raise TypeError(
+            f"covariate_key must be one column name, a non-empty string, or None; got "
+            f"{covariate_key!r}. Build a combined covariate as a single column first."
+        )
+    for mod in (gex_mod, airr_mod):
+        if mod not in mdata.mod:
+            raise KeyError(f"mdata.mod has no {mod!r} modality")
+    gex, airr = mdata.mod[gex_mod], mdata.mod[airr_mod]
+    shared = gex.obs_names.intersection(airr.obs_names)
+    if len(shared) == 0:
         raise ValueError(
             f"no shared obs_names between mdata.mod[{gex_mod!r}] and mdata.mod[{airr_mod!r}]"
         )
-
-    adata = gex[common].copy() if copy else gex[common]
-    airr_view = airr[adata.obs_names]
-
-    source, key, family, candidates = resolve_clonotype_source(
-        {"gex": adata.obs, "airr": airr_view.obs, "mdata": mdata.obs},
-        clonotype_key=clonotype_key, source_prefix=airr_mod,
-    )
-    if source == "gex":
-        clone = adata.obs[key]
-    elif source == "airr":
-        clone = airr_view.obs[key]
-    else:
-        clone = mdata.obs[key].reindex(adata.obs_names)
-    clone = pd.Series(clone, index=adata.obs_names, dtype="object")
-    if strict and clone.isna().any():
-        n = int(clone.isna().sum())
+    mods = dict(gex_mod=gex_mod, airr_mod=airr_mod)
+    values, clonotype_source = _read_column(mdata, clonotype_key, argument="clonotype_key",
+                                            hint=True, **mods)
+    clone = values.reindex(shared).astype(object)
+    missing = _missing_clonotypes(clone).to_numpy()
+    if missing.any() and not drop_missing_clonotype:
         raise ValueError(
-            f"resolved clonotype column {key!r} has {n} missing values; pass "
-            "drop_missing_clonotype=True to drop them or strict=False to continue."
+            f"{int(missing.sum())} of {len(shared)} cells have no clonotype in "
+            f"{clonotype_source} (NaN or None, an empty or whitespace-only string, or the string "
+            "'nan'). Pass drop_missing_clonotype=True to drop them."
+        )
+    cells = shared[~missing]
+
+    covariate_source = None
+    if covariate_key is not None:
+        values, covariate_source = _read_column(mdata, covariate_key, argument="covariate_key",
+                                                **mods)
+        covariate = values.reindex(cells)
+        n_missing = int(covariate.isna().sum())
+        if n_missing:
+            raise ValueError(
+                f"{n_missing} of {len(cells)} cells have no covariate value in "
+                f"{covariate_source}. Drop those cells or fill the values in the MuData first."
+            )
+
+    copy_x = (f"mdata.mod[{gex_mod!r}].layers[{counts_layer!r}] = "
+              f"mdata.mod[{gex_mod!r}].X.copy()")
+    if counts_layer not in gex.layers:
+        raise KeyError(
+            f"mdata.mod[{gex_mod!r}] has no layer {counts_layer!r}. If X holds the raw counts, "
+            f"copy it in first: {copy_x}"
         )
 
-    resolved_clone_col = str(key)
-    adata.obs[resolved_clone_col] = clone.astype("string")
-    if drop_missing_clonotype:
-        adata = adata[adata.obs[resolved_clone_col].notna()].copy()
-    adata.obs[resolved_clone_col] = adata.obs[resolved_clone_col].astype("category")
-
-    cov_col: str | None = None
-    if covariate_cols is not None:
-        if not isinstance(covariate_cols, str) or not covariate_cols:
-            raise TypeError(
-                "covariate_cols must be a single non-empty column name (str). "
-                "For composite covariates, create the combined column upstream and pass it here."
-            )
-        cov_col = covariate_cols
-        if cov_col not in adata.obs:
-            raise KeyError(
-                f"covariate_cols={cov_col!r} is not in adata.obs"
-            )
-        cov = adata.obs[cov_col].astype("string")
-        if strict and cov.isna().any():
-            n_missing = int(cov.isna().sum())
-            raise ValueError(
-                f"covariate source column {cov_col!r} has {n_missing} missing values"
-            )
-        cov = cov.fillna("NA")
-        adata.obs[cov_col] = pd.Categorical(cov.astype(str))
-
-    if counts_layer not in adata.layers:
-        if fill_counts_from_X:
-            adata.layers[counts_layer] = adata.X.copy()
+    adata = gex[cells].copy()
+    if not _holds_counts(adata.layers[counts_layer]):
+        raise ValueError(
+            f"layer {counts_layer!r} of mdata.mod[{gex_mod!r}] does not hold raw counts: it has "
+            f"negative or non-integer values. Pass the layer that holds them as counts_layer, or, "
+            f"if X holds them, copy it in first: {copy_x}"
+        )
+    # Plain-string categories, not pandas' nullable "string": anndata 0.12 does not write those,
+    # so the output would not save to h5ad.
+    adata.obs[clonotype_key] = clone[cells].astype("string").astype(object).astype("category")
+    if covariate_key is not None:
+        labels = covariate.astype(str)
+        if isinstance(covariate.dtype, pd.CategoricalDtype):
+            order = pd.CategoricalDtype([str(c) for c in covariate.cat.categories],
+                                        ordered=covariate.cat.ordered)
+            adata.obs[covariate_key] = labels.astype(order).cat.remove_unused_categories()
         else:
-            raise KeyError(
-                f"layer {counts_layer!r} is missing and fill_counts_from_X=False"
-            )
+            adata.obs[covariate_key] = labels.astype("category")
+
+    n_gex_only = gex.n_obs - len(shared)
+    if n_gex_only:
+        warnings.warn(
+            f"{n_gex_only} of {gex.n_obs} cells of mdata.mod[{gex_mod!r}] have no AIRR data in "
+            f"mdata.mod[{airr_mod!r}] and are dropped.",
+            TCRIDataWarning, stacklevel=2,
+        )
+    if missing.any():
+        warnings.warn(
+            f"{int(missing.sum())} of {len(shared)} cells have no clonotype in {clonotype_source} "
+            "and are dropped.",
+            TCRIDataWarning, stacklevel=2,
+        )
 
     adata.uns["tcri_adapter"] = {
         "source": "tcri.pp.from_mudata",
-        "key_profile": key_profile,
-        "keys": {k: str(v) for k, v in resolved.items()},
         "resolved": {
             "gex_mod": gex_mod,
             "airr_mod": airr_mod,
-            "clonotype_source": source,
-            "clonotype_key": str(key),
-            "clonotype_family": family,
-            "clonotype_col": resolved_clone_col,
-            "covariate_col": cov_col,
+            "clonotype_key": clonotype_key,
+            "clonotype_source": clonotype_source,
+            "covariate_key": covariate_key,
+            "covariate_source": covariate_source,
             "counts_layer": counts_layer,
-            "n_obs_shared": int(len(common)),
+            "n_obs_gex": int(gex.n_obs),
+            "n_obs_airr": int(airr.n_obs),
+            "n_obs_shared": int(len(shared)),
             "n_obs_output": int(adata.n_obs),
         },
-        "auto_candidates": [
-            {"family": fam, "canonical": canon, "source": src, "key": k}
-            for fam, canon, src, k in candidates
-        ],
     }
     return adata

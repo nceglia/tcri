@@ -30,7 +30,7 @@ For the development version, or to run the test suite:
 ```bash
 git clone https://github.com/nceglia/tcri.git
 cd tcri
-pip install -e ".[test]"
+pip install -e ".[test,mudata]"
 ```
 
 ## Dependencies
@@ -44,6 +44,13 @@ scvi-tools) is what enables model fitting:
 - umap-learn
 - matplotlib, seaborn (plotting)
 - tqdm
+
+Reading a MuData object, such as Scirpy writes, with `tcri.pp.from_mudata` needs the `mudata`
+extra:
+
+```bash
+pip install "tcri[mudata]"
+```
 
 ## Verifying the Installation
 
