@@ -27,6 +27,25 @@ A result computed with `null_model=None` has no reference: the default draws the
 "(no reference)" on the y label, and asking for `quantity="adjusted"` raises rather than drawing
 an empty panel.
 
+## Small multiples
+
+A twin is often one panel in a row, and its defaults are the ones a row needs:
+
+- The x axis of a metric twin is in the category order of the column on it (the `obs`
+  categories, or the registered phenotype and clonotype categories), so a level sits at the same
+  position in every panel. `order=` overrides it.
+- `legend=False` draws no legend, so the row can carry one.
+- Dots that are replicates are colored by replicate, with a legend naming them, unless a split is
+  the hue. An item axis such as the phenotypes is drawn in one color, so the replicates within
+  each item can be told apart.
+- A y label longer than its axes is wrapped onto more lines.
+
+```python
+fig, axes = plt.subplots(1, 2, figsize=(9, 3), sharey=True)
+tcri.pl.clonotypic_entropy(adata, key="entropy_pre", ax=axes[0], legend=False)
+tcri.pl.clonotypic_entropy(adata, key="entropy_post", ax=axes[1])
+```
+
 ## Entropy plots
 
 ```{eval-rst}

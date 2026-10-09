@@ -715,3 +715,116 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
     grey = {round(float(s), 6) for c in sized.collections
             if c.get_label() == REFERENCE_LABEL for s in c.get_sizes()}
     assert len(grey) <= 1, f"the reference dots were sized by a count: {sorted(grey)}"
+
+
+# ── small multiples ──────────────────────────────────────────────────────────
+
+def _ticks(ax):
+    return [t.get_text() for t in ax.get_xticklabels()]
+
+
+def test_panels_given_the_same_categories_share_an_x_order(cohort):
+    """The x axis is in category order, never sorted by a panel's own values, so a level sits
+    at the same position in every panel of a row; ``order=`` overrides it."""
+    _, adata = cohort
+    adata = adata.copy()
+    a, b = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    phenotypes = [str(p) for p in adata.uns[K.PHENOTYPE_CATEGORIES]]
+    patients = [str(p) for p in adata.obs["patient"].cat.categories]
+    splits = [str(s) for s in adata.obs["disease_status"].cat.categories]
+
+    for cov, key in ((a, "ce_a"), (b, "ce_b")):
+        tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient",
+                                   splitby="disease_status", key_added=key)
+        tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                   splitby="disease_status", key_added=f"mi_{cov}")
+        tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                   key_added=f"mi_rep_{cov}")
+    for key in ("ce_a", "ce_b"):
+        for quantity in ("auto", "value"):
+            assert _ticks(tcri.pl.clonotypic_entropy(adata, key=key,
+                                                     quantity=quantity)) == phenotypes
+    for cov in (a, b):
+        assert _ticks(tcri.pl.mutual_information(adata, key=f"mi_{cov}")) == splits
+        assert _ticks(tcri.pl.mutual_information(adata, key=f"mi_rep_{cov}")) == patients
+
+    assert _ticks(tcri.pl.clonotypic_entropy(adata, key="ce_a",
+                                             order=phenotypes[::-1])) == phenotypes[::-1]
+
+
+def _all_twins(adata, model):
+    """Every metric twin and gene importance, computed with replicates and a split, as
+    ``name -> callable(**display kwargs)``."""
+    cov, to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    kw = dict(groupby="patient", splitby="disease_status")
+    _compute_all(adata, **kw)
+    _compute_deltas(adata, **kw)
+    tcri.perturb.gene_importance(model, adata, genes=[0, 1, 2], **kw)
+    draw = {name: (lambda name=name, **k: getattr(tcri.pl, name)(adata, **k))
+            for name in TWINS + DELTAS + ["gene_importance"]}
+    for name in DELTAS:
+        draw[f"{name}:endpoints"] = (lambda name=name, **k: getattr(tcri.pl, name)(
+            adata, kind="endpoints", **k))
+    return draw
+
+
+def test_legend_false_draws_none(cohort):
+    """``legend=False`` draws no legend at all, so a row of panels can carry one."""
+    model, adata = cohort
+    adata = adata.copy()
+    for name, draw in _all_twins(adata, model).items():
+        assert draw(quantity="value").get_legend() is not None, f"{name}: no legend to remove"
+        assert draw(quantity="value", legend=False).get_legend() is None, name
+
+
+def test_replicates_on_an_item_axis_are_colored_by_replicate(cohort):
+    """Each phenotype's dots are the replicates, each in its replicate's stored color, under one
+    box color: a color per phenotype would make every dot at a position the same color."""
+    from matplotlib.collections import PathCollection
+
+    _, adata = cohort
+    adata = adata.copy()
+    cov = _cov(adata)
+    tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient")
+    ax = tcri.pl.clonotypic_entropy(adata)
+
+    stored = dict(zip(adata.obs["patient"].cat.categories,
+                      (c.lower() for c in adata.uns[K.colors("patient")])))
+    at = {}
+    for coll in ax.collections:
+        if isinstance(coll, PathCollection):
+            for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
+                at.setdefault(int(round(x)), set()).add(matplotlib.colors.to_hex(c).lower())
+    assert len(at) == len(adata.uns[K.PHENOTYPE_CATEGORIES])
+    for x, colours in at.items():
+        assert colours == set(stored.values()), f"position {x}: {colours}"
+
+    boxes = {matplotlib.colors.to_hex(p.get_facecolor(), keep_alpha=False)
+             for p in ax.patches}
+    assert len(boxes) == 1, f"the boxes are colored per phenotype: {boxes}"
+    legend = ax.get_legend()
+    assert legend is not None and legend.get_title().get_text() == "patient"
+    assert [t.get_text() for t in legend.get_texts()] == list(stored)
+
+
+def test_a_long_y_label_fits_its_axes(cohort):
+    """A label longer than its axes is wrapped onto more lines rather than cut off at the
+    figure edge; every word is kept."""
+    model, adata = cohort
+    adata = adata.copy()
+    import matplotlib.pyplot as plt
+
+    for name, draw in _all_twins(adata, model).items():
+        fig, ax = plt.subplots(figsize=(3, 1.6))
+        draw(ax=ax)
+        fig.canvas.draw()
+        label = ax.yaxis.label
+        assert label.get_window_extent().height <= ax.get_window_extent().height + 1, name
+        assert label.get_text().split()
+        plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(3, 1.6))
+    tcri.pl.gene_importance(adata, ax=ax)
+    assert "\n" in ax.get_ylabel()
+    assert " ".join(ax.get_ylabel().split()) == "adjusted gene importance (L1 shift of the phenotype call)"
+    plt.close(fig)
