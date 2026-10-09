@@ -226,8 +226,6 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
             "covariate_col": meta.get("covariate_col"),
             "batch_col": meta.get("batch_col"),
         })
-        if K.Config.REPLICATE in meta:
-            setup["replicate"] = meta[K.Config.REPLICATE]
     for key in ("phenotype", "clonotype", "covariate"):
         cats_key = f"tcri_{key}_categories"
         if cats_key in adata.uns:
@@ -241,8 +239,7 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
             setup.setdefault("clone_col", r.get("clonotype_col"))
             setup.setdefault("covariate_col", r.get("covariate_col"))
             setup.setdefault("batch_col", r.get("batch_col"))
-            if setup.get("replicate") is None:
-                setup["replicate"] = r.get(K.Config.REPLICATE)
+            setup.setdefault("replicate", r.get(K.Config.REPLICATE))
             setup_args = r.get("setup_args", {})
             if isinstance(setup_args, dict) and "layer" in setup_args:
                 setup["layer"] = setup_args["layer"]
