@@ -1,8 +1,9 @@
 """``pp.clone_persistence``: which clones are seen at more than one covariate level.
 
 The summary counts the clones the paired metrics are computed on: both deltas and
-``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``. It
-reads ``obs`` only and writes nothing to the object.
+``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``, and
+leave pools out by default. A pool is not a clone and is never persistent. The summary reads
+``obs`` and the clonotype derivation record and writes nothing to the object.
 """
 from __future__ import annotations
 
@@ -20,6 +21,8 @@ from anndata import AnnData
 
 import tcri
 import tcri.tools._delta as delta_module
+from tcri._compute._repertoire import _record_derivation
+from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
 from tcri.model._model import TCRIModel
 
@@ -137,18 +140,25 @@ def test_rows_and_level_columns_follow_category_order():
     ]
 
 
-def test_level_keys_are_strings():
-    """Levels that are not strings name their columns as strings, and ``cov_from`` and
-    ``cov_to`` match them either way."""
+def test_group_labels_and_level_keys_are_strings():
+    """Groups and levels that are not strings come out as strings: the group column holds the
+    group as a string, level columns are named by the level as a string, and ``cov_from`` and
+    ``cov_to`` match a level either way."""
     adata = _cohort()
     adata.obs["timepoint"] = adata.obs["timepoint"].map({"t0": 0, "t1": 1, "t2": 2})
+    adata.obs["patient"] = adata.obs["patient"].map({"P1": 1, "P2": 2})
     every = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient", per_clone=True)
     assert list(every.columns) == ["patient", "clonotype", "0", "1", "2"]
+    assert every["patient"].tolist() == ["1"] * 4 + ["2"] * 2
+    overview = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient")
+    assert overview["patient"].tolist() == ["1", "2"]
     expected = tcri.pp.clone_persistence(_cohort(), **KEYS, cov_from="t0", cov_to="t1",
                                          groupby="patient")
     for ends in (dict(cov_from=0, cov_to=1), dict(cov_from="0", cov_to="1")):
         got = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient", **ends)
-        pd.testing.assert_frame_equal(got, expected)
+        assert got["patient"].tolist() == ["1", "2"]
+        pd.testing.assert_frame_equal(got.drop(columns="patient"),
+                                      expected.drop(columns="patient"))
 
 
 # ── arguments ─────────────────────────────────────────────────────────────────────────────────
@@ -188,6 +198,42 @@ def test_two_output_columns_with_one_name_raise():
     adata.obs["timepoint"] = adata.obs["timepoint"].replace({"t2": "clonotype"})
     with pytest.raises(ValueError, match="'clonotype'"):
         tcri.pp.clone_persistence(adata, **KEYS, per_clone=True)
+
+
+def test_pools_are_never_persistent():
+    """A pool holds many rare clones, so it is not a clone and never persistent: on a column
+    whose derivation record lists its pools, their cells are in no count and no row. P1 keeps
+    one clone at both timepoints, and P2's only clone is at t0, while each patient's pool has
+    cells at both."""
+    obs = pd.DataFrame({
+        "clone_id_pooled": ["c1@P1"] * 4 + ["pooled@P1"] * 4 + ["c2@P2"] * 3 + ["pooled@P2"] * 2,
+        "patient": ["P1"] * 8 + ["P2"] * 5,
+        "timepoint": ["t0", "t0", "t0", "t1", "t0", "t0", "t1", "t1", "t0", "t0", "t0", "t0",
+                      "t1"],
+    })
+    adata = _adata(obs)
+    _record_derivation(adata, function="pool_rare_clones", source="clone_id",
+                       key_added="clone_id_pooled", groupby="patient", min_cells=3,
+                       pool_labels=["pooled@P1", "pooled@P2"], n_clones_pooled=4,
+                       n_cells_pooled=6)
+    kw = dict(clonotype_key="clone_id_pooled", covariate_key="timepoint", groupby="patient")
+
+    contrast = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1")
+    assert contrast[["patient"] + CONTRAST].values.tolist() == [
+        ["P1", 0, 0, 1, 0, 0, 4, True],
+        ["P2", 1, 0, 0, 3, 0, 0, False],
+    ]
+    clones = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1", per_clone=True)
+    assert list(clones.itertuples(index=False, name=None)) == [("P1", "c1@P1", 3, 1),
+                                                               ("P2", "c2@P2", 3, 0)]
+    overview = tcri.pp.clone_persistence(adata, **kw)
+    assert overview[["patient"] + OVERVIEW].values.tolist() == [["P1", 2, 0, 1, 0, 4],
+                                                                ["P2", 1, 1, 0, 3, 0]]
+
+    # without the record nothing marks the pools, and each label is a clone
+    del adata.uns[K.CLONOTYPE_DERIVATIONS]
+    unmarked = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1")
+    assert unmarked["persistent_clones"].tolist() == [2, 1]
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
@@ -255,8 +301,11 @@ def ragged_cohort():
     """A fitted three-patient AnnData whose clones are not all seen at both timepoints.
 
     In P0 and P1, clone 0 loses its cells at ``cov_1`` and clone 1 its cells at ``cov_0``. In
-    P2, every clone loses its cells at one of the two, so P2 has no persistent clone. Clone ids
-    are patient-scoped, which the metrics' ``groupby`` needs.
+    P2, clones 0 to 5 each lose their cells at one of the two, so P2 has no persistent clone.
+    In every patient clone 6 keeps two cells at ``cov_0`` and clone 7 two at ``cov_1``: both are
+    rare, and pooling gathers them into one pool per patient with cells at both timepoints. The
+    pooled column, ``clone_id_pooled``, is the one registered. Clone ids are patient-scoped,
+    which the metrics' ``groupby`` needs.
     """
     logging.disable(logging.INFO)
     parts = []
@@ -266,9 +315,12 @@ def ragged_cohort():
         clone = block.obs["clone_id"].cat.codes.to_numpy()
         level = block.obs["covariate"].cat.codes.to_numpy()
         if patient == "P2":
-            drop = clone % 2 == level
+            drop = (clone < 6) & (clone % 2 == level)
         else:
             drop = ((clone == 0) & (level == 1)) | ((clone == 1) & (level == 0))
+        for rare, kept in ((6, 0), (7, 1)):
+            drop |= (clone == rare) & (level != kept)
+            drop[np.flatnonzero((clone == rare) & (level == kept))[2:]] = True
         block = block[~drop].copy()
         block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
         block.obs["patient"] = patient
@@ -279,11 +331,12 @@ def ragged_cohort():
     for column in ("clone_id", "phenotype", "covariate", "patient"):
         adata.obs[column] = adata.obs[column].astype("category")
     adata.layers["counts"] = adata.X.copy()
+    tcri.pp.pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
     # only the fit's clone x covariate rows are read, so a short fit will do, and its warnings
     # about small categories and the epoch budget say nothing about those rows
     with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
         warnings.simplefilter("ignore", UserWarning)
-        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id_pooled",
                                 phenotype_key="phenotype", covariate_key="covariate",
                                 batch_key="patient", replicate="patient")
         model = TCRIModel(adata, n_latent=4, n_hidden=8, n_layers=1, classifier_n_layers=1,
@@ -297,15 +350,21 @@ def ragged_cohort():
 
 def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
     """The persistent clones of each group are the clones both deltas hand the engine, and the
-    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report. A group without a
-    persistent clone is the group those results leave out.
+    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report, at the metrics' default
+    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is in none of
+    them. A group without a persistent clone is the group those results leave out.
 
     Run at ``null_model=None``: what is compared is which clones are used, not a value.
     """
     adata = ragged_cohort
+    obs = adata.obs
+    for patient in ("P0", "P1", "P2"):
+        pool = obs.loc[obs["clone_id_pooled"] == f"pooled@{patient}", "covariate"]
+        assert set(pool) == {"cov_0", "cov_1"}, f"{patient} has no pool at both timepoints"
     kw = dict(cov_from="cov_0", cov_to="cov_1", groupby="patient")
-    keys = dict(clonotype_key="clone_id", covariate_key="covariate")
+    keys = dict(clonotype_key="clone_id_pooled", covariate_key="covariate")
     clones = tcri.pp.clone_persistence(adata, **keys, **kw, per_clone=True)
+    assert not clones["clonotype"].str.startswith("pooled@").any()
     both = clones[(clones["cov_0"] > 0) & (clones["cov_1"] > 0)]
     persistent = set(zip(both["patient"], both["clonotype"]))
     summary = tcri.pp.clone_persistence(adata, **keys, **kw)
