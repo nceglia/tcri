@@ -72,7 +72,7 @@ For the development version:
 ```bash
 git clone https://github.com/nceglia/tcri.git
 cd tcri
-pip install -e ".[test]"
+pip install -e ".[test,mudata]"
 ```
 
 See the [installation guide](https://tcri.readthedocs.io/en/latest/usage/installation.html)

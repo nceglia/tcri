@@ -54,5 +54,5 @@ provenance, not a specification, and are not kept in the repository.
   bottom, with a merge commit. Update a stacked branch by rebasing. Before pushing, confirm the
   branch is not behind its base; if it is, rebase.
 - Run tests with the pinned venv: `MPLBACKEND=Agg .venv/bin/python -m pytest tests/ -q`.
-- `dev/` is gitignored scratch. `example/` and `examples/` are outputs of the package.
+- `dev/` is gitignored scratch. `examples/` is an output of the package.
 - PRs describe what was done, compactly. Follow-up work goes to GitHub issues.

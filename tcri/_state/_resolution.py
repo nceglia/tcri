@@ -1,11 +1,15 @@
-"""Shared field-resolution helpers used by setup and adapters."""
+"""Clone-like column helpers: ``setup_anndata``'s ``clonotype_key="auto"`` and the column list in
+``pp.from_mudata``'s not-found error."""
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection
 
 import pandas as pd
 
-__all__ = ["clone_like_candidates", "resolve_clonotype_source"]
+__all__ = ["clone_like_candidates", "resolve_clonotype_key"]
+
+#: The families ``clonotype_key="auto"`` tries, in order.
+_FAMILY_ORDER = ("clone_id", "cc", "size")
 
 
 def _canonical_col(name: str, *, source_prefix: str) -> str:
@@ -50,95 +54,45 @@ def clone_like_candidates(frame: pd.DataFrame, *, source_prefix: str) -> list[st
     return sorted(out)
 
 
-def _iter_sources(
-    sources: Mapping[str, pd.DataFrame] | Sequence[tuple[str, pd.DataFrame]],
-) -> list[tuple[str, pd.DataFrame]]:
-    if isinstance(sources, Mapping):
-        return [(str(k), v) for k, v in sources.items()]
-    return [(str(k), v) for k, v in sources]
+def resolve_clonotype_key(obs: pd.DataFrame, *, source_prefix: str = "airr") -> str:
+    """The clonotype column that ``clonotype_key="auto"`` picks from ``obs``.
 
+    Clone-like columns fall into three families, tried in order: ``clone_id``, ``cc_*``
+    definitions, and any column with a ``<name>_size`` partner. A ``<base>_size`` column whose
+    ``<base>`` is present stands for ``<base>`` and takes its family, so one ``cc_*`` definition
+    with its size column is one candidate. Names may carry the ``<source_prefix>:`` prefix; a
+    definition present under both names is read from the first column.
 
-def resolve_clonotype_source(
-    sources: Mapping[str, pd.DataFrame] | Sequence[tuple[str, pd.DataFrame]],
-    *,
-    clonotype_key: str,
-    source_prefix: str = "airr",
-    family_order: Sequence[str] = ("clone_id", "cc", "size"),
-    source_preference: Mapping[str, int] | None = None,
-) -> tuple[str, str, str, list[tuple[str, str, str, str]]]:
-    """Resolve a clonotype column from one or more obs-like frames.
-
-    A ``<base>_size`` column whose ``<base>`` is present stands for ``<base>`` and takes its
-    family (``clone_id`` or ``cc``, otherwise ``size``), so one ``cc_*`` definition with its size
-    column is one candidate.
-
-    Returns ``(source_name, resolved_key, family, candidates)`` where candidates are tuples
-    ``(family, canonical, source_name, key)``.
+    Raises
+    ------
+    ValueError
+        When the first family with a candidate has more than one definition, or when no column
+        is clone-like.
     """
-    source_items = _iter_sources(sources)
-    source_rank = (
-        {name: i for i, (name, _) in enumerate(source_items)}
-        if source_preference is None else
-        {str(k): int(v) for k, v in source_preference.items()}
-    )
+    cols = [str(c) for c in obs.columns]
+    colset = set(cols)
+    families: dict[str, dict[str, str]] = {}
+    for col in cols:
+        canon = _canonical_col(col, source_prefix=source_prefix)
+        paired = _size_pair(canon, colset, source_prefix=source_prefix)
+        if paired:
+            col, canon = paired[0], canon[: -len("_size")]
+            family = _name_family(canon) or "size"
+        else:
+            family = _name_family(canon)
+        if family is not None:
+            families.setdefault(family, {}).setdefault(canon, col)
 
-    seen = set()
-    candidates: list[tuple[str, str, str, str]] = []
-    for source_name, frame in source_items:
-        cols = [str(c) for c in frame.columns]
-        colset = set(cols)
-        for col in cols:
-            canon = _canonical_col(col, source_prefix=source_prefix)
-            paired = _size_pair(canon, colset, source_prefix=source_prefix)
-            if paired:
-                col, canon = paired[0], canon[: -len("_size")]
-                family = _name_family(canon) or "size"
-            else:
-                family = _name_family(canon)
-            if family is None:
-                continue
-            marker = (source_name, col)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            candidates.append((family, canon, source_name, col))
-
-    if clonotype_key != "auto":
-        checks = [clonotype_key]
-        if ":" not in clonotype_key:
-            checks.append(f"{source_prefix}:{clonotype_key}")
-        for source_name, frame in source_items:
-            for key in checks:
-                if key in frame.columns:
-                    return source_name, key, "explicit", candidates
-
-        hint = ", ".join(sorted({c for _, f in source_items for c in clone_like_candidates(f, source_prefix=source_prefix)})[:8])
-        names = ", ".join(name for name, _ in source_items)
-        raise KeyError(
-            f"clonotype_key={clonotype_key!r} was not found. "
-            f"Expected it in: {names}. "
-            f"{'Clone-like columns include: ' + hint if hint else 'No clone-like columns found.'}"
-        )
-
-    for family in family_order:
-        subset = [c for c in candidates if c[0] == family]
-        if not subset:
+    for family in _FAMILY_ORDER:
+        found = families.get(family)
+        if not found:
             continue
-        by_canon: dict[str, list[tuple[str, str]]] = {}
-        for _family, canonical, source_name, key in subset:
-            by_canon.setdefault(canonical, []).append((source_name, key))
-        if len(by_canon) > 1:
-            options = sorted(by_canon)
+        if len(found) > 1:
             raise ValueError(
                 "clonotype_key='auto' is ambiguous: multiple candidate clonotype columns were found "
-                f"for family {family!r}: {options}. Pass clonotype_key=... explicitly."
+                f"for family {family!r}: {sorted(found)}. Pass clonotype_key=... explicitly."
             )
-        canonical = next(iter(by_canon))
-        chosen = sorted(
-            by_canon[canonical],
-            key=lambda item: source_rank.get(item[0], len(source_rank)),
-        )[0]
-        return chosen[0], chosen[1], family, candidates
+        return next(iter(found.values()))
 
     raise ValueError(
         "clonotype_key='auto' found no clonotype candidates. "
