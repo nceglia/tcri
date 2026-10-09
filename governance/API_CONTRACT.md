@@ -128,10 +128,11 @@ drawn only between points sharing an identity across the compared levels.
 
 **Diagnostics.** `reconstruction_ppc`, `loss` and `archetypes` take the model; the rest read the
 stored substrate. `joint_distribution_ppc` and `phenotype_calibration` read PER-FIT keys and
-therefore take `fit=`. `permutation_null` reads only the metadata and the category lists, which
-are shared between every fit of an object, so it has no fit to select and takes none; it permutes
-labels within each covariate on the empirical crosstab and draws no Dirichlet samples. It is a
-model-free check on the data, not a reference for a model-based number — `tcri.null` is that.
+therefore take `fit=`. `permutation_null` reads only the metadata, the category lists and the
+derivation record, which are shared between every fit of an object, so it has no fit to select and
+takes none; it permutes labels within each covariate on the empirical crosstab and draws no
+Dirichlet samples. It is a model-free check on the data, not a reference for a model-based number
+— `tcri.null` is that.
 
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
@@ -233,53 +234,56 @@ class tl:
     def joint_distribution(
         adata: AnnData, *, covariate: Optional[str] = ...,
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
-        clones: Any = ..., temperature: float = ..., random_state: Any = ...,
-        device: Any = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., temperature: float = ...,
+        random_state: Any = ..., device: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def clonotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def mutual_information(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        normalize_mode: str = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_flux(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., distance_metric: str = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_clonotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_phenotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
 
@@ -338,8 +342,8 @@ class pl:
 class diag:
     def joint_distribution_ppc(
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: str = ...,
-        temperature: float = ..., clones: Any = ..., random_state: Any = ...,
-        fit: Optional[str] = ...,
+        temperature: float = ..., clones: Any = ..., exclude_pools: bool = ...,
+        random_state: Any = ..., fit: Optional[str] = ...,
     ) -> pd.DataFrame: ...
     def phenotype_calibration(
         adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ...,
@@ -349,8 +353,8 @@ class diag:
     ) -> pd.DataFrame: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
-        groupby: Optional[str] = ..., normalize_mode: str = ..., n_perm: int = ...,
-        random_state: Any = ...,
+        groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
+        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ...,
     ) -> pd.DataFrame: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
@@ -364,9 +368,10 @@ class perturb:
     ) -> pd.DataFrame: ...
     def gene_importance(
         model: Any, adata: AnnData, *, genes: Any = ..., covariate: Optional[str] = ...,
-        groupby: Optional[str] = ..., splitby: Optional[str] = ..., n_samples: int = ...,
-        use_gate: bool = ..., batch_size: int = ..., random_state: Any = ...,
-        null_model: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+        groupby: Optional[str] = ..., splitby: Optional[str] = ..., exclude_pools: bool = ...,
+        n_samples: int = ..., use_gate: bool = ..., batch_size: int = ...,
+        random_state: Any = ..., null_model: Any = ..., key_added: Optional[str] = ...,
+        inplace: bool = ...,
     ) -> dict: ...
 
 

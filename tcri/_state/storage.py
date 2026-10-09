@@ -389,12 +389,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             """The caller's own arguments, with the two the reference changes.
 
             Every other argument is forwarded VERBATIM -- `groupby`, `splitby`, `clones`,
-            `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`,
-            `temperature`, `n_samples`, `random_state` and `device` each change the estimand,
-            and a reference computed at defaults is a different quantity subtracted from a
-            different quantity. `inplace` is honoured as the caller gave it, so the reference's
-            own frame is cached under its fit key: plottable by `key=`, available to the
-            identity test, and not computed twice.
+            `exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`,
+            `distance_metric`, `temperature`, `n_samples`, `random_state` and `device` each
+            change the estimand, and a reference computed at defaults is a different quantity
+            subtracted from a different quantity. `inplace` is honoured as the caller gave it, so
+            the reference's own frame is cached under its fit key: plottable by `key=`,
+            available to the identity test, and not computed twice.
             """
             call = {k: v for k, v in arguments.items() if k != "key_added"}
             call["null_model"] = None          # terminates the recursion
