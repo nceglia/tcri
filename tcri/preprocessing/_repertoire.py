@@ -1,9 +1,8 @@
 """Summaries of a clonotype column, read before fitting.
 
-Each function reads ``adata.obs``, and the clonotype derivation record in ``adata.uns`` where it
-needs it, and returns a table. None of them filters cells, writes to ``adata`` or needs scirpy,
-and none returns a verdict or a threshold. Cells without a clonotype are left out and not
-counted.
+Each function reads ``adata.obs`` and the clonotype derivation record in ``adata.uns`` and returns
+a table. None of them filters cells, writes to ``adata`` or needs scirpy, and none returns a
+verdict or a threshold. Cells without a clonotype are left out and not counted.
 """
 from __future__ import annotations
 
@@ -211,8 +210,8 @@ def _frame(columns: list) -> pd.DataFrame:
     return pd.DataFrame(dict(columns))
 
 
-def _clone_cells(obs, clonotype_key, covariate_key, groupby):
-    """Cells per clone at each covariate level.
+def _clone_cells(obs, clonotype_key, covariate_key, groupby, pools):
+    """Cells per clone at each covariate level, leaving out the labels in ``pools``.
 
     Returns ``(clones, levels, cells)``: ``clones`` holds one row per clone with columns
     ``group`` (with ``groupby`` only) and ``clonotype``, ordered by group and then clonotype,
@@ -220,6 +219,7 @@ def _clone_cells(obs, clonotype_key, covariate_key, groupby):
     in category order; and ``cells`` the int64 array ``[clone, level]`` of cell counts.
     """
     units = _size_counts(obs, clonotype_key, covariate_key, groupby)
+    units = units[~units["clonotype"].isin(pools).to_numpy()]
     keys = ["clonotype"]
     if groupby is not None:
         keys = ["group", "clonotype"]
@@ -271,13 +271,19 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     here it means the whole dataset. Without ``cov_from`` and ``cov_to``, it counts the clones
     seen at one level and at more than one.
 
+    On a pooled column, one whose derivation record lists the pools it was written with, a pool
+    is not a clone: its cells are left out of every count, as are cells without a clonotype, so
+    a pool is never persistent. The metrics still compute a value for a pool seen at both
+    levels, as they do for a clone.
+
     Clones seen at one level only are expected, since each sample holds only part of a
     repertoire.
 
     Parameters
     ----------
     adata
-        The cells to summarize. Only ``adata.obs`` is read, and nothing is written.
+        The cells to summarize. ``adata.obs`` and the clonotype derivation record in
+        ``adata.uns`` are read, and nothing is written.
     clonotype_key
         The clonotype column. Cells without a clonotype (NaN or None, an empty or
         whitespace-only string, or ``"nan"``) are left out and not counted.
@@ -298,8 +304,8 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     -------
     pd.DataFrame
         One row per group with at least one counted cell, in the column's category order, with
-        the group in a column named ``groupby``. With ``groupby=None``, one row and no group
-        column.
+        the group, as a string, in a column named ``groupby``. With ``groupby=None``, one row
+        and no group column.
 
         With ``cov_from`` and ``cov_to``, only cells at those two levels are counted:
 
@@ -317,12 +323,13 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
         - ``cells_at_one_level``, ``cells_at_multiple_levels``: the cells of those clones.
 
         With ``per_clone=True``, one row per clone instead, ordered by group and then
-        clonotype: the group in a column named ``groupby`` (when given), the clonotype in
-        ``clonotype``, and one column per covariate level holding the clone's cells at that
-        level. Level columns are named by the level as a string, in category order. With
-        ``cov_from`` and ``cov_to`` the level columns are those two and the rows are the clones
-        seen at either, so the persistent clones are the rows with cells in both columns.
-        Without them, every level with a counted cell has a column and every clone a row.
+        clonotype: the group, as a string, in a column named ``groupby`` (when given), the
+        clonotype in ``clonotype``, and one column per covariate level holding the clone's
+        cells at that level. Level columns are named by the level as a string, in category
+        order. With ``cov_from`` and ``cov_to`` the level columns are those two and the rows
+        are the clones seen at either, so the persistent clones are the rows with cells in both
+        columns. Without them, every level with a counted cell has a column and every clone a
+        row.
 
     Raises
     ------
@@ -339,7 +346,8 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
             "cov_from and cov_to are given together or not at all: pass both to contrast two "
             "levels, or neither to summarize every level."
         )
-    clones, levels, cells = _clone_cells(obs, clonotype_key, covariate_key, groupby)
+    pools = _pool_labels(adata, clonotype_key)
+    clones, levels, cells = _clone_cells(obs, clonotype_key, covariate_key, groupby, pools)
     contrast = cov_from is not None
     if contrast:
         ends = _endpoints(obs, covariate_key, cov_from, cov_to)
@@ -353,7 +361,7 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
         rows = cells.sum(axis=1) > 0
         keys = [("clonotype", clones["clonotype"].to_numpy()[rows])]
         if groupby is not None:
-            keys.insert(0, (groupby, clones["group"].to_numpy()[rows]))
+            keys.insert(0, (groupby, clones["group"].map(str).to_numpy()[rows]))
         return _frame(keys + [(level, cells[rows, j]) for j, level in enumerate(levels)])
 
     seen = cells > 0
@@ -382,7 +390,7 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     totals = pd.DataFrame(counts).groupby(group, sort=False).sum()
     if groupby is None:
         totals = totals.reindex([0], fill_value=0)
-    columns = [] if groupby is None else [(groupby, totals.index.to_numpy())]
+    columns = [] if groupby is None else [(groupby, totals.index.map(str).to_numpy())]
     if not contrast:
         n_levels = pd.DataFrame(seen).groupby(group, sort=False).any().sum(axis=1)
         columns.append(("n_levels", n_levels.reindex(totals.index, fill_value=0)

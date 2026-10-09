@@ -20,6 +20,8 @@ from anndata import AnnData
 
 import tcri
 import tcri.tools._delta as delta_module
+from tcri._compute._repertoire import _record_derivation
+from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
 from tcri.model._model import TCRIModel
 
@@ -137,18 +139,25 @@ def test_rows_and_level_columns_follow_category_order():
     ]
 
 
-def test_level_keys_are_strings():
-    """Levels that are not strings name their columns as strings, and ``cov_from`` and
-    ``cov_to`` match them either way."""
+def test_group_labels_and_level_keys_are_strings():
+    """Groups and levels that are not strings come out as strings: the group column holds the
+    group as a string, level columns are named by the level as a string, and ``cov_from`` and
+    ``cov_to`` match a level either way."""
     adata = _cohort()
     adata.obs["timepoint"] = adata.obs["timepoint"].map({"t0": 0, "t1": 1, "t2": 2})
+    adata.obs["patient"] = adata.obs["patient"].map({"P1": 1, "P2": 2})
     every = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient", per_clone=True)
     assert list(every.columns) == ["patient", "clonotype", "0", "1", "2"]
+    assert every["patient"].tolist() == ["1"] * 4 + ["2"] * 2
+    overview = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient")
+    assert overview["patient"].tolist() == ["1", "2"]
     expected = tcri.pp.clone_persistence(_cohort(), **KEYS, cov_from="t0", cov_to="t1",
                                          groupby="patient")
     for ends in (dict(cov_from=0, cov_to=1), dict(cov_from="0", cov_to="1")):
         got = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient", **ends)
-        pd.testing.assert_frame_equal(got, expected)
+        assert got["patient"].tolist() == ["1", "2"]
+        pd.testing.assert_frame_equal(got.drop(columns="patient"),
+                                      expected.drop(columns="patient"))
 
 
 # ── arguments ─────────────────────────────────────────────────────────────────────────────────
@@ -188,6 +197,42 @@ def test_two_output_columns_with_one_name_raise():
     adata.obs["timepoint"] = adata.obs["timepoint"].replace({"t2": "clonotype"})
     with pytest.raises(ValueError, match="'clonotype'"):
         tcri.pp.clone_persistence(adata, **KEYS, per_clone=True)
+
+
+def test_pools_are_never_persistent():
+    """A pool holds many rare clones, so it is not a clone and never persistent: on a column
+    whose derivation record lists its pools, their cells are in no count and no row. P1 keeps
+    one clone at both timepoints, and P2's only clone is at t0, while each patient's pool has
+    cells at both."""
+    obs = pd.DataFrame({
+        "clone_id_pooled": ["c1@P1"] * 4 + ["pooled@P1"] * 4 + ["c2@P2"] * 3 + ["pooled@P2"] * 2,
+        "patient": ["P1"] * 8 + ["P2"] * 5,
+        "timepoint": ["t0", "t0", "t0", "t1", "t0", "t0", "t1", "t1", "t0", "t0", "t0", "t0",
+                      "t1"],
+    })
+    adata = _adata(obs)
+    _record_derivation(adata, function="pool_rare_clones", source="clone_id",
+                       key_added="clone_id_pooled", groupby="patient", min_cells=3,
+                       pool_labels=["pooled@P1", "pooled@P2"], n_clones_pooled=4,
+                       n_cells_pooled=6)
+    kw = dict(clonotype_key="clone_id_pooled", covariate_key="timepoint", groupby="patient")
+
+    contrast = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1")
+    assert contrast[["patient"] + CONTRAST].values.tolist() == [
+        ["P1", 0, 0, 1, 0, 0, 4, True],
+        ["P2", 1, 0, 0, 3, 0, 0, False],
+    ]
+    clones = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1", per_clone=True)
+    assert list(clones.itertuples(index=False, name=None)) == [("P1", "c1@P1", 3, 1),
+                                                               ("P2", "c2@P2", 3, 0)]
+    overview = tcri.pp.clone_persistence(adata, **kw)
+    assert overview[["patient"] + OVERVIEW].values.tolist() == [["P1", 2, 0, 1, 0, 4],
+                                                                ["P2", 1, 1, 0, 3, 0]]
+
+    # without the record nothing marks the pools, and each label is a clone
+    del adata.uns[K.CLONOTYPE_DERIVATIONS]
+    unmarked = tcri.pp.clone_persistence(adata, **kw, cov_from="t0", cov_to="t1")
+    assert unmarked["persistent_clones"].tolist() == [2, 1]
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
