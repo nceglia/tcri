@@ -62,21 +62,33 @@ def _check_the_name_is_free(adata, model, fit):
 
     ``tcri.null.all(a, adata)`` then ``tcri.null.all(b, adata)`` would have both claim
     ``null.phenotype`` and the second silently overwrite the first -- two ordinary calls,
-    reachable because two models can coexist in one process. Re-running the SAME parent
-    rewrites in place, which is the ``tl`` convention and not a collision.
+    reachable because two models can coexist in one process -- so a different parent raises.
+    Re-running the SAME parent rewrites in place, which is the ``tl`` convention and not a
+    collision. When neither parent was given ``name=`` (a generated name, or the empty name a
+    record from an earlier release carries) and the new parent has written the object's main
+    fit, the ordinary way to arrive here is refitting a model and re-running its nulls on the
+    same object, so the fit is rewritten with a warning. Otherwise it raises: a parent given
+    ``name=`` on either side, or a new parent whose main fit is not on this object, whose null
+    would sit beside another model's values.
     """
+    from ..model._model import _is_generated_name
+
     record = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit))
     if not record or "parent" not in record:
         return
     held = str(record["parent"])
     if held == str(model.name):
-        if not held:
-            warnings.warn(
-                f"fit {fit!r} is already on this object and its parent is unnamed, as is this "
-                f"one, so they cannot be told apart: it is being rewritten. Give the parents "
-                f"`name=` at construction if they are different models.",
-                UserWarning, stacklevel=3,
-            )
+        return
+    main = str((adata.uns.get(K.FIT_SETTINGS) or {}).get("name", ""))
+    if ((not held or _is_generated_name(held)) and _is_generated_name(model.name)
+            and main == str(model.name)):
+        warnings.warn(
+            f"fit {fit!r} on this object was written by parent {held!r}. Neither that model nor "
+            f"this one ({model.name!r}) was given `name=`, and this one wrote the object's main "
+            f"fit, so this is taken as a refit and the fit is rewritten. Give the models `name=` "
+            f"at construction if they are different models.",
+            UserWarning, stacklevel=3,
+        )
         return
     raise ValueError(
         f"fit {fit!r} on this object belongs to parent {held!r}, not to {model.name!r}. "
@@ -117,9 +129,10 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
 
-    namespace = f"{model.name}.{fit}" if model.name else fit
+    namespace = f"{model.name}.{fit}"
     null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
                      **_init_params(model))
+    null._fit_name = fit
     null.train(**train_args)
     null.to_anndata(adata, fit=fit)
 

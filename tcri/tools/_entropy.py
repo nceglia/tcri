@@ -68,8 +68,8 @@ def _phenotypic_one(clone_ids, J, cols, *, normalized):
 
 
 def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temperature,
-                    clones, weighted, normalized, random_state, n_clones_ref=None, device=None,
-                    fit=None):
+                    clones, exclude_pools, weighted, normalized, random_state, n_clones_ref=None,
+                    device=None, fit=None):
     """Shared body for both entropies.
 
     The two differ only in their ITEM AXIS: clonotypic entropy H(c|phi) is one value per
@@ -94,7 +94,8 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
         return [_one(ids, J, cols) for ids, J in draws]
 
     table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
-                         clones=clones, item_col=item_col, compute=_compute, fit=fit)
+                         clones=clones, exclude_pools=exclude_pools, item_col=item_col,
+                         compute=_compute, fit=fit)
     result = build_result(table)
     stats = build_stats(result, groupby=gkey, splitby=splitby)
 
@@ -105,8 +106,8 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
 @tl_result(key=K.CLONOTYPIC_ENTROPY, version=2, schema=schemas.ClonotypicEntropy,
            default_null="phenotype")
 def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-                       temperature=1.0, clones=None, weighted=False, normalized=True,
-                       n_clones_ref=None, random_state=None, device=None,
+                       temperature=1.0, clones=None, exclude_pools=True, weighted=False,
+                       normalized=True, n_clones_ref=None, random_state=None, device=None,
                        null_model="auto", fit=None, key_added=None, inplace=True):
     """H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the normalizer for cross-group
     comparability (else per-group #supported clones). See module docstring.
@@ -114,25 +115,38 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     ``null_model`` names the permutation reference: ``"auto"`` is the phenotype null, ``None``
     reports the bare value, and any fit on this object can be named instead. ``fit`` selects
     which fit the number is computed ON, which is a different question -- see the module
-    docstring of :mod:`tcri.null`."""
+    docstring of :mod:`tcri.null`.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the entropy counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out."""
     return _entropy_metric(adata, kind="clonotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
-                           clones=clones, weighted=weighted, normalized=normalized,
-                           random_state=random_state, n_clones_ref=n_clones_ref,
-                           device=device, fit=fit)
+                           clones=clones, exclude_pools=exclude_pools, weighted=weighted,
+                           normalized=normalized, random_state=random_state,
+                           n_clones_ref=n_clones_ref, device=device, fit=fit)
 
 
 @tl_result(key=K.PHENOTYPIC_ENTROPY, version=2, schema=schemas.PhenotypicEntropy,
            default_null="phenotype")
 def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-                       temperature=1.0, clones=None, weighted=False, normalized=True,
-                       random_state=None, device=None, null_model="auto", fit=None,
-                       key_added=None, inplace=True):
+                       temperature=1.0, clones=None, exclude_pools=True, weighted=False,
+                       normalized=True, random_state=None, device=None, null_model="auto",
+                       fit=None, key_added=None, inplace=True):
     """H[P(φ|c)] per clone (bits) — computed once, cached, returned. See module docstring.
 
     ``null_model`` names the permutation reference (``"auto"`` is the phenotype null); ``fit``
-    selects which fit the number is computed on."""
+    selects which fit the number is computed on.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the entropy counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out."""
     return _entropy_metric(adata, kind="phenotypic", covariate=covariate, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
-                           clones=clones, weighted=weighted, normalized=normalized,
-                           random_state=random_state, device=device, fit=fit)
+                           clones=clones, exclude_pools=exclude_pools, weighted=weighted,
+                           normalized=normalized, random_state=random_state, device=device,
+                           fit=fit)

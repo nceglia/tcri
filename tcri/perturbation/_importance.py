@@ -18,7 +18,7 @@ import warnings
 import numpy as np
 import torch
 
-from .._compute._tables import build_result, resolve_groupby, validate_splitby
+from .._compute._tables import _resolve_clones, build_result, resolve_groupby, validate_splitby
 from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
@@ -78,8 +78,9 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
 @tl_result(key=K.GENE_IMPORTANCE, version=2, schema=schemas.GeneImportance, data_param="adata",
            default_null="phenotype", reference_arg="model", per_gene_stats=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
-                    n_samples=0, use_gate=True, batch_size=4096, random_state=None,
-                    null_model="auto", key_added=None, inplace=True) -> dict:
+                    exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
+                    random_state=None, null_model="auto", key_added=None,
+                    inplace=True) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
     distribution moves when the gene is silenced. Computed once, cached, returned.
 
@@ -98,6 +99,13 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         per (gene, group), and the unit of the ``splitby`` contrast.
     splitby
         A per-group label to contrast; the contrast is per gene, in ``stats``.
+    exclude_pools
+        ``True`` leaves out the cells of the pools of the registered clonotype column, the
+        ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones`` writes. A pool is a mixture of
+        many rare clones, not a clone, so by default its cells are left out of the phenotype
+        distribution the importance moves, which then holds exactly the cells of the clones
+        ``pool_rare_clones`` kept. ``False`` keeps them. A column with no pooling step has
+        nothing to leave out.
     n_samples
         ``0``: the plug-in at the posterior mean of ``p_ct``. ``N > 0``: ``N`` Dirichlet draws
         of ``p_ct`` from the guide, shared by every gene, entering only through the gate; the
@@ -140,6 +148,13 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
 
     gid, labels, split = cell_groups(adata, cov_col=reg["covariate_col"], covariate=covariate,
                                      groupby=gkey, splitby=splitby)
+    # the clonotype column `to_anndata` recorded, or the model's own on an object it has not
+    # written
+    meta = adata.uns.get(K.METADATA)
+    column = reg["clonotype_col"] if meta is None else meta[K.CLONE_COL]
+    counted = _resolve_clones(adata, None, exclude_pools, column=column)
+    if counted is not None:
+        gid[~adata.obs[column].isin(counted).to_numpy()] = -1
     n_groups = len(labels)
     base, pert, counts = _accumulate(model, adata, positions=positions, gid=gid,
                                      n_groups=n_groups, draws=draws, use_gate=use_gate,

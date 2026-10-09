@@ -14,7 +14,6 @@ from scipy.stats import fisher_exact
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.colors as mcolors
 
-from contextlib import contextmanager
 
 from typing import Optional, Tuple, Dict, Any
 import json as _json
@@ -41,60 +40,6 @@ import numpy as np
 __all__ = ["save_tcri_session", "load_tcri_session"]
 
 
-def _ensure_pyro_posterior_params(model, adata) -> None:
-    import pyro, torch
-    from pyro.distributions import constraints
-    from torch import nn
-
-    store = pyro.get_param_store()
-    # BOTH the test and the fallback write below must use the model's own namespace. Repairing
-    # a namespaced model under the bare name would leave it looking for a key nothing wrote.
-    pname = model.module.pname("q_p_ct_raw")
-    if pname in store:
-        return
-
-    device = next(model.module.parameters()).device
-
-    # infer ct_count
-    if hasattr(model.module, "ct_count"):
-        ct_count = int(model.module.ct_count)
-    elif hasattr(model.module, "ct_to_cov"):
-        ct_count = int(model.module.ct_to_cov.shape[0])
-    elif hasattr(model.module, "ct_array"):
-        ct_count = int(model.module.ct_array.max().item() + 1)
-    else:
-        raise RuntimeError("Could not infer ct_count from the model.")
-
-    # infer P via classifier forward (most reliable)
-    try:
-        z = model.get_latent_representation(batch_size=8)
-        with torch.no_grad():
-            logits = model.module.classifier(torch.from_numpy(z[:1]).to(device))
-        P = int(logits.shape[-1])
-    except Exception:
-        # fallback to adata phenotypes
-        reg = getattr(model, "adata_manager", None)
-        phen_col = reg.registry.get("phenotype_col") if (reg and hasattr(reg, "registry")) else None
-        if phen_col and phen_col in adata.obs:
-            P = int(adata.obs[phen_col].astype("category").cat.categories.size)
-        else:
-            raise RuntimeError("Could not infer P from classifier or adata.")
-
-    _warnings.warn(
-        "Pyro param store has no 'q_p_ct_raw'; re-initializing it to a uniform "
-        "1/P simplex. Downstream posterior metrics (joint_distribution_posterior, "
-        "phenotypic/clonotypic entropy, mutual information) will run on this "
-        "uninformative prior instead of the trained posterior. This usually means "
-        "the Pyro param store failed to load or was never saved; verify the model's "
-        "Pyro params were persisted and restored (e.g. via save_tcri_session / "
-        "load_tcri_session).",
-        RuntimeWarning,
-        stacklevel=2,
-    )
-    init = torch.full((ct_count, P), 1.0 / P, device=device)
-    pyro.param(pname, init, constraint=constraints.simplex)
-
-
 def _resolve_TCRIModel():
     import importlib, importlib.util, os as _os
     # Try common import locations
@@ -116,68 +61,6 @@ def _resolve_TCRIModel():
             if hasattr(mod, "TCRIModel"):
                 return mod.TCRIModel
     raise ModuleNotFoundError("Could not import TCRIModel.")
-
-from contextlib import contextmanager
-
-@contextmanager
-def _disable_scvi_onload_train():
-    """
-    Suppress scvi's ``PyroBaseModuleClass.on_load`` warmup train for the duration of a
-    model load: ``on_load`` is replaced by a no-op that clears the pyro param store, and is
-    restored on exit. The saved parameters are loaded afterwards instead.
-
-    Compatible across scvi variants that pass different kwargs (e.g., pyro_param_store).
-    """
-    candidates = []
-    try:
-        from scvi.module.base import _base_module as _scvi_bm
-        if hasattr(_scvi_bm, "PyroBaseModuleClass"):
-            candidates.append(_scvi_bm)
-    except Exception:
-        pass
-    # Some installations have the class re-exported elsewhere; try other modules if needed
-    try:
-        from scvi.module.base import _pyromodule as _scvi_pm  # may not exist in all versions
-        if hasattr(_scvi_pm, "PyroBaseModuleClass"):
-            candidates.append(_scvi_pm)
-    except Exception:
-        pass
-
-    # If we couldn't import anything, just yield and hope load works.
-    if not candidates:
-        yield
-        return
-
-    import pyro as _pyro
-
-    def _noop(self, *args, **kwargs):
-        # Accept any args/kwargs (e.g., pyro_param_store) but do nothing.
-        # Keep Pyro store clean; we'll load our own params after model.load().
-        _pyro.clear_param_store()
-        # If a store was provided, we intentionally ignore it here.
-
-    origs = []
-    try:
-        for mod in candidates:
-            cls = getattr(mod, "PyroBaseModuleClass", None)
-            if cls is None:
-                continue
-            orig = getattr(cls, "on_load", None)
-            if orig is not None:
-                origs.append((cls, orig))
-                setattr(cls, "on_load", _noop)
-        yield
-    finally:
-        for cls, orig in origs:
-            setattr(cls, "on_load", orig)
-
-
-def _pyro_load(path, map_location=None):
-    # torch>=2.6 defaults torch.load(weights_only=True), which rejects the
-    # constraint instances pyro stores. Self-produced artifacts only.
-    state = _torch.load(path, map_location=map_location, weights_only=False)
-    _pyro.get_param_store().set_state(state)
-
 
 def _read_session_meta(run_dir: str) -> Dict[str, Any]:
     """``meta.json`` if it is there and readable, else an empty dict with a warning."""
@@ -244,30 +127,26 @@ def load_tcri_session(
         batch_key=setup.get("batch_col", "patient"),
     )
 
-    # 3) Load model WITHOUT scvi's warmup train
-    with _disable_scvi_onload_train():
-        model = TCRIModel.load(run_dir, adata=adata)
-
-    # 4) Restore Pyro param store
+    # 3) The Pyro store saved beside the model, read before anything is loaded: a corrupt file
+    # fails the load with the process-global store untouched, rather than leaving a model whose
+    # posteriors are not the fit.
     pyro_file = _os.path.join(run_dir, PYRO_FILE)
+    state = None
     if _os.path.exists(pyro_file):
         try:
-            _pyro.clear_param_store()
-            if map_location is not None:
-                try:
-                    _pyro_load(pyro_file, map_location=map_location)
-                except TypeError:
-                    _pyro_load(pyro_file)
-                    if map_location != "cpu":
-                        device = _torch.device(map_location)
-                        for k, v in list(_pyro.get_param_store().items()):
-                            _pyro.get_param_store()[k] = v.to(device)
-            else:
-                _pyro_load(pyro_file)
+            # torch>=2.6 defaults torch.load(weights_only=True), which rejects the constraint
+            # instances pyro stores. Self-produced artifacts only.
+            state = _torch.load(pyro_file, map_location=map_location, weights_only=False)
         except Exception as e:
-            _warnings.warn(f"Could not load Pyro param store: {e}")
-    
-    _ensure_pyro_posterior_params(model, adata)
+            raise RuntimeError(f"could not read the Pyro store saved at {pyro_file}: {e}") from e
+
+    # 4) Load the model. TCRIModule.on_load restores its store family -- its posteriors and its
+    # nulls' parameters -- from the store saved in model.pt and leaves every other model's
+    # entries as they are; the same family then comes from pyro_params.pt, onto map_location.
+    model = TCRIModel.load(run_dir, adata=adata)
+    if state is not None:
+        model.module.restore_param_store(state, warn_on_replace=False,
+                                         fitted=bool(getattr(model, "is_trained_", True)))
 
     # 5) The arguments the parent was actually fitted with. `tcri.null.*` replays them, and an
     # in-memory attribute does not survive a reload: without this a null built after a reload

@@ -12,13 +12,19 @@ __all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_pp
 
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", temperature=1.0,
-                           clones=None, random_state=None, fit=None):
+                           clones=None, exclude_pools=True, random_state=None, fit=None):
     """Model vs empirical per-clone phenotype frequencies: a per-clone distance plus a
     per-covariate aggregate. adata-only.
 
     ``fit`` selects which fit's predictions are checked against the data. A null's predictions
     are compared against the SAME empirical crosstab, which is the point: a phenotype null
-    should reconstruct expression as well as its parent and the phenotype calls far worse."""
+    should reconstruct expression as well as its parent and the phenotype calls far worse.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes, as in ``tl.joint_distribution``. A pool is a mixture of many rare clones, not a
+    clone, so by default it is left out and the check covers exactly the clones
+    ``pool_rare_clones`` kept, with ``clones`` selecting among them. ``False`` checks each
+    pool as one clone."""
     from .._compute._distance import phenotype_distance
     from ..tools import joint_distribution
 
@@ -33,7 +39,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", tempe
         # inplace=False: a diagnostic must not overwrite the joint the user computed
         Jm = joint_distribution(adata, covariate=m, use_logits=True, n_samples=0, fit=fit,
                                 temperature=temperature, clones=clones,
-                                inplace=False)["result"]
+                                exclude_pools=exclude_pools, inplace=False)["result"]
         cmask = adata.obs[cov_col].astype(str) == str(m)
         sub = adata.obs.loc[cmask, [clone_col, pheno_col]]
         for c in Jm.index:
@@ -172,7 +178,8 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
 
 
 def permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None,
-                     normalize_mode="min", n_perm=1000, random_state=None):
+                     clones=None, exclude_pools=True, normalize_mode="min", n_perm=1000,
+                     random_state=None):
     """Permutation null for a clone↔phenotype metric: permute phenotype labels within each
     covariate, recompute the metric on the **empirical** clone×phenotype joint to form a null;
     report observed, null mean/sd, z, p. adata-only, model-free.
@@ -189,9 +196,17 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     The same clone-disjointness check the metric applies is applied here, so the null raises in
     exactly the cases the metric raises rather than quietly answering a different question.
 
+    ``clones`` and ``exclude_pools`` restrict the empirical joint the way they restrict a
+    metric's: only the cells of the counted clones enter it, and the phenotypes are permuted
+    among them. ``clones`` names the clones to count. ``exclude_pools`` leaves out the
+    ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones`` writes: a pool is a mixture of many
+    rare clones, not a clone, so by default it is left out and the null counts exactly the
+    clones ``pool_rare_clones`` kept. ``False`` counts each pool as one clone.
+
     Note this is deliberately model-free: it uses the EMPIRICAL clone x phenotype crosstab,
     not the model's ``p_ct``, so it shares no Dirichlet draw stack with ``tl.*``.
     """
+    from .._compute._tables import _resolve_clones
     from ..tools._mutual_information import _mi_from_joint
 
     if metric != "mutual_information":
@@ -202,6 +217,9 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     phenos = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     pheno_index = {p: i for i, p in enumerate(phenos)}
     covs = [covariate] if covariate is not None else list(adata.uns[K.COVARIATE_CATEGORIES])
+    counted = _resolve_clones(adata, clones, exclude_pools)
+    in_counted = (np.ones(adata.n_obs, dtype=bool) if counted is None
+                  else adata.obs[clone_col].isin(counted).to_numpy())
 
     n_phenos = len(phenos)
 
@@ -232,7 +250,7 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
 
     rows = []
     for m in covs:
-        cov_mask = (adata.obs[cov_col].astype(str) == str(m)).to_numpy()
+        cov_mask = (adata.obs[cov_col].astype(str) == str(m)).to_numpy() & in_counted
         for g in groups:
             # Stratum = (covariate, group). Permuting within it conditions the null on exactly
             # what the reported statistic conditions on; permuting across strata would destroy

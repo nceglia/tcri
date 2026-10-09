@@ -195,7 +195,7 @@ def test_posterior_concentration_is_not_pinned_to_beta(fitted):
     import pyro
 
     _m, a = fitted
-    raw = pyro.get_param_store()["q_p_ct_raw"].detach().cpu().numpy()
+    raw = pyro.get_param_store()[_m.module.pname("q_p_ct_raw")].detach().cpu().numpy()
     totals = raw.sum(axis=1)
 
     assert totals.max() / max(totals.min(), 1e-12) > 1.05, (
