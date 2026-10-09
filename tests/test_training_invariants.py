@@ -356,7 +356,7 @@ def test_num_particles_averages_that_many_draws(adata):
     m = _fresh(adata)
     m.train(max_epochs=1, batch_size=128, n_epochs_kl_warmup=2, num_particles=n,
             accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
-    assert m._train_kwargs["num_particles"] == n, "num_particles is not recorded for nulls"
+    assert m.train_kwargs_["num_particles"] == n, "num_particles is not recorded for nulls"
     plan = m.trainer.lightning_module
     loader = m._make_data_loader(adata=m.adata, batch_size=128, shuffle=False)
     args, kwargs = plan.module._get_fn_args_from_batch(next(iter(loader)))

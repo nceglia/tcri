@@ -12,6 +12,7 @@ perturbation is a query on a MODEL rather than on a substrate, so it needs the n
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pyro
 import torch
 
@@ -22,10 +23,11 @@ def rebuild(model, adata, fit):
     """Return the fitted null named ``fit`` as a :class:`TCRIModel`.
 
     Built from the parent's ``init_params_`` with ``name`` and ``permutation`` replaced from the
-    substrate, then given the buffers from ``uns`` and the parameters from the store. It trains
-    nothing and it fits nothing: if the store has no such namespace it raises, because a rebuild
-    on fresh parameters would return a randomly initialised model that answers every question
-    without complaint.
+    substrate, then given the buffers from ``uns``, the parameters from the store, and the
+    training history and record its fit stored, for ``tcri.diag.loss``. It trains nothing and
+    it fits nothing: if the store has no such namespace it raises, because a rebuild on fresh
+    parameters would return a randomly initialized model that answers every question without
+    complaint.
     """
     from ..model._model import TCRIModel, adopt, expect_params
     from ._nulls import _init_params
@@ -124,4 +126,20 @@ def rebuild(model, adata, fit):
     null.module.eval()
     null.is_trained_ = True
     null._fit_name = fit
+
+    # The curves and the record the fit left, so `tcri.diag.loss` reads a rebuilt null as it
+    # reads the one `tcri.null.*` returned.
+    training = adata.uns.get(K.fit_key(K.TRAINING, fit))
+    if training is not None:
+        history = training.get("history")
+        null.history_ = {} if history is None else {
+            str(name): pd.DataFrame(
+                {str(name): np.asarray(series["value"], dtype=float)},
+                index=pd.Index(np.asarray(series["epoch"], dtype=np.int64), name="epoch"))
+            for name, series in history.items()
+        }
+        record = training.get("record")
+        null.training_record_ = {} if record is None else {
+            str(k): v.item() if isinstance(v, np.generic) else v for k, v in record.items()
+        }
     return null

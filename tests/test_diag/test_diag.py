@@ -69,6 +69,101 @@ def test_loss_draws_the_validation_objective_on_its_own_axes(trained_model):
     plt.close(fig)
 
 
+def _curves(record, n_before=0):
+    """A stand-in for a fitted model: the three curves ``diag.loss`` draws and a record.
+
+    The last six epochs are one ``train()`` call whose KL ramp ends at its fourth epoch: the
+    first three sit far above, and after the ramp each curve moves by a few thousandths.
+    ``n_before`` epochs of an earlier call come first, on the same high level.
+    """
+    from types import SimpleNamespace
+
+    curves = {
+        "elbo_train": [5000.0] * n_before + [5000.0, 3000.0, 1500.0, 900.0, 899.0, 898.0],
+        "objective_validation_percell": [34.0] * n_before + [34.0, 20.0, 8.0, 3.650, 3.645, 3.640],
+        "kl_divergence_with_prior_train_epoch": [50.0] * n_before + [50.0, 30.0, 10.0, 2.0, 2.01,
+                                                                     2.02],
+    }
+    history = {name: pd.DataFrame({name: values},
+                                  index=pd.Index(range(len(values)), name="epoch"))
+               for name, values in curves.items()}
+    return SimpleNamespace(history_=history, training_record_=record), curves
+
+
+RAMPED = dict(epochs_run=6, ramp_completes_at_epoch=3, ramp_completed=True, selected_epoch=None)
+
+
+@pytest.mark.parametrize("log_scale", [False, True], ids=["linear", "log"])
+@pytest.mark.parametrize("n_before", [0, 4], ids=["one_call", "two_calls"])
+def test_loss_y_range_spans_the_epochs_after_the_ramp(log_scale, n_before):
+    """Each panel's y range spans the epochs after the KL ramp, so their change fills most of the
+    axis and the first epochs run off the top. With two ``train()`` calls the ramp is located in
+    the last one, whose epochs are the last of the history."""
+    import matplotlib.pyplot as plt
+
+    model, curves = _curves(RAMPED, n_before)
+    fig = tcri.diag.loss(model, log_scale=log_scale).figure
+    titles = {"Training loss": "elbo_train",
+              "Validation objective (per cell)": "objective_validation_percell",
+              "prior KL": "kl_divergence_with_prior_train_epoch"}
+    for ax in fig.axes:
+        after = np.asarray(curves[titles[ax.get_title()]][n_before + 3:])
+        lo, hi = ax.get_ylim()
+        assert lo <= after.min() and after.max() <= hi, ax.get_title()
+        assert hi < curves[titles[ax.get_title()]][0], ax.get_title()
+        span = (np.log10(after.max() / after.min()) / np.log10(hi / lo) if log_scale
+                else (after.max() - after.min()) / (hi - lo))
+        assert span > 0.85, (ax.get_title(), span)
+    plt.close(fig)
+
+
+def test_loss_y_range_spans_every_epoch_without_a_completed_ramp():
+    """A ramp that never completed leaves no epoch after it: every epoch is in range."""
+    import matplotlib.pyplot as plt
+
+    model, curves = _curves({**RAMPED, "ramp_completed": False})
+    fig = tcri.diag.loss(model).figure
+    val = [ax for ax in fig.axes if "Validation objective" in ax.get_title()][0]
+    assert val.get_ylim()[1] >= curves["objective_validation_percell"][0]
+    plt.close(fig)
+
+
+def test_loss_marks_the_selected_epoch_after_two_train_calls():
+    """A second ``train()`` call appends its epochs to the history and counts the epoch it
+    selected within itself: the marker sits at that epoch after the first call's epochs."""
+    import contextlib
+    import io
+    import warnings
+
+    import matplotlib.pyplot as plt
+
+    from tcri.datasets import simulate_tcri
+    from tcri.model._model import TCRIModel
+
+    a = simulate_tcri(n_clones=8, n_phenotypes=3, n_genes=20, n_cells=200, n_covariates=2,
+                      seed=0)
+    TCRIModel.setup_anndata(a, clonotype_key="clone_id", phenotype_key="phenotype",
+                            covariate_key="covariate", batch_key="batch")
+    model = TCRIModel(a, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
+                      classifier_hidden=16, K=3, seed=0)
+    train = dict(batch_size=64, n_epochs_kl_warmup=2, accelerator="cpu",
+                 enable_progress_bar=False, enable_model_summary=False)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.train(max_epochs=4, **train)
+        first = len(model.history_["objective_validation_percell"])
+        model.train(max_epochs=3, **train)
+    selected = model.training_record_["selected_epoch"]
+    assert first == 4 and len(model.history_["objective_validation_percell"]) == 7
+    assert selected is not None, "the second call selected no epoch"
+
+    fig = tcri.diag.loss(model).figure
+    val = [ax for ax in fig.axes if "Validation objective" in ax.get_title()][0]
+    marks = [line for line in val.lines if line.get_label().startswith("selected epoch")]
+    assert len(marks) == 1 and list(marks[0].get_xdata()) == [first + selected] * 2
+    plt.close(fig)
+
+
 def test_reconstruction_ppc_n_sims_is_wired(trained_model):
     """``n_sims`` must change the result, not merely be accepted.
 

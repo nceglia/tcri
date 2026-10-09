@@ -332,12 +332,12 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
 
         With ``per_clone=True``, one row per clone instead, ordered by group and then
         clonotype: the group, as a string, in a column named ``groupby`` (when given), the
-        clonotype in ``clonotype``, and one column per covariate level holding the clone's
-        cells at that level. Level columns are named by the level as a string, in category
-        order. With ``cov_from`` and ``cov_to`` the level columns are those two and the rows
-        are the clones seen at either, so the persistent clones are the rows with cells in both
-        columns. Without them, every level with a counted cell has a column and every clone a
-        row.
+        clonotype, as a string, in ``clonotype``, and one column per covariate level holding
+        the clone's cells at that level. Level columns are named by the level as a string, in
+        category order. With ``cov_from`` and ``cov_to`` the level columns are those two and
+        the rows are the clones seen at either, so the persistent clones are the rows with
+        cells in both columns. Without them, every level with a counted cell has a column and
+        every clone a row.
 
     Raises
     ------
@@ -367,7 +367,7 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     if per_clone:
         # every clone has cells at some level; in a contrast, only those seen at either end
         rows = cells.sum(axis=1) > 0
-        keys = [("clonotype", clones["clonotype"].to_numpy()[rows])]
+        keys = [("clonotype", clones["clonotype"].map(str).to_numpy()[rows])]
         if groupby is not None:
             keys.insert(0, (groupby, clones["group"].map(str).to_numpy()[rows]))
         return _frame(keys + [(level, cells[rows, j]) for j, level in enumerate(levels)])

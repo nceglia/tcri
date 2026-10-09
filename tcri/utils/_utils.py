@@ -148,13 +148,12 @@ def load_tcri_session(
         model.module.restore_param_store(state, warn_on_replace=False,
                                          fitted=bool(getattr(model, "is_trained_", True)))
 
-    # 5) The arguments the parent was actually fitted with. `tcri.null.*` replays them, and an
-    # in-memory attribute does not survive a reload: without this a null built after a reload
-    # would silently fall back to `train()`'s defaults and stop being the parent's model on
-    # permuted labels. An older session has no record; `_train_kwargs` stays empty and
-    # `tcri.null.*` raises rather than guessing.
+    # 5) The arguments the parent was actually fitted with, which `tcri.null.*` replays.
+    # `TCRIModel.load` already set them from model.pt; the copy in meta.json is applied over
+    # them, so a model file that holds none still gets the session's record. With neither,
+    # `train_kwargs_` stays empty and `tcri.null.*` raises rather than guessing.
     if meta.get("train_kwargs"):
-        model._train_kwargs = dict(meta["train_kwargs"])
+        model.train_kwargs_ = dict(meta["train_kwargs"])
 
     return model, adata
 
@@ -310,7 +309,7 @@ def save_tcri_session(
         "var_names_hash": str(_pd.util.hash_pandas_object(_pd.Index(adata.var_names)).sum()),
         # What `train()` actually ran with, so `tcri.null.*` can replay it after a reload.
         # Empty for a model that was loaded and never trained, or a session that recorded none.
-        "train_kwargs": dict(getattr(model, "_train_kwargs", {}) or {}),
+        "train_kwargs": dict(getattr(model, "train_kwargs_", {}) or {}),
         "name": str(getattr(model, "name", "")),
         "versions": {
             "tcri": _tcri_version(),

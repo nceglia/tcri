@@ -390,7 +390,7 @@ def test_null_is_recoverable_from_the_parent_session(fitted, tmp_path):
         loaded, loaded_adata = load_tcri_session(str(tmp_path / "run"), map_location="cpu")
         back = rebuild(loaded, loaded_adata, "clonotype")
 
-    assert loaded._train_kwargs["max_epochs"] == TRAIN["max_epochs"], (
+    assert loaded.train_kwargs_["max_epochs"] == TRAIN["max_epochs"], (
         "the parent's training arguments did not survive the session")
     np.testing.assert_allclose(back.predict(loaded_adata).to_numpy(), expected, atol=1e-6)
 
@@ -644,6 +644,78 @@ def test_a_null_is_rebuilt_after_its_parent_is_reloaded_with_load(tmp_path):
     np.testing.assert_allclose(back.predict(b).to_numpy(), expected, atol=1e-6)
 
 
+def test_a_null_fits_after_its_parent_is_reloaded_with_load(tmp_path):
+    """``TCRIModel.save``, clear the store, ``TCRIModel.load``: the loaded model carries the
+    arguments its parent was trained with, and a null fits on it without being given them."""
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    _save_plain(parent, a, tmp_path / "p")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "p")
+    assert loaded.train_kwargs_ == parent.train_kwargs_
+    _fit_null("phenotype", loaded, b)
+
+    assert "null.phenotype" in K.fits(b)
+    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["train"] == parent.train_kwargs_
+
+
+def test_a_refit_writes_to_an_object_read_back_from_h5ad(tmp_path):
+    """An object carrying a main fit and two nulls, written to h5ad and read back, takes a
+    refit's main fit and a new named fit, and keeps the names it listed; a null re-run by the
+    refit is rewritten. h5ad hands the fits list back as an array of strings."""
+    a = _adata()
+    first = _unnamed_parent(a)
+    _fit_null("phenotype", first, a)
+    _fit_null("clonotype", first, a)
+    a.write_h5ad(tmp_path / "a.h5ad")
+    b = anndata.read_h5ad(tmp_path / "a.h5ad")
+    assert isinstance(b.uns[K.METADATA][K.FITS], np.ndarray)
+
+    second = _unnamed_parent(b, seed=1)
+    with contextlib.redirect_stdout(io.StringIO()):
+        second.to_anndata(b, fit="other")
+    assert K.fits(b) == ["null.phenotype", "null.clonotype", "other"]
+
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        tcri.null.phenotype(second, b)
+    assert len(_rewrites(w)) == 1, [str(x.message) for x in w]
+    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == second.name
+
+
+def test_diag_loss_reads_a_rebuilt_null(tmp_path):
+    """A null rebuilt after its parent is saved and loaded, from the object read back from h5ad,
+    carries the training history and record its fit stored: ``tcri.diag.loss`` draws the curves
+    the null was fitted with."""
+    import matplotlib.pyplot as plt
+
+    pyro.clear_param_store()
+    a = _adata()
+    parent = _unnamed_parent(a)
+    null = _fit_null("phenotype", parent, a)
+    _save_plain(parent, a, tmp_path / "p")
+    pyro.clear_param_store()
+
+    loaded, b = _load_plain(tmp_path / "p")
+    back = rebuild(loaded, b, "phenotype")
+
+    assert set(back.history_) == set(null.history_)
+    for name, frame in null.history_.items():
+        assert back.history_[name].index.tolist() == frame.index.tolist(), name
+        np.testing.assert_allclose(back.history_[name].to_numpy(dtype=float),
+                                   frame.to_numpy(dtype=float), err_msg=name)
+    assert back.training_record_ == {k: v for k, v in null.training_record_.items()
+                                     if v is not None}
+    fig = tcri.diag.loss(back).figure
+    val = [ax for ax in fig.axes if "Validation objective" in ax.get_title()][0]
+    np.testing.assert_allclose(
+        val.lines[0].get_ydata(),
+        null.history_["objective_validation_percell"].to_numpy(dtype=float).ravel())
+    plt.close(fig)
+
+
 def test_loading_another_model_leaves_the_parents_nulls(tmp_path):
     """Load a parent, then an unrelated model: the parent's null still rebuilds and predicts what
     it predicted.
@@ -766,7 +838,8 @@ def test_a_null_recorded_without_a_parent_name_is_rewritten():
 def test_an_unnamed_model_whose_main_fit_is_not_here_raises():
     """Two models built without ``name=``, but the second never wrote its main fit to this
     object: its null would sit beside the first model's values, so it raises and the held null
-    is left as it was."""
+    is left as it was. The message names ``key_added=`` and writing the main fit first, and does
+    not offer a copy of the AnnData, which carries the same record."""
     a = _adata()
     first = _unnamed_parent(a)
     _fit_null("phenotype", first, a)
@@ -775,8 +848,9 @@ def test_an_unnamed_model_whose_main_fit_is_not_here_raises():
     with contextlib.redirect_stdout(io.StringIO()):
         other.train(**TRAIN)
 
-    with pytest.raises(ValueError, match="key_added"):
+    with pytest.raises(ValueError, match="key_added") as e:
         tcri.null.phenotype(other, a)
+    assert "model.to_anndata(adata)" in str(e.value) and "copy" not in str(e.value)
     assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
     np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
 
@@ -785,15 +859,16 @@ def test_an_unnamed_model_whose_main_fit_is_not_here_raises():
                          ids=["generated_over_named", "named_over_generated"])
 def test_a_named_parent_on_either_side_still_raises(held, new):
     """Only two parents built without ``name=`` rewrite. With ``name=`` given to either, the
-    second raises and the held null is left as it was."""
+    second raises, naming ``key_added=`` alone, and the held null is left as it was."""
     a = _adata()
     first = _parent(a, held) if held else _unnamed_parent(a)
     _fit_null("phenotype", first, a)
     second = _parent(a, new) if new else _unnamed_parent(a, seed=1)
     before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
 
-    with pytest.raises(ValueError, match="key_added"):
+    with pytest.raises(ValueError, match="key_added") as e:
         tcri.null.phenotype(second, a)
+    assert "to_anndata" not in str(e.value) and "copy" not in str(e.value)
     assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
     np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
 

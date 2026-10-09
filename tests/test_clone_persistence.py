@@ -161,6 +161,24 @@ def test_group_labels_and_level_keys_are_strings():
                                       expected.drop(columns="patient"))
 
 
+def test_clonotype_labels_are_strings():
+    """Integer clonotype labels come out as strings in the per-clone ``clonotype`` column, with
+    the rows and counts they have as text labels."""
+    adata = _cohort()
+    adata = adata[adata.obs["clone_id"] != ""].copy()
+    codes = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
+    for ends in ({}, dict(cov_from="t0", cov_to="t1")):
+        expected = tcri.pp.clone_persistence(adata, **KEYS, groupby="patient", per_clone=True,
+                                             **ends)
+        numbered = adata.copy()
+        numbered.obs["clone_id"] = numbered.obs["clone_id"].map(codes)
+        got = tcri.pp.clone_persistence(numbered, **KEYS, groupby="patient", per_clone=True,
+                                        **ends)
+        assert got["clonotype"].tolist() == [str(codes[c]) for c in expected["clonotype"]]
+        pd.testing.assert_frame_equal(got.drop(columns="clonotype"),
+                                      expected.drop(columns="clonotype"))
+
+
 # ── arguments ─────────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("ends", [dict(cov_from="t0"), dict(cov_to="t1")])
