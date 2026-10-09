@@ -25,9 +25,16 @@ know what a metric reduces to.
 
 **Parameter namespaces.** Pyro's parameter store is process-global, so the names a model
 registers are the only thing separating it from another model in the same session. `name`
-namespaces them: a model called `x` owns exactly the store keys under `x.`, and `""` (the
-default) owns the unnamed layout every session saved before 0.12 uses. Two named models can be
-fitted in one process without overwriting each other. `TCRIModel.name` reads it back.
+namespaces them: a model called `x` owns exactly the store keys under `x.`, and its nulls the keys
+under `x.null.`. A model constructed without `name=` gets a generated one (`tcri-` and 12 hex
+digits), recorded with the model, so no two models share a key. `TCRIModel.name` reads it back.
+
+**Loading.** `TCRIModel.load` and `load_tcri_session` restore the loaded model's guide
+concentrations and its nulls' parameters from the saved store, take its networks from the saved
+weights, and leave every other model's entries in the store as they are. A load that finds the
+model's entries already in the store replaces them and warns. A load raises when the file cannot
+supply a trained model's posteriors, and refuses a store that keeps them under bare keys, without
+a model name.
 
 **Registration.** Every cell `setup_anndata` registers must have a clonotype. NaN or None, an
 empty or whitespace-only string, and the literal string `"nan"` in the `clonotype_key` column
@@ -37,6 +44,19 @@ constructor raises the same way for a cell whose registered clonotype, phenotype
 is NaN or None, which covers `obs` edited after setup and every null, since a null is built on
 its parent's registration without running setup again. No clone × covariate row is built for a
 cell without a clonotype or a covariate level.
+
+**Rare clones.** `pp.pool_rare_clones` runs on the source clonotype column, before setup. It
+counts cells per (`groupby` group, clonotype), so a clonotype carried by two groups is two
+clones. A clone is rare when it has fewer than `min_cells` cells (default 3) and all of them come
+from one sample: `samples` names each cell's capture, and without it the rule is `min_cells`
+alone. A clone seen in two or more samples is never rare. It writes `obs[key_added]` (default
+`{clonotype_key}_pooled`), a categorical with sorted categories, in which each group's rare clones
+are `pooled@{group}` and every other clone is `{clonotype}@{group}`, an id already ending in
+`@{group}` unchanged; the source column is never modified. Each call records one step in
+`uns["tcri_clonotype_derivations"]` with the columns it used, `min_cells`, the pool labels and the
+numbers of clones and cells pooled; a later call with the same `key_added` replaces it. Missing
+clonotypes, as defined above, and NaN or None in `groupby` or `samples` raise `ValueError`
+naming the column and the number of cells; a group that keeps no clone warns.
 
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
@@ -108,10 +128,11 @@ drawn only between points sharing an identity across the compared levels.
 
 **Diagnostics.** `reconstruction_ppc`, `loss` and `archetypes` take the model; the rest read the
 stored substrate. `joint_distribution_ppc` and `phenotype_calibration` read PER-FIT keys and
-therefore take `fit=`. `permutation_null` reads only the metadata and the category lists, which
-are shared between every fit of an object, so it has no fit to select and takes none; it permutes
-labels within each covariate on the empirical crosstab and draws no Dirichlet samples. It is a
-model-free check on the data, not a reference for a model-based number — `tcri.null` is that.
+therefore take `fit=`. `permutation_null` reads only the metadata, the category lists and the
+derivation record, which are shared between every fit of an object, so it has no fit to select and
+takes none; it permutes labels within each covariate on the empirical crosstab and draws no
+Dirichlet samples. It is a model-free check on the data, not a reference for a model-based number
+— `tcri.null` is that.
 
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
@@ -160,6 +181,8 @@ class TCRIModel:
         covariate_key: str = ..., batch_key: str = ...,
         replicate: Optional[str] = ..., **kwargs: Any,
     ) -> None: ...
+    @classmethod
+    def load(cls, dir_path: str, adata: Optional[AnnData] = ..., **kwargs: Any) -> Any: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
         reconstruction_loss_scale: float = ..., n_epochs_kl_warmup: int = ...,
@@ -182,9 +205,9 @@ class TCRIModel:
 
 # ── preprocessing (pp) ───────────────────────────────────────────────────────
 class pp:
-    def group_singletons(
-        adata: AnnData, *, clonotype_key: str = ..., groupby: str = ...,
-        target_col: str = ..., min_clone_size: int = ...,
+    def pool_rare_clones(
+        adata: AnnData, *, clonotype_key: str, groupby: str, min_cells: int = ...,
+        samples: Optional[str] = ..., key_added: Optional[str] = ...,
     ) -> None: ...
     def clone_size(adata: AnnData, *, key_added: str = ..., return_counts: bool = ...) -> Any: ...
     def from_mudata(
@@ -192,6 +215,18 @@ class pp:
         covariate_cols: Any = ..., drop_missing_clonotype: bool = ..., counts_layer: str = ...,
         fill_counts_from_X: bool = ..., strict: bool = ..., copy: bool = ...,
     ) -> AnnData: ...
+    def repertoire_summary(
+        adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,
+        covariate_key: Optional[str] = ..., phenotype_key: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
+    def clone_persistence(
+        adata: AnnData, *, clonotype_key: str, covariate_key: str,
+        cov_from: Optional[str] = ..., cov_to: Optional[str] = ...,
+        groupby: Optional[str] = ..., per_clone: bool = ...,
+    ) -> pd.DataFrame: ...
+    def clonotype_sharing(
+        adata: AnnData, *, clonotype_key: str, groupby: str, per_clonotype: bool = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
@@ -199,53 +234,56 @@ class tl:
     def joint_distribution(
         adata: AnnData, *, covariate: Optional[str] = ...,
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
-        clones: Any = ..., temperature: float = ..., random_state: Any = ...,
-        device: Any = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., temperature: float = ...,
+        random_state: Any = ..., device: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def clonotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def mutual_information(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        normalize_mode: str = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_flux(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., distance_metric: str = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_clonotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ...,
-        n_clones_ref: Any = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
+        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_phenotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., weighted: bool = ..., normalized: bool = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
+        normalized: bool = ..., random_state: Any = ..., device: Any = ...,
+        null_model: Optional[str] = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
 
@@ -304,8 +342,8 @@ class pl:
 class diag:
     def joint_distribution_ppc(
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: str = ...,
-        temperature: float = ..., clones: Any = ..., random_state: Any = ...,
-        fit: Optional[str] = ...,
+        temperature: float = ..., clones: Any = ..., exclude_pools: bool = ...,
+        random_state: Any = ..., fit: Optional[str] = ...,
     ) -> pd.DataFrame: ...
     def phenotype_calibration(
         adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ...,
@@ -315,8 +353,8 @@ class diag:
     ) -> pd.DataFrame: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
-        groupby: Optional[str] = ..., normalize_mode: str = ..., n_perm: int = ...,
-        random_state: Any = ...,
+        groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
+        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ...,
     ) -> pd.DataFrame: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
@@ -330,9 +368,10 @@ class perturb:
     ) -> pd.DataFrame: ...
     def gene_importance(
         model: Any, adata: AnnData, *, genes: Any = ..., covariate: Optional[str] = ...,
-        groupby: Optional[str] = ..., splitby: Optional[str] = ..., n_samples: int = ...,
-        use_gate: bool = ..., batch_size: int = ..., random_state: Any = ...,
-        null_model: Any = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+        groupby: Optional[str] = ..., splitby: Optional[str] = ..., exclude_pools: bool = ...,
+        n_samples: int = ..., use_gate: bool = ..., batch_size: int = ...,
+        random_state: Any = ..., null_model: Any = ..., key_added: Optional[str] = ...,
+        inplace: bool = ...,
     ) -> dict: ...
 
 
@@ -364,13 +403,6 @@ class ut:
     def load_tcri_session(
         run_dir: str, *, adata_path: Optional[str] = ..., map_location: Any = ..., layer: Optional[str] = ...,
     ) -> Any: ...
-    def auc_and_label_permutation(
-        scores: Any, labels: Any, pos_label: Any = ..., n_perm: int = ..., seed: int = ...,
-        max_exact: int = ...,
-    ) -> tuple: ...
-    def bootstrap_auc(
-        scores: Any, labels: Any, pos_label: Any = ..., n_boot: int = ..., seed: int = ...,
-    ) -> tuple: ...
 
 
 # ── synthetic data (datasets) ────────────────────────────────────────────────

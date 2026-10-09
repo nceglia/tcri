@@ -53,8 +53,8 @@ __all__ = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
 
 
 def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples, temperature,
-                  clones, weighted, normalized, random_state, n_clones_ref=None, device=None,
-                  fit=None):
+                  clones, exclude_pools, weighted, normalized, random_state, n_clones_ref=None,
+                  device=None, fit=None):
     """Shared body. Mirrors ``_entropy_metric`` with the covariate axis contracted."""
     item_col = "phenotype" if kind == "clonotypic" else "clonotype"
 
@@ -103,7 +103,8 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
         return per
 
     table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
-                         item_col=item_col, compute=_compute, fit=fit,
+                         exclude_pools=exclude_pools, item_col=item_col, compute=_compute,
+                         fit=fit,
                          extra_labels={"cov_from": cov_from, "cov_to": cov_to})
 
     if dropped:
@@ -127,28 +128,34 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
 @tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=2, schema=schemas.DeltaClonotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
-                             n_samples=0, temperature=1.0, clones=None, weighted=False,
-                             normalized=True, n_clones_ref=None, random_state=None,
-                             device=None, null_model="auto", fit=None,
+                             n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
+                             weighted=False, normalized=True, n_clones_ref=None,
+                             random_state=None, device=None, null_model="auto", fit=None,
                              key_added=None, inplace=True):
     """ΔH[P(c|φ)] per phenotype: ``cov_to`` minus ``cov_from``, in bits.
 
     "Did this phenotype draw on a wider or narrower clone pool?" The item is a phenotype — a
     category measured twice, not an entity that persisted — so the intersection here acts on
     the clone set summed over, not on which rows exist. See the module docstring.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the delta counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out.
     """
     return _delta_metric(adata, kind="clonotypic", cov_from=cov_from, cov_to=cov_to,
                          groupby=groupby, splitby=splitby, n_samples=n_samples,
-                         temperature=temperature, clones=clones, weighted=weighted,
-                         normalized=normalized, random_state=random_state,
+                         temperature=temperature, clones=clones, exclude_pools=exclude_pools,
+                         weighted=weighted, normalized=normalized, random_state=random_state,
                          n_clones_ref=n_clones_ref, device=device, fit=fit)
 
 
 @tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=2, schema=schemas.DeltaPhenotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
-                             n_samples=0, temperature=1.0, clones=None, weighted=False,
-                             normalized=True, random_state=None, device=None,
+                             n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
+                             weighted=False, normalized=True, random_state=None, device=None,
                              null_model="auto", fit=None, key_added=None, inplace=True):
     """ΔH[P(φ|c)] per clone: ``cov_to`` minus ``cov_from``, in bits.
 
@@ -156,9 +163,15 @@ def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
     same entity at two timepoints — the one metric here whose pairing is a biological barcode.
     Complementary to ``phenotypic_flux``, which measures how FAR a clone moved without saying
     whether it spread or concentrated.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the delta counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out.
     """
     return _delta_metric(adata, kind="phenotypic", cov_from=cov_from, cov_to=cov_to,
                          groupby=groupby, splitby=splitby, n_samples=n_samples,
-                         temperature=temperature, clones=clones, weighted=weighted,
-                         normalized=normalized, random_state=random_state, device=device,
-                         fit=fit)
+                         temperature=temperature, clones=clones, exclude_pools=exclude_pools,
+                         weighted=weighted, normalized=normalized, random_state=random_state,
+                         device=device, fit=fit)

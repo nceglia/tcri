@@ -15,7 +15,7 @@ import pandas as pd
 
 from .._state import keys as K
 from .._stats import hdi
-from ._repertoire import _clonotype_sharing
+from ._repertoire import _clonotype_sharing, _pool_labels
 # NOTE: ``tools._joint`` is imported lazily inside the functions that need it, never at module
 # level. ``_compute`` is the lower layer — every tools/* metric imports *down* into this module —
 # so a module-level import back up into ``tools`` inverts the layering and makes the package
@@ -204,6 +204,53 @@ def clones_at(adata, covariate, *, fit=None, group_clones=None):
     return [c for c in at if c in allowed]
 
 
+def _resolve_clones(adata, clones, exclude_pools, *, column=None):
+    """The clones a tool counts: ``clones`` when it is given, else every registered clone,
+    minus the pools of the registered clonotype column when ``exclude_pools`` is true.
+
+    Every tool resolves its clones here, so no two tools can disagree about what a clone is. A
+    pool is a ``pooled@{group}`` label written by ``tcri.pp.pool_rare_clones``: a mixture of
+    many rare clones, not a clone. The derivation record lists the pools of the column it
+    wrote, so a column with no pooling step has nothing to exclude. The registered labels and
+    the pools are shared by every fit of an object, so the answer does not depend on the fit.
+    An id in ``clones`` that names no registered clone is kept here and matches nothing in any
+    tool.
+
+    Parameters
+    ----------
+    adata
+        The object carrying the derivation record.
+    clones
+        The caller's ``clones=``: clone ids, or ``None`` for every registered clone.
+    exclude_pools
+        Whether the pools are left out.
+    column
+        The registered clonotype column. ``None`` reads the one ``to_anndata`` records in
+        ``uns[K.METADATA]``; an object without that record names no registered column, and
+        nothing is excluded. A tool that holds the model passes the column the model
+        registered when the record is absent.
+
+    Returns
+    -------
+    list or None
+        ``None`` when ``clones`` is ``None`` and nothing is excluded, which every tool reads as
+        every registered clone. Otherwise the clone ids to count, in the order of ``clones``
+        when it is given and in the registered category order when not.
+    """
+    if column is None:
+        column = (adata.uns.get(K.METADATA) or {}).get(K.CLONE_COL)
+    pools = set(_pool_labels(adata, column)) if exclude_pools and column is not None else set()
+    if clones is not None:
+        return [c for c in clones if c not in pools]
+    if not pools:
+        return None
+    # the categories `to_anndata` records, or the same categories read off the column on an
+    # object it has not written
+    registered = (adata.uns[K.CLONOTYPE_CATEGORIES] if K.CLONOTYPE_CATEGORIES in adata.uns
+                  else adata.obs[column].astype("category").cat.categories)
+    return [c for c in registered if c not in pools]
+
+
 def _refit_hint(adata, fit, groupby):
     """The sentence that tells a caller how to make a null's strata match their ``groupby``.
 
@@ -255,8 +302,9 @@ def _validate_group_clones(labels, groups, groupby, hint=""):
         raise ValueError(
             f"groupby={groupby!r}: clonotype {c!r} spans groups {spans[0]!r} and {spans[1]!r}. "
             f"The metric groupby restricts by clone id (clones=), which requires clones "
-            f"to be disjoint across groups (e.g. patient-specific `trb_unique`). Use a "
-            f"clone-disjoint groupby, or pre-filter with `clones=`.{hint}"
+            f"to be disjoint across groups (e.g. the patient-specific ids "
+            f"`tcri.pp.pool_rare_clones` writes). Use a clone-disjoint groupby, or pre-filter "
+            f"with `clones=`.{hint}"
         )
 
 
@@ -464,19 +512,23 @@ def build_stats(result, *, groupby, splitby, value="value"):
     return pd.DataFrame(rows)
 
 
-def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, compute,
-                 extra_labels=None, fit=None):
+def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
+                 compute, extra_labels=None, fit=None):
     """Build the long ``table`` every metric shares: one row per (covariate, group, item, draw).
 
     ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
     ``{item: value}`` mapping; without one (mutual_information) it is a scalar.
 
     The group loop lives here rather than in each metric so the four metrics cannot diverge on
-    what ``groupby`` means. Clone restriction is intersected with the group's clones, never
-    shadowed: ``groupby=...`` together with ``clones=[...]`` keeps only the clones in both.
+    what ``groupby`` means. The clones counted come from :func:`_resolve_clones`. Clone
+    restriction is intersected with the group's clones, never shadowed: ``groupby=...``
+    together with ``clones=[...]`` keeps only the clones in both, in the order of ``clones``.
+    Without ``clones``, leaving out the pools keeps each group's clones in the group's own
+    order.
     """
     obs = adata.obs
     clone_labels = fit_clone_labels(adata, fit)
+    counted = _resolve_clones(adata, clones, exclude_pools)
     # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
     # `covariate=None` through would add an all-NaN column to every row of its result
     base = {"covariate": covariate} if covariate is not None else {}
@@ -502,7 +554,7 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
 
     rows = []
     if groupby is None:
-        _emit(rows, dict(base), compute(clones))
+        _emit(rows, dict(base), compute(counted))
         return pd.DataFrame(rows)
 
     _validate_group_clones(clone_labels, obs[groupby], groupby,
@@ -519,9 +571,13 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, item_col, comput
     for g in obs[groupby].dropna().unique().tolist():
         gmask = obs[groupby] == g
         group_clones = clone_labels[gmask.to_numpy()].dropna().unique().tolist()
-        if clones is not None:
-            allowed = set(group_clones)
-            group_clones = [c for c in clones if c in allowed]
+        if counted is not None:
+            if clones is None:
+                kept = set(counted)
+                group_clones = [c for c in group_clones if c in kept]
+            else:
+                allowed = set(group_clones)
+                group_clones = [c for c in counted if c in allowed]
             if not group_clones:
                 continue
         label_row = {**base, groupby: g}

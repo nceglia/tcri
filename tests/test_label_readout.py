@@ -59,8 +59,8 @@ def _traces(m, batch_size=32):
     return t, args
 
 
-def _grad_to_hierarchy(node_log_prob):
-    lam = pyro.param("q_p_ct_raw").unconstrained()
+def _grad_to_hierarchy(m, node_log_prob):
+    lam = pyro.param(m.module.pname("q_p_ct_raw")).unconstrained()
     return torch.autograd.grad(node_log_prob.sum(), lam, retain_graph=True, allow_unused=True)[0]
 
 
@@ -70,7 +70,7 @@ def test_off_switch_restores_the_label_free_model():
     m = _model(_fixture(), label_error_rate=None)
     t, _ = _traces(m)
     assert "phenotype_label" not in t.nodes
-    g = _grad_to_hierarchy(t.nodes["phenotype_alignment"]["log_prob"])
+    g = _grad_to_hierarchy(m, t.nodes["phenotype_alignment"]["log_prob"])
     assert g is None or float(g.abs().sum()) == 0.0
     pyro.clear_param_store()
 
@@ -85,7 +85,7 @@ def test_readout_is_the_hierarchy_data_term():
     assert node["type"] == "sample" and node["is_observed"]
     lp = node["log_prob"]
 
-    g_h = _grad_to_hierarchy(lp)
+    g_h = _grad_to_hierarchy(m, lp)
     assert g_h is not None and float(g_h.abs().sum()) > 0.0, (
         "the readout carries no gradient to q(p_ct); phi must enter it live"
     )
@@ -95,7 +95,7 @@ def test_readout_is_the_hierarchy_data_term():
         g = torch.autograd.grad(lp.sum(), w, retain_graph=True, allow_unused=True)[0]
         assert g is not None and float(g.abs().sum()) > 0.0, f"the readout does not train the {name}"
 
-    g_s = _grad_to_hierarchy(t.nodes["phenotype_alignment"]["log_prob"])
+    g_s = _grad_to_hierarchy(m, t.nodes["phenotype_alignment"]["log_prob"])
     assert g_s is None or float(g_s.abs().sum()) == 0.0, (
         "the surrogate's target is live; it must stay detached (a live target collapses the "
         "head and the hierarchy onto one constant)"

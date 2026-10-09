@@ -58,7 +58,7 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
            values=("value", "denom"), denominators=("denom",), default_null="phenotype")
 def mutual_information(
     adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-    temperature=1.0, clones=None, weighted=False, normalized=True,
+    temperature=1.0, clones=None, exclude_pools=True, weighted=False, normalized=True,
     normalize_mode="min", random_state=None, device=None,
     null_model="auto", fit=None, key_added=None, inplace=True,
 ):
@@ -77,6 +77,12 @@ def mutual_information(
     the bare value); ``fit`` selects which fit the number is computed on. The result carries
     ``denom``, the normaliser this MI was divided by, so the reference's own normaliser can be
     stored beside it and both bit values recovered exactly.
+
+    ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
+    writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
+    and the MI counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
+    selecting among them. ``False`` counts each pool as one clone. A column with no pooling
+    step has nothing to leave out.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -94,7 +100,8 @@ def mutual_information(
         return out
 
     table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
-                         clones=clones, item_col=None, compute=_compute, fit=fit)
+                         clones=clones, exclude_pools=exclude_pools, item_col=None,
+                         compute=_compute, fit=fit)
     result = build_result(table, extra_values=("denom",))
     stats = build_stats(result, groupby=gkey, splitby=splitby)
 

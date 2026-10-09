@@ -57,10 +57,9 @@ are both learned, and `guide_temperature` sharpens the direction only. (μ_i, σ
 [1e-3, 10], and the VampPrior components of eq 3 are built by the same function. ▸ z^φ has no
 variational factor; it is summed out in eq 8 and stands behind the surrogate below.
 
-The two variational parameters are registered under the module's `name`: `q_p_ct_raw` for an
-unnamed module, `x.q_p_ct_raw` for one called `x`. The family is the same either way; the name
-exists because Pyro's store is process-global and a second model would otherwise overwrite the
-first. `GUIDE_PARAMS` names the parameters, not the keys, so the conformance test compares the
+The two variational parameters are registered under the module's `name`, which every module
+has: `x.q_p_ct_raw` for one called `x`. The name exists because Pyro's store is process-global and
+a second model would otherwise overwrite the first. `GUIDE_PARAMS` names the parameters, not the keys, so the conformance test compares the
 tail of each traced param site.
 
 ## The objective (eq 7)

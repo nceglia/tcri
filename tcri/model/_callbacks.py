@@ -35,12 +35,9 @@ def _is_own_guide_param(module, store_name: str) -> bool:
     """
     from ._training import GUIDE_CONCENTRATION_PARAMS
 
-    name = getattr(module, "name", "")
-    if name:
-        if not store_name.startswith(f"{name}."):
-            return False
-        store_name = store_name[len(name) + 1:]
-    return store_name in GUIDE_CONCENTRATION_PARAMS
+    prefix = f"{module.name}."
+    return (store_name.startswith(prefix)
+            and store_name[len(prefix):] in GUIDE_CONCENTRATION_PARAMS)
 
 
 def ramp_is_complete(pl_module) -> bool:

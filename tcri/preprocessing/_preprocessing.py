@@ -1,4 +1,4 @@
-"""Preprocessing helpers: clonotype grouping and clone sizes.
+"""Preprocessing helpers: rare-clone pooling, clone sizes and the MuData adapter.
 
 Deliberately light on imports: this module is loaded by ``import tcri``, so anything
 heavy imported here is paid for on every import of the package.
@@ -10,11 +10,11 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
-from .._compute._repertoire import _missing_clonotypes
+from .._compute._repertoire import _missing_clonotypes, _pool_rare_clones
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_source
 
-__all__ = ["group_singletons", "clone_size", "from_mudata"]
+__all__ = ["pool_rare_clones", "clone_size", "from_mudata"]
 
 
 _SCIRPY_KEYS = {
@@ -28,17 +28,73 @@ _SCIRPY_KEYS = {
 }
 
 
-def group_singletons(adata, *, clonotype_key="trb", groupby="patient",
-                     target_col="trb_unique", min_clone_size=10):
-    adata.obs["trb_candidate"] = adata.obs[clonotype_key].astype(str) + "_" + adata.obs[groupby].astype(str)
-    clone_counts = adata.obs["trb_candidate"].value_counts()
-    def collapse_singleton(row):
-        candidate = row["trb_candidate"]
-        if clone_counts[candidate] < min_clone_size:
-            return f"Singleton_{row[groupby]}"
-        else:
-            return candidate
-    adata.obs[target_col] = adata.obs.apply(collapse_singleton, axis=1)
+def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
+                     samples: str | None = None, key_added: str | None = None) -> None:
+    """Pool each individual's rare clones into one label per individual.
+
+    A clone is a set of cells within one individual, so cells are counted within each
+    ``groupby`` group, and a clonotype carried by two individuals is two clones. A clone with
+    fewer than ``min_cells`` cells, all from one sample, is rare, and each group's rare clones
+    are pooled into one ``pooled@{group}`` label. Every other clone is kept, as
+    ``{clonotype}@{group}``; an id that already ends in ``@{group}`` is not suffixed again.
+
+    **Why the sample matters.** Doublets and ambient TCR can attach stray cells to the wrong
+    clone within one capture, so a clone seen in only one sample needs several cells before it
+    is trusted. They cannot carry a clone into another capture, so a clone seen in two samples is
+    real however small, and it is kept whatever ``min_cells`` is.
+
+    **Choosing min_cells.** Raising it keeps fewer clones, and each kept clone's estimates rest
+    on more cells. A clone seen through very few cells in a condition looks purer there than it
+    is, which pushes mutual information up most when phenotype is only weakly tied to clone.
+    Raise it when precision matters more than keeping clones.
+
+    **When to pass samples.** Pass it when individuals were captured in more than one sample.
+    Without it, each group counts as one sample, and the rule is ``min_cells`` alone.
+
+    Run it on the source clonotype column before ``TCRIModel.setup_anndata``, and register the
+    column it writes. It writes ``obs[key_added]``, a categorical with sorted categories, and
+    records the step in ``uns['tcri_clonotype_derivations']``; a second call with the same
+    ``key_added`` replaces both. One line per group is logged on the ``tcri`` logger: clones
+    kept, clones pooled, and cells pooled with their share of the group.
+
+    Parameters
+    ----------
+    adata
+        The object to pool, with the columns in ``obs``.
+    clonotype_key
+        The source clonotype column. It is never modified.
+    groupby
+        The column naming each cell's individual, usually the column registered as
+        ``replicate`` at setup.
+    min_cells
+        A clone with fewer cells than this, all from one sample, is pooled. A positive
+        integer.
+    samples
+        The column naming each cell's capture, its 10x sample or library, which need not be the
+        condition. ``None`` counts each group as one sample.
+    key_added
+        The column to write; ``f"{clonotype_key}_pooled"`` when ``None``. It must differ from
+        ``clonotype_key``.
+
+    Warns
+    -----
+    UserWarning
+        When a group keeps no clone, naming the group: every cell of that group is pooled.
+
+    Raises
+    ------
+    KeyError
+        When ``clonotype_key``, ``groupby`` or ``samples`` is not a column of ``obs``.
+    TypeError
+        When ``min_cells`` is not an integer.
+    ValueError
+        When ``min_cells`` is not positive; when ``key_added`` is ``clonotype_key``; when a cell
+        has no clonotype (NaN or None, an empty or whitespace-only string, or the string
+        ``"nan"``), no group or no sample; and when two kept clones of one group would get the
+        same id. Nothing is written when it raises.
+    """
+    _pool_rare_clones(adata, clonotype_key=clonotype_key, groupby=groupby, min_cells=min_cells,
+                      samples=samples, key_added=key_added)
 
 
 def clone_size(adata, *, key_added=K.CLONE_SIZE, return_counts=False):

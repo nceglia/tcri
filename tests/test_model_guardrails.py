@@ -78,14 +78,16 @@ def test_K_clamped_to_n_clonotypes(tiny_adata):
 
 
 def test_second_model_warns_about_shared_param_store(tiny_adata):
-    """Pyro's param store is process-global — a 2nd model silently continues the 1st fit."""
+    """Pyro's param store is process-global — a 2nd model built under a name the store already
+    holds silently continues that fit. A generated name never collides, so only a `name=`
+    passed twice can."""
     pyro.clear_param_store()
-    m1 = _model(tiny_adata, K=5)
+    m1 = _model(tiny_adata, K=5, name="shared")
     with contextlib.redirect_stdout(io.StringIO()):
         m1.train(max_epochs=5, batch_size=256,
                  enable_progress_bar=False, enable_model_summary=False)
     with pytest.warns(UserWarning, match="param store"):
-        _model(tiny_adata, K=5)
+        _model(tiny_adata, K=5, name="shared")
 
 
 def test_batch_size_at_or_above_n_obs_warns(tiny_adata):

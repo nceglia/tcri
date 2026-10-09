@@ -28,15 +28,13 @@ warnings.filterwarnings("ignore")
 STORE_KEYS = ("q_p_c_raw", "q_p_ct_raw")
 
 
-def _store_keys(model=None):
-    """The two guide tensors under the model's namespace. ``None`` asks for the unnamed
-    layout, which is what every fixture in this file builds."""
-    if model is None:
-        return STORE_KEYS
-    return tuple(model.module.pname(k) for k in STORE_KEYS)
+def _store_keys(model):
+    """The two guide tensors under the namespace of ``model``, a ``TCRIModel`` or its module."""
+    module = getattr(model, "module", model)
+    return tuple(module.pname(k) for k in STORE_KEYS)
 
 
-def _snapshot(model=None):
+def _snapshot(model):
     """The two guide tensors every metric reads. They live only in Pyro's param store —
     they are NOT in ``module.state_dict()`` and not reachable from ``parameters()``."""
     store = pyro.get_param_store()
@@ -72,10 +70,10 @@ class _ValidationWatcher(torch.nn.Module):
         self._before = None
 
     def on_validation_start(self, trainer, pl_module):
-        self._before = _snapshot()
+        self._before = _snapshot(pl_module.module)
 
     def on_validation_end(self, trainer, pl_module):
-        after = _snapshot()
+        after = _snapshot(pl_module.module)
         if self._before:
             self.deltas.append(
                 sum(float((after[k] - self._before[k]).abs().sum()) for k in self._before)
@@ -859,8 +857,9 @@ def test_weight_decay_does_not_reach_the_guide_concentrations(adata):
         m.module.model(*args, **kwargs)
 
     store = pyro.get_param_store()
-    assert GUIDE_CONCENTRATION_PARAMS <= set(store.keys())
-    leaves = [pyro.param(k).unconstrained() for k in sorted(GUIDE_CONCENTRATION_PARAMS)]
+    names = [m.module.pname(k) for k in sorted(GUIDE_CONCENTRATION_PARAMS)]
+    assert set(names) <= set(store.keys())
+    leaves = [pyro.param(k).unconstrained() for k in names]
     weight = next(p for n, p in m.module.encoder.named_parameters() if p.ndim == 2)
 
     before_leaves = [t.detach().clone() for t in leaves]
