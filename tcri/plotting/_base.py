@@ -23,6 +23,15 @@ pseudoreplication ``build_stats`` collapses away, drawn as a picture. And a bar 
 whisker is a lossy summary of a distribution the package already stored, so wherever draws are
 the sample the violin shows what was measured instead of two numbers off it.
 
+**Small multiples.** A twin is often one panel of a row, so its defaults are the ones a row
+needs. The x axis is in the category order of the column on it (the obs categories, or the
+registered phenotype and clonotype categories), never sorted by this panel's values, so a level
+sits at the same position in every panel; ``order=`` overrides it. ``legend=False`` draws no
+legend, so a row can carry one. Dots that are replicates are colored by replicate unless a split
+is the hue, and an item axis is never colored per item: its marks take one color, because a
+color per item leaves the replicates within each item indistinguishable. A y label longer than the axes is wrapped onto
+as many lines as it needs.
+
 **Connecting lines.** A line between x positions implies the two points are the same entity
 observed twice, which is a claim only matched data supports, so it is drawn from an identity
 key and never from adjacency: the endpoints view joins one replicate's two endpoint values,
@@ -33,14 +42,18 @@ matched-identity line.
 """
 from __future__ import annotations
 
+import textwrap
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 from .._state import _reference
+from .._state import keys as K
 from ._colors import resolve_colors
 
 __all__: list[str] = []  # private module
 
+#: The one color of a mark whose x levels carry no color of their own (an item axis).
 tcri_bar_color = "#66D9EF"
 
 #: Coarsest first. The sample at an x position is the first of these that varies there.
@@ -88,7 +101,29 @@ def _reference_legend(ax, drawn):
               fontsize=8, title_fontsize=8)
 
 
-def _finish(fig, ax, *, save=None, show=None):
+def _fit_ylabel(ax, *, min_width=12):
+    """Wrap the y label onto as many lines as it takes to fit the height of the axes.
+
+    A label longer than its axes runs past the figure edge and is cut off, which on a short panel
+    in a row of them is most labels. The text is wrapped at word boundaries and never shortened.
+    """
+    label = ax.yaxis.label
+    words = label.get_text().split()
+    if not words:
+        return
+    limit = ax.get_window_extent().height
+    flat = " ".join(words)
+    label.set_text(flat)
+    width = len(flat)
+    while label.get_window_extent().height > limit and width > min_width:
+        width = max(min_width, int(width * 0.8))
+        label.set_text(textwrap.fill(flat, width))
+
+
+def _finish(fig, ax, *, save=None, show=None, legend=True):
+    if not legend and ax.get_legend() is not None:
+        ax.get_legend().remove()
+    _fit_ylabel(ax)
     if save:
         fig.savefig(save, bbox_inches="tight", dpi=150)
     if show:
@@ -246,26 +281,43 @@ def _sample_unit(frame, table, *, x, groupby, item_col):
     return None
 
 
-def order_from(d, x, y):
-    """The x order a mark would have chosen for itself: descending median of ``y``.
+def category_order(adata, x, levels):
+    """The default x order: the levels present, in the category order of the column on x.
 
-    Computed ONCE by the caller and handed to every mark, because a reference is a SECOND pass
-    over the same axes: a mark that re-derives the order from its own y re-sorts the axis and
-    rewrites the tick labels under marks already drawn.
+    The phenotype and clonotype item axes take the registered categories; any other column takes
+    its ``obs`` categories. Levels the categories do not list follow, sorted. Panels given the
+    same categories therefore share an x order whatever their values are.
+
+    Computed ONCE by the caller and handed to every mark, because a reference is a second pass
+    over the same axes and must land at the same positions.
     """
-    return d.groupby(x, observed=True)[y].median().sort_values(ascending=False).index.tolist()
+    present = list(dict.fromkeys(levels))
+    if x == "phenotype" and K.PHENOTYPE_CATEGORIES in adata.uns:
+        canon = list(adata.uns[K.PHENOTYPE_CATEGORIES])
+    elif x == "clonotype" and K.CLONOTYPE_CATEGORIES in adata.uns:
+        canon = list(adata.uns[K.CLONOTYPE_CATEGORIES])
+    elif x in adata.obs.columns:
+        canon = list(adata.obs[x].astype("category").cat.categories)
+    else:
+        canon = []
+    by_name = {str(lv): lv for lv in present}
+    ordered = [by_name[str(c)] for c in canon if str(c) in by_name]
+    seen = set(map(str, ordered))
+    return ordered + sorted((lv for lv in present if str(lv) not in seen), key=str)
 
 
-def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None):
+def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, color_x=True):
     """One violin per x position over the DRAW distribution.
 
     Reached only when draws are the coarsest varying unit, so a violin never spans replicates.
+    ``color_x`` colors each violin by its x level; ``False`` draws them all in one color.
     """
     import seaborn as sns
 
     if order is None:
-        order = order_from(d, x, y)
-    colours = _colors_for(adata, x, order, palette)
+        order = category_order(adata, x, d[x].dropna().unique().tolist())
+    colours = (_colors_for(adata, x, order, palette) if color_x
+               else {lv: tcri_bar_color for lv in order})
     sns.violinplot(data=d, x=x, y=y, order=order, ax=ax, palette=colours,
                    inner="quartile", cut=0, density_norm="width", linewidth=0.8)
     ax.set_ylabel(ylabel)
@@ -297,22 +349,45 @@ def _mark_reference(ax, first_collection, first_patch, first_line):
         ln.set_zorder(1.45)
 
 
+def _replicate_legend(ax, colours, *, title):
+    """Name each replicate's color, so a replicate can be followed from panel to panel."""
+    from matplotlib.lines import Line2D
+
+    handles = [Line2D([], [], marker="o", linestyle="none", markerfacecolor=c,
+                      markeredgecolor="black", markeredgewidth=0.3, markersize=6)
+               for c in colours.values()]
+    ax.legend(handles=handles, labels=[str(r) for r in colours], title=title,
+              bbox_to_anchor=(1.02, 1.0), loc="upper left", frameon=False, fontsize=8,
+              title_fontsize=8)
+
+
 def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rotation, s=20,
-              reference=False):
+              reference=False, color_x=True, replicate=None):
     """Box + strip of a tidy frame, coloured through the shared palette.
 
     ``reference`` draws the same marks grey, hollow and behind: the permutation reference is a
     second pass over the same axes, never a second axis and never a second figure.
+
+    With a ``hue`` the marks take the hue's colors. Without one, ``color_x`` colors each box by
+    its x level and ``False`` draws every box in one color; ``replicate`` names the column the
+    dots are replicates of, and colors each dot by its replicate, with a legend naming them.
     """
     import seaborn as sns
 
     if order is None:
-        order = order_from(d, x, y)
+        order = category_order(adata, x, d[x].dropna().unique().tolist())
     colour_key = hue if hue is not None else x
     levels = hue_order if (hue is not None and hue_order is not None) else (
         sorted(d[hue].dropna().unique().tolist(), key=str) if hue is not None else order
     )
-    colours = _colors_for(adata, colour_key, levels, palette)
+    by_replicate = (replicate is not None and hue is None and not reference
+                    and replicate in d.columns and replicate != x)
+    if hue is not None or color_x:
+        colours = _colors_for(adata, colour_key, levels, palette)
+    else:
+        # one color; a white box under dots colored by replicate, so no replicate's color
+        # disappears into the box behind it
+        colours = {lv: "white" if by_replicate else tcri_bar_color for lv in levels}
 
     common = dict(data=d, x=x, y=y, order=order, ax=ax)
     if hue is not None:
@@ -322,8 +397,16 @@ def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rot
     if reference:
         colours = {lv: "0.85" for lv in levels}
     sns.boxplot(**common, palette=colours, showfliers=False, boxprops=dict(alpha=0.5))
-    sns.stripplot(**common, palette=colours, dodge=hue is not None, size=s / 3,
-                  edgecolor="black", linewidth=0.3, legend=False)
+    if by_replicate:
+        reps = category_order(adata, replicate, d[replicate].dropna().unique().tolist())
+        rep_colours = _colors_for(adata, replicate, reps, None)
+        sns.stripplot(data=d, x=x, y=y, order=order, ax=ax, hue=replicate, hue_order=reps,
+                      palette=rep_colours, dodge=False, size=s / 3, edgecolor="black",
+                      linewidth=0.3, legend=False)
+        _replicate_legend(ax, rep_colours, title=replicate)
+    else:
+        sns.stripplot(**common, palette=colours, dodge=hue is not None, size=s / 3,
+                      edgecolor="black", linewidth=0.3, legend=False)
     if reference:
         _mark_reference(ax, first_collection, first_patch, first_line)
     ax.set_ylabel(ylabel)
@@ -335,7 +418,8 @@ def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rot
     return order, levels
 
 
-def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=None):
+def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=None,
+            color_x=True):
     """One point per x position, with the posterior HDI as an error bar.
 
     The floor of the mark rule: nothing varies within an x position, so there is no
@@ -350,12 +434,16 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
     value: the reference has none to show here, and the adjusted value cannot have one at all,
     because an interval on a difference needs paired draws and draws are never paired across
     two fits.
+
+    ``color_x`` colors each point by its x level; ``False`` draws them all in one color.
     """
-    d = d.sort_values(y, ascending=False) if order is None else \
-        d.set_index(d[x].astype(str)).reindex([str(o) for o in order]).dropna(subset=[y])
+    if order is None:
+        order = category_order(adata, x, d[x].dropna().unique().tolist())
+    d = d.set_index(d[x].astype(str)).reindex([str(o) for o in order]).dropna(subset=[y])
     labels = d[x].astype(str).tolist()
     values = d[y].to_numpy(dtype=float)
-    colours = _colors_for(adata, x, labels, palette)
+    colours = (_colors_for(adata, x, labels, palette) if color_x
+               else {lv: tcri_bar_color for lv in labels})
 
     yerr = None
     if y == "value" and {"hdi_low", "hdi_high"} <= set(d.columns):
@@ -381,9 +469,9 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
 
 
 def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=False, key=None,
-                  order=None, hue_order=None, palette=None, ax=None, figsize=(8, 4),
-                  save=None, show=None, return_df=False, annotate=True, rotation=90,
-                  decorate=None):
+                  order=None, hue_order=None, palette=None, legend=True, ax=None,
+                  figsize=(8, 4), save=None, show=None, return_df=False, annotate=True,
+                  rotation=90, decorate=None):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
@@ -396,6 +484,8 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
     with its permutation reference behind it, grey and hollow, when the result carries one. The
     star drawn is always the one for the quantity on the axis, so a value panel of a result
     whose ``stats`` is on the adjusted value carries none.
+
+    ``order`` overrides the category order of the x axis; ``legend=False`` draws no legend.
     """
     from .. import get as _get
     from .._compute._tables import collapse_to_replicates
@@ -415,11 +505,13 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
 
     if result is None or not len(result) or "value" not in result.columns:
         ylabel = _reference.label_for(result, quantity, ylabel)
-        return _finish(fig, _empty(ax, f"no data for {name}", ylabel), save=save, show=show)
+        return _finish(fig, _empty(ax, f"no data for {name}", ylabel), save=save, show=show,
+                       legend=legend)
     quantity = resolve_quantity(result, quantity, name=name)
     d = result.dropna(subset=[quantity])
     if not len(d):
-        return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show)
+        return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show,
+                       legend=legend)
     # The reference is drawn behind the value and nowhere else: on the adjusted panel zero is
     # the reference, and the zero rule says so. A column with nothing finite in it is not a
     # reference either: seaborn raises on an all-NaN y, so the panel is the value with
@@ -481,11 +573,16 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
             # the shared mask can empty the frame even though `value` was finite everywhere,
             # when the reference is non-finite on every row. Say so rather than drawing an
             # axes with no marks on it.
-            return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show)
+            return _finish(fig, _empty(ax, f"no finite {name}", ylabel), save=save, show=show,
+                           legend=legend)
 
-    # ONE order, computed here from the quantity on the axis and handed to every mark. A mark
-    # that derives it from its own y re-sorts the axis on the reference pass.
-    _order = order if order is not None else order_from(d, x, quantity)
+    # ONE order, computed here and handed to every mark, so the reference pass lands at the
+    # value's own positions.
+    _order = order if order is not None else category_order(adata, x, d[x].dropna().unique())
+    # A split or replicate axis has colors of its own; an item axis does not, and coloring each
+    # item would leave the replicates within it indistinguishable.
+    color_x = x in (splitby, groupby)
+    replicate = groupby if unit == "replicate" else None
 
     if unit in ("replicate", "item"):
         if ref is not None:
@@ -495,22 +592,23 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
             # pools both arms into one distribution that belongs to neither.
             _boxstrip(adata, d, x=x, y=ref, hue=hue, order=_order, hue_order=hue_order,
                       palette=palette, ax=ax, ylabel=ylabel, reference=True,
-                      rotation=0 if single else rotation)
+                      rotation=0 if single else rotation, color_x=color_x)
         _order, _levels = _boxstrip(adata, d, x=x, y=quantity, hue=hue, order=_order,
                                     hue_order=hue_order, palette=palette, ax=ax,
-                                    ylabel=ylabel, rotation=0 if single else rotation)
+                                    ylabel=ylabel, rotation=0 if single else rotation,
+                                    color_x=color_x, replicate=replicate)
     elif unit == "draw":
         t = table.dropna(subset=[quantity]) if quantity in table.columns else table
         if quantity not in t.columns:
             return _finish(fig, _empty(ax, f"no {quantity} in the draws", ylabel),
-                           save=save, show=show)
+                           save=save, show=show, legend=legend)
         if x in ("_all", "_one"):
             t = t.assign(**{x: d[x].iloc[0]})
         elif x not in t.columns:
             return _finish(fig, _empty(ax, f"no {x} axis in the draws", ylabel),
-                           save=save, show=show)
+                           save=save, show=show, legend=legend)
         _order = _violins(adata, t, x=x, y=quantity, palette=palette, ax=ax, ylabel=ylabel,
-                          rotation=0 if single else rotation, order=_order)
+                          rotation=0 if single else rotation, order=_order, color_x=color_x)
         if ref is not None:
             # the reference has no draw distribution of its own to show here -- its own draws
             # belong to a different fit and are not paired with these -- so it is drawn as the
@@ -521,7 +619,7 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
                        linewidths=1.1, zorder=2, label=REFERENCE_LABEL)
     else:
         _points(adata, d, x=x, y=quantity, palette=palette, ax=ax, ylabel=ylabel,
-                rotation=0 if single else rotation, order=_order, ref=ref)
+                rotation=0 if single else rotation, order=_order, ref=ref, color_x=color_x)
         _order = [str(o) for o in _order]
 
     if decorate is not None:
@@ -531,7 +629,7 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
         ax.set_xlabel("")
     if annotate and x == splitby:
         _annotate_contrasts(ax, stats, _order, quantity=quantity)
-    return _finish(fig, ax, save=save, show=show)
+    return _finish(fig, ax, save=save, show=show, legend=legend)
 
 
 # ── the delta family ─────────────────────────────────────────────────────────
@@ -589,7 +687,7 @@ def _size_legend(ax, counts):
 
 def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
                  item_as_x=False, entity_matched=False, key=None, order=None, hue_order=None,
-                 palette=None, ax=None, figsize=(8, 4), save=None, show=None,
+                 palette=None, legend=True, ax=None, figsize=(8, 4), save=None, show=None,
                  return_df=False, rotation=90):
     """Render a cached delta result — the change, or its two endpoints.
 
@@ -627,8 +725,8 @@ def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
     if kind == "delta":
         return render_metric(adata, name, ylabel=ylabel, item_col=item_col,
                              item_as_x=item_as_x, key=key, order=order, hue_order=hue_order,
-                             palette=palette, ax=ax, figsize=figsize, save=save, show=show,
-                             annotate=True, rotation=rotation, quantity=quantity,
+                             palette=palette, legend=legend, ax=ax, figsize=figsize, save=save,
+                             show=show, annotate=True, rotation=rotation, quantity=quantity,
                              decorate=_zero_rule)
 
     # ── the endpoints view ──────────────────────────────────────────────────
@@ -637,7 +735,7 @@ def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
     if groupby is None or groupby not in result.columns:
         return _finish(fig, _empty(
             ax, f"{name} endpoints need a replicate axis\n(re-run with groupby=)", ylabel),
-            save=save, show=show)
+            save=save, show=show, legend=legend)
 
     counts = _matched_counts(result, groupby=groupby,
                              item_col=item_col) if entity_matched else None
@@ -684,4 +782,4 @@ def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
     if counts is not None:
         _size_legend(ax, counts)
     _reference_legend(ax, len(reference) == 2)
-    return _finish(fig, ax, save=save, show=show)
+    return _finish(fig, ax, save=save, show=show, legend=legend)

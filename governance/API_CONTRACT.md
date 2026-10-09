@@ -125,7 +125,12 @@ no metric arguments. A mark shows one variance component: the coarsest unit that
 an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
 result carries one, against a zero rule, and `quantity="value"` draws the value with its null
 behind it; the star a panel draws is always about the quantity on its axis. Connecting lines are
-drawn only between points sharing an identity across the compared levels.
+drawn only between points sharing an identity across the compared levels. Every twin takes
+`legend=`, and `False` draws no legend, so a row of panels can carry one; a y label longer than
+its axes is wrapped. In the metric twins the x axis is in the category order of the column on it
+(`order=` overrides), so a level sits at the same position in every panel, and dots that are
+replicates are colored by replicate unless a split is the hue; an item axis is never colored per
+item.
 
 **Diagnostics.** `reconstruction_ppc`, `loss` and `archetypes` take the model; the rest read the
 stored substrate. `joint_distribution_ppc` and `phenotype_calibration` read PER-FIT keys and
@@ -294,44 +299,45 @@ class pl:
     def clonotypic_entropy(
         adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
         hue_order: Any = ...,
-        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
-        show: Any = ..., return_df: bool = ...,
+        palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_entropy(
         adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
         hue_order: Any = ...,
-        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
-        show: Any = ..., return_df: bool = ...,
+        palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def mutual_information(
         adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
         hue_order: Any = ...,
-        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
-        show: Any = ..., return_df: bool = ...,
+        palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_flux(
         adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
         hue_order: Any = ...,
-        palette: Any = ..., ax: Any = ..., figsize: Any = ..., save: Any = ...,
-        show: Any = ..., return_df: bool = ...,
+        palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
+        save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def delta_clonotypic_entropy(
         adata: AnnData, *, kind: str = ..., quantity: str = ..., key: Optional[str] = ...,
         order: Any = ...,
-        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
-        save: Any = ..., show: Any = ..., return_df: bool = ...,
+        hue_order: Any = ..., palette: Any = ..., legend: bool = ..., ax: Any = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def delta_phenotypic_entropy(
         adata: AnnData, *, kind: str = ..., quantity: str = ..., key: Optional[str] = ...,
         order: Any = ...,
-        hue_order: Any = ..., palette: Any = ..., ax: Any = ..., figsize: Any = ...,
-        save: Any = ..., show: Any = ..., return_df: bool = ...,
+        hue_order: Any = ..., palette: Any = ..., legend: bool = ..., ax: Any = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
         adata: AnnData, *, kind: str = ..., quantity: str = ..., n_top: int = ...,
         key: Optional[str] = ...,
-        order: Any = ..., hue_order: Any = ..., palette: Any = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
+        order: Any = ..., hue_order: Any = ..., palette: Any = ..., legend: bool = ...,
+        ax: Any = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
+        return_df: bool = ...,
     ) -> Any: ...
     def resolve_colors(
         adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,

@@ -25,7 +25,7 @@ import numpy as np
 from .._state import _reference
 from ._base import (_axes, _boxstrip, _colors_for, _empty, _finish, _points,
                     _reference_legend, _violins, _zero_rule, check_quantity, filter_quantity,
-                    order_from, resolve_quantity)
+                    resolve_quantity)
 
 __all__ = ["gene_importance"]
 
@@ -79,15 +79,15 @@ def _star_labels(ax, stats, genes, *, groupby, quantity):
         ax.set_ylim(ymin, ymax + 0.12 * ((ymax - ymin) or 1.0))
 
 
-def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, ax, figsize, save,
-          show):
+def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, legend, ax, figsize,
+          save, show):
     result, table, stats = payload["result"], payload.get("table"), payload.get("stats")
     groupby, splitby = params.get("groupby"), params.get("splitby")
     fig, ax = _axes(ax, figsize)
     if result is None or not len(result) or "value" not in result.columns:
         return _finish(fig, _empty(ax, "no data for gene_importance",
                                    _reference.label_for(result, quantity, _YLABEL)),
-                       save=save, show=show)
+                       save=save, show=show, legend=legend)
     d = result[result["gene"].isin(genes)].dropna(subset=[quantity])
     # The reference is drawn behind the value and nowhere else, and only when something in it
     # is finite: the rule `render_metric` applies, so an all-NaN null is "(no reference)" here
@@ -129,7 +129,7 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, ax, fi
         _zero_rule(ax)
     _reference_legend(ax, ref is not None)
     ax.set_xlabel("gene")
-    return _finish(fig, ax, save=save, show=show)
+    return _finish(fig, ax, save=save, show=show, legend=legend)
 
 
 def _shift(adata, payload, params, *, genes, ax, figsize, save, show):
@@ -163,13 +163,14 @@ def _shift(adata, payload, params, *, genes, ax, figsize, save, show):
 
 
 def gene_importance(adata, *, kind="rank", quantity="auto", n_top=25, key=None, order=None,
-                    hue_order=None, palette=None, ax=None, figsize=(8, 4), save=None,
-                    show=None, return_df=False):
+                    hue_order=None, palette=None, legend=True, ax=None, figsize=(8, 4),
+                    save=None, show=None, return_df=False):
     """The cached ``perturb.gene_importance``: a ranking (``kind="rank"``) or the signed
     gene × phenotype shift (``kind="shift"``) of the ``n_top`` most important genes.
 
     ``order`` restricts and orders the genes shown; ``hue_order`` orders the split levels;
-    ``return_df`` hands back the cached ``result`` frame instead of drawing.
+    ``legend=False`` draws no legend; ``return_df`` hands back the cached ``result`` frame
+    instead of drawing.
 
     ``quantity`` defaults to ``"auto"``: the adjusted importance whenever the cached result
     carries a reference, and the bare value otherwise, as on every twin. The correction matters
@@ -224,7 +225,7 @@ def gene_importance(adata, *, kind="rank", quantity="auto", n_top=25, key=None, 
         result is not None and len(result)) else []
     if kind == "rank":
         return _rank(adata, payload, params, genes=genes, quantity=quantity,
-                     hue_order=hue_order, palette=palette, ax=ax, figsize=figsize,
-                     save=save, show=show)
+                     hue_order=hue_order, palette=palette, legend=legend, ax=ax,
+                     figsize=figsize, save=save, show=show)
     return _shift(adata, payload, params, genes=genes, ax=ax, figsize=figsize,
                   save=save, show=show)
