@@ -102,7 +102,7 @@ $q(p_c)$ and $q(p_{ct})$; `get_p_ct()` returns the posterior-mean $p_{ct}$.
 ### What the two scales actually control
 
 $\alpha$ (`global_scale`, default `5.0`) is the concentration of the clonotype prior and
-$\beta$ (`local_scale`, default `3.0`) the concentration of the covariate-level one. $\beta$ is
+$\beta$ (`local_scale`, default `10.0`) the concentration of the covariate-level one. $\beta$ is
 the shrinkage knob described above: raise it and each covariate level is held
 closer to its clone's overall distribution, so differences between covariates attenuate further.
 
