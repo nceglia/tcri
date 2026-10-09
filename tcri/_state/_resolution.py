@@ -1,7 +1,7 @@
 """Shared field-resolution helpers used by setup and adapters."""
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
 import pandas as pd
 
@@ -13,21 +13,40 @@ def _canonical_col(name: str, *, source_prefix: str) -> str:
     return name[len(prefix):] if name.startswith(prefix) else name
 
 
+def _name_family(canon: str) -> str | None:
+    """The family a column name marks on its own: ``clone_id``, ``cc`` for ``cc_*``, or None."""
+    if canon == "clone_id":
+        return "clone_id"
+    if canon.startswith("cc_"):
+        return "cc"
+    return None
+
+
+def _size_pair(canon: str, cols: Collection[str], *, source_prefix: str) -> list[str]:
+    """The present columns that a ``<base>_size`` column counts: ``<base>``, then
+    ``<source_prefix>:<base>``. Empty when ``canon`` is not a ``_size`` column or its base is
+    absent.
+
+    Callers check this before :func:`_name_family`. Scirpy writes each clonotype definition with
+    a size column (``clone_id_size``, ``cc_<x>_size``), and that column stands for its base; read
+    by name first, ``cc_<x>_size`` would count as a second ``cc_*`` definition.
+    """
+    if not canon.endswith("_size"):
+        return []
+    base = canon[: -len("_size")]
+    return [c for c in (base, f"{source_prefix}:{base}") if c in cols]
+
+
 def clone_like_candidates(frame: pd.DataFrame, *, source_prefix: str) -> list[str]:
     cols = [str(c) for c in frame.columns]
     out = set()
     for col in cols:
         canon = _canonical_col(col, source_prefix=source_prefix)
-        if canon == "clone_id" or canon.startswith("cc_"):
+        paired = _size_pair(canon, cols, source_prefix=source_prefix)
+        if paired:
+            out.update(paired)
+        elif _name_family(canon) is not None:
             out.add(col)
-            continue
-        if canon.endswith("_size"):
-            base = canon[:-5]
-            prefixed = f"{source_prefix}:{base}"
-            if base in cols:
-                out.add(base)
-            if prefixed in cols:
-                out.add(prefixed)
     return sorted(out)
 
 
@@ -49,6 +68,10 @@ def resolve_clonotype_source(
 ) -> tuple[str, str, str, list[tuple[str, str, str, str]]]:
     """Resolve a clonotype column from one or more obs-like frames.
 
+    A ``<base>_size`` column whose ``<base>`` is present stands for ``<base>`` and takes its
+    family (``clone_id`` or ``cc``, otherwise ``size``), so one ``cc_*`` definition with its size
+    column is one candidate.
+
     Returns ``(source_name, resolved_key, family, candidates)`` where candidates are tuples
     ``(family, canonical, source_name, key)``.
     """
@@ -66,17 +89,12 @@ def resolve_clonotype_source(
         colset = set(cols)
         for col in cols:
             canon = _canonical_col(col, source_prefix=source_prefix)
-            family = None
-            if canon == "clone_id":
-                family = "clone_id"
-            elif canon.startswith("cc_"):
-                family = "cc"
-            elif canon.endswith("_size"):
-                base = canon[:-5]
-                if base in colset:
-                    family, col, canon = "size", base, base
-                elif f"{source_prefix}:{base}" in colset:
-                    family, col, canon = "size", f"{source_prefix}:{base}", base
+            paired = _size_pair(canon, colset, source_prefix=source_prefix)
+            if paired:
+                col, canon = paired[0], canon[: -len("_size")]
+                family = _name_family(canon) or "size"
+            else:
+                family = _name_family(canon)
             if family is None:
                 continue
             marker = (source_name, col)

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from .._compute._repertoire import _missing_clonotypes
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_source
 
@@ -98,10 +99,74 @@ def from_mudata(
 
     The adapter aligns the GEX and AIRR modalities on ``obs_names``, selects a clonotype
     column (explicitly or by ``clonotype_key='auto'``), optionally wires one covariate
-    column from ``obs``, and ensures a counts layer exists.
+    column from ``obs``, and ensures a counts layer exists. ``mdata`` is not modified.
 
-    It records only resolved adapter provenance under ``adata.uns['tcri_adapter']``; key-profile
-    defaults are not persisted globally.
+    A cell has no clonotype when its value is NaN or None, an empty or whitespace-only string, or
+    the string ``"nan"``; these are the cells ``TCRIModel.setup_anndata`` refuses. They are
+    dropped by default (``drop_missing_clonotype=True``). With ``drop_missing_clonotype=False``
+    they raise ``ValueError`` when ``strict=True`` and are kept when ``strict=False``.
+
+    Parameters
+    ----------
+    mdata : mudata.MuData
+        A MuData with a GEX and an AIRR modality, as Scirpy writes it.
+    key_profile : str
+        The naming convention for modalities and keys. Only ``"scirpy"`` is supported; its
+        modalities are ``"gex"`` and ``"airr"``.
+    keys : Mapping[str, str] | None
+        Overrides for the profile's names: ``gex_mod``, ``airr_mod``, ``sample_key``,
+        ``tissue_key``, ``site_key``, ``batch_key`` and ``clonotype_key``. Only ``gex_mod`` and
+        ``airr_mod`` change what is read; the others are recorded in
+        ``uns['tcri_adapter']['keys']``.
+    clonotype_key : str
+        The clonotype column. A name is looked up as given and with the ``"<airr_mod>:"`` prefix,
+        in the GEX ``obs``, the AIRR ``obs`` and ``mdata.obs``, in that order. ``"auto"`` takes
+        the first family that has a clone-like column, in the order ``clone_id``, ``cc_*``
+        definitions, any column with a ``<name>_size`` partner, and raises unless that family
+        holds one definition. A ``<name>_size`` column stands for ``<name>``, and a definition
+        found in more than one of the three frames is read from the first.
+    covariate_cols : str | None
+        One column of the GEX modality's ``obs``, stored as a categorical. Missing values raise
+        ``ValueError`` when ``strict=True`` and become ``"NA"`` otherwise. Build a composite
+        covariate as a single column first.
+    drop_missing_clonotype : bool
+        Drop the cells without a clonotype.
+    counts_layer : str
+        The layer that holds the counts.
+    fill_counts_from_X : bool
+        When ``counts_layer`` is absent, store a copy of ``X`` under that name. With ``False``
+        an absent layer raises ``KeyError``.
+    strict : bool
+        Raise on missing covariate values, and on cells without a clonotype when
+        ``drop_missing_clonotype=False``.
+    copy : bool
+        Copy the shared cells of the GEX modality before writing to them. With ``False`` they are
+        taken as a view, which anndata copies, with an ``ImplicitModificationWarning``, when the
+        clonotype column is written; the result never shares data with ``mdata``.
+
+    Returns
+    -------
+    anndata.AnnData
+        The cells of the GEX modality that are also in the AIRR modality, less those dropped for
+        a missing clonotype. ``obs`` holds the clonotype column, under its resolved name, with
+        string categories, and the covariate column when one is given. ``uns['tcri_adapter']``
+        records the profile and its keys, the resolved names and cell counts (``resolved``), and
+        the clone-like columns found (``auto_candidates``: parallel string lists ``family``,
+        ``canonical``, ``source`` and ``key``).
+
+    Raises
+    ------
+    KeyError
+        When a modality is missing from ``mdata.mod``, ``keys`` has an unknown entry, an explicit
+        ``clonotype_key`` or ``covariate_cols`` is not found, or ``counts_layer`` is absent with
+        ``fill_counts_from_X=False``.
+    ValueError
+        When ``key_profile`` is unknown, the modalities share no cells, ``clonotype_key="auto"``
+        finds no clone-like column or more than one definition in a family, or ``strict=True``
+        meets the missing values described under ``strict``.
+    TypeError
+        When ``keys`` is not a mapping of non-empty strings, or ``covariate_cols`` is not a
+        single non-empty string.
     """
     resolved = _coerce_keys(key_profile, keys)
     gex_mod = resolved["gex_mod"]
@@ -133,18 +198,21 @@ def from_mudata(
     else:
         clone = mdata.obs[key].reindex(adata.obs_names)
     clone = pd.Series(clone, index=adata.obs_names, dtype="object")
-    if strict and clone.isna().any():
-        n = int(clone.isna().sum())
+    missing = _missing_clonotypes(clone).to_numpy()
+    if strict and not drop_missing_clonotype and missing.any():
         raise ValueError(
-            f"resolved clonotype column {key!r} has {n} missing values; pass "
-            "drop_missing_clonotype=True to drop them or strict=False to continue."
+            f"{int(missing.sum())} of {adata.n_obs} cells have no clonotype in {key!r} (NaN or "
+            "None, an empty or whitespace-only string, or the string 'nan'). Pass "
+            "drop_missing_clonotype=True to drop them, or strict=False to keep them."
         )
 
     resolved_clone_col = str(key)
     adata.obs[resolved_clone_col] = clone.astype("string")
     if drop_missing_clonotype:
-        adata = adata[adata.obs[resolved_clone_col].notna()].copy()
-    adata.obs[resolved_clone_col] = adata.obs[resolved_clone_col].astype("category")
+        adata = adata[~missing].copy()
+    # Plain-string categories, not pandas' nullable "string": anndata 0.12 does not write those,
+    # so the output would not save to h5ad.
+    adata.obs[resolved_clone_col] = adata.obs[resolved_clone_col].astype(object).astype("category")
 
     cov_col: str | None = None
     if covariate_cols is not None:
@@ -191,9 +259,10 @@ def from_mudata(
             "n_obs_shared": int(len(common)),
             "n_obs_output": int(adata.n_obs),
         },
-        "auto_candidates": [
-            {"family": fam, "canonical": canon, "source": src, "key": k}
-            for fam, canon, src, k in candidates
-        ],
+        # Parallel string lists, one entry per candidate: a list of dicts does not write to h5ad.
+        "auto_candidates": {
+            field: [str(candidate[i]) for candidate in candidates]
+            for i, field in enumerate(("family", "canonical", "source", "key"))
+        },
     }
     return adata

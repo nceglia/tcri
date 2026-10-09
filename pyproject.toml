@@ -51,6 +51,10 @@ test = [
     "pytest>=8",
     "pytest-cov>=5",
 ]
+# MuData input to tcri.pp.from_mudata, the format Scirpy writes. Not needed for AnnData input.
+mudata = [
+    "mudata>=0.3.1",   # 0.3.0 imports anndata internals removed in anndata 0.12
+]
 # Building examples/example.ipynb with its outputs embedded. Not needed to use tcri.
 notebook = [
     "jupytext>=1.16",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from anndata import AnnData
+from anndata import AnnData, read_h5ad
 from mudata import MuData
 
 import tcri
@@ -14,6 +14,7 @@ def _toy_mudata(
     include_site: bool = True,
     include_clone_id: bool = True,
     missing_clone: bool = False,
+    missing_value: object = None,
     cc_keys: tuple[str, ...] = (),
 ):
     obs_names = [f"cell_{i}" for i in range(6)]
@@ -41,7 +42,7 @@ def _toy_mudata(
     if include_clone_id:
         clones = ["cl_1", "cl_2", "cl_3", "cl_4"]
         if missing_clone:
-            clones[1] = None
+            clones[1] = missing_value
         airr_obs["clone_id"] = pd.Series(clones, index=airr_idx, dtype="string")
         airr_obs["clone_id_size"] = [5, 2, 7, 3]
     for i, key in enumerate(cc_keys):
@@ -80,6 +81,19 @@ def test_from_mudata_scirpy_defaults_with_single_covariate():
     assert meta["resolved"]["covariate_col"] == "tissue"
 
 
+def test_from_mudata_output_round_trips_through_h5ad(tmp_path):
+    adata = tcri.pp.from_mudata(_toy_mudata())
+    path = tmp_path / "adapter.h5ad"
+    adata.write_h5ad(path)
+    back = read_h5ad(path)
+
+    meta = adata.uns["tcri_adapter"]
+    read = dict(back.uns["tcri_adapter"])
+    read["auto_candidates"] = {k: list(v) for k, v in read["auto_candidates"].items()}
+    assert read == meta
+    assert back.obs["clone_id"].tolist() == adata.obs["clone_id"].tolist()
+
+
 def test_from_mudata_missing_clones_drop_when_non_strict():
     mdata = _toy_mudata(missing_clone=True)
     adata = tcri.pp.from_mudata(
@@ -91,6 +105,25 @@ def test_from_mudata_missing_clones_drop_when_non_strict():
     assert adata.obs["clone_id"].notna().all()
 
 
+@pytest.mark.parametrize("value", [None, "", "   ", "nan"], ids=repr)
+def test_from_mudata_defaults_drop_cells_without_a_clonotype(value):
+    adata = tcri.pp.from_mudata(_toy_mudata(missing_clone=True, missing_value=value))
+    assert adata.obs_names.tolist() == ["cell_1", "cell_4", "cell_5"]
+    assert adata.uns["tcri_adapter"]["resolved"]["n_obs_output"] == 3
+
+
+def test_from_mudata_without_drop_raises_or_keeps_cells_without_a_clonotype():
+    mdata = _toy_mudata(missing_clone=True, missing_value="")
+    with pytest.raises(
+        ValueError,
+        match=r"1 of 4 cells have no clonotype in 'clone_id'.*drop_missing_clonotype=True",
+    ):
+        tcri.pp.from_mudata(mdata, drop_missing_clonotype=False)
+
+    adata = tcri.pp.from_mudata(mdata, drop_missing_clonotype=False, strict=False)
+    assert adata.n_obs == 4
+
+
 def test_from_mudata_auto_ambiguous_cc_raises():
     mdata = _toy_mudata(
         include_clone_id=False,
@@ -98,6 +131,30 @@ def test_from_mudata_auto_ambiguous_cc_raises():
     )
     with pytest.raises(ValueError, match="ambiguous"):
         tcri.pp.from_mudata(mdata, clonotype_key="auto")
+
+
+def test_from_mudata_auto_resolves_one_cc_definition_with_its_size_column():
+    mdata = _toy_mudata(include_clone_id=False, cc_keys=("cc_aa_tcrdist",))
+    # Scirpy also writes both columns to mdata.obs under the modality prefix.
+    for col in ("cc_aa_tcrdist", "cc_aa_tcrdist_size"):
+        mdata.obs[f"airr:{col}"] = mdata.mod["airr"].obs[col]
+
+    adata = tcri.pp.from_mudata(mdata)
+
+    meta = adata.uns["tcri_adapter"]
+    assert meta["resolved"]["clonotype_key"] == "cc_aa_tcrdist"
+    assert meta["resolved"]["clonotype_family"] == "cc"
+    assert meta["auto_candidates"]["canonical"] == ["cc_aa_tcrdist", "cc_aa_tcrdist"]
+    assert meta["auto_candidates"]["key"] == ["cc_aa_tcrdist", "airr:cc_aa_tcrdist"]
+    assert adata.n_obs == 4
+
+
+def test_from_mudata_unknown_clonotype_key_lists_the_cc_definition_not_its_size_column():
+    mdata = _toy_mudata(include_clone_id=False, cc_keys=("cc_aa_tcrdist",))
+    with pytest.raises(KeyError, match="Clone-like columns include") as err:
+        tcri.pp.from_mudata(mdata, clonotype_key="no_such_column")
+    assert "cc_aa_tcrdist" in str(err.value)
+    assert "cc_aa_tcrdist_size" not in str(err.value)
 
 
 def test_from_mudata_unknown_profile_raises():

@@ -155,3 +155,16 @@ def test_setup_anndata_auto_rejects_ambiguous_cc_family():
 
     with pytest.raises(ValueError, match="ambiguous"):
         TCRIModel.setup_anndata(adata, clonotype_key="auto")
+
+
+def test_setup_anndata_auto_resolves_one_cc_definition_with_its_size_column():
+    adata = _tiny_adata_clone_id_only()
+    adata.obs = adata.obs.drop(columns=["clone_id"])
+    adata.obs["cc_aa_tcrdist"] = ["c1", "c1", "c2", "c2"]
+    adata.obs["cc_aa_tcrdist_size"] = [2, 2, 2, 2]
+
+    TCRIModel.setup_anndata(adata, clonotype_key="auto")
+
+    manager = TCRIModel._get_most_recent_anndata_manager(adata)
+    assert manager.registry["clonotype_col"] == "cc_aa_tcrdist"
+    assert manager.registry["setup_args"]["clonotype_key"] == "cc_aa_tcrdist"
