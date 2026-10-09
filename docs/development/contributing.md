@@ -3,6 +3,11 @@
 How work on tcri is planned, split into pull requests and merged. The rules themselves are stated
 once, in [`governance/RULES.md`](https://github.com/nceglia/tcri/blob/main/governance/RULES.md).
 
+## Installing for development
+
+An editable install (`pip install -e ".[dev]"`) takes its version from the git tags, so run
+`git fetch --tags` first; without them tcri reports version `0.1.0.devN`.
+
 ## Tracking issues and sub-issues
 
 Work that takes more than one pull request, such as better Scirpy integration, has a **tracking
@@ -22,6 +27,14 @@ tracking issue shows progress as sub-issues close.
 
 Before starting, compare the footprint with the open `tracking` issues. Where two touch the same
 file or public symbol, agree which lands first and note it on both issues.
+
+## Grouping changes
+
+Related fixes go in one pull request, which may close several issues: list each with its own
+`Closes #N`. A truly small fix, such as a typo or a one-line correction, can skip the issue and
+carry the `no issue` label. Anything left over from a milestone's work goes as a checklist line in
+that milestone's single "Loose ends" issue (`Loose ends: <version>`), not as a new issue; open that
+issue the first time a milestone needs one.
 
 ## Stacks
 

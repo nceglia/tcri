@@ -31,10 +31,11 @@ digits), recorded with the model, so no two models share a key. `TCRIModel.name`
 
 **Loading.** `TCRIModel.load` and `load_tcri_session` restore the loaded model's guide
 concentrations and its nulls' parameters from the saved store, take its networks from the saved
-weights, and leave every other model's entries in the store as they are. A load that finds the
-model's entries already in the store replaces them and warns. A load raises when the file cannot
-supply a trained model's posteriors, and refuses a store that keeps them under bare keys, without
-a model name.
+weights, and leave every other model's entries in the store as they are. Both restore the
+arguments the model was trained with (`train_kwargs_`), which `tcri.null.*` replays. A load that
+finds the model's entries already in the store replaces them and warns. A load raises when the
+file cannot supply a trained model's posteriors, and refuses a store that keeps them under bare
+keys, without a model name.
 
 **Registration.** Every cell `setup_anndata` registers must have a clonotype. NaN or None, an
 empty or whitespace-only string, and the literal string `"nan"` in the `clonotype_key` column

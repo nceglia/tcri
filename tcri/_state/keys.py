@@ -72,7 +72,7 @@ TRUTH = "tcri_truth"
 # ── per-fit provenance ───────────────────────────────────────────────────────
 # One AnnData can carry several fits: the main one and, beside it, any null or alternative
 # model written with `to_anndata(fit=...)`. Each fit's arrays live under a prefixed key built by
-# `fit_key`; these three carry what a fit IS, as opposed to what it learned.
+# `fit_key`; these carry what a fit IS, as opposed to what it learned.
 #
 # They are spelled `tcri_*` deliberately. `fit_key` inserts the fit name after a known prefix,
 # and a bare base like "permutation" would fall through to its last branch and put an
@@ -80,6 +80,7 @@ TRUTH = "tcri_truth"
 PERMUTATION = "tcri_permutation"        # the integer permutation a null was built from
 FIT_SETTINGS = "tcri_fit_settings"      # kind, strata, seed, train args, parent, joinability
 BUFFERS = "tcri_buffers"                # the module's non-parameter state (BatchNorm, archetypes)
+TRAINING = "tcri_training"              # a null's training history and record, for diag.loss
 
 #: Inside `uns[METADATA]`: the fits this object carries, main first as ``None``.
 FITS = "fits"

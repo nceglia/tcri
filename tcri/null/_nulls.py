@@ -80,8 +80,8 @@ def _check_the_name_is_free(adata, model, fit):
     if held == str(model.name):
         return
     main = str((adata.uns.get(K.FIT_SETTINGS) or {}).get("name", ""))
-    if ((not held or _is_generated_name(held)) and _is_generated_name(model.name)
-            and main == str(model.name)):
+    unnamed = (not held or _is_generated_name(held)) and _is_generated_name(model.name)
+    if unnamed and main == str(model.name):
         warnings.warn(
             f"fit {fit!r} on this object was written by parent {held!r}. Neither that model nor "
             f"this one ({model.name!r}) was given `name=`, and this one wrote the object's main "
@@ -90,12 +90,34 @@ def _check_the_name_is_free(adata, model, fit):
             UserWarning, stacklevel=3,
         )
         return
+    # A copy of the AnnData is not a way out: it carries the same record and raises the same.
+    refit = (" If this model is a refit of that one, write its main fit first with "
+             "model.to_anndata(adata); the null is then rewritten as a refit."
+             if unnamed else "")
     raise ValueError(
         f"fit {fit!r} on this object belongs to parent {held!r}, not to {model.name!r}. "
         f"Writing it would overwrite another model's reference, and the two are not "
         f"interchangeable. Pass key_added= to name this one (it would land as "
-        f"{_fit_name(fit.split('.')[1], 'b')!r}), or build it on a copy of the AnnData."
+        f"{_fit_name(fit.split('.')[1], 'b')!r}).{refit}"
     )
+
+
+def _training_for_uns(null):
+    """A null's ``history_`` and ``training_record_``, in a form h5ad writes.
+
+    A null has no saved model of its own, so this is what lets ``rebuild`` hand
+    ``tcri.diag.loss`` the curves after the process that fitted it has ended. Each history
+    series is kept as its epochs and its values; record entries that are ``None`` are left out,
+    because h5ad cannot write them, and read back as missing.
+    """
+    history = {
+        name: {"epoch": np.asarray(frame.index, dtype=np.int64),
+               "value": np.asarray(frame.to_numpy(), dtype=float).ravel()}
+        for name, frame in (getattr(null, "history_", None) or {}).items()
+    }
+    record = {k: v for k, v in (getattr(null, "training_record_", None) or {}).items()
+              if v is not None}
+    return {"history": history, "record": record}
 
 
 def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train_kwargs):
@@ -120,11 +142,11 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
     )
     perm, sizes = _permute.build_permutation(adata, strata, np.random.default_rng(resolved_seed))
 
-    train_args = {**(getattr(model, "_train_kwargs", None) or {}), **train_kwargs}
+    train_args = {**(getattr(model, "train_kwargs_", None) or {}), **train_kwargs}
     if not train_args:
         raise ValueError(
-            f"the parent has no record of how it was trained, so this null cannot be fitted "
-            f"the same way. That happens for a model loaded from a session saved before 0.12. "
+            f"the parent carries no record of the arguments it was trained with "
+            f"(`model.train_kwargs_` is empty), so this null cannot be fitted the same way. "
             f"Pass the parent's arguments explicitly, e.g. "
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
@@ -140,6 +162,7 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
     adata.uns[K.fit_key(K.BUFFERS, fit)] = {
         k: v.detach().cpu().numpy() for k, v in null.module.named_buffers() if v is not None
     }
+    adata.uns[K.fit_key(K.TRAINING, fit)] = _training_for_uns(null)
     adata.uns[K.fit_key(K.FIT_SETTINGS, fit)] = {
         **adata.uns[K.fit_key(K.FIT_SETTINGS, fit)],
         "kind": kind,

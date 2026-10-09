@@ -208,7 +208,7 @@ def test_count_arguments_must_be_integers(adata, name, bad):
         _train(m, **{name: bad})
     assert getattr(m, "training_record_", None) is None, "the fit ran before the error"
     _train(m, max_epochs=1, **{name: np.int64(2)})
-    assert m._train_kwargs[name] == 2 and type(m._train_kwargs[name]) is int
+    assert m.train_kwargs_[name] == 2 and type(m.train_kwargs_[name]) is int
 
 
 def test_early_stopping_off_installs_no_stopping_rule(adata):

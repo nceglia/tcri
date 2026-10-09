@@ -478,10 +478,11 @@ class TCRIModel(BaseModelClass):
         #: parameter-store namespace, which is not that.
         self._fit_name = None
         #: The arguments the last ``train()`` actually ran with. ``tcri.null.*`` replays them so
-        #: a null is fitted the way its parent was; ``save_tcri_session`` persists them, because
-        #: an in-memory attribute would not survive a reload and the null would silently fall
-        #: back to ``train()``'s defaults.
-        self._train_kwargs: dict = {}
+        #: a null is fitted the way its parent was. The trailing underscore is what makes scvi's
+        #: ``save`` write them into ``model.pt`` and ``load`` set them back after construction;
+        #: without it a reloaded model would carry none, and ``tcri.null.*`` would have nothing
+        #: to replay.
+        self.train_kwargs_: dict = {}
 
         # Names a saved constructor record can carry, resolved before init_params_ is captured so
         # the record holds the current names only; everything else unknown is rejected, because
@@ -884,7 +885,7 @@ class TCRIModel(BaseModelClass):
         # What this fit actually ran with. `tcri.null.*` replays it so a null is fitted the
         # way its parent was -- a null trained at train()'s defaults would not be "the same
         # model on permuted labels", which is the one thing a reference has to be.
-        self._train_kwargs = {
+        self.train_kwargs_ = {
             "max_epochs": max_epochs, "batch_size": batch_size, "lr": lr,
             "reconstruction_loss_scale": reconstruction_loss_scale,
             "n_epochs_kl_warmup": n_epochs_kl_warmup,
@@ -1104,7 +1105,7 @@ class TCRIModel(BaseModelClass):
                 (K.PHENOTYPE_COL, K.PHENOTYPE_CATEGORIES),
             )
         }
-        known = list((adata.uns.get(K.METADATA) or {}).get(K.FITS) or [])
+        known = K.fits(adata)
         if fit is None or K.METADATA not in adata.uns:
             # The main fit owns the shared keys. It also CARRIES THE FITS LIST FORWARD: rewriting
             # the main substrate (re-running to_anndata for a UMAP, say) must not orphan the
@@ -1139,7 +1140,7 @@ class TCRIModel(BaseModelClass):
             "n_obs": int(adata.n_obs),
             "n_ct": int(self.module.ct_count),
             "name": self._name,
-            "train": dict(self._train_kwargs),
+            "train": dict(self.train_kwargs_),
             **categories,
         }
         # The guide's actual concentration, so credible intervals come from the fitted
