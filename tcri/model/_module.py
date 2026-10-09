@@ -1,6 +1,7 @@
 """The TCRI Pyro module: a CVAE (encoder/decoder over gene expression) coupled to
 two-level hierarchical Dirichlet priors (clonotype -> clonotype x covariate) and a
 phenotype classifier head."""
+import warnings
 from typing import Dict, Optional
 
 import torch
@@ -16,6 +17,18 @@ from ._classifier import PhenotypeClassifier
 from ._priors import VampPrior, MixtureDirichlet, encoder_posterior
 
 __all__ = ["TCRIModule"]
+
+
+def _null_namespace(key: str) -> str:
+    """The namespace a null's store key sits under: the key without its parameter tail.
+
+    The tail is a guide concentration (``....q_p_ct_raw``) or a network entry
+    (``....scvi$$$<parameter path>``); a ``key_added`` may itself contain dots, so the split is
+    taken from the tail's side.
+    """
+    if "$$$" in key:
+        return key.split("$$$", 1)[0].rsplit(".", 1)[0]
+    return key.rsplit(".", 1)[0]
 
 
 class TCRIModule(PyroBaseModuleClass):
@@ -48,16 +61,24 @@ class TCRIModule(PyroBaseModuleClass):
         classifier_temperature: float = 1.0,
         phenotype_kl_weight: float = 1.0,
         label_error_rate: Optional[float] = 0.1,   # must match TCRIModel.__init__, which overrides it
-        name: str = "",
+        *,
+        name: str,
     ):
         super().__init__()
         # Pyro's param store is PROCESS-GLOBAL and its names are the only thing separating one
         # model's parameters from another's. `name` is that separation: every parameter this
         # module registers goes through `pname`, so two models -- a fit and its null, or two
-        # fits -- coexist instead of overwriting each other. "" is the unnamed layout, whose
-        # store keys carry no prefix: a session saved without a name reloads under it, so those
-        # keys must stay unprefixed.
+        # fits -- coexist instead of overwriting each other. TCRIModel always passes one.
+        if not name:
+            raise ValueError(
+                "TCRIModule needs a non-empty `name`: it namespaces the module's entries in "
+                "Pyro's process-global parameter store."
+            )
         self.name = str(name)
+        #: Null namespaces the last load restored from the saved store; None until a load runs.
+        #: ``tcri.null.rebuild`` reads it to tell a null fitted after that save from a store that
+        #: was never loaded.
+        self._restored_nulls: Optional[frozenset] = None
         self.n_input = n_input
         self.n_latent = n_latent
         self.P = P
@@ -199,14 +220,108 @@ class TCRIModule(PyroBaseModuleClass):
             self.register_buffer("ct_to_cov", ct_to_cov_array)
 
     def pname(self, base: str) -> str:
-        """Param-store name of a parameter this module owns.
+        """Param-store name of a parameter this module owns: ``f"{name}.{base}"``.
 
-        ``""`` returns the bare name, so an unnamed module's parameters keep unprefixed store
-        keys. A named module owns exactly the keys under ``f"{name}."``; nothing else
-        may match that prefix, which is what the constructor warning and the best-weight
-        snapshot both rely on.
+        The module's own keys are the ones this produces, and its nulls' keys sit under
+        ``f"{name}.null."``. The constructor warning, the best-weight snapshot and the
+        load-time restore all select keys by these prefixes.
         """
-        return f"{self.name}.{base}" if self.name else base
+        return f"{self.name}.{base}"
+
+    def store_family(self, keys) -> list:
+        """The keys among ``keys`` that belong to this module or to one of its nulls.
+
+        The family is the module's two guide concentrations, its network entries
+        (``f"{name}.scvi$$$..."``) and every entry under its null namespaces
+        (``f"{name}.null."``). A null's parameters, network weights included, exist only in
+        the store, so a load that restored the module without them would leave every null
+        unrecoverable.
+        """
+        from ._training import GUIDE_CONCENTRATION_PARAMS
+
+        own = {self.pname(base) for base in GUIDE_CONCENTRATION_PARAMS}
+        networks, nulls = f"{self.pname('scvi')}$$$", self.pname("null.")
+        return [k for k in keys if k in own or k.startswith(networks) or k.startswith(nulls)]
+
+    def restore_param_store(self, state, *, warn_on_replace: bool = True,
+                            fitted: bool = True) -> None:
+        """Make the Pyro store hold this module's family as ``state`` records it.
+
+        ``state`` is a ``ParamStoreDict.get_state()`` dict, or ``None`` for a file with no
+        store. It is checked before the store is touched: for a ``fitted`` model it must hold
+        this module's two guide concentrations, or this raises ``ValueError`` and the store is
+        left as it was. A model saved before it was trained (``fitted=False``) has no
+        posteriors yet; the guide initializes them on the first training step, as it does for
+        a new model.
+
+        The family's current entries are then removed, so afterwards the family matches
+        ``state`` and nothing else, and the family is restored from ``state`` -- except this
+        module's own network entries, which the next ``guide`` or ``model`` call registers from
+        the module's parameters, so SVI steps the tensors the forward pass uses. Entries outside
+        the family belong to other models and are left alone. Replacing a non-empty family warns
+        unless ``warn_on_replace`` is False.
+        """
+        from pyro.distributions import constraints
+        from ._training import GUIDE_CONCENTRATION_PARAMS
+
+        own = [self.pname(base) for base in sorted(GUIDE_CONCENTRATION_PARAMS)]
+        if state is None and fitted:
+            raise ValueError(
+                f"the file holds no Pyro parameter store, so model {self.name!r} has no fitted "
+                f"posteriors to load."
+            )
+        state = state if state is not None else {"params": {}, "constraints": {}}
+        saved = state["params"]
+        if fitted and any(k not in saved for k in own):
+            if any(base in saved for base in GUIDE_CONCENTRATION_PARAMS):
+                raise ValueError(
+                    f"the saved Pyro store keeps its posteriors under bare names "
+                    f"({sorted(GUIDE_CONCENTRATION_PARAMS)}), the layout of a model constructed "
+                    f"without `name=`. Every model is now constructed with a name, and its "
+                    f"parameters live under it; a fit saved in the bare layout cannot be loaded. "
+                    f"Refit it."
+                )
+            raise ValueError(
+                f"the saved Pyro store holds no posteriors for model {self.name!r} "
+                f"(looked for {own})."
+            )
+
+        store = pyro.get_param_store()
+        current = self.store_family(list(store.keys()))
+        networks = f"{self.pname('scvi')}$$$"
+        keep = [k for k in self.store_family(saved) if not k.startswith(networks)]
+        restored_nulls = frozenset(_null_namespace(k) for k in keep if k not in own)
+        if current and warn_on_replace:
+            dropped = sorted({_null_namespace(k) for k in current
+                              if k.startswith(self.pname("null."))} - restored_nulls)
+            warnings.warn(
+                f"The Pyro store already holds {len(current)} entries for model {self.name!r} "
+                f"and its nulls; this load replaces them with the saved ones."
+                + (f" Nulls the save does not have are dropped: {dropped}." if dropped else ""),
+                UserWarning,
+                stacklevel=3,
+            )
+        for key in current:
+            del store[key]
+        # A missing constraint falls back to the one this module registers the key with.
+        saved_constraints = state.get("constraints", {})
+        store.set_state({
+            "params": {k: saved[k] for k in keep},
+            "constraints": {
+                k: saved_constraints.get(
+                    k, constraints.positive if k.rsplit(".", 1)[-1] in GUIDE_CONCENTRATION_PARAMS
+                    else constraints.real)
+                for k in keep
+            },
+        })
+        self._restored_nulls = (self._restored_nulls or frozenset()) | restored_nulls
+
+    def on_load(self, model, **kwargs):
+        """Run by ``BaseModelClass.load`` before ``load_state_dict``: restore this module's
+        family from the Pyro store saved in ``model.pt`` (see ``restore_param_store``).
+        ``model.is_trained_``, restored from the file by then, says whether it was fitted."""
+        self.restore_param_store(kwargs.get("pyro_param_store"),
+                                 fitted=bool(getattr(model, "is_trained_", True)))
 
     @property
     def use_gate(self) -> bool:

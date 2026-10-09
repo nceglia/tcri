@@ -245,12 +245,23 @@ def label_for(result, quantity, ylabel):
     return ylabel if "null_value" in result.columns else f"{ylabel} (no reference)"
 
 
-def name_of(reference_of):
+def name_of(reference_of, adata=None):
     """The h5ad-writable name of whatever the reference was computed on.
 
-    A fit name passes through; a model object becomes its own name, because a model in the
-    params block would break the `.h5ad` write and tell a later reader nothing it can act on.
+    A fit name passes through. A null built by ``tcri.null.*`` or rebuilt becomes its fit name
+    (``null.phenotype``), which ``fit=`` resolves, when ``adata``'s record for that fit has the
+    null's ``name``, its parameter-store namespace, as its namespace. A null whose fit another
+    parent has since rewritten, a null with no record on ``adata``, and any other model object
+    become their own name. An earlier null of the same parent shares the namespace and so takes
+    the fit name. A model in the params block would break the `.h5ad` write and tell a later
+    reader nothing it can act on.
     """
     if reference_of is None or isinstance(reference_of, str):
         return reference_of
-    return str(getattr(reference_of, "name", "") or "model")
+    name = str(getattr(reference_of, "name", "") or "model")
+    fit = getattr(reference_of, "_fit_name", None)
+    if fit and adata is not None:
+        record = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
+        if str(record.get("namespace", "")) == name:
+            return str(fit)
+    return name

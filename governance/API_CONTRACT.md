@@ -25,9 +25,16 @@ know what a metric reduces to.
 
 **Parameter namespaces.** Pyro's parameter store is process-global, so the names a model
 registers are the only thing separating it from another model in the same session. `name`
-namespaces them: a model called `x` owns exactly the store keys under `x.`, and `""` (the
-default) owns the unnamed layout every session saved before 0.12 uses. Two named models can be
-fitted in one process without overwriting each other. `TCRIModel.name` reads it back.
+namespaces them: a model called `x` owns exactly the store keys under `x.`, and its nulls the keys
+under `x.null.`. A model constructed without `name=` gets a generated one (`tcri-` and 12 hex
+digits), recorded with the model, so no two models share a key. `TCRIModel.name` reads it back.
+
+**Loading.** `TCRIModel.load` and `load_tcri_session` restore the loaded model's guide
+concentrations and its nulls' parameters from the saved store, take its networks from the saved
+weights, and leave every other model's entries in the store as they are. A load that finds the
+model's entries already in the store replaces them and warns. A load raises when the file cannot
+supply a trained model's posteriors, and refuses a store that keeps them under bare keys, without
+a model name.
 
 **Registration.** Every cell `setup_anndata` registers must have a clonotype. NaN or None, an
 empty or whitespace-only string, and the literal string `"nan"` in the `clonotype_key` column
@@ -173,6 +180,8 @@ class TCRIModel:
         covariate_key: str = ..., batch_key: str = ...,
         replicate: Optional[str] = ..., **kwargs: Any,
     ) -> None: ...
+    @classmethod
+    def load(cls, dir_path: str, adata: Optional[AnnData] = ..., **kwargs: Any) -> Any: ...
     def train(
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
         reconstruction_loss_scale: float = ..., n_epochs_kl_warmup: int = ...,

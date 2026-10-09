@@ -376,7 +376,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     # the RESOLVED reference, never the caller's "auto" and never a model
                     # object: the params block goes into `uns` and has to be readable and
                     # h5ad-writable. An unresolved model here breaks the .h5ad write.
-                    params["null_model"] = _reference.name_of(reference_of)
+                    params["null_model"] = _reference.name_of(reference_of, adata)
                 if resolved:
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version),
@@ -416,7 +416,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # null's `name` is its parameter-store namespace (`<parent>.null.phenotype`),
                 # which is not what `params["null_model"]` records and not what `fit=` resolves.
                 # Keying the blob by it would put the reference somewhere no reader looks.
-                fit_name = _reference.name_of(reference_of)
+                fit_name = _reference.name_of(reference_of, arguments[_data_param])
                 if isinstance(reference_of, str):
                     from ..null._rebuild import rebuild   # a view package: lazy (test_layout.py)
                     reference_of = rebuild(arguments[reference_arg],

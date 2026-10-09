@@ -828,6 +828,31 @@ def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
     assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
 
 
+@pytest.mark.parametrize("source, key_added", [("rebuild", None), ("fit", None), ("fit", "b")])
+def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_added):
+    """Passing the null itself as ``null_model`` -- rebuilt, or as ``tcri.null.*`` returned it --
+    records and keys the reference by the null's fit name, the same as the default does, so
+    ``tcri.get(fit=...)`` finds it."""
+    import warnings
+
+    from tcri.model._model import adopt
+    from tcri.null._rebuild import rebuild
+
+    model, adata = ref
+    adata = adopt(model, adata)   # `ref` is a copy: register the parent's setup on it
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        null = (rebuild(model, adata, "phenotype") if source == "rebuild"
+                else tcri.null.phenotype(model, adata, key_added=key_added))
+        tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]),
+                                     null_model=null)
+    fit = tcri.get.params(adata, "gene_importance")["null_model"]
+    assert fit == ("null.phenotype" if key_added is None else f"null.phenotype.{key_added}")
+    assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
+        k for k in adata.uns if "gene_importance" in k)
+    assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
+
+
 def test_a_non_finite_reference_does_not_delete_the_stats(ref):
     """A reference that is non-finite everywhere is no reference, and the stored ``stats`` says
     so rather than disappearing.
