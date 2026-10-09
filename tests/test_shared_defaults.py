@@ -68,7 +68,7 @@ def test_the_known_drifted_knobs_are_pinned():
     model, module = _defaults(TCRIModel.__init__), _defaults(TCRIModule.__init__)
     train, plan = _defaults(TCRIModel.train), _defaults(UnifiedTrainingPlan.__init__)
 
-    assert model["local_scale"] == module["local_scale"] == 3.0
+    assert model["local_scale"] == module["local_scale"] == 10.0
     assert model["global_scale"] == module["global_scale"] == 5.0
     assert train["n_epochs_kl_warmup"] == plan["n_epochs_kl_warmup"] == 150
     assert train["reconstruction_loss_scale"] == 1e-2

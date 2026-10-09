@@ -110,6 +110,12 @@ def test_constructor_knob_is_wired(adata, knob, value, reader):
     assert reader(m) == pytest.approx(value), f"{knob}={value} did not reach the module"
 
 
+def test_local_scale_defaults_to_ten(adata):
+    """A model built without ``local_scale`` carries β = 10 on its module."""
+    m = _model(adata)
+    assert m.module.local_scale == 10.0
+
+
 def test_n_latent_determines_latent_width(adata):
     m = _model(adata, n_latent=6)
     _train(m)
