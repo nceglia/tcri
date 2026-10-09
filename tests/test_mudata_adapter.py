@@ -202,7 +202,10 @@ def test_from_mudata_takes_one_column_name_per_key(keys, message):
 @pytest.mark.parametrize("value", [None, "", "   ", "nan"], ids=repr)
 def test_from_mudata_drops_cells_without_a_clonotype_by_default(value):
     mdata = _toy_mudata(missing_clone=True, missing_value=value)
-    adata = tcri.pp.from_mudata(mdata, clonotype_key="clone_id")
+    with pytest.warns(TCRIDataWarning, match=r"1 of 4 cells have no clonotype in "
+                                             r"mdata\.mod\['airr'\]\.obs\['clone_id'\] and are "
+                                             r"dropped"):
+        adata = tcri.pp.from_mudata(mdata, clonotype_key="clone_id")
     assert adata.obs_names.tolist() == ["cell_1", "cell_4", "cell_5"]
     assert adata.uns["tcri_adapter"]["resolved"]["n_obs_output"] == 3
 
@@ -215,6 +218,27 @@ def test_from_mudata_without_the_drop_raises_on_cells_without_a_clonotype():
               r"Pass drop_missing_clonotype=True",
     ):
         tcri.pp.from_mudata(mdata, clonotype_key="clone_id", drop_missing_clonotype=False)
+
+
+def test_from_mudata_keeps_the_category_order_of_a_categorical_covariate():
+    mdata = _toy_mudata()
+    obs = mdata.mod["gex"].obs
+    obs["tissue"] = pd.Categorical(obs["tissue"], categories=["TP", "PBMC", "CSF", "BM"])
+    obs["timepoint"] = pd.Categorical([2, 0, 1, 2], categories=[2, 1, 0], ordered=True)
+
+    tissue = tcri.pp.from_mudata(mdata, clonotype_key="clone_id", covariate_key="tissue")
+    timepoint = tcri.pp.from_mudata(mdata, clonotype_key="clone_id", covariate_key="timepoint")
+
+    assert list(tissue.obs["tissue"].cat.categories) == ["TP", "PBMC", "CSF"]
+    assert tissue.obs["tissue"].tolist() == TISSUES
+    assert list(timepoint.obs["timepoint"].cat.categories) == ["2", "1", "0"]
+    assert timepoint.obs["timepoint"].cat.ordered
+    assert timepoint.obs["timepoint"].tolist() == ["2", "0", "1", "2"]
+
+
+def test_from_mudata_sorts_the_categories_of_a_plain_covariate():
+    adata = tcri.pp.from_mudata(_toy_mudata(), clonotype_key="clone_id", covariate_key="tissue")
+    assert list(adata.obs["tissue"].cat.categories) == ["CSF", "PBMC", "TP"]
 
 
 def test_from_mudata_raises_on_missing_covariate_values():

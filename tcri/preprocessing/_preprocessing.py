@@ -167,8 +167,9 @@ def from_mudata(
     warning. The clonotype column and, when given, the covariate column are each read from the
     first place that has them: the GEX modality's ``obs``, the AIRR modality's ``obs``, then
     ``mdata.obs`` under the bare name or with a ``<gex_mod>:`` or ``<airr_mod>:`` prefix. Each is
-    written to ``obs`` under the bare name, as a categorical with string categories. ``mdata`` is
-    not modified.
+    written to ``obs`` under the bare name, as a categorical with string categories. A categorical
+    covariate keeps its category order, less the categories no returned cell has; any other
+    column's categories are sorted. ``mdata`` is not modified.
 
     A cell has no clonotype when its value is NaN or None, an empty or whitespace-only string, or
     the string ``"nan"``; these are the cells ``TCRIModel.setup_anndata`` refuses.
@@ -189,7 +190,7 @@ def from_mudata(
     counts_layer
         The layer of the GEX modality that holds the raw counts, as non-negative integers.
     drop_missing_clonotype
-        Drop the cells without a clonotype. With ``False`` they raise.
+        Drop the cells without a clonotype, with a warning. With ``False`` they raise.
 
     Returns
     -------
@@ -202,7 +203,8 @@ def from_mudata(
     Warns
     -----
     UserWarning
-        When GEX cells have no AIRR data, with the number dropped.
+        When GEX cells have no AIRR data, and when cells without a clonotype are dropped, each
+        with the number of cells dropped.
 
     Raises
     ------
@@ -278,13 +280,25 @@ def from_mudata(
     # so the output would not save to h5ad.
     adata.obs[clonotype_key] = clone[cells].astype("string").astype(object).astype("category")
     if covariate_key is not None:
-        adata.obs[covariate_key] = covariate.astype(str).astype("category")
+        labels = covariate.astype(str)
+        if isinstance(covariate.dtype, pd.CategoricalDtype):
+            order = pd.CategoricalDtype([str(c) for c in covariate.cat.categories],
+                                        ordered=covariate.cat.ordered)
+            adata.obs[covariate_key] = labels.astype(order).cat.remove_unused_categories()
+        else:
+            adata.obs[covariate_key] = labels.astype("category")
 
     n_gex_only = gex.n_obs - len(shared)
     if n_gex_only:
         warnings.warn(
             f"{n_gex_only} of {gex.n_obs} cells of mdata.mod[{gex_mod!r}] have no AIRR data in "
             f"mdata.mod[{airr_mod!r}] and are dropped.",
+            TCRIDataWarning, stacklevel=2,
+        )
+    if missing.any():
+        warnings.warn(
+            f"{int(missing.sum())} of {len(shared)} cells have no clonotype in {clonotype_source} "
+            "and are dropped.",
             TCRIDataWarning, stacklevel=2,
         )
 
