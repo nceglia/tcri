@@ -2,7 +2,7 @@
 
 - :mod:`._xp`       — device dispatch (torch-first; CPU / torch-CUDA), ``asnumpy`` boundary.
 - :mod:`._joint`    — ``_joint_draws``: the batched ``[S, n_clones, P]`` engine core.
-- :mod:`._distance` — kl / l1 / jsd kernels over phenotype distributions.
+- :mod:`._distance` — kl / l1 kernels over phenotype distributions.
 - :mod:`._tables`   — the metric-table plumbing every ``tools`` metric reduces through
   (``metric_table``, ``build_result``, ``build_stats``, ``collapse_to_replicates``).
 - :mod:`._repertoire` — clonotype-label helpers (``_missing_clonotypes``, ``_label_problems``,

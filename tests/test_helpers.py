@@ -151,8 +151,6 @@ def test_auc_permutation_degenerate_single_class():
 def test_distance_kernels():
     assert abs(D.kl_divergence([1, 0], [1, 0])) < 1e-9        # KL(p‖p)=0
     assert D.kl_divergence([0.9, 0.1], [0.1, 0.9]) > 0        # asymmetric, positive
-    assert D.jensen_shannon([1, 0], [0, 1]) == pytest.approx(1.0, abs=1e-6)  # ~1 bit disjoint
-    assert D.jensen_shannon([0.5, 0.5], [0.5, 0.5]) < 1e-9    # symmetric, self=0
     assert D.l1_distance([1, 0], [0, 1]) == pytest.approx(2.0)
 
 

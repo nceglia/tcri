@@ -1,7 +1,7 @@
 """Distance / divergence kernels for phenotype distributions.
 
-Single home for the KL kernel, plus L1 and a symmetric Jensen–Shannon option. All
-operate on 1-D probability vectors, use log base 2 (bits), and share one eps floor.
+Single home for the KL kernel, plus L1. Both operate on 1-D probability vectors and share
+one eps floor; KL is in bits (log base 2).
 ``phenotype_distance`` is the string→callable dispatcher used by
 ``phenotypic_flux(distance_metric=)``.
 """
@@ -29,22 +29,10 @@ def l1_distance(p, q) -> float:
     return float(np.abs(_normalize(p) - _normalize(q)).sum())
 
 
-def jensen_shannon(p, q, *, base: float = 2.0, eps: float = EPS) -> float:
-    """Jensen–Shannon divergence: symmetric, bounded [0, 1] bit — the recommended
-    symmetric shift measure."""
-    p = _normalize(p)
-    q = _normalize(q)
-    m = 0.5 * (p + q)
-    return float(0.5 * kl_divergence(p, m, base=base, eps=eps)
-                 + 0.5 * kl_divergence(q, m, base=base, eps=eps))
-
-
 _REGISTRY = {
     "l1": l1_distance,
     "kl": kl_divergence,
     "dkl": kl_divergence,
-    "js": jensen_shannon,
-    "jsd": jensen_shannon,
 }
 
 
