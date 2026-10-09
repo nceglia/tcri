@@ -74,12 +74,6 @@ The correction matters most here. Silencing a gene is an intervention whose size
 gene's counts, and the encoder responds to that whatever the gene says about phenotype, so the
 bare ranking is not merely incomplete: it is dominated by something the question is not about.
 
-Measured on a real fit of 2,000 genes: the bare importance and its null are 0.901
-rank-correlated, and the bare top ten is led by MALAT1, TMSB4X, MT-CO2 and three ribosomal
-proteins. Ranked by the adjusted importance the same fit gives CD8B, CD8A, GATA3, IKZF2, RTKN2
-and KLRC4, and only 17 of the top 50 genes are shared. A reader shown the first list reasonably
-concludes the perturbation is broken.
-
 Which genes are SHOWN and which quantity is DRAWN are separate decisions. The gene set is
 ranked by the adjusted importance whenever the result carries one, unless you explicitly ask for
 `quantity="value"`, so `kind="rank"` and `kind="shift"` always describe the same genes.
