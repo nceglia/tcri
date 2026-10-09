@@ -223,6 +223,9 @@ class pp:
         cov_from: Optional[str] = ..., cov_to: Optional[str] = ...,
         groupby: Optional[str] = ..., per_clone: bool = ...,
     ) -> pd.DataFrame: ...
+    def clonotype_sharing(
+        adata: AnnData, *, clonotype_key: str, groupby: str, per_clonotype: bool = ...,
+    ) -> pd.DataFrame: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
