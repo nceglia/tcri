@@ -1,8 +1,9 @@
 """``pp.clone_persistence``: which clones are seen at more than one covariate level.
 
 The summary counts the clones the paired metrics are computed on: both deltas and
-``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``. It
-reads ``obs`` only and writes nothing to the object.
+``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``, and
+leave pools out by default. A pool is not a clone and is never persistent. The summary reads
+``obs`` and the clonotype derivation record and writes nothing to the object.
 """
 from __future__ import annotations
 
@@ -300,8 +301,11 @@ def ragged_cohort():
     """A fitted three-patient AnnData whose clones are not all seen at both timepoints.
 
     In P0 and P1, clone 0 loses its cells at ``cov_1`` and clone 1 its cells at ``cov_0``. In
-    P2, every clone loses its cells at one of the two, so P2 has no persistent clone. Clone ids
-    are patient-scoped, which the metrics' ``groupby`` needs.
+    P2, clones 0 to 5 each lose their cells at one of the two, so P2 has no persistent clone.
+    In every patient clone 6 keeps two cells at ``cov_0`` and clone 7 two at ``cov_1``: both are
+    rare, and pooling gathers them into one pool per patient with cells at both timepoints. The
+    pooled column, ``clone_id_pooled``, is the one registered. Clone ids are patient-scoped,
+    which the metrics' ``groupby`` needs.
     """
     logging.disable(logging.INFO)
     parts = []
@@ -311,9 +315,12 @@ def ragged_cohort():
         clone = block.obs["clone_id"].cat.codes.to_numpy()
         level = block.obs["covariate"].cat.codes.to_numpy()
         if patient == "P2":
-            drop = clone % 2 == level
+            drop = (clone < 6) & (clone % 2 == level)
         else:
             drop = ((clone == 0) & (level == 1)) | ((clone == 1) & (level == 0))
+        for rare, kept in ((6, 0), (7, 1)):
+            drop |= (clone == rare) & (level != kept)
+            drop[np.flatnonzero((clone == rare) & (level == kept))[2:]] = True
         block = block[~drop].copy()
         block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
         block.obs["patient"] = patient
@@ -324,11 +331,12 @@ def ragged_cohort():
     for column in ("clone_id", "phenotype", "covariate", "patient"):
         adata.obs[column] = adata.obs[column].astype("category")
     adata.layers["counts"] = adata.X.copy()
+    tcri.pp.pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
     # only the fit's clone x covariate rows are read, so a short fit will do, and its warnings
     # about small categories and the epoch budget say nothing about those rows
     with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
         warnings.simplefilter("ignore", UserWarning)
-        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id_pooled",
                                 phenotype_key="phenotype", covariate_key="covariate",
                                 batch_key="patient", replicate="patient")
         model = TCRIModel(adata, n_latent=4, n_hidden=8, n_layers=1, classifier_n_layers=1,
@@ -342,15 +350,21 @@ def ragged_cohort():
 
 def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
     """The persistent clones of each group are the clones both deltas hand the engine, and the
-    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report. A group without a
-    persistent clone is the group those results leave out.
+    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report, at the metrics' default
+    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is in none of
+    them. A group without a persistent clone is the group those results leave out.
 
     Run at ``null_model=None``: what is compared is which clones are used, not a value.
     """
     adata = ragged_cohort
+    obs = adata.obs
+    for patient in ("P0", "P1", "P2"):
+        pool = obs.loc[obs["clone_id_pooled"] == f"pooled@{patient}", "covariate"]
+        assert set(pool) == {"cov_0", "cov_1"}, f"{patient} has no pool at both timepoints"
     kw = dict(cov_from="cov_0", cov_to="cov_1", groupby="patient")
-    keys = dict(clonotype_key="clone_id", covariate_key="covariate")
+    keys = dict(clonotype_key="clone_id_pooled", covariate_key="covariate")
     clones = tcri.pp.clone_persistence(adata, **keys, **kw, per_clone=True)
+    assert not clones["clonotype"].str.startswith("pooled@").any()
     both = clones[(clones["cov_0"] > 0) & (clones["cov_1"] > 0)]
     persistent = set(zip(both["patient"], both["clonotype"]))
     summary = tcri.pp.clone_persistence(adata, **keys, **kw)

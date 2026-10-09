@@ -275,15 +275,14 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     the persistent clones, and those seen at one of the two only. On the clonotype column
     registered at setup, and with the ``groupby`` the metrics use, the persistent clones are the
     clones ``tl.phenotypic_flux``, ``tl.delta_phenotypic_entropy`` and
-    ``tl.delta_clonotypic_entropy`` are computed on, and a group without any has no row in
-    those results. The metrics read ``groupby=None`` as the replicate registered at setup, while
-    here it means the whole dataset. Without ``cov_from`` and ``cov_to``, it counts the clones
-    seen at one level and at more than one.
+    ``tl.delta_clonotypic_entropy`` are computed on at their default ``exclude_pools=True``,
+    and a group without any has no row in those results. The metrics read ``groupby=None`` as
+    the replicate registered at setup, while here it means the whole dataset. Without
+    ``cov_from`` and ``cov_to``, it counts the clones seen at one level and at more than one.
 
     On a pooled column, one whose derivation record lists the pools it was written with, a pool
     is not a clone: its cells are left out of every count, as are cells without a clonotype, so
-    a pool is never persistent. The metrics still compute a value for a pool seen at both
-    levels, as they do for a clone.
+    a pool is never persistent.
 
     Clones seen at one level only are expected, since each sample holds only part of a
     repertoire.
