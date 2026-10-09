@@ -125,6 +125,7 @@ def load_tcri_session(
         phenotype_key=setup.get("phenotype_col", "phenotype_col"),
         covariate_key=setup.get("covariate_col", "timepoint"),
         batch_key=setup.get("batch_col", "patient"),
+        replicate=setup.get("replicate"),
     )
 
     # 3) The Pyro store saved beside the model, read before anything is loaded: a corrupt file
@@ -237,6 +238,7 @@ def _collect_setup_from_adata_or_model(adata: "_ad.AnnData", model: Any) -> Dict
             setup.setdefault("clone_col", r.get("clonotype_col"))
             setup.setdefault("covariate_col", r.get("covariate_col"))
             setup.setdefault("batch_col", r.get("batch_col"))
+            setup.setdefault("replicate", r.get(K.Config.REPLICATE))
             setup_args = r.get("setup_args", {})
             if isinstance(setup_args, dict) and "layer" in setup_args:
                 setup["layer"] = setup_args["layer"]

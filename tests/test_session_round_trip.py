@@ -188,10 +188,10 @@ def test_a_session_written_before_format_versions_is_not_refused(tmp_path):
 SAVERS = ("scvi", "session")
 
 
-def _registered(adata):
+def _registered(adata, replicate=None):
     adata = adata.copy()
     TCRIModel.setup_anndata(adata, clonotype_key="unique_clone_id", phenotype_key="phenotype_col",
-                            covariate_key="timepoint", batch_key="patient")
+                            covariate_key="timepoint", batch_key="patient", replicate=replicate)
     return adata
 
 
@@ -413,4 +413,61 @@ def test_an_unreadable_session_store_is_refused(synthetic_adata, tmp_path):
     with pytest.raises(RuntimeError, match="could not read the Pyro store"):
         _load(tmp_path / "m", "session")
     assert not list(pyro.get_param_store().keys())
+
+
+# ── the registered replicate ─────────────────────────────────────────────────
+
+def test_a_session_records_and_restores_the_registered_replicate(synthetic_adata, tmp_path,
+                                                                  monkeypatch):
+    """``setup.json`` records the registered replicate, ``load_tcri_session`` registers it again,
+    and a metric's default ``groupby`` gives the same groups after the round trip.
+
+    ``TCRIModel.load`` re-runs ``setup_anndata`` from the arguments saved in ``model.pt``, so the
+    reloaded registry has the replicate whatever ``load_tcri_session`` passes. The spy checks the
+    setup call ``load_tcri_session`` makes itself, from ``setup.json``.
+    """
+    pyro.clear_param_store()
+    adata = _registered(synthetic_adata, replicate="patient")
+    model = _fit(adata, seed=0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.to_anndata(adata)
+    level = adata.obs["timepoint"].cat.categories[0]
+    before = tcri.tl.mutual_information(adata, covariate=level, null_model=None, inplace=False)
+    _save(model, adata, tmp_path / "m", "session")
+    calls = []
+    setup_anndata = TCRIModel.setup_anndata
+
+    def spy(adata, **kwargs):
+        calls.append(kwargs)
+        return setup_anndata(adata, **kwargs)
+
+    monkeypatch.setattr(TCRIModel, "setup_anndata", spy)
+    pyro.clear_param_store()
+
+    loaded_model, loaded = _load(tmp_path / "m", "session")
+
+    assert json.loads((tmp_path / "m" / "setup.json").read_text())["replicate"] == "patient"
+    assert [c.get("replicate") for c in calls if "source_registry" not in c] == ["patient"]
+    assert loaded_model.adata_manager.registry[K.Config.REPLICATE] == "patient"
+    with contextlib.redirect_stdout(io.StringIO()):
+        loaded_model.to_anndata(loaded)
+    after = tcri.tl.mutual_information(loaded, covariate=level, null_model=None, inplace=False)
+    assert after["result"]["patient"].tolist() == before["result"]["patient"].tolist()
+
+
+def test_a_session_without_a_recorded_replicate_loads_without_one(synthetic_adata, tmp_path):
+    """A ``setup.json`` with no ``replicate`` key predates the key; it loads, with no replicate
+    registered."""
+    pyro.clear_param_store()
+    adata = _registered(synthetic_adata)
+    _save(_fit(adata, seed=0), adata, tmp_path / "m", "session")
+    setup_file = tmp_path / "m" / "setup.json"
+    setup = json.loads(setup_file.read_text())
+    del setup["replicate"]
+    setup_file.write_text(json.dumps(setup))
+    pyro.clear_param_store()
+
+    loaded_model, _ = _load(tmp_path / "m", "session")
+
+    assert loaded_model.adata_manager.registry[K.Config.REPLICATE] is None
 
