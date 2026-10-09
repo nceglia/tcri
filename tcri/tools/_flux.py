@@ -2,12 +2,12 @@
 covariate values, engine-backed.
 
 For each clone in the ``cov_from`` ∩ ``cov_to`` intersection, the distance between its
-phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l1 / jsd,
-KL & JSD in **bits**). **KL is the default** — flux is defined as the KL divergence; l1 and
-jsd are available for when a bounded or symmetric measure is wanted. ``n_samples=0`` is the plug-in (a clone with no real shift reads
-exactly 0); ``n_samples>0`` redraws both sides from one shared draw (common random numbers) and
-summarizes; a seed is generated when ``random_state`` is None, so the coupling holds at the
-default too.
+phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l1, KL in
+**bits**). **KL is the default** — flux is defined as the KL divergence; l1 is available for
+when a bounded or symmetric measure is wanted. ``n_samples=0`` is the plug-in (a clone with no
+real shift reads exactly 0); ``n_samples>0`` redraws both sides from one shared draw (common
+random numbers) and summarizes; a seed is generated when ``random_state`` is None, so the
+coupling holds at the default too.
 """
 from __future__ import annotations
 
@@ -76,11 +76,10 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
                     distance_metric="kl", random_state=None, device=None, null_model="auto",
                     fit=None, key_added=None, inplace=True):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl/jsd) — computed once, cached, returned.
+    kl) — computed once, cached, returned.
 
     Flux is defined as the KL divergence, which is why ``distance_metric`` defaults to
-    ``"kl"``; ``"l1"`` and ``"jsd"`` remain available for when a bounded or symmetric measure
-    is wanted.
+    ``"kl"``; ``"l1"`` is available for when a bounded or symmetric measure is wanted.
 
     A clone present at ``cov_from`` but absent at ``cov_to`` is DROPPED, not NaN-filled — a
     flux needs both endpoints to exist.

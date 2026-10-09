@@ -455,7 +455,7 @@ def test_a_single_draw_reports_no_spread(blocks):
 # ── flux: the two sides must come from one shared draw ───────────────────────
 
 @pytest.mark.parametrize("random_state", [None, 0, 7])
-@pytest.mark.parametrize("distance_metric", ["kl", "l1", "jsd"])
+@pytest.mark.parametrize("distance_metric", ["kl", "l1"])
 def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
     """The flux of a covariate against ITSELF is the distance of a distribution from itself,
     which is exactly 0 for every metric here.

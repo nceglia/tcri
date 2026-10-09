@@ -79,9 +79,8 @@ D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
 ```
 
 `distance_metric="kl"` (default) is `Σ_φ p log₂(p/q)` in bits with both rows floored at 1e-12
-and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]; `"jsd"` is the Jensen–Shannon divergence
-in [0, 1] bit. A clone absent from either level is **NaN**. Not normalised: a divergence has no
-maximum-entropy reference.
+and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from either level is
+**NaN**. Not normalised: a divergence has no maximum-entropy reference.
 
 ### `delta_clonotypic_entropy`, `delta_phenotypic_entropy`
 
@@ -265,6 +264,6 @@ GOLDEN = {
     "phenotypic_entropy": {"raw": [0.721928094887, 1.0, 0.591672778582], "normalized": [0.721928094887, 1.0, 0.591672778582]},
     "mutual_information": {"raw": 0.288703141426, "min": 0.293031766823, "average": 0.238914701013},
     # flux between row 0 and row 2 of the joint, as P(phi|c) at two levels
-    "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286, "jsd": 0.340842859252},
+    "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286},
 }
 ```
