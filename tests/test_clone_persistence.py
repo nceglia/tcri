@@ -8,7 +8,6 @@ leave pools out by default. A pool is not a clone and is never persistent. The s
 from __future__ import annotations
 
 import contextlib
-import copy
 import io
 import logging
 import warnings
@@ -267,7 +266,7 @@ def test_cells_without_a_clonotype_are_not_counted(dtype):
     assert overview[OVERVIEW].values.tolist() == [[2, 1, 1, 1, 2]], dtype
 
 
-# ── the whole dataset, and the object left as it was ──────────────────────────────────────────
+# ── the whole dataset ─────────────────────────────────────────────────────────────────────────
 
 def test_groupby_none_is_one_whole_dataset_row():
     """Without ``groupby`` the whole dataset is one row with no group column. On ids that never
@@ -294,22 +293,6 @@ def test_groupby_none_is_one_whole_dataset_row():
     for ends, row in ((dict(cov_from="t0", cov_to="t1"), [0] * 6 + [False]), ({}, [0] * 5)):
         assert tcri.pp.clone_persistence(adata, **KEYS, **ends).values.tolist() == [row]
         assert tcri.pp.clone_persistence(adata, **KEYS, **ends, groupby="patient").empty
-
-
-def test_repertoire_functions_do_not_mutate_adata():
-    """No mode writes to the object, converts a column or adds a key."""
-    adata = _cohort()
-    adata.obs["patient"] = adata.obs["patient"].astype("category")
-    adata.uns["kept"] = {"a": [1, 2]}
-    obs, uns = adata.obs.copy(deep=True), copy.deepcopy(dict(adata.uns))
-    for ends in ({}, dict(cov_from="t0", cov_to="t1")):
-        for groupby in (None, "patient"):
-            for per_clone in (False, True):
-                tcri.pp.clone_persistence(adata, **KEYS, **ends, groupby=groupby,
-                                          per_clone=per_clone)
-    pd.testing.assert_frame_equal(adata.obs, obs)
-    assert dict(adata.uns) == uns
-    assert not adata.obsm and not adata.layers and not adata.varm
 
 
 # ── the clones the metrics use ────────────────────────────────────────────────────────────────

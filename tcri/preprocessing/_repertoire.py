@@ -35,8 +35,35 @@ _SUMMARY_COLUMNS = ["n_cells", "n_clones", "n_singleton_clones", "singleton_frac
                     "largest_clone_cells", "largest_clone_share", "n_phenotypes_observed",
                     "n_pools", "cells_in_pools"]
 
-#: The label of the row of :func:`clonotype_sharing` that counts all groups together.
+#: The value columns of :func:`clonotype_sharing`'s table per group, in order.
+_SHARING_COLUMNS = ["n_clonotypes", "shared_clonotypes", "shared_fraction", "n_cells",
+                    "cells_in_shared_clonotypes", "source_column", "registered_shared_clonotypes"]
+
+#: The group of the row of :func:`clonotype_sharing` that counts all groups together.
 _ALL = "All"
+
+
+def _check_columns(obs: pd.DataFrame, **columns) -> None:
+    """Raise ``ValueError`` naming the first argument whose column is not in ``obs``.
+
+    Each keyword is an argument name and its column; a column of ``None`` is not checked.
+    """
+    for argument, column in columns.items():
+        if column is not None and column not in obs.columns:
+            raise ValueError(f"{argument}={column!r} is not a column of adata.obs.")
+
+
+def _check_group_name(groupby, columns) -> None:
+    """Raise ``ValueError`` when ``groupby`` is one of a summary's other ``columns``.
+
+    A summary names its group column after ``groupby``, so a ``groupby`` that has the name of
+    another of its columns would replace that column.
+    """
+    if groupby in columns:
+        raise ValueError(
+            f"groupby={groupby!r} would name the group column of the summary, which already has "
+            f"a column of that name. Group by a copy of the column under another name."
+        )
 
 
 def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None,
@@ -118,19 +145,9 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
       matches into one cluster.
     """
     obs = adata.obs
-    if clonotype_key not in obs.columns:
-        raise ValueError(f"clonotype_key={clonotype_key!r} is not a column of adata.obs")
-    for argument, column in (("groupby", groupby), ("covariate_key", covariate_key),
-                             ("phenotype_key", phenotype_key)):
-        if column is not None and column not in obs.columns:
-            raise ValueError(f"{argument}={column!r} is not a column of adata.obs")
-
-    taken = _SUMMARY_COLUMNS + ([] if covariate_key is None else ["covariate"])
-    if groupby in taken:
-        raise ValueError(
-            f"groupby={groupby!r} would name the group column of the summary, which already has "
-            f"a column of that name. Group by a copy of the column under another name."
-        )
+    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby,
+                   covariate_key=covariate_key, phenotype_key=phenotype_key)
+    _check_group_name(groupby, _SUMMARY_COLUMNS + ([] if covariate_key is None else ["covariate"]))
     # each row label: its name in the summary -> (its column in the units, its column in obs)
     labels = {}
     if groupby is not None:
@@ -194,13 +211,6 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     columns = [column for column in _SUMMARY_COLUMNS
                if column in summary.columns and column not in absent]
     return summary[[*labels, *columns]]
-
-
-def _check_columns(obs: pd.DataFrame, **columns) -> None:
-    """Raise ``ValueError`` naming the first argument whose column is not in ``obs``."""
-    for argument, column in columns.items():
-        if column is not None and column not in obs.columns:
-            raise ValueError(f"{argument}={column!r} is not a column of adata.obs.")
 
 
 def _frame(columns: list) -> pd.DataFrame:
@@ -439,10 +449,12 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     expected biology, not a problem with the data. Some clonotypes recur in several individuals,
     which is expected biology as well.
 
-    When tcri derived ``clonotype_key`` from another column, the derivation record in
-    ``adata.uns["tcri_clonotype_derivations"]`` leads back to the column it was made from, and
-    sharing is measured there: ids made specific to each replicate never span two replicates, so
-    sharing between individuals shows only on the clonotypes those ids were made from.
+    When :func:`tcri.pp.pool_rare_clones` wrote ``clonotype_key``, the derivation record in
+    ``adata.uns["tcri_clonotype_derivations"]`` leads back to the column pooling read, and
+    sharing is measured there: pooling makes each id specific to its group, usually the
+    individual, so no id spans two groups, and sharing between individuals shows only on the
+    clonotypes those ids were made from. ``TCRIModel.setup_anndata`` registers the column it is
+    given under its own name, so a registered pooled column leads back the same way.
     ``source_column`` names the column used. ``registered_shared_clonotypes`` counts the ids of
     ``clonotype_key`` itself that are present in more than one group. A metric with a
     ``groupby`` needs every registered id inside one group, so on the column registered at setup,
@@ -456,7 +468,8 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     adata
         The object to summarize. Only ``adata.obs`` and the derivation record are read.
     clonotype_key
-        The clonotype column: a source column, or one tcri derived from it.
+        The clonotype column: a source column, or a column :func:`tcri.pp.pool_rare_clones`
+        wrote from one.
     groupby
         The column naming each cell's group, usually the individual. Required: sharing is
         defined between groups.
@@ -467,9 +480,10 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     -------
     pd.DataFrame
         By default, one row per group with a counted cell, in the order of
-        ``obs[groupby].astype("category")``, then a row labeled ``All`` for all groups together.
-        The index holds the group labels and is named after ``groupby``. Columns:
+        ``obs[groupby].astype("category")``, then a row for all groups together. Columns:
 
+        - the group, in a column named after ``groupby``, with ``All`` in the row for all
+          groups.
         - ``n_clonotypes``: the distinct clonotypes in the group.
         - ``shared_clonotypes``: those of them also present in another group.
         - ``shared_fraction``: ``shared_clonotypes / n_clonotypes``.
@@ -494,12 +508,13 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     ------
     ValueError
         When ``clonotype_key``, ``groupby`` or the column the derivation record leads back to
-        is not a column of ``adata.obs``, or when a group is named ``All``.
+        is not a column of ``adata.obs``, when a group is named ``All``, or, for the table per
+        group, when ``groupby`` has the name of one of its other columns.
     """
     obs = adata.obs
-    for name, column in (("clonotype_key", clonotype_key), ("groupby", groupby)):
-        if column not in obs.columns:
-            raise ValueError(f"{name}={column!r} is not a column of adata.obs")
+    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby)
+    if not per_clonotype:
+        _check_group_name(groupby, _SHARING_COLUMNS)
     source = _clonotype_source(adata, clonotype_key)
     if source is None:
         source = clonotype_key
@@ -552,12 +567,13 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     # The groups with a counted cell, in category order, then the last entry: all groups.
     rows = np.append(np.flatnonzero(n_cells[:-1]), n_groups)
     table = pd.DataFrame({
+        groupby: [*group_names[rows[:-1]], _ALL],
         "n_clonotypes": n_clonotypes[rows],
         "shared_clonotypes": n_shared[rows],
         "n_cells": n_cells[rows],
         "cells_in_shared_clonotypes": cells_in_shared[rows],
         "source_column": source,
         "registered_shared_clonotypes": n_registered_shared[rows],
-    }, index=pd.Index([*group_names[rows[:-1]], _ALL], name=groupby))
-    table.insert(2, "shared_fraction", table["shared_clonotypes"] / table["n_clonotypes"])
+    })
+    table.insert(3, "shared_fraction", table["shared_clonotypes"] / table["n_clonotypes"])
     return table
