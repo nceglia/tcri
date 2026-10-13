@@ -716,6 +716,28 @@ def test_a_fit_ended_by_another_limit_is_not_an_early_stop(adata):
     assert any("without the early-stopping rule firing" in str(c.message) for c in caught)
 
 
+def test_warmup_epochs_taken_counts_only_the_ramp(adata):
+    """Contract B9: ``warmup_epochs_taken`` is the part of the KL ramp the fit has trained through.
+
+    It is at most ``n_epochs_kl_warmup`` once the ramp completes, however long the fit runs after
+    it, and the epochs trained so far while the ramp is still incomplete.
+    """
+    import warnings as _w
+
+    kw = dict(batch_size=128, accelerator="cpu", enable_progress_bar=False,
+              enable_model_summary=False, early_stopping=False)
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        done = _fresh(adata)
+        done.train(max_epochs=6, n_epochs_kl_warmup=2, **kw)
+        partial = _fresh(adata)
+        partial.train(max_epochs=1, n_epochs_kl_warmup=3, **kw)
+    assert done.training_record_["epochs_run"] > 2, "the fit did not outlast its ramp"
+    assert done.training_record_["warmup_epochs_taken"] == 2
+    assert partial.training_record_["ramp_completed"] is False
+    assert partial.training_record_["warmup_epochs_taken"] == pytest.approx(1.0)
+
+
 def test_monitor_excludes_the_global_block(adata):
     """Contract I3, scope: the monitor is the per-cell block, not the ELBO.
 

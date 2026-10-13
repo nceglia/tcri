@@ -7,7 +7,7 @@ together, so a gene program is one call.
 
 It stores nothing by default. Per-cell probabilities are not a group table; they go to
 ``obsm`` (``key_added=``) beside the baseline ``X_tcri_probabilities`` when the caller wants
-them on the object, or straight into a metric.
+them on the object.
 """
 from __future__ import annotations
 

@@ -925,7 +925,10 @@ class TCRIModel(BaseModelClass):
         self.training_record_ = {
             "epochs_run": epochs_run,
             "n_epochs_kl_warmup": n_epochs_kl_warmup,
-            "warmup_epochs_taken": self.module.kl_warmup_position(steps_per_epoch),
+            # The position keeps counting after the ramp completes; the ramp itself is
+            # n_epochs_kl_warmup long, so that is the most it can have taken.
+            "warmup_epochs_taken": min(self.module.kl_warmup_position(steps_per_epoch),
+                                       float(n_epochs_kl_warmup)),
             "steps_per_epoch": steps_per_epoch,
             # The one number that says which regime a run was in: the epochs of this call before
             # the gate opens (0 when annealing is off or a previous call finished the ramp). A
