@@ -13,7 +13,7 @@ it with a test, so that:
 
 - the model the package *claims* to implement is the model it *does* implement;
 - a metric cannot be silently redefined, which would change what every past figure means;
-- the training plan has recorded, behavioural bounds rather than folklore defaults.
+- the training plan has recorded, behavioral bounds rather than folklore defaults.
 
 **A failing conformance test means _stop and decide_** — is this an intended change, in which
 case the contract is updated first and deliberately, or a regression, in which case the code
@@ -29,7 +29,7 @@ is fixed? It never means "loosen the test until it passes."
 | **Training** | how the model is fit — the schedule, the stopping rule, and what each knob actually does |
 
 The model contract is verified by *tracing* the live model and guide and asserting every site,
-scale and index map behaviourally — a source-text or scalar check is not enough. The metrics
+scale and index map behaviorally — a source-text or scalar check is not enough. The metrics
 contract instead pins **numeric identities**, because metrics are pure functions of a joint
 table. The keystone is
 
@@ -47,5 +47,5 @@ If you are **contributing**, the policy is `governance/RULES.md` in the reposito
 contract is one file beside it, and each is enforced by one test under `tests/`: the model
 contract by tracing the live model against the block in its file, the metrics contract by
 reference recomputation, identities and pinned values, the API contract by parsing the stub in
-its file, and the training contract by behavioural tests. Code and its contract change in the
+its file, and the training contract by behavioral tests. Code and its contract change in the
 same pull request, and a contract change carries a release note.

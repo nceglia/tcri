@@ -37,7 +37,7 @@ def test_clones_pair_across_conditions_within_a_patient(cohort):
 
     Measured by MASS, not by count. With power-law clone sizes some rare clones simply are
     not drawn at both conditions — that is what a heavy tail does to a finite sample, and it
-    is the behaviour the intersection rule exists to handle. What has to hold is that the
+    is the behavior the intersection rule exists to handle. What has to hold is that the
     clones carrying the repertoire are paired, so the assertion is on the fraction of each
     sample's cells that the shared clones cover.
     """
@@ -63,7 +63,7 @@ def test_clones_never_span_two_patients(cohort):
 
 
 def test_only_the_concentration_moves(cohort):
-    """Disease clones commit; control clones do not — and nothing was relabelled, so
+    """Disease clones commit; control clones do not — and nothing was relabeled, so
     each cell's phenotype still matches the expression it was generated with."""
     truth = cohort.uns["tcri_truth"]["per_arm"]
     r_change = float(truth.loc["disease", "post"] - truth.loc["disease", "pre"])
@@ -72,7 +72,7 @@ def test_only_the_concentration_moves(cohort):
     assert r_change > 0.1, "the disease arm barely concentrated; the fixture is inert"
 
     # `true_phenotype` is carried through from the source sims and still agrees, which is what
-    # "nothing is relabelled" means concretely
+    # "nothing is relabeled" means concretely
     obs = cohort.obs
     if "true_phenotype" in obs.columns:
         agree = (obs["phenotype"].astype(str) == obs["true_phenotype"].astype(str)).mean()
@@ -111,7 +111,7 @@ def test_reproducible_and_responsive_to_its_knobs(cohort):
                         seed=2).uns["tcri_truth"]["per_arm"].to_numpy())
 
     # enrichment=1.0 means the second condition is an unbiased draw too, so the arms stop
-    # separating -- the knob is what creates the effect, not the labelling
+    # separating -- the knob is what creates the effect, not the labeling
     flat = simulate_cohort(n_patients=4, n_cells_per_sample=140, n_clones=10,
                            disease_enrichment=1.0, control_enrichment=1.0, seed=0)
     per_arm = flat.uns["tcri_truth"]["per_arm"]

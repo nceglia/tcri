@@ -1,7 +1,7 @@
 """The fitted hierarchy must depend on which cells sit in which clone x covariate group.
 
 Permuting the covariate labels among a clone's cells preserves every per-clone label count and
-every (clone, covariate) group size, so the initialisation is identical and only cell membership
+every (clone, covariate) group size, so the initialization is identical and only cell membership
 changes. Without a per-cell data term the fitted p_ct is BITWISE invariant to that permutation:
 the alignment surrogate's target is detached and nothing else in the data plate touches
 q(p_ct). The noisy-label readout (``MODEL_CONTRACT.md``, eq 8) is that term, so with it on the
@@ -34,7 +34,7 @@ def _cohort(seed=0):
 
 def _shuffle_covariate_within_clone(adata, *, clone_key, cov_key, seed):
     """Permute covariate labels among the cells of each clone. Per-clone label counts and
-    per-(clone, covariate) group sizes are preserved, so the initialisation is identical;
+    per-(clone, covariate) group sizes are preserved, so the initialization is identical;
     only which cells fall in which group changes."""
     rng = np.random.default_rng(seed)
     cov = adata.obs[cov_key].astype(str).to_numpy().copy()
@@ -70,7 +70,7 @@ def test_hierarchy_moves_with_the_covariate_shuffle():
     ad = _cohort()
     shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="condition", seed=0)
     changed = (ad.obs["condition"].astype(str).to_numpy() != shuffled.obs["condition"].astype(str).to_numpy()).mean()
-    assert changed > 0.2, f"the shuffle is nearly a no-op ({changed:.2%} of cells relabelled)"
+    assert changed > 0.2, f"the shuffle is nearly a no-op ({changed:.2%} of cells relabeled)"
 
     p0, k0 = _fit_p_ct(ad)
     p1, k1 = _fit_p_ct(shuffled)

@@ -1,4 +1,4 @@
-"""Behavioural invariants for the training plan.
+"""Behavioral invariants for the training plan.
 
 Each test here asserts what the training layer *does*: that a validation pass takes no
 optimizer step, that the annealing schedule is monotone across ``train()`` calls, that the
@@ -1122,7 +1122,7 @@ def _body_source(fn) -> str:
 
 
 def test_validation_step_does_not_call_training_step():
-    """Contract I2, structurally; the behavioural proof is
+    """Contract I2, structurally; the behavioral proof is
     ``test_validation_does_not_update_parameters`` above. Catches a reintroduction at review."""
     from tcri.model._training import UnifiedTrainingPlan
 

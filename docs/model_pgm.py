@@ -50,7 +50,7 @@ def _node(ax, x, y, label, observed=False):
 
 
 def _edge(ax, p0, p1):
-    """Arrow between node centres, trimmed to the circle boundary at both ends."""
+    """Arrow between node centers, trimmed to the circle boundary at both ends."""
     (x0, y0), (x1, y1) = p0, p1
     dx, dy = x1 - x0, y1 - y0
     d = (dx * dx + dy * dy) ** 0.5

@@ -41,8 +41,8 @@ H[P(c|φ)] = − Σ_c P(c|φ) log₂ P(c|φ)
 ```
 
 How spread a phenotype is across clones. **Support-only:** clones with zero mass in that
-column are dropped before renormalising; there is no epsilon clip, which would fabricate
-uniform mass on absent clones. Normaliser `log₂(number of supported clones)`, or
+column are dropped before renormalizing; there is no epsilon clip, which would fabricate
+uniform mass on absent clones. Normalizer `log₂(number of supported clones)`, or
 `log₂(n_clones_ref)` when given, so that groups with different clone counts are comparable.
 An empty column is **NaN**.
 
@@ -53,7 +53,7 @@ H[P(φ|c)] = − Σ_φ P(φ|c) log₂ P(φ|c)
 ```
 
 Plasticity versus commitment of a clone. All P phenotypes are in the sum with `0·log 0 = 0`.
-Normaliser `log₂(P)`. A clone with zero mass is **NaN**, never reindexed to zeros (which would
+Normalizer `log₂(P)`. A clone with zero mass is **NaN**, never reindexed to zeros (which would
 report H = 1 for a clone that was never observed).
 
 ### `mutual_information`, one value per joint (eqs 5, 6)
@@ -62,8 +62,8 @@ report H = 1 for a clone that was never observed).
 I(c;φ) = Σ_{c,φ} P(c,φ) log₂ ( P(c,φ) / (P(c) P(φ)) )
 ```
 
-The joint is renormalised to sum to 1; a numerical floor of 1e-15 guards `log 0`.
-Normalised forms: `normalize_mode="min"` divides by `min(H(c), H(φ))` (the coefficient of
+The joint is renormalized to sum to 1; a numerical floor of 1e-15 guards `log 0`.
+Normalized forms: `normalize_mode="min"` divides by `min(H(c), H(φ))` (the coefficient of
 constraint) and is the **default**; `"average"` divides by `½(H(c) + H(φ))`, which is eq 6 of
 the manuscript's numbering. `min` is the default because the mean denominator scales with
 `log₂(C)` and so is not comparable across groups with different clone counts. Anything
@@ -79,8 +79,8 @@ D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
 ```
 
 `distance_metric="kl"` (default) is `Σ_φ p log₂(p/q)` in bits with both rows floored at 1e-12
-and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from either level is
-**NaN**. Not normalised: a divergence has no maximum-entropy reference.
+and renormalized; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from either level is
+**NaN**. Not normalized: a divergence has no maximum-entropy reference.
 
 ### `delta_clonotypic_entropy`, `delta_phenotypic_entropy`
 
@@ -88,7 +88,7 @@ and renormalised; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from eit
 summary is of the difference's distribution, not a difference of summaries. Only the two
 metrics with an item axis have a delta; mutual information has none, so its difference is a
 subtraction the caller performs. The clone set is the intersection of clones present at both
-levels within each replicate, which for the clonotypic form makes the normaliser identical on
+levels within each replicate, which for the clonotypic form makes the normalizer identical on
 both sides; the drop is warned about.
 
 ## The perturbation (`tcri.perturb`)
@@ -125,7 +125,7 @@ group, the replicate unit of the `splitby` contrast, which is **per gene**). `sh
 to zero over phenotypes; a positive entry means silencing the gene removed mass from that
 phenotype. A gene whose column is already zero has `I_j = 0` exactly. At `n_samples > 0` the
 prior `p_ct` is drawn from the guide's Dirichlet posterior once, shared by every gene, and
-enters only through the gate; `I_j` is computed per draw and summarised as in "Posterior
+enters only through the gate; `I_j` is computed per draw and summarized as in "Posterior
 summaries". With `use_gate=False` there is nothing to draw, and `n_samples` is ignored with a
 warning. The reduction is over cells, so `covariate=None` is allowed and clones need not be
 disjoint across groups.
@@ -140,7 +140,7 @@ the simulator oracle are abundance-weighted, so reproducing them passes `weighte
 ## Posterior summaries
 
 At `n_samples=0` a metric is the plug-in at the posterior mean, `F(E[p_ct])`. At `n_samples>0`
-it is `E_s[F(p_ct^(s))]`, the metric evaluated on each draw of the joint and then summarised
+it is `E_s[F(p_ct^(s))]`, the metric evaluated on each draw of the joint and then summarized
 (mean, sd, highest-density interval). The two differ by a Jensen gap: plug-in entropy is ≥ the
 posterior mean, plug-in flux is ≤ it, and the sign is indeterminate for mutual information. No
 test may equate them. The return shape does not change with `n_samples`; `sd`, `hdi_low` and
@@ -150,13 +150,13 @@ test may equate them. The return shape does not change with `n_samples`; `sd`, `
 
 | identity | what it catches |
 |---|---|
-| uniform over k → `log₂ k`, normalised 1 | a wrong base or normaliser |
-| all mass on one outcome → 0 | sign or normalisation errors |
+| uniform over k → `log₂ k`, normalized 1 | a wrong base or normalizer |
+| all mass on one outcome → 0 | sign or normalization errors |
 | zero-mass clone or phenotype → NaN | the spurious H = 1 reindexing regression |
-| support-only normalisation | an epsilon clip creeping back in |
+| support-only normalization | an epsilon clip creeping back in |
 | independent joint → I = 0 | a broken MI |
 | `I(c;φ) = I(φ;c)`, `I ≥ 0` | transpose or sign errors |
-| permutation joint → normalised I = 1 (`min`) | a wrong denominator |
+| permutation joint → normalized I = 1 (`min`) | a wrong denominator |
 | **`I(c;φ) = H(c) − Σ_φ P(φ) H[P(c\|φ)]`** | redefining either family alone |
 | weighting by the marginal instead of the conditional exceeds `log₂ C` and gives I < 0 | the natural mis-transcription of eqs 3 and 4 |
 
@@ -186,14 +186,22 @@ adjusted column: a difference of two normalizers is not a quantity anyone report
 | clonotypic entropy, phenotypic entropy, mutual information, gene importance | the phenotype null | which cell carries which phenotype |
 | phenotypic flux, both deltas | the condition null | which condition a cell sits at |
 
-The reference is **the caller's own call with two arguments changed** -- the fit and
-`null_model=None` -- and every other argument forwarded verbatim. `groupby`, `splitby`, `clones`,
-`exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`, `distance_metric`,
-`temperature` and `n_samples` each change the estimand, so a reference computed at defaults is a
-different quantity subtracted from a different quantity.
+The reference is **the caller's own call on the null** -- the fit, `null_model=None` and the
+seed of its draws changed -- and every other argument forwarded verbatim. `groupby`, `splitby`,
+`clones`, `exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`,
+`distance_metric`, `temperature` and `n_samples` each change the estimand, so a reference
+computed at defaults is a different quantity subtracted from a different quantity.
 
-**Both denominators are stored.** A normalised MI divides by a normaliser taken from the same
-joint it normalises: at `weighted=False` the engine row-normalises, so `h_c` is exactly
+**`adjusted` is computed per paired draw.** The null is the value expected under no association.
+The fit and the null are independent fits, so draw *d* of the fit is paired with draw *d* of the
+null and `adjusted_d = value_d - null_value_d`; `table` carries `null_value` and `adjusted` on
+every draw, and `result` gives the adjusted value's mean, `adjusted_sd` and HDI
+(`adjusted_hdi_low`, `adjusted_hdi_high`) over those draws, like any value. The null's draws are
+seeded from their own seed, derived from the caller's `random_state`, so the two samples share
+no noise. At `n_samples=0` each side is one point value and `adjusted` is their difference.
+
+**Both denominators are stored.** A normalized MI divides by a normalizer taken from the same
+joint it normalizes: at `weighted=False` the engine row-normalizes, so `h_c` is exactly
 `log2(C)` and `normalize_mode="min"` selects `h_p`, the fitted phenotype marginal entropy, which
 a null does not share. `result` therefore carries `denom` and `null_denom`, so a reader can
 recover both numbers in bits as `value*denom` and `null_value*null_denom`. At `n_samples=0` that

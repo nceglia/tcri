@@ -8,6 +8,9 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "covariate",
               "hdi_high",
               "hdi_low",
@@ -98,7 +101,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.clonotypic_entropy"
     },
     "tcri_delta_clonotypic_entropy": {
@@ -110,6 +113,9 @@
               "<splitby>",
               "adjusted",
               "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "adjusted_to",
               "cov_from",
               "cov_to",
@@ -219,7 +225,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.delta_clonotypic_entropy"
     },
     "tcri_delta_phenotypic_entropy": {
@@ -231,6 +237,9 @@
               "<splitby>",
               "adjusted",
               "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "adjusted_to",
               "clonotype",
               "cov_from",
@@ -340,7 +349,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.delta_phenotypic_entropy"
     },
     "tcri_gene_importance": {
@@ -351,6 +360,9 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "gene",
               "hdi_high",
               "hdi_low",
@@ -467,7 +479,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.perturb.gene_importance"
     },
     "tcri_joint_distribution": {
@@ -527,6 +539,9 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "covariate",
               "denom",
               "hdi_high",
@@ -619,7 +634,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.mutual_information"
     },
     "tcri_phenotypic_entropy": {
@@ -630,6 +645,9 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "clonotype",
               "covariate",
               "hdi_high",
@@ -720,7 +738,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.phenotypic_entropy"
     },
     "tcri_phenotypic_flux": {
@@ -731,6 +749,9 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "clonotype",
               "cov_from",
               "cov_to",
@@ -825,7 +846,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 2,
+      "version": 3,
       "writer": "tcri.tl.phenotypic_flux"
     }
   }

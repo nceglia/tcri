@@ -86,7 +86,7 @@ def test_fuzziness_collapses_the_true_discriminativeness():
     np.testing.assert_allclose(flat, 0.0, atol=1e-9)
 
 
-def test_the_oracle_is_visible_in_the_realised_counts():
+def test_the_oracle_is_visible_in_the_realized_counts():
     """Genes the oracle calls discriminative separate the true phenotype labels in the data
     itself -- otherwise no estimator could be expected to find them."""
     a = simulate_tcri(n_genes=60, n_factors=8, n_phenotypes=4, n_cells=3000, seed=2)
@@ -96,7 +96,7 @@ def test_the_oracle_is_visible_in_the_realised_counts():
     means = np.stack([X[phi == p].mean(axis=0) for p in range(4)])   # [P, G]
     spread = (means.max(axis=0) - means.min(axis=0)) / (means.mean(axis=0) + 1e-9)
     rho = spearmanr(d, spread).statistic
-    assert rho > 0.8, f"the oracle does not describe the realised counts: rho={rho:.3f}"
+    assert rho > 0.8, f"the oracle does not describe the realized counts: rho={rho:.3f}"
 
 
 # ── the fitted model ─────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ def test_informative_genes_outrank_matched_noise_genes_on_average():
     The noise genes are the one set with an unambiguous truth on this fixture: they are drawn
     at the real genes' count scale and carry no phenotype, so an importance that ranked them
     level with the informative genes would be reporting intervention size and nothing else.
-    The floors are loose by design -- the assertion messages report the realised values.
+    The floors are loose by design -- the assertion messages report the realized values.
     """
     aurocs, noise_in_top = [], []
     for seed in (11, 12, 13):
@@ -149,7 +149,7 @@ def test_informative_genes_outrank_matched_noise_genes_on_average():
         aurocs.append(roc_auc_score(is_info, imp))
         noise_in_top.append(int((~is_info[np.argsort(-imp)[:10]]).sum()))
     report = f"AUROC per seed {np.round(aurocs, 3).tolist()}, noise genes in top ten {noise_in_top}"
-    assert float(np.mean(aurocs)) > 0.55, f"importance does not favour informative genes -- {report}"
+    assert float(np.mean(aurocs)) > 0.55, f"importance does not favor informative genes -- {report}"
     assert max(noise_in_top) <= 3, f"the top of the ranking is noise -- {report}"
 
 

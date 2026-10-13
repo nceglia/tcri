@@ -92,7 +92,7 @@ def test_second_model_warns_about_shared_param_store(tiny_adata):
 
 def test_batch_size_at_or_above_n_obs_warns(tiny_adata):
     """batch_size >= n_obs leaves ONE optimizer step per epoch, so a large max_epochs buys
-    almost no optimisation; the caller must be told."""
+    almost no optimization; the caller must be told."""
     pyro.clear_param_store()
     model = _model(tiny_adata, K=5)
     with pytest.warns(UserWarning, match="SINGLE"):
@@ -119,7 +119,7 @@ def test_lr_and_weight_decay_reach_pyros_optimizer(tiny_adata):
         optimizer_config={"lr": 0.05, "betas": (0.9, 0.999), "eps": 1e-5,
                           "weight_decay": 1e-4},
     )
-    # Pyro resolves per-parameter settings through a callable keyed by the normalised
+    # Pyro resolves per-parameter settings through a callable keyed by the normalized
     # param-store name: module parameters arrive as "scvi.<path>", the two guide
     # concentrations as their bare names.
     args = plan.optim.pt_optim_args

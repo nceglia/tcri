@@ -14,7 +14,7 @@ import pandas as pd
 from .._state import keys as K
 
 #: The permutation's own random stream, per kind. A null's TRAINING seed is the parent's exactly
-#: -- same initialisation, same split, same minibatch order -- so the permuted labels are the
+#: -- same initialization, same split, same minibatch order -- so the permuted labels are the
 #: only difference between a null and its parent. Name-keyed, never positional: a reordering
 #: of this dict must not silently change every recorded permutation.
 OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
@@ -79,7 +79,7 @@ def resolve_strata(adata, kind: str, within=None):
         raise ValueError(
             "the condition null takes no `within`: its strata are fixed at (clonotype, batch) "
             "so that each clone keeps its cells and its size while the condition a cell sits "
-            "at is randomised. Drop `within`, or permute a different axis."
+            "at is randomized. Drop `within`, or permute a different axis."
         )
     within = [within] if isinstance(within, str) else list(within)
     missing = [c for c in within if c not in adata.obs.columns]

@@ -1,7 +1,7 @@
 # Training contract
 
-How the model is fit. Enforced by `tests/test_training_invariants.py`, behaviourally: every
-statement below names a test that exercises the behaviour, not the wiring. Nothing else binds
+How the model is fit. Enforced by `tests/test_training_invariants.py`, behaviorally: every
+statement below names a test that exercises the behavior, not the wiring. Nothing else binds
 the training plan.
 
 Two kinds of statement. **Invariants** follow from the objective in `MODEL_CONTRACT.md`; a
@@ -95,7 +95,7 @@ schedules or stopping; they change with a recorded reason.
   and the step floor (B3) start there. If the ramp never completes: warn, do not raise, and
   record `selection_criterion = "last epoch (ramp incomplete)"`.
   `test_selection_is_gated_until_the_ramp_completes`.
-- **B6** Every advertised knob has a behavioural test, never a wiring check.
+- **B6** Every advertised knob has a behavioral test, never a wiring check.
 - **B7** A fit is a function of (seed, data, knobs) and of nothing that ran before `train()`.
   `train()` forces train mode, because an earlier `predict()`, `to_anndata()`, session load,
   or scvi's own end-of-fit `eval()` otherwise leaves dropout off and BatchNorm frozen for the

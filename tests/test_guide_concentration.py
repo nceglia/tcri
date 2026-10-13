@@ -1,7 +1,7 @@
 """The variational concentration is a free parameter, not a pinned constant.
 
 ``governance/MODEL_CONTRACT.md`` eq 6 makes ``λ_c`` and ``λ'_m`` free variational parameters,
-optimised per group, while ``α`` (``global_scale``) and ``β`` (``local_scale``) are scalar PRIOR
+optimized per group, while ``α`` (``global_scale``) and ``β`` (``local_scale``) are scalar PRIOR
 hyperparameters of the generative model. Using a prior scale as the variational total conflates
 the two and pins every group's posterior width to the same constant: a 3-cell clone and a
 3000-cell clone then get the same credible interval, so no interval reported at ``n_samples>0``

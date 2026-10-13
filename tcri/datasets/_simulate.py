@@ -283,7 +283,7 @@ def temperature_scale(P, T, eps=1e-12):
     Pp = P ** (1.0 / T)
 
     # float64 underflow: once (1/T)*log10(p) < -308 every entry of a row becomes exactly
-    # 0.0 and the renormalisation below is 0/0. Raising beats returning NaN, which the
+    # 0.0 and the renormalization below is 0/0. Raising beats returning NaN, which the
     # caller would have to notice.
     row_sums = Pp.sum(axis=1, keepdims=True)
     dead = ~np.isfinite(row_sums) | (row_sums <= 0.0)
@@ -466,7 +466,7 @@ def simulate_cohort(
     **Condition progression.** The first condition is an unbiased draw. Later ones oversample
     each clone's dominant phenotype, ramping linearly to the arm's full enrichment at the last
     condition — so disease clones commit over time and control clones barely move.
-    Nothing is relabelled, so a cell's phenotype still matches the expression it was generated
+    Nothing is relabeled, so a cell's phenotype still matches the expression it was generated
     with; only the clone->phenotype *concentration* changes.
 
     Parameters

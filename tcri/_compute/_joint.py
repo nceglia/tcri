@@ -108,7 +108,7 @@ def _joint_draws(
             #
             # Only the MAGNITUDE is taken from the guide. The direction stays `base`, which is
             # the analysis-time tempered mean -- at temperature == 1 `base` is the guide's own
-            # normalised direction, so the draw is the guide's own Dirichlet; at T != 1 the
+            # normalized direction, so the draw is the guide's own Dirichlet; at T != 1 the
             # deliberate analysis-time temper still applies to the mean while the posterior
             # WIDTH continues to come from the fit.
             conc_ct_t = torch.as_tensor(np.asarray(conc_ct), dtype=torch.float64, device=dev)

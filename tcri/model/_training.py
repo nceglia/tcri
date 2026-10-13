@@ -38,7 +38,7 @@ def _per_param_optim_args(base):
     surrogate and nothing in it asks for that prior, so the decay is removed from the guide
     rather than declared as a prior.
 
-    Pyro calls the one-argument form with the normalised param-store name, which is what
+    Pyro calls the one-argument form with the normalized param-store name, which is what
     ``normalize_param_name`` produces: ``"scvi.encoder..."`` for module parameters and the
     bare ``"q_p_ct_raw"`` for the guide.
 

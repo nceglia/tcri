@@ -9,7 +9,7 @@ global id; draws come from the guide's Dirichlet and are seeded; the contrast is
 groups. The fixtures fit for a few epochs -- the numbers here are identities, not accuracies.
 
 Each test names the mutation it catches: a flipped sign on ``shift``, a prior bound by loader
-position instead of global id, a dropped draw path, a zeroed neighbouring column in either
+position instead of global id, a dropped draw path, a zeroed neighboring column in either
 kernel path.
 
 Every model call goes through the ``cohort`` fixture, so every comparison is against one fit.

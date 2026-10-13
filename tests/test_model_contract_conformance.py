@@ -314,7 +314,7 @@ def test_alignment_factor_is_a_negative_kl(traced):
     val = torch.as_tensor(val)
     assert torch.all(val <= 1e-6), (
         f"phenotype_alignment carries a positive log-factor (max={float(val.max()):.4e}). "
-        "the surrogate is −γ·KL(probs‖ϕ) ≤ 0: SVI maximises the log-joint and the KL is a penalty."
+        "the surrogate is −γ·KL(probs‖ϕ) ≤ 0: SVI maximizes the log-joint and the KL is a penalty."
     )
     # and it must be non-trivial (a zero factor trains nothing)
     assert float(val.abs().sum()) > 0, (
@@ -472,11 +472,11 @@ def test_latent_scale_is_the_encoder_std(traced):
     """eq 6 / eq 3: one σ. The guide's q(z|x) scale and every VampPrior component scale must be
     the square root of the encoder's variance output, under the same clamp.
 
-    scvi's ``Encoder`` returns ``(mean, VARIANCE, sample)``, so the parameterisation is easy to
+    scvi's ``Encoder`` returns ``(mean, VARIANCE, sample)``, so the parameterization is easy to
     get wrong in two directions: taking the variance as the Normal scale gives q(z|x) = N(μ, σ⁴),
     and ``sqrt(exp(variance))`` in the prior gives a scale that can never fall below 1. Either
     way eq 3's "mixture of encoder posteriors" is not built from the encoder posterior, and the
-    latent KL compares two different parameterisations. Traced in eval mode so encoder dropout
+    latent KL compares two different parameterizations. Traced in eval mode so encoder dropout
     does not make the comparison stochastic.
     """
     model, _, _, args, kwargs = traced
@@ -488,7 +488,7 @@ def test_latent_scale_is_the_encoder_std(traced):
         "AND in every VampPrior component, through the same clamp (`encoder_posterior`). "
         "Using the variance as the scale makes q(z|x) = N(μ, σ⁴); sqrt(exp(variance)) in the "
         "prior makes a scale that can never fall below 1. Either way the prior is not the "
-        "mixture of encoder posteriors, and the latent KL compares two parameterisations."
+        "mixture of encoder posteriors, and the latent KL compares two parameterizations."
     )
 
     was_training = mod.training

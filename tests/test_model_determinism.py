@@ -1,6 +1,6 @@
 """A seeded fit is reproducible; an unseeded one is not.
 
-If `seed` does not reach network initialisation and minibatch order, two fits with the same
+If `seed` does not reach network initialization and minibatch order, two fits with the same
 nominal seed differ, and every paired comparison built on them -- a metric before and after a
 change, a null against its parent -- measures run-to-run noise along with the change
 (`governance/TRAINING_CONTRACT.md` B7: a fit is a function of seed, data and knobs).

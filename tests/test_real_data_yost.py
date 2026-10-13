@@ -160,14 +160,14 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
     _m, a = fitted
     jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0)["result"]
 
-    # each (covariate, clone) row is a distribution over phenotypes. Check normalisation
+    # each (covariate, clone) row is a distribution over phenotypes. Check normalization
     # BEFORE collapsing: summing over covariates gives a row total of 1 per covariate the
     # clone appears in, which is 2.0 for a clone seen both pre and post.
     raw = jd.to_numpy(dtype=float)
     assert np.isfinite(raw).all(), "p_ct contains NaN or inf on real data"
     assert (raw >= -1e-9).all(), "p_ct has negative mass"
     assert np.allclose(raw.sum(axis=1), 1.0, atol=1e-6), (
-        f"p_ct rows are not normalised: sums span "
+        f"p_ct rows are not normalized: sums span "
         f"{raw.sum(axis=1).min():.6f}–{raw.sum(axis=1).max():.6f}"
     )
 
@@ -187,7 +187,7 @@ def test_posterior_concentration_is_not_pinned_to_beta(fitted):
     """The variational concentration must be free, on real, heavy-tailed clone sizes.
 
     Eq 6 (`MODEL_CONTRACT.md`, "The variational family") specifies λ'_m ∈ ℝ^P_{>0}: magnitude
-    and direction are both learned. A parameterisation that normalises the row and multiplies by
+    and direction are both learned. A parameterization that normalizes the row and multiplies by
     β pins every group's concentration TOTAL to β whatever its cell count, so a 3-cell group and
     a 3000-cell group would report the same posterior width. The totals must differ across
     groups.
