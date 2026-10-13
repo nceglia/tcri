@@ -558,7 +558,7 @@ def _discriminating_min_delta(values, patience):
     return None
 
 
-def test_fit_stops_once_improvements_fall_below_min_delta(adata):
+def test_fit_stops_once_improvements_fall_below_min_delta(adata, monkeypatch):
     """Contract B3 and B4: a check restarts the patience count only when it beats the best check
     by more than ``early_stopping_min_delta``, and ``early_stopping_patience`` such checks in a
     row stop the fit.
@@ -571,8 +571,13 @@ def test_fit_stops_once_improvements_fall_below_min_delta(adata):
     The weights it ends on are still the lowest check's (I4), which lies after the last
     improvement the rule counted.
     """
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
     from ._stopping import GatedSeries, stop_index
 
+    # The step floor is lifted so that patience alone decides where this short fit stops;
+    # test_patience_cannot_end_a_fit_before_the_step_floor covers the floor.
+    monkeypatch.setattr(RampGatedEarlyStopping, "step_floor", 0)
     patience = 5
     fit = dict(max_epochs=60, batch_size=128, n_epochs_kl_warmup=2, lr=1e-2, accelerator="cpu",
                enable_progress_bar=False, enable_model_summary=False)
@@ -602,7 +607,7 @@ def test_fit_stops_once_improvements_fall_below_min_delta(adata):
     assert rec["selected_score"] == min(got), "the fit did not end on its lowest check (I4)"
 
 
-def test_default_threshold_counts_every_new_low(adata):
+def test_default_threshold_counts_every_new_low(adata, monkeypatch):
     """Contract B4: at the default ``early_stopping_min_delta`` every new low restarts the count.
 
     A fit with the default threshold must stop where the zero-threshold rule stops on the
@@ -610,8 +615,13 @@ def test_default_threshold_counts_every_new_low(adata):
     fixture must be one on which some positive threshold stops strictly earlier, so the
     comparison can tell a threshold from none.
     """
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
     from ._stopping import GatedSeries, stop_index
 
+    # The step floor is lifted so that patience alone decides where this short fit stops;
+    # test_patience_cannot_end_a_fit_before_the_step_floor covers the floor.
+    monkeypatch.setattr(RampGatedEarlyStopping, "step_floor", 0)
     patience = 5
     fit = dict(max_epochs=60, batch_size=128, n_epochs_kl_warmup=2, lr=1e-2, accelerator="cpu",
                enable_progress_bar=False, enable_model_summary=False)
@@ -633,6 +643,83 @@ def test_default_threshold_counts_every_new_low(adata):
     assert len(got) == expected, (
         f"the default threshold ran {len(got)} gated checks; with no threshold and patience "
         f"{patience} the rule runs {expected}"
+    )
+
+
+def test_patience_cannot_end_a_fit_before_the_step_floor(adata, monkeypatch):
+    """Contract B3: at one optimizer step per epoch, patience that runs out before the step floor
+    does not end the fit.
+
+    One fit, recorded at every gated check. Patience alone would have stopped it before the
+    floor; it must instead run to the floor and stop at the first check there that has no
+    improvement in its last ``patience`` checks. The floor is lowered so the fit stays short;
+    the rule is the same at any floor.
+    """
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
+    from ._stopping import GatedSeries, stop_index
+
+    floor, patience = 60, 3
+    monkeypatch.setattr(RampGatedEarlyStopping, "step_floor", floor)
+    spy = GatedSeries()
+    m = _fresh(adata)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")    # batch_size >= n_obs is the point here
+        m.train(max_epochs=200, batch_size=1000, n_epochs_kl_warmup=2, lr=1e-2,
+                early_stopping_patience=patience, callbacks=[spy], accelerator="cpu",
+                enable_progress_bar=False, enable_model_summary=False)
+    rec, got = m.training_record_, spy.values
+
+    assert rec["steps_per_epoch"] == 1, f"the fixture has {rec['steps_per_epoch']} steps per epoch"
+    unfloored = stop_index(got, 0.0, patience)
+    assert unfloored is not None and unfloored < floor, (
+        "patience alone would not have stopped this fit before the floor; the fixture no longer "
+        "discriminates"
+    )
+    assert rec["stopped_early"] is True, "the fit ran to max_epochs; nothing is asserted"
+    assert len(got) - 1 >= floor, (
+        f"the fit stopped {len(got) - 1} steps after its first gated check, inside the "
+        f"{floor}-step floor"
+    )
+    assert len(got) - 1 == stop_index(got, 0.0, patience, step_floor=floor), (
+        "the fit did not stop at the first check past the floor without an improvement in its "
+        f"last {patience} checks"
+    )
+    assert rec["selected_score"] == min(got), "the fit did not end on its lowest check (I4)"
+
+
+def test_a_fit_with_many_steps_per_epoch_stops_as_without_the_floor(adata, monkeypatch):
+    """Contract B3: where ``early_stopping_patience`` epochs already span the step floor, the
+    floor never acts and the fit stops exactly where patience alone stops it.
+
+    The floor is set above the patience in epochs and below it in steps, so a floor counted in
+    epochs would hold this fit open and one counted in steps must not.
+    """
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
+    from ._stopping import GatedSeries, stop_index
+
+    floor, patience = 40, 5
+    monkeypatch.setattr(RampGatedEarlyStopping, "step_floor", floor)
+    spy = GatedSeries()
+    m = _fresh(adata)
+    m.train(max_epochs=60, batch_size=16, n_epochs_kl_warmup=2, lr=1e-2,
+            early_stopping_patience=patience, callbacks=[spy], accelerator="cpu",
+            enable_progress_bar=False, enable_model_summary=False)
+    rec, got = m.training_record_, spy.values
+
+    assert patience < floor <= patience * rec["steps_per_epoch"], (
+        f"{rec['steps_per_epoch']} steps per epoch; the fixture cannot tell steps from epochs"
+    )
+    stop = stop_index(got, 0.0, patience)
+    assert stop is not None and stop < floor, (
+        "patience alone does not stop this fit within the floor counted in epochs; the fixture "
+        "no longer discriminates"
+    )
+    assert rec["stopped_early"] is True
+    assert len(got) - 1 == stop, (
+        f"the fit stopped after {len(got)} gated checks; patience {patience} alone stops it "
+        f"after {stop + 1}"
     )
 
 

@@ -58,14 +58,24 @@ schedules or stopping; they change with a recorded reason.
   epoch cut short is counted as completed when the next `train()` starts. `train()` takes no
   schedule argument counted in optimizer steps; `n_steps_kl_warmup` raises, naming
   `n_epochs_kl_warmup`. Lightning's `max_steps` and `max_time` limit a run and are not schedule
-  settings (B9 records a fit they end as not an early stop).
+  settings (B9 records a fit they end as not an early stop), and neither is the stopping rule's
+  floor in steps (B3), which is fixed and not an argument.
   `test_schedule_arguments_are_counted_in_epochs`, `test_kl_weight_rises_within_an_epoch`,
   `test_the_ramp_ends_at_the_same_epoch_whatever_the_batches_per_epoch`.
 - **B3** Patience is in epochs: `train()` validates once per epoch and the knob is
   `train(early_stopping_patience=...)`, default 300. `early_stopping_patience` checks in a row
-  without an improvement stop the fit (B4 defines one). `early_stopping=False` installs no
-  stopping rule and trains for `max_epochs`; the best check is restored either way (I4).
-  `test_fit_stops_once_improvements_fall_below_min_delta`, `test_restored_model_is_the_selected_one`.
+  without an improvement stop the fit (B4 defines one), but no sooner than 2,000 optimizer steps
+  (Lightning's `global_step`) after the first gated check (B5). Where an epoch is one step,
+  patience alone is that many steps, short enough to end a fit on a temporary plateau of the
+  criterion that a longer run leaves. Patience that runs out inside the floor does not stop the
+  fit; it stops at the first check past the floor with no improvement in its last
+  `early_stopping_patience` checks. Where `early_stopping_patience` epochs span at least 2,000
+  steps the floor never acts. A non-finite criterion stops the fit at once.
+  `early_stopping=False` installs no stopping rule and trains for `max_epochs`; the best check
+  is restored either way (I4).
+  `test_fit_stops_once_improvements_fall_below_min_delta`, `test_restored_model_is_the_selected_one`,
+  `test_patience_cannot_end_a_fit_before_the_step_floor`,
+  `test_a_fit_with_many_steps_per_epoch_stops_as_without_the_floor`.
 - **B3a** `max_epochs` defaults to 10000. On small data an epoch is one or two updates, and
   simulated fits there kept improving for thousands of epochs before the stopping rule ended them;
   at 10000 the stopping rule, not the cap, ends every one of them. The cap costs nothing for a fit
@@ -82,7 +92,7 @@ schedules or stopping; they change with a recorded reason.
   `test_default_threshold_counts_every_new_low`, `test_a_null_stops_under_its_parents_rule`.
 - **B5** Selection begins only after the ramp completes, read from one counter, the module's
   completed warmup epochs, by both the stopping and the snapshot callback; the stopping count
-  starts there. If the ramp never completes: warn, do not raise, and
+  and the step floor (B3) start there. If the ramp never completes: warn, do not raise, and
   record `selection_criterion = "last epoch (ramp incomplete)"`.
   `test_selection_is_gated_until_the_ramp_completes`.
 - **B6** Every advertised knob has a behavioral test, never a wiring check.

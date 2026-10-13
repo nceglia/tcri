@@ -1,9 +1,10 @@
-"""Callbacks implementing the stopping policy (training contract I3, I4, B5).
+"""Callbacks implementing the stopping policy (training contract I3, I4, B3, B5).
 
 Two objects, one shared gate:
 
 ``RampGatedEarlyStopping``
-    Lightning's ``EarlyStopping``, but blind until the KL ramp finishes.
+    Lightning's ``EarlyStopping``, but blind until the KL ramp finishes, and unable to end a fit
+    until a fixed number of optimizer steps after that.
 
 ``BestObjectiveSnapshot``
     Records the argmin weights and writes them back at ``on_fit_end``.
@@ -21,6 +22,7 @@ import warnings
 import pyro
 import torch
 from lightning.pytorch.callbacks import Callback, EarlyStopping
+from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason
 
 __all__ = ["RampGatedEarlyStopping", "BestObjectiveSnapshot", "ramp_is_complete"]
 
@@ -54,25 +56,51 @@ def ramp_is_complete(pl_module) -> bool:
 
 
 class RampGatedEarlyStopping(EarlyStopping):
-    """Early stopping that ignores every check taken before the KL ramp completes.
+    """Early stopping that ignores every check taken before the KL ramp completes, and that ends
+    no fit within ``step_floor`` optimizer steps of the first check it counts.
 
-    I3 makes each check well-posed; this makes the *series* comparable, by ensuring every entry
-    in it came from the same objective ``L_(max_kl_weight)``. Without the gate, the argmin can
-    land on an early check that scored well only because the KL term was still switched off.
+    I3 makes each check well-posed; the gate makes the *series* comparable, by ensuring every
+    entry in it came from the same objective ``L_(max_kl_weight)``. Without the gate, the argmin
+    can land on an early check that scored well only because the KL term was still switched off.
+
+    Patience is counted in checks, one per epoch. Where an epoch is a single optimizer step,
+    patience alone lasts ``patience`` steps, short enough to end a fit on a temporary plateau of
+    the criterion that a longer run leaves. Patience that runs out before the floor therefore
+    does not stop the fit; the fit stops at the first check past the floor that still has no
+    improvement in its last ``patience`` checks. Where ``patience`` checks already span
+    ``step_floor`` steps, the floor never acts and the fit stops exactly where patience alone
+    stops it. A non-finite criterion stops the fit at once, inside the floor or not.
     """
+
+    #: Optimizer steps after the first gated check before patience may end the fit. Counted with
+    #: ``trainer.global_step``, which advances once per SVI update.
+    step_floor = 2000
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         #: Whether this rule stopped the fit, as opposed to the epoch budget or a Lightning limit.
         self.fired = False
+        #: ``trainer.global_step`` at the first gated check, where both the patience count and
+        #: the step floor start.
+        self._gate_step: int | None = None
+        self._steps_since_gate = 0
 
     def _run_early_stopping_check(self, trainer):
         if not ramp_is_complete(trainer.lightning_module):
             return
+        if self._gate_step is None:
+            self._gate_step = int(trainer.global_step)
+        self._steps_since_gate = int(trainer.global_step) - self._gate_step
         super()._run_early_stopping_check(trainer)
 
     def _evaluate_stopping_criteria(self, current):
         should_stop, reason = super()._evaluate_stopping_criteria(current)
+        if (should_stop and self.stopping_reason == EarlyStoppingReason.PATIENCE_EXHAUSTED
+                and self._steps_since_gate < self.step_floor):
+            # The wait count keeps rising past patience, so the first check at the floor stops
+            # the fit unless one of the last `patience` checks improved.
+            self.stopping_reason = EarlyStoppingReason.NOT_STOPPED
+            return False, None
         if should_stop:
             self.fired = True
         return should_stop, reason
