@@ -7,7 +7,7 @@ supplied at inference (``K``), and compare TCRi's normalized MI against the clos
 truth from :func:`tcri.datasets.simulate_tcri` — plus a GMM/KMeans baseline.
 
 **The defaults are shake-out settings and do NOT reproduce the note's protocol.** The
-note trains for a maximum of 2,000 epochs, initialises phenotypes with K-Means at the
+note trains for a maximum of 2,000 epochs, initializes phenotypes with K-Means at the
 supplied ``K``, and compares against a GMM baseline. This harness defaults to
 ``--epochs 60``, hands the model the generator's ground-truth phenotype labels as
 ``phenotype_key`` (an oracle, under which the fuzziness axis barely moves the estimate

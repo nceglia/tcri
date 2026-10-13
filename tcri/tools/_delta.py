@@ -24,7 +24,7 @@ axis sits, which is worth stating because they look unrelated:
   The intersection instead constrains the clone set summed over *inside* ``H(c|φ)``, which
   makes ``log2(C)`` identical on both sides so the normalizer cancels out of the difference.
   Without it a contracting repertoire reports a positive delta in normalized entropy having
-  not redistributed at all, and the artefact points the same way as treatment does.
+  not redistributed at all, and the artifact points the same way as treatment does.
 
 That cancellation is why ``n_clones_ref`` keeps its inherited ``None`` default here rather
 than gaining a special one.
@@ -67,7 +67,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     validate_splitby(adata.obs, gkey, splitby)
 
     # Both sides must come from ONE shared sample. The engine draws over every ct row and then
-    # selects a covariate's block, so two calls carrying the same seed realise the same
+    # selects a covariate's block, so two calls carrying the same seed realize the same
     # underlying draw. Left at random_state=None the two calls draw independently, and a
     # covariate contrasted against ITSELF -- exactly 0 by construction -- reports the sampling
     # noise floor instead of 0.
@@ -125,7 +125,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
-@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=2, schema=schemas.DeltaClonotypicEntropy,
+@tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=3, schema=schemas.DeltaClonotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
@@ -151,7 +151,7 @@ def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
                          n_clones_ref=n_clones_ref, device=device, fit=fit)
 
 
-@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=2, schema=schemas.DeltaPhenotypicEntropy,
+@tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=3, schema=schemas.DeltaPhenotypicEntropy,
            values=("value", "value_from", "value_to"), default_null="condition")
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,

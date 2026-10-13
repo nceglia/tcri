@@ -136,7 +136,7 @@ def test_tcri_mi_matches_an_independent_implementation():
 
 
 def test_the_two_normalizations_are_not_interchangeable():
-    """Guards a benchmark trap: the two normalisations are different estimands, and ``min``
+    """Guards a benchmark trap: the two normalizations are different estimands, and ``min``
     is the default (``METRICS_CONTRACT.md``, "``mutual_information``").
 
     ``min <= average`` denominators means nmi_min >= nmi_average, so scoring a
@@ -256,7 +256,7 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
     """The n_samples>0 path returns a usable posterior summary of NMI.
 
     Coverage of the simulator's truth is deliberately not the assertion. The interval
-    summarises ``E_s[F(J_s)]``, the metric evaluated on each posterior draw, while the number
+    summarizes ``E_s[F(J_s)]``, the metric evaluated on each posterior draw, while the number
     most callers read is the plug-in ``F(E[J])`` at ``n_samples=0``. Those are different
     estimators separated by a Jensen gap whose sign is indeterminate for mutual information,
     and no test may equate them (``METRICS_CONTRACT.md``, "Posterior summaries"), so a coverage
@@ -264,7 +264,7 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
 
     What the path does guarantee is checked instead: the interval is finite, ordered, narrow
     enough to be informative, inside [0, 1] for ``normalize_mode='average'``, and brackets its
-    own posterior mean. An interval that excludes the value reported beside it is summarising
+    own posterior mean. An interval that excludes the value reported beside it is summarizing
     some other quantity.
     """
     from tcri.model._model import TCRIModel
@@ -300,7 +300,7 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
         assert hi - lo < 0.5, f"HDI too wide to be informative: [{lo}, {hi}]"
         assert lo <= mean <= hi, (
             f"the posterior mean {mean:.4f} lies outside its own 94% HDI [{lo:.4f}, {hi:.4f}]. "
-            f"Whatever the interval is summarising, it is not the quantity reported beside it."
+            f"Whatever the interval is summarizing, it is not the quantity reported beside it."
         )
         assert 0.0 <= lo and hi <= 1.0, (
             f"NMI interval [{lo:.4f}, {hi:.4f}] leaves [0,1]; normalize_mode='average' is "

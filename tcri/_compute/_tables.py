@@ -65,7 +65,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
             "the clone axis it is measured on.\n"
             "\n"
             "Pass an explicit covariate level, or use tl.joint_distribution(covariate=None) to "
-            "get every level as a labelled (covariate, clonotype) table and reduce it the way "
+            "get every level as a labeled (covariate, clonotype) table and reduce it the way "
             "your analysis intends."
         )
 

@@ -130,7 +130,7 @@ def _same(got, want):
 
 
 def _sorted(result):
-    """Every frame of a result in a fixed row order: by index for a labelled index, by the label
+    """Every frame of a result in a fixed row order: by index for a labeled index, by the label
     columns for a long frame."""
     out = {}
     for slot, frame in _frames(result).items():

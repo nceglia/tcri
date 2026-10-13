@@ -22,9 +22,10 @@ which is the default — ``result`` and ``table`` each gain, beside every native
 ``adjusted`` (``value - null_value``; ``adjusted_from``/``adjusted_to`` for the delta
 endpoints). The adjusted value is the one quantity a scored metric reports; ``value`` and
 ``null_value`` are its inputs and stay stored beside it. A DENOMINATOR gets ``null_denom`` and
-no adjusted column. At ``null_model=None`` none of them exist, on either frame. The adjusted
-value carries no ``sd`` and no interval: it is a difference of two summaries, and draws are
-never paired across two fits.
+no adjusted column. ``table`` carries them per draw, the fit's draw ``d`` paired with the
+null's draw ``d``, and ``result`` summarizes the paired draws: ``adjusted`` is their mean, with
+``adjusted_sd``, ``adjusted_hdi_low`` and ``adjusted_hdi_high`` beside it, and ``null_v`` is the
+null's mean. At ``null_model=None`` none of them exist, on either frame.
 
 **The ``stats`` slot.** Every metric except :class:`JointDistribution` returns it. Only three
 of the ``TypedDict``s below declare it, and a declared key is a required one, so the rest accept
@@ -64,9 +65,10 @@ class MutualInformation(TypedDict):
 
     table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value, denom
     result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
-                            # (across groups) + denom, and null_value/null_denom/adjusted
-                            # with a reference. The contrast lives in `stats`.
-                            # `denom` is the normaliser this MI was divided by: the null does
+                            # (across groups) + denom, and null_value/null_denom/adjusted +
+                            # adjusted_sd/adjusted_hdi_* with a reference. The contrast lives
+                            # in `stats`.
+                            # `denom` is the normalizer this MI was divided by: the null does
                             # not share it, so both are stored and value*denom recovers bits
 
 

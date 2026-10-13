@@ -30,7 +30,7 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
                distance_metric, random_state, device=None, fit=None):
     dist_fn = phenotype_distance(distance_metric)
     # Both sides MUST come from one shared draw. The engine samples over every ct row and then
-    # selects a covariate's block, so two calls carrying the SAME seed realise the same
+    # selects a covariate's block, so two calls carrying the SAME seed realize the same
     # underlying sample and the two blocks are coherent. Left at random_state=None they are two
     # independent samples, and the flux of a covariate against ITSELF -- which is the KL of a
     # distribution from itself, exactly 0 -- comes back as the sampling noise floor instead.
@@ -69,7 +69,7 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
     return point, drawsd
 
 
-@tl_result(key=K.PHENOTYPIC_FLUX, version=2, schema=schemas.PhenotypicFlux,
+@tl_result(key=K.PHENOTYPIC_FLUX, version=3, schema=schemas.PhenotypicFlux,
            default_null="condition")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, exclude_pools=True, weighted=False,

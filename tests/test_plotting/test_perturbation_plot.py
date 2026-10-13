@@ -148,7 +148,7 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     assert not tcri.pl.gene_importance(a, n_top=6).texts, "stars drawn without a contrast"
 
 
-def test_rank_view_without_groups_falls_back_to_points_then_violins(cohort):
+def test_rank_view_without_groups_draws_points_then_violins(cohort):
     model, adata = cohort
     a = _without_replicate(adata)
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3])
@@ -156,19 +156,16 @@ def test_rank_view_without_groups_falls_back_to_points_then_violins(cohort):
     assert _n_points(pts) == 4 and _n_violins(pts) == 0
 
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], n_samples=6, random_state=0)
-    # `quantity="value"` draws the violins, because the draws are a distribution of the VALUE.
-    # The adjusted value in `table` is a per-group constant, so a violin of it would be a
-    # spike; the default panel falls back to one mark per gene instead.
+    # with only draws varying, each gene is a violin of its draws: the value with the null's
+    # mean behind it, and the adjusted value over the paired draws
     vio = tcri.pl.gene_importance(a, quantity="value")
     assert _n_violins(vio) == 4, "with only draws varying, each gene is a violin of its draws"
-    from matplotlib.collections import PolyCollection
+    assert _n_points(vio, reference=True) == 4, "the null was not drawn behind each gene"
     adjusted = tcri.pl.gene_importance(a)
-    assert not [c for c in adjusted.collections if isinstance(c, PolyCollection)], (
-        "the adjusted value was drawn as a violin")
-    assert _n_points(adjusted) == 4, "the default panel did not fall back to one mark per gene"
+    assert _n_violins(adjusted) == 4, "the adjusted draws were not drawn as violins"
 
 
-def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
+def test_shift_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
     model, adata = cohort
     a = adata.copy()
     res = tcri.perturb.gene_importance(model, a)
@@ -178,7 +175,7 @@ def test_shift_view_is_a_gene_by_phenotype_heatmap_centred_on_zero(cohort):
     im = ax.images[0]
     phenotypes = list(a.uns[K.PHENOTYPE_CATEGORIES])
     assert im.get_array().shape == (7, len(phenotypes))
-    assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centred on zero"
+    assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centered on zero"
     assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
 
     genes = [t.get_text() for t in ax.get_yticklabels()]

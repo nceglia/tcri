@@ -165,13 +165,13 @@ def make_plot(df, path):
     sizes = df.groupby("cells")["cells"].first().sort_values().index.tolist()
     width = 0.38
     cmap = plt.get_cmap("viridis")
-    colours = {s: cmap(i / max(len(STAGES) - 1, 1)) for i, s in enumerate(STAGES)}
+    colors = {s: cmap(i / max(len(STAGES) - 1, 1)) for i, s in enumerate(STAGES)}
     for di, dev in enumerate(devices):
         d = df[df.device == dev].groupby("cells")[STAGES].mean()
         bottom = np.zeros(len(d))
         x = np.arange(len(d)) + (di - (len(devices) - 1) / 2) * width
         for stage in STAGES:
-            ax.bar(x, d[stage], width, bottom=bottom, color=colours[stage],
+            ax.bar(x, d[stage], width, bottom=bottom, color=colors[stage],
                    edgecolor="white", linewidth=0.4,
                    label=stage if di == 0 else None)
             bottom += d[stage].to_numpy()
@@ -189,7 +189,7 @@ def make_plot(df, path):
             d = df[df.device == dev].groupby("cells")[stage].mean()
             if d.sum() > 0:
                 ax.plot(d.index, d.to_numpy(), ls, marker="o", ms=3,
-                        color=colours[stage], label=f"{stage} ({dev})" if len(devices) > 1
+                        color=colors[stage], label=f"{stage} ({dev})" if len(devices) > 1
                         else stage)
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlabel("cells"); ax.set_ylabel("seconds"); ax.set_title("how each stage scales")
@@ -205,7 +205,7 @@ def make_plot(df, path):
             speed = cpu.loc[common, stage] / gpu.loc[common, stage].replace(0, np.nan)
             ax.plot(common, speed, marker="o", ms=4,
                     lw=2.2 if stage == "total" else 1.2,
-                    color="black" if stage == "total" else colours.get(stage),
+                    color="black" if stage == "total" else colors.get(stage),
                     label=stage)
         ax.axhline(1.0, ls="--", lw=0.8, c="0.5")
         ax.set_xscale("log")

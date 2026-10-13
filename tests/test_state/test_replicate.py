@@ -4,7 +4,7 @@
 declared once at setup rather than retyped at every call.
 
 It is deliberately NOT derived from ``batch_key``. scvi's ``batch_key`` is one-hot encoded into
-every hidden layer of the encoder and decoder (``n_cat_list=[n_batch]``), which is a modelling
+every hidden layer of the encoder and decoder (``n_cat_list=[n_batch]``), which is a modeling
 decision about what to correct for. ``replicate`` is a claim about what counts as an
 independent observation for statistics. They coincide when batches are patients and diverge the
 moment they are sequencing runs — at which point deriving one from the other gives a silently
