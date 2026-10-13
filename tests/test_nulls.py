@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import warnings
 
 import anndata
@@ -66,6 +67,12 @@ def _parent(a, name):
         model.train(**TRAIN)
         model.to_anndata(a)
     return model
+
+
+def _is_namespace_of(namespace, parent, fit):
+    """Is ``namespace`` one fit's own: ``<parent>.<fit>.<12 hex digits>``?"""
+    return re.fullmatch(rf"{re.escape(parent.name)}\.{re.escape(fit)}\.[0-9a-f]{{12}}",
+                        str(namespace)) is not None
 
 
 @pytest.fixture(scope="module")
@@ -311,7 +318,7 @@ def test_null_writes_its_substrate_and_provenance(fitted):
 
     settings = adata.uns[K.fit_key(K.FIT_SETTINGS, fit)]
     assert settings["kind"] == "phenotype" and settings["parent"] == model.name
-    assert settings["namespace"] == f"{model.name}.{fit}"
+    assert _is_namespace_of(settings["namespace"], model, fit)
     assert settings["n_obs"] == adata.n_obs
     assert int(settings["n_strata"]) == len(settings["stratum_sizes"])
     assert settings["train"]["max_epochs"] == TRAIN["max_epochs"]
@@ -809,7 +816,8 @@ def test_a_refit_unnamed_parent_rewrites_its_null():
     assert len(rewrites) == 1 and first.name in rewrites[0], [str(x.message) for x in w]
     settings = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]
     assert settings["parent"] == second.name
-    assert settings["namespace"] == null.name == f"{second.name}.null.phenotype"
+    assert settings["namespace"] == null.name
+    assert _is_namespace_of(null.name, second, "null.phenotype")
     new = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")])
     assert not np.allclose(new, old), "the two nulls must differ to tell the rewrite apart"
     np.testing.assert_allclose(new, null.get_p_ct(), atol=1e-6)
@@ -936,3 +944,51 @@ def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_p
     with pytest.raises(RuntimeError, match="fitted after the save"):
         rebuild(loaded, b, "phenotype")
 
+
+
+def test_a_refit_null_starts_fresh_in_a_namespace_of_its_own():
+    """Re-running a parent's null replaces the earlier fit. The refit gets a namespace of its
+    own, the earlier fit's entries leave the store, a ``key_added`` sibling's stay, and at the
+    same seed the refit reproduces the earlier fit, networks included. Fitted under the earlier
+    fit's namespace, it would start from that fit's guide concentrations and its networks would
+    not train."""
+    a = _adata()
+    model = _parent(a, "refitparent")
+    first = _fit_null("phenotype", model, a)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sibling = tcri.null.phenotype(model, a, key_added="b")
+    p_ct = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    weights = {k: v.detach().clone() for k, v in first.module.named_parameters()}
+
+    second = _fit_null("phenotype", model, a)
+
+    store = set(pyro.get_param_store().keys())
+    assert second.name != first.name and _is_namespace_of(second.name, model, "null.phenotype")
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["namespace"] == second.name
+    assert not any(k.startswith(f"{first.name}.") for k in store), "the replaced fit stayed"
+    assert any(k.startswith(f"{sibling.name}.") for k in store), "a sibling fit was dropped"
+    np.testing.assert_allclose(a.uns[K.fit_key(K.P_CT, "null.phenotype")], p_ct, atol=1e-6)
+    for name, value in second.module.named_parameters():
+        torch.testing.assert_close(value.detach(), weights[name], atol=1e-6, rtol=0,
+                                   msg=f"the refit's {name} is not the earlier fit's")
+
+
+def test_an_earlier_null_of_the_same_parent_keeps_its_own_name():
+    """A null object from before a refit of its fit is not the fit this object records: it keeps
+    its own name, and since the refit removed its entries, using it as a reference raises
+    instead of computing on the later fit's guide concentrations."""
+    from tcri._state._reference import name_of
+
+    a = _adata()
+    model = _parent(a, "staleparent")
+    stale = _fit_null("phenotype", model, a)
+    current = _fit_null("phenotype", model, a)
+
+    assert name_of(stale, a) == stale.name
+    assert name_of(current, a) == "null.phenotype"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(RuntimeError, match="replaced by a later fit"):
+            tcri.perturb.gene_importance(model, a, genes=list(a.var_names[:3]),
+                                         null_model=stale)

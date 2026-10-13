@@ -47,9 +47,11 @@ schedules or stopping; they change with a recorded reason.
 ## Bounds
 
 - **B1** The `kl_weight` schedule is non-decreasing within and across `train()` calls and
-  reaches `max_kl_weight` in `n_epochs_kl_warmup` epochs. `train()` has no reset knob; construct
-  a new model for a fresh schedule. `test_no_reset_knob_on_train`,
-  `test_an_epoch_cut_short_counts_as_completed`.
+  reaches `max_kl_weight` in `n_epochs_kl_warmup` epochs. The ramp's position and `kl_weight`
+  are saved with the model, so a model loaded with `TCRIModel.load` or `load_tcri_session`
+  continues the ramp where it was. `train()` has no reset knob; construct a new model for a
+  fresh schedule. `test_no_reset_knob_on_train`, `test_an_epoch_cut_short_counts_as_completed`,
+  `test_a_load_keeps_the_ramp_position`.
 - **B2 One unit for the schedule.** Every schedule setting of a fit is counted in epochs: the KL
   warmup (`n_epochs_kl_warmup`, default 150), patience (`early_stopping_patience`) and the budget
   (`max_epochs`); a validation check is one epoch (B3). The warmup's position is the epochs
@@ -106,9 +108,10 @@ schedules or stopping; they change with a recorded reason.
   parent's train/validation split; only the permutation draws from a stream of its own, keyed by
   the kind so that two kinds never share one. `train()` records the arguments it actually ran
   with, the stopping arguments included, and a null replays them, because a null fitted at
-  `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. A null's
-  parameter namespace is its own, so I4 and B8 apply per namespace and neither the parent nor
-  any other null is touched by its fit. `tests/test_nulls.py`.
+  `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. Each fit of a
+  null has a parameter namespace of its own, so I4 and B8 apply per namespace and neither the
+  parent nor any other null is touched by its fit, and a refit starts fresh rather than from
+  the fit it replaces. `tests/test_nulls.py`.
 - **B11** No argument is accepted and then ignored. `train()` raises for a Trainer argument
   this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
   `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,

@@ -413,8 +413,9 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # explicitly: with no `fit` parameter there is nothing for the destination to
                 # be suffixed by, and the reference would land on the caller's own key.
                 # The FIT name, captured before `reference_of` is rebound to a model: a rebuilt
-                # null's `name` is its parameter-store namespace (`<parent>.null.phenotype`),
-                # which is not what `params["null_model"]` records and not what `fit=` resolves.
+                # null's `name` is its parameter-store namespace
+                # (`<parent>.null.phenotype.<token>`), which is not what `params["null_model"]`
+                # records and not what `fit=` resolves.
                 # Keying the blob by it would put the reference somewhere no reader looks.
                 fit_name = _reference.name_of(reference_of, arguments[_data_param])
                 if isinstance(reference_of, str):

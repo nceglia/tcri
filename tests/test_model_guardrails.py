@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pyro
 import pytest
+import torch
 from anndata import AnnData
 
 from tcri.model._model import TCRIModel
@@ -77,17 +78,24 @@ def test_K_clamped_to_n_clonotypes(tiny_adata):
     assert model.centers.shape[0] == 5
 
 
-def test_second_model_warns_about_shared_param_store(tiny_adata):
-    """Pyro's param store is process-global — a 2nd model built under a name the store already
-    holds silently continues that fit. A generated name never collides, so only a `name=`
-    passed twice can."""
+def test_a_second_model_under_a_held_name_raises(tiny_adata):
+    """Pyro's param store is process-global, so a 2nd model built under a name the store already
+    holds would read the first fit's guide concentrations, and its networks would not train.
+    Construction raises and leaves the store as it was. A generated name never collides, so only
+    a `name=` passed twice can."""
     pyro.clear_param_store()
     m1 = _model(tiny_adata, K=5, name="shared")
     with contextlib.redirect_stdout(io.StringIO()):
         m1.train(max_epochs=5, batch_size=256,
                  enable_progress_bar=False, enable_model_summary=False)
-    with pytest.warns(UserWarning, match="param store"):
+    before = {k: v.detach().clone() for k, v in pyro.get_param_store().items()}
+
+    with pytest.raises(ValueError, match="already holds"):
         _model(tiny_adata, K=5, name="shared")
+
+    after = pyro.get_param_store()
+    assert set(after.keys()) == set(before)
+    assert all(torch.equal(after[k].detach(), v) for k, v in before.items())
 
 
 def test_batch_size_at_or_above_n_obs_warns(tiny_adata):

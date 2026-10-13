@@ -1004,6 +1004,44 @@ def test_no_reset_knob_on_train():
     )
 
 
+@pytest.mark.parametrize("via", ["model", "session"])
+@pytest.mark.parametrize("n_epochs_kl_warmup", [10, 2])
+def test_a_load_keeps_the_ramp_position(adata, tmp_path, via, n_epochs_kl_warmup):
+    """B1 across a save: a loaded model is where the saved one was on the KL ramp, at the same
+    ``kl_weight``, and further training continues the ramp instead of restarting it. With a
+    warmup of 10 the ramp is three epochs in when the model is saved; with 2 it has finished,
+    and the loaded model stays at full weight."""
+    from tcri.model._model import TCRIModel
+    from tcri.utils import load_tcri_session, save_tcri_session
+
+    m = _fresh(adata, name="ramp")
+    m.train(max_epochs=3, batch_size=128, n_epochs_kl_warmup=n_epochs_kl_warmup,
+            accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    position = (m.module._kl_warmup_epochs, m.module._kl_warmup_batch)
+    weight = float(m.module.kl_weight)
+    path = str(tmp_path / "saved")
+    if via == "model":
+        m.save(path, overwrite=True, save_anndata=False)
+    else:
+        save_tcri_session(m, adata, path)
+    pyro.clear_param_store()
+
+    if via == "model":
+        loaded = TCRIModel.load(path, adata=adata)
+    else:
+        loaded, _ = load_tcri_session(path)
+
+    assert (loaded.module._kl_warmup_epochs, loaded.module._kl_warmup_batch) == position
+    assert float(loaded.module.kl_weight) == pytest.approx(weight)
+    if n_epochs_kl_warmup <= 3:
+        assert weight == pytest.approx(loaded.module.max_kl_weight)
+
+    loaded.train(max_epochs=2, batch_size=128, n_epochs_kl_warmup=n_epochs_kl_warmup,
+                 accelerator="cpu", enable_progress_bar=False, enable_model_summary=False)
+    assert loaded.training_record_["warmup_epochs_taken"] == min(5.0, n_epochs_kl_warmup)
+    assert float(loaded.module.kl_weight) >= weight
+
+
 def test_warmup_counter_is_owned_by_the_module_not_the_plan():
     """Contract B1/I5: ``train()`` builds a fresh plan per call, so a plan-local counter
     restarts the ramp on every resumed fit. The counter must live on the module, which
