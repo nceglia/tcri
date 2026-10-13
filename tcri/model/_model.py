@@ -725,7 +725,10 @@ class TCRIModel(BaseModelClass):
             ``max_epochs``; the best check's weights are restored either way.
         early_stopping_patience
             Epochs in a row without an improvement that stop the fit; an integer ``>= 1``. There
-            is one validation check per epoch.
+            is one validation check per epoch. The rule ends no fit within 2,000 optimizer steps
+            of the first check after the KL ramp, so where an epoch is only a few steps a fit
+            runs past a patience that runs out sooner, and stops at the first check after those
+            steps that has no improvement in this many epochs.
         early_stopping_min_delta
             A check is an improvement only if the criterion is below the best check so far by
             more than this, in the criterion's own units (per cell). Finite and ``>= 0``. At 0,
@@ -745,7 +748,8 @@ class TCRIModel(BaseModelClass):
         -----
         scvi's own early stopping is switched off and replaced by two callbacks:
         ``RampGatedEarlyStopping``, which ignores every check taken before the KL ramp
-        completes, and ``BestObjectiveSnapshot``, which restores the best-scoring module state
+        completes and ends no fit within 2,000 optimizer steps of the first check it counts,
+        and ``BestObjectiveSnapshot``, which restores the best-scoring module state
         and guide concentrations at the end of the fit. The monitored criterion is
         ``objective_validation_percell``, minimized.
 
