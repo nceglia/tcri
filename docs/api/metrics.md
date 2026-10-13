@@ -89,11 +89,15 @@ near-zero reference and hides effect size, and dividing two stored columns is yo
 The reference is **the caller's own call with the fit changed** — every other argument forwarded
 verbatim, because `groupby`, `clones`, `exclude_pools`, `weighted`, `normalized`,
 `normalize_mode`, `n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change
-what is being measured.
+what is being measured. Its draws take their own seed, derived from your `random_state`.
 
-The adjusted value carries no `sd` and no interval. It is a difference of two summaries, and
-there is no correspondence between the parent's draw 7 and the null's, so nothing pairs them.
+**The adjusted value is computed per draw.** The null is the value expected under no
+association, and the fit and the null are independent fits, so the fit's draw *d* is paired with
+the null's draw *d*. `table` carries `null_value` and `adjusted` on every draw, and `result`
+gives the adjusted value's mean with `adjusted_sd`, `adjusted_hdi_low` and `adjusted_hdi_high`
+over those draws, so it has an interval like any value. At `n_samples=0` there is one draw on
+each side, and `adjusted` is the difference of the two point values.
 
-**Mutual information stores both denominators.** A normalised MI divides by a normaliser taken
-from the same joint it normalises, and a null does not share it, so `result` carries `denom` and
+**Mutual information stores both denominators.** A normalized MI divides by a normalizer taken
+from the same joint it normalizes, and a null does not share it, so `result` carries `denom` and
 `null_denom`. `value * denom` and `null_value * null_denom` recover both numbers in bits.

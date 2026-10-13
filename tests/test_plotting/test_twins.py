@@ -36,7 +36,7 @@ def _cov(adata):
 def _n_points(ax, *, reference=False):
     """Markers drawn by the VALUE mark — the floor of the mark rule.
 
-    The permutation reference is a second collection at the same x positions, labelled
+    The permutation reference is a second collection at the same x positions, labeled
     :data:`tcri.plotting._base.REFERENCE_LABEL`. Counting both would make every "one dot per
     replicate" assertion in this file read double the moment a result carries a reference,
     which is the normal case. ``reference=True`` counts the reference collection instead.
@@ -50,7 +50,7 @@ def _n_points(ax, *, reference=False):
 
 
 def _reference_points(ax):
-    """The grey reference markers, as an (n, 2) array of (x, y)."""
+    """The gray reference markers, as an (n, 2) array of (x, y)."""
     from tcri.plotting._base import REFERENCE_LABEL
 
     import numpy as _np
@@ -254,7 +254,8 @@ def test_draws_become_violins_not_a_summary(trained_model):
 
     A bar-plus-HDI is a lossy summary of a distribution the package already stored in
     ``table``. With no group and no item axis to vary, the draws ARE the sample, so the mark
-    is a violin. At ``n_samples=0`` there is no distribution and it degrades to a point with
+    is a violin, for the value and for the adjusted value, whose draws are the paired
+    differences. At ``n_samples=0`` there is no distribution and it degrades to a point with
     no interval — NOT a zero-width one, which would state certainty never measured.
     """
     _, adata = trained_model
@@ -271,12 +272,10 @@ def test_draws_become_violins_not_a_summary(trained_model):
     tcri.tl.mutual_information(adata, covariate=cov, n_samples=30, random_state=0)
     drawn = tcri.pl.mutual_information(adata, quantity="value")
     assert _n_violins(drawn) == 1, "the draws were summarized away instead of drawn"
+    assert _n_points(drawn, reference=True) == 1, "the null was not drawn behind the violin"
 
-    # the default panel draws the adjusted value, which `table` carries as one number per
-    # group: a violin of it would be a spike, so the panel takes the group-level mark instead
     adjusted = tcri.pl.mutual_information(adata)
-    assert _n_violins(adjusted) == 0, "the adjusted value was drawn as a violin"
-    assert _n_points(adjusted) == 1
+    assert _n_violins(adjusted) == 1, "the adjusted draws were summarized away"
 
 
 def test_a_violin_never_spans_replicates(cohort):
@@ -303,18 +302,16 @@ def test_a_violin_never_spans_replicates(cohort):
     assert per_patient.get_xlabel() == "patient"
     assert _n_violins(per_patient) == 6, "one violin per patient over its own draws"
 
-    # the default panel: the adjusted value is one number per patient in `table`, so the panel
-    # falls back to one mark per patient rather than drawing a spike as a violin
+    # ...and so are its adjusted values, over the paired draws
     adjusted = tcri.pl.mutual_information(adata)
     assert adjusted.get_xlabel() == "patient"
-    assert _n_violins(adjusted) == 0, "the adjusted value was drawn as a violin"
-    assert _n_points(adjusted) == 6, "the fallback is not one mark per patient"
+    assert _n_violins(adjusted) == 6, "one violin per patient over its paired draws"
 
 
-# ── colours ──────────────────────────────────────────────────────────────────
+# ── colors ──────────────────────────────────────────────────────────────────
 
 def test_resolve_colors_persists_and_is_reused(trained_model):
-    """A level keeps its colour across figures: the assignment is written to ``uns`` under
+    """A level keeps its color across figures: the assignment is written to ``uns`` under
     scanpy's own ``<key>_colors`` name and read back from there, so a later figure reuses it
     rather than assigning afresh."""
     _, adata = trained_model
@@ -353,22 +350,22 @@ def test_the_palette_has_one_definition():
     """One ``tcri_colors``, and it lives in ``tcri.pl``.
 
     A second copy in ``tcri.utils._utils`` can disagree on contents and order, so the same
-    level draws in a different colour depending on which list the caller reached. The entries
-    must also be distinct, and the first must be a category colour rather than the dark editor
+    level draws in a different color depending on which list the caller reached. The entries
+    must also be distinct, and the first must be a category color rather than the dark editor
     background (``#272822``) that ships alongside such palettes."""
     from tcri.utils import _utils
 
     assert not hasattr(_utils, "tcri_colors")
-    assert len(tcri.pl.tcri_colors) == len(set(tcri.pl.tcri_colors)), "duplicate colour"
-    assert tcri.pl.tcri_colors[0] != "#272822", "the background colour is not a category colour"
+    assert len(tcri.pl.tcri_colors) == len(set(tcri.pl.tcri_colors)), "duplicate color"
+    assert tcri.pl.tcri_colors[0] != "#272822", "the background color is not a category color"
 
 
 def test_plots_route_through_the_shared_palette(trained_model):
-    """A plot must not invent its own colours — otherwise the same patient changes colour
+    """A plot must not invent its own colors — otherwise the same patient changes color
     between two figures in one notebook.
 
     Checked on the strip dots rather than the boxes: seaborn bakes ``boxprops.alpha`` into
-    the box facecolour, so a box reads back as the palette colour blended toward white and
+    the box facecolor, so a box reads back as the palette color blended toward white and
     never compares equal to what was stored.
     """
     _, adata = trained_model
@@ -381,7 +378,7 @@ def test_plots_route_through_the_shared_palette(trained_model):
     stored = {c.lower() for c in adata.uns[K.colors("patient")]}
     drawn = {matplotlib.colors.to_hex(c).lower()
              for coll in ax.collections for c in coll.get_facecolor()}
-    assert drawn and drawn <= stored, f"colours off the shared palette: {drawn - stored}"
+    assert drawn and drawn <= stored, f"colors off the shared palette: {drawn - stored}"
     
 
     # and a stored assignment wins on the next figure, which is the whole point of persisting
@@ -457,14 +454,14 @@ def test_the_plot_uses_the_same_collapse_as_the_contrast(cohort):
                                       splitby="disease_status", value=["adjusted"])
     ax = tcri.pl.phenotypic_entropy(adata)
     assert np.allclose(_ys(ax, reference=False), np.sort(expected["adjusted"].to_numpy()))
-    assert not len(_ys(ax, reference=True)), "a grey mark was drawn on the adjusted panel"
+    assert not len(_ys(ax, reference=True)), "a gray mark was drawn on the adjusted panel"
     stats = res["stats"]
     assert set(stats["quantity"]) == {"adjusted"}
     row = stats.iloc[0]
     assert len(expected) == row["n_a"] + row["n_b"], (
         "the marks and the contrast rest on different replicate sets")
 
-    # the value panel collapses the value and its reference together, so the grey mark and
+    # the value panel collapses the value and its reference together, so the gray mark and
     # the value mark rest on one replicate set
     expected = collapse_to_replicates(res["result"], groupby="patient",
                                       splitby="disease_status",
@@ -504,14 +501,14 @@ def test_nothing_connects_two_x_positions(cohort):
             )
 
 
-def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
-    """The colour is a property of the level, not of where it lands on this figure.
+def test_a_levels_color_does_not_depend_on_its_position(trained_model):
+    """The color is a property of the level, not of where it lands on this figure.
 
     The renderer sorts x by median, so two panels of the same variable can present its levels
     in different orders. A `resolve_colors` that zipped the stored hex list against the caller's
-    display order would then give one level two colours in one figure, so the lookup is per
+    display order would then give one level two colors in one figure, so the lookup is per
     level: a reversed order, a subset, and a key with no obs column all keep each level's
-    colour.
+    color.
     """
     _, adata = trained_model
     adata = adata.copy()
@@ -519,9 +516,9 @@ def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
 
     forward = tcri.pl.resolve_colors(adata, "patient", cats)
     reverse = tcri.pl.resolve_colors(adata, "patient", list(reversed(cats)))
-    assert forward == reverse, "the colour followed the order, not the level"
+    assert forward == reverse, "the color followed the order, not the level"
 
-    # a subset must keep each level's colour rather than restarting the cycle
+    # a subset must keep each level's color rather than restarting the cycle
     subset = tcri.pl.resolve_colors(adata, "patient", cats[1:])
     assert all(subset[c] == forward[c] for c in cats[1:])
 
@@ -531,13 +528,13 @@ def test_a_levels_colour_does_not_depend_on_its_position(trained_model):
     assert a == b
 
 
-def test_the_same_level_keeps_its_colour_across_panels(cohort):
+def test_the_same_level_keeps_its_color_across_panels(cohort):
     """The end-to-end version: two panels of the same split, drawn in different orders."""
     _, adata = cohort
     adata = adata.copy()
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
 
-    def _colour_by_level(ax):
+    def _color_by_level(ax):
         out = {}
         for coll in ax.collections:
             for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
@@ -546,10 +543,10 @@ def test_the_same_level_keeps_its_colour_across_panels(cohort):
         return out
 
     tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
-    first = _colour_by_level(tcri.pl.phenotypic_entropy(adata))
+    first = _color_by_level(tcri.pl.phenotypic_entropy(adata))
     tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=rest[0], groupby="patient",
                             splitby="disease_status")
-    second = _colour_by_level(tcri.pl.phenotypic_flux(adata))
+    second = _color_by_level(tcri.pl.phenotypic_flux(adata))
 
     for level in set(first) & set(second):
         assert first[level] == second[level], (
@@ -580,7 +577,7 @@ def test_delta_twins_obey_the_renderer_contract(name, cohort):
 
     # `cohort` is session-scoped and other modules compute on it, so a copy inherits whatever
     # they cached. Asserting a key is ABSENT has to clear it first or the test passes or fails
-    # on file ordering rather than on behaviour.
+    # on file ordering rather than on behavior.
     adata.uns.pop(getattr(K, name.upper()), None)
     with pytest.raises(KeyError, match=f"tcri.tl.{name}"):
         getattr(tcri.pl, name)(adata)
@@ -664,7 +661,7 @@ def test_dot_area_is_the_matched_clone_count(cohort):
     counts = res.groupby("patient", observed=True)["clonotype"].nunique()
 
     ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    # the grey reference pair is excluded: its size is FIXED by design, because the null's
+    # the gray reference pair is excluded: its size is FIXED by design, because the null's
     # matched clone count is provably the parent's and sizing it would repeat one number
     from tcri.plotting._base import REFERENCE_LABEL
     per_patient = [c.get_sizes() for c in ax.collections
@@ -695,13 +692,13 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
     assert sized.get_legend() is not None
 
     unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
-    # a legend may exist to name the grey reference; what must NOT be there is a SIZE legend,
+    # a legend may exist to name the gray reference; what must NOT be there is a SIZE legend,
     # whose title is the claim being guarded against
     from tcri.plotting._base import REFERENCE_LEGEND
     lg = unsized.get_legend()
     if lg is not None:
         assert lg.get_title().get_text() != "clones matched", (
-            "a phenotype count was labelled as clones matched")
+            "a phenotype count was labeled as clones matched")
         assert [t.get_text() for t in lg.get_texts()] == [REFERENCE_LEGEND], [
             t.get_text() for t in lg.get_texts()]
     from tcri.plotting._base import REFERENCE_LABEL
@@ -712,9 +709,9 @@ def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
     # ...and the reference's own dots are all one size too, for the same reason stated the
     # other way round: the null's matched clone count IS the parent's, so encoding it would
     # repeat one number in a channel that means "this varies".
-    grey = {round(float(s), 6) for c in sized.collections
+    gray = {round(float(s), 6) for c in sized.collections
             if c.get_label() == REFERENCE_LABEL for s in c.get_sizes()}
-    assert len(grey) <= 1, f"the reference dots were sized by a count: {sorted(grey)}"
+    assert len(gray) <= 1, f"the reference dots were sized by a count: {sorted(gray)}"
 
 
 # ── small multiples ──────────────────────────────────────────────────────────
@@ -796,8 +793,8 @@ def test_replicates_on_an_item_axis_are_colored_by_replicate(cohort):
             for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
                 at.setdefault(int(round(x)), set()).add(matplotlib.colors.to_hex(c).lower())
     assert len(at) == len(adata.uns[K.PHENOTYPE_CATEGORIES])
-    for x, colours in at.items():
-        assert colours == set(stored.values()), f"position {x}: {colours}"
+    for x, colors in at.items():
+        assert colors == set(stored.values()), f"position {x}: {colors}"
 
     boxes = {matplotlib.colors.to_hex(p.get_facecolor(), keep_alpha=False)
              for p in ax.patches}

@@ -2,7 +2,7 @@
 # Refuse to commit a red tree.
 #
 # Added after a commit landed with 29 failing tests: a targeted probe passed, and the full
-# suite was never run. That is not a judgement call anyone should have to remember at the
+# suite was never run. That is not a judgment call anyone should have to remember at the
 # moment of committing -- especially when a change alters a RETURN SHAPE, where the damage is
 # always broad and always downstream.
 #

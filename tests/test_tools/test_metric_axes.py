@@ -1,4 +1,4 @@
-"""Behavioural tests for the metric comparison axes.
+"""Behavioral tests for the metric comparison axes.
 
 Every metric takes the same family of arguments — ``covariate``, ``groupby``, ``splitby``,
 ``clones``, ``weighted``, ``normalize_mode``, ``n_samples``, ``temperature``. An argument can
@@ -181,7 +181,7 @@ def test_splitby_labels_the_groups(blocks):
 
     assert "disease_status" in split.columns
     assert np.allclose(plain["value"].to_numpy(), split["value"].to_numpy()), (
-        "splitby changed the values; it is a labelling axis, not a computation axis"
+        "splitby changed the values; it is a labeling axis, not a computation axis"
     )
     expected = {p: r for p, r, _o in BLOCKS}
     for _, row in split.iterrows():
@@ -392,7 +392,7 @@ def test_the_joint_is_cached_like_every_other_metric(blocks):
     assert "jd_pre" in adata.uns and "tcri_joint_distribution" in adata.uns
 
 
-def test_groupby_honours_the_callers_clone_restriction(blocks):
+def test_groupby_honors_the_callers_clone_restriction(blocks):
     """``clones=`` is intersected with each group's clones, not discarded under ``groupby``.
 
     A per-group closure that rebinds the name to that group's clone list shadows the caller's,
@@ -434,7 +434,7 @@ def test_groupby_warns_when_cells_have_no_group_label(blocks):
 
 
 def test_a_single_draw_reports_no_spread(blocks):
-    """One draw carries no information about spread, so ``n_samples=1`` summarises to NaN.
+    """One draw carries no information about spread, so ``n_samples=1`` summarizes to NaN.
 
     An ``sd`` of 0.0 and a zero-width HDI state a certainty that was never measured. The second
     half asserts that the n=1 case did not disable real summaries.
@@ -461,7 +461,7 @@ def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
     which is exactly 0 for every metric here.
 
     Two independent ``joint_draws`` calls would instead report the sampling noise floor, which
-    grows with ``n_samples`` rather than shrinking. ``random_state=None`` is parametrised
+    grows with ``n_samples`` rather than shrinking. ``random_state=None`` is parametrized
     deliberately: it is the default, and it is the case where nothing but a shared draw makes
     the two sides agree, so a seeded-only test could not see it.
     """

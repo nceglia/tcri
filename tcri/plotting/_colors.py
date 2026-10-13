@@ -1,9 +1,9 @@
-"""Canonical categorical colours for ``tcri.pl`` — one home for the palette.
+"""Canonical categorical colors for ``tcri.pl`` — one home for the palette.
 
 Every categorical plot routes through :func:`resolve_colors`, so a label keeps the same
-colour across views and a user-set ``uns["<key>_colors"]`` propagates everywhere. Colours
+color across views and a user-set ``uns["<key>_colors"]`` propagates everywhere. Colors
 persist under scanpy's ``uns["<obs_key>_colors"]`` convention (via ``K.colors``), which is
-also what ``sc.pl.umap`` reads — so setting a response palette here colours the UMAP too.
+also what ``sc.pl.umap`` reads — so setting a response palette here colors the UMAP too.
 
 Continuous colormaps stay per-plot ``cmap=`` arguments; this module is categorical only.
 """
@@ -16,7 +16,7 @@ from .._state import keys as K
 
 __all__ = ["tcri_colors", "NA_COLOR", "resolve_colors"]
 
-#: The categorical cycle, and the only one: every default category colour is taken from here,
+#: The categorical cycle, and the only one: every default category color is taken from here,
 #: in this order. The near-black entries sit late in the cycle on purpose, so the first few
 #: categories of a figure are the distinguishable ones.
 tcri_colors = [
@@ -35,31 +35,31 @@ def resolve_colors(adata, cat_key, categories=None, *, palette=None, persist=Tru
     """Resolve a ``{category: hex}`` map for a categorical, cached under
     ``uns[K.colors(cat_key)]``.
 
-    Priority: an explicit ``palette`` (a ``dict`` ``{cat: colour}``, a ``list`` cycled, or a
+    Priority: an explicit ``palette`` (a ``dict`` ``{cat: color}``, a ``list`` cycled, or a
     matplotlib colormap name) -> an existing ``uns["<cat_key>_colors"]`` **whose length
     matches** -> :data:`tcri_colors`, cycled. A partial ``dict`` fills its gaps from the
     canonical cycle rather than erroring, so ``palette={"R": "red"}`` is a legal way to pin
     one level and leave the rest alone.
 
     ``categories`` defaults to the categories of ``adata.obs[cat_key]``. Pass it explicitly
-    when colouring something that is not an obs column -- a phenotype axis read off a metric
+    when coloring something that is not an obs column -- a phenotype axis read off a metric
     result, say.
 
     An existing ``uns["<cat_key>_colors"]`` is read back rather than reassigned, so a level
-    keeps its colour across figures. That is the point: a plot that cannot see the colours
-    already stored assigns its own, and the same level changes colour from one figure to the
+    keeps its color across figures. That is the point: a plot that cannot see the colors
+    already stored assigns its own, and the same level changes color from one figure to the
     next.
     """
     if categories is None:
         categories = adata.obs[cat_key].astype("category").cat.categories
     requested = list(dict.fromkeys(categories))
 
-    # The colour is a property of the LEVEL, never of its position in this particular figure.
+    # The color is a property of the LEVEL, never of its position in this particular figure.
     # Assignment therefore runs over a canonical order -- scanpy's convention, the obs
     # categorical's categories, which is also what `uns[<key>_colors]` is aligned to -- and the
     # requested order only selects from the result.
     #
-    # Zipping against the caller's order instead would make the colour follow position: the
+    # Zipping against the caller's order instead would make the color follow position: the
     # renderer sorts x by median, so a `response` panel where NR sorts first would draw NR
     # purple and the panel beside it, where R sorts first, would draw R purple -- same
     # variable, same figure, swapped. Without an obs column to appeal to, sorting is enough

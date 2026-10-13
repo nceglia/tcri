@@ -162,7 +162,7 @@ class Config:
     ``REPLICATE`` is the column a metric uses when ``groupby`` is left implicit, so a user
     registers it once at ``setup_anndata`` rather than retyping it at every call. It is
     deliberately separate from ``BATCH_COL``: scvi's ``batch_key`` conditions the encoder and
-    decoder (one-hot into every hidden layer), which is a modelling decision, not a statement
+    decoder (one-hot into every hidden layer), which is a modeling decision, not a statement
     about what an independent replicate is. They coincide when batches are patients and diverge
     the moment they are sequencing runs.
     """

@@ -45,7 +45,7 @@ Two properties matter downstream:
   expanded clones over a long tail of singletons.
 
 Only the clone→phenotype *concentration* changes between conditions. Disease clones
-commit; control clones barely move. Nothing is relabelled, so each cell's phenotype still
+commit; control clones barely move. Nothing is relabeled, so each cell's phenotype still
 matches the expression it was generated with.
 
 ```{note}
@@ -77,7 +77,7 @@ entirely different things, even when they are the same column:
 For clonotypes, `clonotype_key="auto"` will resolve common Scirpy-style columns
 (`clone_id`, `cc_*`, or `<name>` with `<name>_size`) if you do not want to name one explicitly.
 
-- **`batch_key`** is a *modelling* choice — one-hot encoded into every hidden layer of the
+- **`batch_key`** is a *modeling* choice — one-hot encoded into every hidden layer of the
   encoder and decoder, so the network can absorb batch structure.
 - **`replicate`** is a *statistical* choice — the independent unit. Registering it once lets
   `groupby` be left implicit on every metric, and the effective value still lands in each
@@ -182,10 +182,10 @@ sample is the coarsest unit that varies there — replicate over item over draw.
 patients wherever a p-value over patients sits above them, and draws are never pooled across
 replicates.
 
-### Colours are a property of the level
+### Colors are a property of the level
 
 {func}`tcri.pl.resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps
-its colour in every later figure — and `sc.pl.umap(color="disease_status")` matches too.
+its color in every later figure — and `sc.pl.umap(color="disease_status")` matches too.
 
 ## 6. The paired entropies — what changed, per clone
 

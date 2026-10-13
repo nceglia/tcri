@@ -27,7 +27,7 @@ call resolved its own arguments; and a plot could only draw what it could recomp
 `pl.phenotypic_flux` manufactured a `groupby` out of the batch column to get a frame it could
 consume.
 
-One decorator, `@tl_result`, now realises the convention as code, so a metric cannot drift from
+One decorator, `@tl_result`, now realizes the convention as code, so a metric cannot drift from
 it:
 
 ```python
@@ -120,8 +120,10 @@ ambiguous name raises rather than silently preferring one.
 ## The reference alongside
 
 When a metric declares `null_model`, the decorator runs the whole call a second time against the
-named reference fit, with every other argument forwarded verbatim, and joins the two: the result
-gains `null_*` columns and, for the value columns, `adjusted*` columns. Forwarding verbatim is
+named reference fit, with every other argument forwarded verbatim and the draws seeded from their
+own seed, and joins the two draw by draw: `table` and `result` gain `null_*` columns and, for the
+value columns, `adjusted*` columns, and `result` carries the adjusted value's spread over the
+paired draws. Forwarding verbatim is
 the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
 estimand, and a reference computed at defaults would be a different quantity subtracted from a
 different quantity.
@@ -147,7 +149,7 @@ Storing columns positionally is what lets a phenotype called `CD8/GZMK` and two 
 same label survive the trip. Reading inverts the encoding, so `get.result` gives back the slots
 `tl` returned, with their values, column labels and index levels. Each encoded structure is
 tagged (`__tcri_df__`, `__tcri_series__`, `__tcri_map__`, `__tcri_multiindex__`), so the decoder
-recognises its own output and passes everything else through.
+recognizes its own output and passes everything else through.
 
 ## What stops a result from changing quietly
 

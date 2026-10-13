@@ -30,9 +30,9 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
                    return_denom: bool = False):
     """MI (bits) of a clone×phenotype table ``J`` (any scale — renormalized here).
 
-    ``return_denom`` also returns the normaliser, which a REFERENCE needs and cannot be given
-    from outside. The normaliser comes from the same joint it normalises, so a null does not
-    share it: at the default ``weighted=False`` the engine row-normalises, making ``h_c``
+    ``return_denom`` also returns the normalizer, which a REFERENCE needs and cannot be given
+    from outside. The normalizer comes from the same joint it normalizes, so a null does not
+    share it: at the default ``weighted=False`` the engine row-normalizes, making ``h_c``
     exactly ``log2(C)``, and ``normalize_mode="min"`` therefore selects ``h_p``, the FITTED
     phenotype marginal entropy. Both denominators are stored so a reader recovers both bit
     values exactly, as ``value*denom`` and ``null_value*null_denom``.
@@ -54,7 +54,7 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
     return (value, denom) if return_denom else value
 
 
-@tl_result(key=K.MUTUAL_INFORMATION, version=2, schema=schemas.MutualInformation,
+@tl_result(key=K.MUTUAL_INFORMATION, version=3, schema=schemas.MutualInformation,
            values=("value", "denom"), denominators=("denom",), default_null="phenotype")
 def mutual_information(
     adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
@@ -75,7 +75,7 @@ def mutual_information(
 
     ``null_model`` names the permutation reference (``"auto"`` is the phenotype null, ``None``
     the bare value); ``fit`` selects which fit the number is computed on. The result carries
-    ``denom``, the normaliser this MI was divided by, so the reference's own normaliser can be
+    ``denom``, the normalizer this MI was divided by, so the reference's own normalizer can be
     stored beside it and both bit values recovered exactly.
 
     ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``

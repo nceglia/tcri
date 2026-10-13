@@ -33,7 +33,7 @@ def _engine_blocks(
 ):
     """Validate, then run the numeric core; return the raw per-covariate blocks.
 
-    Shared by :func:`joint_distribution` (which formats them into a labelled
+    Shared by :func:`joint_distribution` (which formats them into a labeled
     DataFrame) and the metric fast path (which consumes the arrays directly), so
     both see identical validation, the same engine call, and one shared draw.
 

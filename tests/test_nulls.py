@@ -448,7 +448,7 @@ def test_a_null_rebuilt_after_a_gpu_session_load_is_on_the_parents_device(fitted
 
 def test_rebuild_names_the_missing_namespace(fitted):
     """With the store cleared, ``rebuild`` raises and names both fixes rather than handing back
-    a randomly initialised model that answers every question without complaint."""
+    a randomly initialized model that answers every question without complaint."""
     model, adata, _ = fitted
     pyro.clear_param_store()
     with pytest.raises(RuntimeError, match="load_tcri_session"):

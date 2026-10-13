@@ -9,7 +9,7 @@ API reference will make sense.
 A repertoire is large and a sequencing run samples a small part of it. What comes back is a
 few hundred to a few thousand cells, unevenly distributed: a handful of expanded clones supply
 most of the cells, while the long tail of the repertoire appears once or twice, or not at all.
-The clone→phenotype table counted from that sample is one realisation of the underlying joint
+The clone→phenotype table counted from that sample is one realization of the underlying joint
 distribution $P(c, \phi)$, and its variance is largest where the counts are smallest.
 
 Information-theoretic quantities — the entropies, the mutual information between clonotype and
@@ -27,7 +27,7 @@ empirical table takes every clone's counts at face value, so a clone contributin
 one timepoint and forty at the next is assigned a phenotype distribution from two cells, and
 most of the apparent change between timepoints is the variance of that two-cell estimate.
 
-TCRi draws each clone's covariate-level distribution $p_{ct}$ from a Dirichlet centred on that
+TCRi draws each clone's covariate-level distribution $p_{ct}$ from a Dirichlet centered on that
 **clone's own distribution pooled across covariates**, with concentration set by `local_scale`.
 Every covariate level of a clone is anchored to the same clone-level profile, so differences
 between covariates come out attenuated relative to the empirical table. The attenuation is a

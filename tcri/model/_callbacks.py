@@ -30,7 +30,7 @@ def _is_own_guide_param(module, store_name: str) -> bool:
 
     Two conditions, both needed. The key is in this module's namespace, which excludes the
     concentrations of any other model in the same process; and its tail is a guide
-    concentration rather than a network parameter, whose normalised name also lives under the
+    concentration rather than a network parameter, whose normalized name also lives under the
     namespace.
     """
     from ._training import GUIDE_CONCENTRATION_PARAMS

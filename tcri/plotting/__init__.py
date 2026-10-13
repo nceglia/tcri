@@ -1,4 +1,4 @@
-"""``tcri.pl`` — plotting. The four ``tl``<->``pl`` metric twins plus the shared colours.
+"""``tcri.pl`` — plotting. The four ``tl``<->``pl`` metric twins plus the shared colors.
 
 Every twin is a **cache renderer**: it reads the result ``tl`` stored in ``uns`` (through
 :mod:`tcri.get`) and draws it. None of them computes a metric, so a figure cannot disagree

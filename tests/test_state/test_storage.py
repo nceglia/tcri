@@ -212,7 +212,7 @@ def test_load_result_provenance_asymmetry_is_deliberate(adata):
     dropped on the floor.
 
     That asymmetry is easy to trip over, so it is pinned here rather than discovered.
-    ``tcri.get.result()`` is the accessor that normalises it — it strips provenance so the
+    ``tcri.get.result()`` is the accessor that normalizes it — it strips provenance so the
     return mirrors the tool's natural result in BOTH cases.
     """
     _store(adata, "tcri_df_case", pd.DataFrame({"v": [1.0]}))
