@@ -232,8 +232,8 @@ Two things to know before reading the ranking:
   across genes.
 
 {func}`knockout <tcri.perturbation.knockout>` is the primitive underneath: the per-cell
-probabilities with a gene, or a whole program, silenced — the `predict()` frame, so it goes
-straight into `obsm` or into any metric.
+probabilities with a gene, or a whole program, silenced — the `predict()` frame, written to
+`obsm` when you pass `key_added`.
 
 ```python
 tcri.perturb.knockout(model, adata, genes=["gene_3", "gene_7"], key_added="X_ko_program")
