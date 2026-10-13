@@ -231,7 +231,7 @@ def test_null_is_the_parent_model_on_permuted_labels(fitted):
         assert kp == kn and torch.equal(vp, vn), f"initial weights differ at {kp}"
 
 
-def test_a_null_stops_under_its_parents_rule():
+def test_a_null_stops_under_its_parents_rule(monkeypatch):
     """The null is fitted under its parent's recorded stopping arguments (B4, B10).
 
     The parent's threshold is so large that no check after the first gated one counts as an
@@ -239,8 +239,12 @@ def test_a_null_stops_under_its_parents_rule():
     it, whatever the values. The null is fitted with no stopping override and must stop there
     too.
     """
+    from tcri.model._callbacks import RampGatedEarlyStopping
+
     from ._stopping import GatedSeries, stop_index
 
+    # The step floor is lifted so that patience alone decides where these short fits stop.
+    monkeypatch.setattr(RampGatedEarlyStopping, "step_floor", 0)
     patience = 2
     a = _adata()
     _setup(a)
