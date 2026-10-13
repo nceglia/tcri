@@ -141,7 +141,7 @@ def test_train_knobs_reach_the_optimizer_and_plan(adata):
 
     Pyro's optimizer is the one that descends the ELBO. If the values stop at the Lightning
     plan, the fit silently runs at scvi's default learning rate and still converges, so no
-    behavioural test notices.
+    behavioral test notices.
     """
     m = _model(adata)
     plan = UnifiedTrainingPlan(
@@ -412,7 +412,7 @@ def test_gate_prob_endpoints_reduce_to_closed_forms(adata, gate, expect):
 
 
 def test_predict_is_invariant_to_batch_size(adata):
-    """batch_size is a chunking detail, not a modelling one.
+    """batch_size is a chunking detail, not a modeling one.
 
     Tolerance is float32-scale, not exact: different batch shapes take different BLAS kernel
     paths, so the encoder's accumulations differ in the last bits. Anything materially larger

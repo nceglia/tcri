@@ -290,12 +290,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     recorded as provenance and the ``.h5ad`` write would fail on it.
 
     **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
-    a second time against a permutation null and adds the ``null_*``/``adjusted*`` columns
-    (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
-    is not tidiness: the reference has to be *the caller's own call with two arguments changed*,
-    and only the decorator holds the caller's bound arguments. A body re-invoking itself would
-    have to re-list what to forward, and that list would drift from the signature the first time
-    a knob was added.
+    a second time against a permutation null and adds the ``null_*``/``adjusted*`` columns,
+    per draw on ``table`` and summarized on ``result`` (:mod:`tcri._state._reference`). It lives
+    here rather than in each body for one reason that is not tidiness: the reference has to be
+    *the caller's own call on the null*, and only the decorator holds the caller's bound
+    arguments. A body re-invoking itself would have to re-list what to forward, and that list
+    would drift from the signature the first time a knob was added.
 
     ``values`` names the metric's NATIVE value columns, before any reference column exists --
     ``("value",)`` for the scalar metrics, ``("value", "value_from", "value_to")`` for the two
@@ -327,7 +327,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             arguments = bound.arguments
             adata = arguments[_data_param]
 
-            # The fit is CANONICALISED before anything reads it, so `fit="phenotype"` and
+            # The fit is CANONICALIZED before anything reads it, so `fit="phenotype"` and
             # `fit="null.phenotype"` are one call rather than two `uns` keys and two params
             # blocks. `resolve_fit` is idempotent on the canonical name, which is what makes
             # doing it here safe.
@@ -386,18 +386,23 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             return result
 
         def _reference_call(arguments, reference_of):
-            """The caller's own arguments, with the two the reference changes.
+            """The caller's own arguments, on the null.
 
-            Every other argument is forwarded VERBATIM -- `groupby`, `splitby`, `clones`,
-            `exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`,
-            `distance_metric`, `temperature`, `n_samples`, `random_state` and `device` each
+            The fit (or model) and `null_model` change, and the draws take their own seed,
+            derived from the caller's `random_state` by `_reference.null_seed`: the fit and the
+            null are independent fits whose draws are paired, and two samples drawn from one
+            seed share their noise. Every other argument is forwarded VERBATIM -- `groupby`,
+            `splitby`, `clones`, `exclude_pools`, `weighted`, `normalized`, `normalize_mode`,
+            `n_clones_ref`, `distance_metric`, `temperature`, `n_samples` and `device` each
             change the estimand, and a reference computed at defaults is a different quantity
-            subtracted from a different quantity. `inplace` is honoured as the caller gave it, so
+            subtracted from a different quantity. `inplace` is honored as the caller gave it, so
             the reference's own frame is cached under its fit key: plottable by `key=`,
             available to the identity test, and not computed twice.
             """
             call = {k: v for k, v in arguments.items() if k != "key_added"}
             call["null_model"] = None          # terminates the recursion
+            if "random_state" in call:
+                call["random_state"] = _reference.null_seed(call["random_state"])
             if reference_arg == "fit":
                 if not isinstance(reference_of, str):
                     raise TypeError(

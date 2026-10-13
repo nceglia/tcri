@@ -64,7 +64,7 @@ tail of each traced param site.
 
 ## The objective (eq 7)
 
-The ELBO of the model above plus the alignment surrogate, maximised by SVI with Adam:
+The ELBO of the model above plus the alignment surrogate, maximized by SVI with Adam:
 
 ```
 L = ρ·E_q[log p(x | z)] + E_q[log p(y | z, φ)] − KL(q(z) ‖ p(z)) − KL(q(Φ) ‖ p(Φ | Ω)) − KL(q(Ω) ‖ p(Ω))

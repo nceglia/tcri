@@ -10,7 +10,7 @@ Two views of one cached result, selected by ``kind``:
 
 ``"shift"``
     Which way each top gene moves the call: a gene × phenotype heatmap of ``shift``
-    (``baseline − silenced``, averaged over groups), diverging and centred on zero, so a red
+    (``baseline − silenced``, averaged over groups), diverging and centered on zero, so a red
     cell is mass the phenotype LOSES when the gene is silenced and a blue cell is mass it gains.
 
 Like every twin it takes no metric arguments: the genes, groups, split and draws are the ones
@@ -24,8 +24,8 @@ import numpy as np
 
 from .._state import _reference
 from ._base import (_axes, _boxstrip, _colors_for, _empty, _finish, _points,
-                    _reference_legend, _violins, _zero_rule, check_quantity, filter_quantity,
-                    resolve_quantity)
+                    _reference_legend, _reference_means, _violins, _zero_rule, check_quantity,
+                    filter_quantity, resolve_quantity)
 
 __all__ = ["gene_importance"]
 
@@ -104,7 +104,7 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, legend
     if has_groups:
         hue = splitby if (splitby and splitby in d.columns) else None
         if ref is not None:
-            # the SAME hue and hue_order as the value pass. With hue=None the grey box pools
+            # the SAME hue and hue_order as the value pass. With hue=None the gray box pools
             # both arms into one distribution that belongs to neither, and the panel shows a
             # single reference where the value has two -- so a gene whose null differs between
             # arms reads as if it did not.
@@ -114,14 +114,14 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, legend
                   palette=palette, ax=ax, ylabel=ylabel, rotation=90)
         if hue is not None:
             _star_labels(ax, stats, genes, groupby=groupby, quantity=quantity)
-    elif (table is not None and "draw" in table.columns and table["draw"].nunique() > 1
-          and quantity == "value"):
-        # `quantity == "value"` only. The draws are a distribution of the VALUE; the adjusted
-        # value in `table` is a per-group constant, so a violin of it is a spike at one number.
-        # `render_metric` makes the same refusal for the same reason.
+    elif table is not None and "draw" in table.columns and table["draw"].nunique() > 1:
+        # draws are the sample, for the value and for the adjusted value alike: `table` carries
+        # both per draw. The reference is its mean behind the violins, as on `render_metric`.
         t = table[table["gene"].isin(genes)].dropna(subset=[quantity])
         _violins(adata, t, x="gene", y=quantity, palette=palette, ax=ax, ylabel=ylabel,
                  rotation=90, order=genes)
+        if ref is not None:
+            _reference_means(ax, d, x="gene", ref=ref, order=genes)
     else:
         _points(adata, d, x="gene", y=quantity, palette=palette, ax=ax, ylabel=ylabel,
                 rotation=90, order=genes, ref=ref)

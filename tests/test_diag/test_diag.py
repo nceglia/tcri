@@ -220,7 +220,7 @@ def _perfectly_coupled_adata(n_clones=6, per_clone=30):
 def test_permutation_null_p_value_is_floored(R):
     """A permutation p-value estimated from R shuffles can never be 0.
 
-    The observed statistic is itself one realisation under the null, so the estimator is
+    The observed statistic is itself one realization under the null, so the estimator is
     (1 + #{null >= obs}) / (1 + R), not the raw fraction (Phipson & Smyth 2010). The raw
     fraction is exactly 0.0 whenever no shuffle beats the observation — claiming infinite
     evidence from a finite sample, and giving -inf to anyone who logs it.
@@ -239,7 +239,7 @@ def test_permutation_null_p_value_is_floored(R):
     )
 
 
-def test_permutation_null_honours_normalize_mode(trained_model):
+def test_permutation_null_honors_normalize_mode(trained_model):
     """The null must be on the same scale as the statistic it is a null for.
 
     If the normalizer were fixed inside the null, a caller working in ``"average"`` would

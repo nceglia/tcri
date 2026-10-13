@@ -102,7 +102,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0):
 
     The encoder/decoder run once per batch and only the sampling is repeated, so cost is
     roughly linear in ``n_sims`` on the cheap part. Statistics accumulate per draw rather than
-    materialising every replicate, so memory does not scale with ``n_sims * n_cells * n_genes``.
+    materializing every replicate, so memory does not scale with ``n_sims * n_cells * n_genes``.
     """
     import torch
     import pyro.distributions as dist
@@ -271,7 +271,7 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
             z = (obs_mi - mu) / sd if sd > 0 else np.nan
             # (1 + #{null >= obs}) / (1 + n_perm), not the raw fraction. A permutation p-value
             # estimated from a finite number of shuffles can never be 0: the observed statistic
-            # is itself one realisation under the null. The unfloored fraction would return
+            # is itself one realization under the null. The unfloored fraction would return
             # exactly 0.0 whenever no shuffle beat the observation, claiming infinite evidence
             # from a finite sample. Phipson & Smyth (2010).
             p = float((1.0 + np.count_nonzero(null >= obs_mi)) / (1.0 + int(n_perm)))

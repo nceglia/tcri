@@ -61,5 +61,5 @@ def test_model_construct_train_predict(synthetic_adata):
 
     probs = model.predict()
     assert probs.shape == (n_cells, P)
-    assert list(probs.index) == list(adata.obs_names)  # order-preserving, labelled
+    assert list(probs.index) == list(adata.obs_names)  # order-preserving, labeled
     np.testing.assert_allclose(probs.values.sum(axis=1), 1.0, atol=1e-4)

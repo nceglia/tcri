@@ -110,11 +110,14 @@ with a `draw` column. Read back with `tcri.get.result(adata, name)` and
 **References.** Every scored metric takes `null_model`, defaulting to `"auto"`: the reference is
 computed and `result` gains `null_value` and `adjusted = value - null_value` beside every native
 value column (`null_denom` has no adjusted column; a denominator is not a reported quantity).
-`table` carries them too, broadcast to every draw. The adjusted value is the quantity a metric
-reports: `stats` is computed on it, and `value` and `null_value` stay stored as its inputs.
-`null_model=None` computes no reference and creates no column, and `stats` is then on the value. The reference is the caller's own call with two arguments changed — `fit` set to the
-null and `null_model=None` — every other argument forwarded verbatim, so both sides are the same
-functional at the same arguments. `joint_distribution` returns a matrix rather than a scored
+`table` carries them per draw, the fit's draw *d* paired with the null's draw *d*, and `result`
+summarizes the paired draws: `adjusted` is their mean, with `adjusted_sd`, `adjusted_hdi_low` and
+`adjusted_hdi_high` beside it. The adjusted value is the quantity a metric reports: `stats` is
+computed on it, and `value` and `null_value` stay stored as its inputs. `null_model=None`
+computes no reference and creates no column, and `stats` is then on the value. The reference is
+the caller's own call on the null — `fit` set to the null, `null_model=None`, and the draws
+seeded from their own seed derived from `random_state` — every other argument forwarded
+verbatim, so both sides are the same functional at the same arguments. `joint_distribution` returns a matrix rather than a scored
 quantity and takes no `null_model`.
 
 **Substrate and fits.** One AnnData carries one main fit and any number of named ones, written
@@ -160,8 +163,8 @@ null from the parameter store and this object.
 `n_top` genes under the mark rule, with each gene's own contrast starred above it when a
 split was used; `kind="shift"` is the gene × phenotype `shift`, averaged over groups, on a
 diverging scale centered on zero. Every twin takes `quantity`: the default is the adjusted value
-against a zero rule, with no interval, and `quantity="value"` is the value with its reference
-drawn behind it; `kind="shift"` draws only the value, because the reference has no per-phenotype
+against a zero rule, drawn under the mark rule like the value, and `quantity="value"` is the
+value with its reference drawn behind it; `kind="shift"` draws only the value, because the reference has no per-phenotype
 decomposition stored.
 
 ## The stub

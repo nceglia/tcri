@@ -61,7 +61,7 @@ def test_true_and_observed_phenotype_share_a_level_set():
 @pytest.mark.parametrize("bad", [0.0, -1.0, np.nan, np.inf, -np.inf])
 def test_temperature_scale_rejects_non_positive_or_non_finite(bad):
     """Temperature scaling is defined only for finite T > 0, so the function must raise
-    instead of returning something a caller cannot recognise as wrong: T=0 divides by zero,
+    instead of returning something a caller cannot recognize as wrong: T=0 divides by zero,
     T=nan gives an all-NaN matrix, and a negative T gives finite, plausible, row-stochastic
     output that inverts the distribution and would propagate into a benchmark silently."""
     with pytest.raises(ValueError, match="finite and > 0"):
@@ -70,7 +70,7 @@ def test_temperature_scale_rejects_non_positive_or_non_finite(bad):
 
 def test_temperature_scale_raises_on_float64_underflow():
     """Once (1/T)*log10(min(P)) < -308 every entry of a row underflows to exactly 0.0 in
-    float64 and the renormalisation is 0/0. Raising names the cause; returning a NaN row leaves
+    float64 and the renormalization is 0/0. Raising names the cause; returning a NaN row leaves
     the caller to notice. The two temperatures here bracket that point for this row."""
     P = np.array([[0.7, 0.2, 0.1]])
     assert np.isfinite(temperature_scale(P, 1e-3)).all(), "1e-3 should still be computable"

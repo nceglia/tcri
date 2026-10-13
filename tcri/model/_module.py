@@ -536,7 +536,7 @@ class TCRIModule(PyroBaseModuleClass):
             q_p_c_sharp = torch.clamp(q_p_c_sharp, min=1e-8)
             q_p_c_sharp = q_p_c_sharp / q_p_c_sharp.sum(dim=1, keepdim=True)
             # alpha is the eq-1 PRIOR scale, not the variational total, so the magnitude is free
-            # here as it is for lambda'_m below: the pair is parameterised the same way.
+            # here as it is for lambda'_m below: the pair is parameterized the same way.
             conc_c_guide = torch.clamp(q_c_mag * q_p_c_sharp, min=1e-3)
             
             # Sample p_c from a single learned Dirichlet per clonotype.
@@ -577,7 +577,7 @@ class TCRIModule(PyroBaseModuleClass):
             pyro.sample("p_ct", dist.Dirichlet(conc_ct_guide))
 
         # eq 6: q(z_i|x_i) = N(μ_i, diag(σ_i²)). σ comes from `encoder_posterior`, the same
-        # map the eq-3 VampPrior uses, so prior and posterior share one parameterisation.
+        # map the eq-3 VampPrior uses, so prior and posterior share one parameterization.
         z_loc, z_scale = encoder_posterior(self.encoder, x, batch_idx)
 
         with pyro.plate("data", size=self.plate_size(), subsample=indices):

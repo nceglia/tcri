@@ -5,7 +5,7 @@ Four contracts, one file each, one test file each. Everything else is ordinary c
 | contract | file | what it pins | enforced by |
 |---|---|---|---|
 | Model | `governance/MODEL_CONTRACT.md` | the generative model, the variational family, the objective | `tests/test_model_contract_conformance.py` traces `model()`/`guide()` against the block in the file |
-| Training | `governance/TRAINING_CONTRACT.md` | how the model is fit: invariants of the objective and the bounds we author | `tests/test_training_invariants.py`, behaviourally |
+| Training | `governance/TRAINING_CONTRACT.md` | how the model is fit: invariants of the objective and the bounds we author | `tests/test_training_invariants.py`, behaviorally |
 | Metrics | `governance/METRICS_CONTRACT.md` | what every `tl` number means, its defaults, and its value on a reference joint | `tests/test_metrics_contract_conformance.py`: reference recomputation, identities, pinned values |
 | API | `governance/API_CONTRACT.md` | the public surface and every signature | `tests/test_contract_conformance.py` parses the stub in the file: set equality and signature equality |
 
@@ -20,7 +20,7 @@ provenance, not a specification, and are not kept in the repository.
 - Adding a public function: add it to its namespace's `__all__` and declare it in the stub in
   `API_CONTRACT.md`. Changing a signature: the same.
 - Changing the model: update the block and the prose in `MODEL_CONTRACT.md`; add a test that
-  fails on the parent commit for the behaviour that changed.
+  fails on the parent commit for the behavior that changed.
 - Changing what a metric computes: update `METRICS_CONTRACT.md` including the pinned values,
   and say why in the PR.
 

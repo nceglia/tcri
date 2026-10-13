@@ -63,7 +63,7 @@ SEED = 0
 #   expanded clones over a long tail of singletons.
 #
 # Only the clone→phenotype *concentration* changes between conditions. Responders' clones
-# commit; control clones barely move. Nothing is relabelled, so each cell's phenotype still
+# commit; control clones barely move. Nothing is relabeled, so each cell's phenotype still
 # matches the expression it was generated with.
 
 # %%
@@ -129,7 +129,7 @@ print(f"clones: {adata.obs['clone_id'].nunique()} -> "
 # `setup_anndata` names the columns the model needs. Two of them are easy to confuse and mean
 # entirely different things, even when they are the same column:
 #
-# - **`batch_key`** is a *modelling* choice — one-hot encoded into every hidden layer of the
+# - **`batch_key`** is a *modeling* choice — one-hot encoded into every hidden layer of the
 #   encoder and decoder, so the network can absorb batch structure.
 # - **`replicate`** is a *statistical* choice — the independent unit. Registering it once lets
 #   `groupby` be left implicit on every metric, and the effective value still lands in each
@@ -167,7 +167,7 @@ pd.Series({k: v for k, v in record.items()
 # %% [markdown]
 # `to_anndata` wrote everything the metrics read. Two model outputs are useful directly:
 # `predict` gives per-cell phenotype probabilities, and `get_latent_representation` gives the
-# latent embedding you would hand to a neighbours graph or a UMAP.
+# latent embedding you would hand to a neighbors graph or a UMAP.
 
 # %%
 # `clone_size` reads uns[METADATA]['clone_col'], which to_anndata just wrote
@@ -356,9 +356,9 @@ fig.tight_layout()
 plt.show()
 
 # %% [markdown]
-# ### Colours are a property of the level
+# ### Colors are a property of the level
 #
-# `resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps its colour in
+# `resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps its color in
 # every later figure — and `sc.pl.umap(color="disease_status")` matches too.
 
 # %%

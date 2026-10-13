@@ -1,6 +1,6 @@
 /* TCRi documentation — minimal aesthetic with the brand green (#39de2d) as a
    strong accent. Layered on top of Furo; base colors (white background, near-
-   black text, dark greys, green links) come from light_css_variables /
+   black text, dark grays, green links) come from light_css_variables /
    dark_css_variables in conf.py. Everything here is mode-safe: it only sets
    the bright-green accents and weights, never a fixed foreground/background
    color, so light and dark modes both stay readable. */

@@ -25,7 +25,9 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     ``groupby`` group, and a clonotype carried by two individuals is two clones. A clone with
     fewer than ``min_cells`` cells, all from one sample, is rare, and each group's rare clones
     are pooled into one ``pooled@{group}`` label. Every other clone is kept, as
-    ``{clonotype}@{group}``; an id that already ends in ``@{group}`` is not suffixed again.
+    ``{clonotype}@{group}``; an id that already ends in ``@{group}`` is not suffixed again. The
+    kept clones are the clones the metrics count: at their default ``exclude_pools=True``, the
+    metrics leave the pools out.
 
     **Why the sample matters.** Doublets and ambient TCR can attach stray cells to the wrong
     clone within one capture, so a clone seen in only one sample needs several cells before it
@@ -63,7 +65,7 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
         condition. ``None`` counts each group as one sample.
     key_added
         The column to write; ``f"{clonotype_key}_pooled"`` when ``None``. It must differ from
-        ``clonotype_key``.
+        ``clonotype_key``, ``groupby`` and ``samples``.
 
     Warns
     -----
@@ -77,10 +79,12 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     TypeError
         When ``min_cells`` is not an integer.
     ValueError
-        When ``min_cells`` is not positive; when ``key_added`` is ``clonotype_key``; when a cell
-        has no clonotype (NaN or None, an empty or whitespace-only string, or the string
-        ``"nan"``), no group or no sample; and when two kept clones of one group would get the
-        same id. Nothing is written when it raises.
+        When ``min_cells`` is not positive; when ``key_added`` is ``clonotype_key``, ``groupby``
+        or ``samples``; when a cell has no clonotype (NaN or None, an empty or whitespace-only
+        string, or the string ``"nan"``), no group or no sample; when two kept clones of one
+        group would get the same id; and when a kept clone would get its group's pool label
+        ``pooled@{group}``, as a clonotype named ``"pooled"`` does, or a pool does when a column
+        this function wrote is pooled again. Nothing is written when it raises.
     """
     _pool_rare_clones(adata, clonotype_key=clonotype_key, groupby=groupby, min_cells=min_cells,
                       samples=samples, key_added=key_added)

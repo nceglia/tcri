@@ -9,7 +9,7 @@ For a gene ``j`` and a set of cells ``C``::
 
 One pass over the data: the baseline and the ``p_ct`` draws are computed once per batch and
 shared by every gene; each gene costs one encoder forward per batch. The per-draw values are
-the ``table`` the shared reducers summarise; the signed decomposition is the ``shift`` slot.
+the ``table`` the shared reducers summarize; the signed decomposition is the ``shift`` slot.
 """
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
     return base, pert, counts
 
 
-@tl_result(key=K.GENE_IMPORTANCE, version=2, schema=schemas.GeneImportance, data_param="adata",
+@tl_result(key=K.GENE_IMPORTANCE, version=3, schema=schemas.GeneImportance, data_param="adata",
            default_null="phenotype", reference_arg="model", per_gene_stats=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
@@ -109,7 +109,7 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
     n_samples
         ``0``: the plug-in at the posterior mean of ``p_ct``. ``N > 0``: ``N`` Dirichlet draws
         of ``p_ct`` from the guide, shared by every gene, entering only through the gate; the
-        importance is computed per draw and summarised (mean, sd, HDI).
+        importance is computed per draw and summarized (mean, sd, HDI).
     use_gate
         ``True``: the model's own rule, as ``predict()``, so the importance is about the calls
         users see. ``False``: the head alone, invariant to the gate and the clone structure.

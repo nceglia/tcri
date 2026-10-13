@@ -17,7 +17,7 @@ def encoder_posterior(encoder, x, *cat_list):
     (``exp(var_encoder(q)) + var_eps``; scvi builds its own ``Normal(q_m, q_v.sqrt())``). Eq 6
     is ``N(μ_i, diag(σ_i²))`` and eq 3 is the mixture of exactly these posteriors at the
     pseudo-inputs, so both must take ``σ = sqrt(q_v)``. Defining σ once, here, is what keeps
-    the guide and the VampPrior on one parameterisation, so the latent KL is taken between two
+    the guide and the VampPrior on one parameterization, so the latent KL is taken between two
     distributions of the same form.
 
     The clamp bounds the posterior width to ``[1e-3, 10]``, and applying it here bounds the

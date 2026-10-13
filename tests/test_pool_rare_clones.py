@@ -210,7 +210,7 @@ def test_pool_rejects_bad_min_cells(min_cells, error):
 def test_pool_writes_only_key_added():
     """Only obs[key_added] and the derivation record are written. The source column keeps its
     values and dtype; the default key_added is f"{clonotype_key}_pooled"; key_added equal to
-    clonotype_key raises; a second run replaces the column."""
+    clonotype_key, groupby or samples raises; a second run replaces the column."""
     adata = _cohort("category")
     source = adata.obs["clone_id"].copy()
     columns, uns_keys = list(adata.obs.columns), set(adata.uns)
@@ -226,16 +226,21 @@ def test_pool_writes_only_key_added():
     assert list(adata.obs.columns) == columns + ["clone_id_pooled", "mine"]
     assert _labels(adata, "mine") == COHORT_LABELS
 
+    adata.obs["sample"] = "s1"
     before = (list(adata.obs.columns), set(adata.uns))
-    with pytest.raises(ValueError, match="key_added must differ from clonotype_key"):
-        _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient",
-                          key_added="clone_id")
-    _unchanged(adata, before)
-    pd.testing.assert_series_equal(adata.obs["clone_id"], source)
+    read = adata.obs[["clone_id", "patient", "sample"]].copy()
+    for argument, column in [("clonotype_key", "clone_id"), ("groupby", "patient"),
+                             ("samples", "sample")]:
+        with pytest.raises(ValueError, match=f"key_added must differ from {argument} "
+                                             f"\\({column!r}\\)"):
+            _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient",
+                              samples="sample", key_added=column)
+        _unchanged(adata, before)
+    pd.testing.assert_frame_equal(adata.obs[["clone_id", "patient", "sample"]], read)
 
     with pytest.warns(TCRIDataWarning):
         _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient", min_cells=5)
-    assert list(adata.obs.columns) == columns + ["clone_id_pooled", "mine"]
+    assert list(adata.obs.columns) == columns + ["clone_id_pooled", "mine", "sample"]
     assert _labels(adata) == ["pooled@P1"] * 6 + ["pooled@P2"] * 6
 
 
@@ -268,6 +273,42 @@ def test_pool_suffixes_once():
     collide = _adata(clone_id=["x@P1"] * 3 + ["x"] * 2, patient=["P1"] * 5)
     _pool_rare_clones(collide, clonotype_key="clone_id", groupby="patient")
     assert _labels(collide) == ["x@P1"] * 3 + ["pooled@P1"] * 2
+
+
+def test_pool_refuses_a_kept_id_that_is_a_pool_label():
+    """A kept clone whose id would be its group's pool label raises, naming the clone, and
+    nothing is written: a clonotype named "pooled", and a pool kept as a clone when a column
+    pooling wrote is pooled again. A rare clonotype named "pooled" goes to the pool, and a pool
+    that is rare again is pooled again."""
+    named = _adata(clone_id=["pooled"] * 3 + ["c1"] * 3 + ["c2"], patient=["P1"] * 7)
+    before = (list(named.obs.columns), set(named.uns))
+    with pytest.raises(ValueError, match=r"clonotype 'pooled' of patient 'P1' would become "
+                                         r"'pooled@P1'"):
+        _pool_rare_clones(named, clonotype_key="clone_id", groupby="patient")
+    _unchanged(named, before)
+    named = _adata(clone_id=["pooled@P1"] * 3 + ["c1"] * 3, patient=["P1"] * 6)
+    with pytest.raises(ValueError, match="'pooled@P1' of patient 'P1'"):
+        _pool_rare_clones(named, clonotype_key="clone_id", groupby="patient")
+
+    rare = _adata(clone_id=["pooled"] * 2 + ["c1"] * 3, patient=["P1"] * 5)
+    _pool_rare_clones(rare, clonotype_key="clone_id", groupby="patient")
+    assert _labels(rare) == ["pooled@P1"] * 2 + ["c1@P1"] * 3
+
+    # P1's pool holds three cells, as many as min_cells, so pooling the pooled column keeps it.
+    # At min_cells=4 it is rare again and pooled with c1@P1, and P2's pool of two is pooled again.
+    adata = _cohort()
+    _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
+    before = (list(adata.obs.columns), set(adata.uns))
+    steps = _derivation_steps(adata)
+    with pytest.raises(ValueError, match="clonotype 'pooled@P1' of patient 'P1'"):
+        _pool_rare_clones(adata, clonotype_key="clone_id_pooled", groupby="patient")
+    _unchanged(adata, before)
+    assert _derivation_steps(adata) == steps
+    with pytest.warns(TCRIDataWarning, match="patient 'P1' keeps no clone"):
+        _pool_rare_clones(adata, clonotype_key="clone_id_pooled", groupby="patient",
+                          min_cells=4)
+    assert _labels(adata, "clone_id_pooled_pooled") == (["pooled@P1"] * 6 + ["pooled@P2"] * 2
+                                                        + ["c4@P2"] * 4)
 
 
 def test_pool_warns_when_a_group_keeps_nothing():

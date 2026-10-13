@@ -113,7 +113,7 @@ def result(adata, name: str, *, key=None, fit=None):
     """The cached result, exactly as the ``tl`` function returned it.
 
     Strips the provenance keys, which ``load_result`` carries through for dict payloads but not
-    for DataFrame ones — normalising that asymmetry is most of this function's job.
+    for DataFrame ones — normalizing that asymmetry is most of this function's job.
 
     ``fit`` selects which fit's RESULT BLOB to read, which is a different question from the
     ``fit`` a metric takes: that one selects which fit the number is computed on. They resolve

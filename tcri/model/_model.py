@@ -45,7 +45,7 @@ from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_c
 from ._training import UnifiedTrainingPlan, build_archetypes
 
 #: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
-#: concentrations and the networks `pyro.module` normalises as ``scvi$$$<param>``. This is the
+#: concentrations and the networks `pyro.module` normalizes as ``scvi$$$<param>``. This is the
 #: whole of a model's store footprint, which is what makes ownership decidable by name alone:
 #: a model owns exactly this set under ``f"{name}."``, and nothing else may.
 _PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
@@ -363,7 +363,7 @@ class TCRIModel(BaseModelClass):
         # provenance.
         #
         # Deliberately separate from batch_key. scvi's batch_key conditions the encoder and
-        # decoder (one-hot into every hidden layer), which is a modelling decision about what
+        # decoder (one-hot into every hidden layer), which is a modeling decision about what
         # to correct for; `replicate` is a claim about what counts as an independent
         # observation. They coincide when batches are patients and diverge the moment they are
         # sequencing runs -- at which point deriving one from the other silently gives the
@@ -663,7 +663,7 @@ class TCRIModel(BaseModelClass):
 
         `lightning.seed_everything(workers=True)` also seeds dataloader workers, which is what
         makes minibatch order reproducible; `pyro.set_rng_seed` covers the param-store
-        initialisers and the Dirichlet draws. Both are needed -- neither alone is sufficient.
+        initializers and the Dirichlet draws. Both are needed -- neither alone is sufficient.
         """
         import lightning.pytorch as _pl
         import scvi as _scvi
@@ -733,7 +733,7 @@ class TCRIModel(BaseModelClass):
             descending, if it descends by less than this per ``early_stopping_patience`` epochs.
         kwargs
             Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``.
-            An unrecognised name raises ``TypeError`` here rather than several frames deep in
+            An unrecognized name raises ``TypeError`` here rather than several frames deep in
             scvi, and so does a name those accept but this model replaces:
             ``early_stopping_warmup_epochs``, ``early_stopping_monitor``,
             ``early_stopping_mode``, ``trainer_config``, ``learning_rate_monitor``,

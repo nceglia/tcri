@@ -485,10 +485,11 @@ def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int
     TypeError
         When ``min_cells`` is not an integer; a bool is not one.
     ValueError
-        When ``min_cells`` is below 1; when ``key_added`` is ``clonotype_key``; when cells have
-        no clonotype (see :func:`_missing_clonotypes`), no group or no sample, naming the column
-        and the number of cells; and when two kept clones of one group would get the same id.
-        Nothing is written to ``adata`` when it raises.
+        When ``min_cells`` is below 1; when ``key_added`` is ``clonotype_key``, ``groupby`` or
+        ``samples``; when cells have no clonotype (see :func:`_missing_clonotypes`), no group or
+        no sample, naming the column and the number of cells; when two kept clones of one group
+        would get the same id; and when a kept clone would get its group's pool label
+        ``pooled@{group}``, naming the clones. Nothing is written to ``adata`` when it raises.
     """
     if isinstance(min_cells, bool):
         raise TypeError(f"min_cells must be an integer, got {min_cells!r}")
@@ -500,11 +501,13 @@ def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int
         raise ValueError(f"min_cells must be >= 1, got {min_cells!r}")
     if key_added is None:
         key_added = f"{clonotype_key}_pooled"
-    if key_added == clonotype_key:
-        raise ValueError(
-            f"key_added must differ from clonotype_key ({clonotype_key!r}): the pooled labels go "
-            f"to a column of their own, and the source column is never modified."
-        )
+    for argument, column in (("clonotype_key", clonotype_key), ("groupby", groupby),
+                             ("samples", samples)):
+        if key_added == column:
+            raise ValueError(
+                f"key_added must differ from {argument} ({column!r}): the pooled labels go to a "
+                f"column of their own, and the columns pooling reads are never modified."
+            )
 
     obs = adata.obs
     columns = {"clonotype_key": clonotype_key, "groupby": groupby}
@@ -550,10 +553,24 @@ def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int
 
     kept_ids = np.asarray(_make_clonotypes_replicate_specific(clonotypes[kept], groups[kept]),
                           dtype=object)
+    pools = "pooled@" + groups.astype(str).to_numpy(dtype=object)
+    # A kept id equal to its group's pool label merges into the pool, or, when nothing of the
+    # group is pooled, is left out of the recorded pool labels and counted as a clone.
+    as_pool = kept_ids == pools[kept]
+    if as_pool.any():
+        named = dict.fromkeys(zip(clonotypes[kept][as_pool].tolist(),
+                                  groups[kept][as_pool].tolist()))
+        shown = "; ".join(f"clonotype {c!r} of {groupby} {g!r} would become 'pooled@{g}'"
+                          for c, g in list(named)[:5])
+        more = f" ({len(named)} clones in all)" if len(named) > 5 else ""
+        raise ValueError(
+            f"a kept clone would get the label of its group's pool: {shown}{more}. Rename a "
+            f"clonotype named 'pooled', and pool the source column rather than a column pooling "
+            f"wrote."
+        )
     suffixed = bool(np.any(kept_ids != clonotypes.astype(str).to_numpy(dtype=object)[kept]))
     ids = np.empty(adata.n_obs, dtype=object)
     ids[kept] = kept_ids
-    pools = "pooled@" + groups.astype(str).to_numpy(dtype=object)
     labels = np.where(rare, pools, ids)
 
     # Cells and clones per group, in the group column's category order. `first` marks one cell

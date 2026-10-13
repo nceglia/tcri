@@ -6,16 +6,18 @@ flux is non-zero whenever two fits differ at all, and an in-silico knockout move
 call for every gene. The reference is what says how much of the number is the data: the same
 model, the same knobs, the same seed, the same training arguments, on one permuted label vector.
 
-Two rules carry the weight here, and both exist because the obvious shortcut is wrong.
+Two rules carry the weight here.
 
-The reference run is **the caller's own call with two arguments changed**, not a call at
-defaults: `groupby`, `splitby`, `clones`, `weighted`, `normalized`, `normalize_mode`,
-`n_clones_ref`, `distance_metric`, `temperature` and `n_samples` each change the estimand, so a
-reference at defaults is a different quantity subtracted from a different quantity.
+The reference run is **the caller's own call on the null**, not a call at defaults: `groupby`,
+`splitby`, `clones`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`,
+`distance_metric`, `temperature` and `n_samples` each change the estimand, so a reference at
+defaults is a different quantity subtracted from a different quantity. Only the fit,
+`null_model` and the seed of the draws differ.
 
-And `adjusted` is **a difference of two summaries, never a summary of a difference**. Draws are
-not paired across two fits -- there is no correspondence between the parent's draw 7 and the
-null's -- so the adjusted value carries no sd and no interval, and nothing here asks for one.
+And `adjusted` is **computed per draw**. The null is the value expected under no association,
+and the fit and the null are independent fits, so the fit's draw d is paired with the null's
+draw d: `adjusted` has per-draw rows in `table`, and a mean, an sd and an HDI in `result`, like
+any value. The null draws from its own seed, derived from the caller's.
 
 `null_model=None` reproduces the values and the `uns` key set of a run with no reference at all.
 Four shape changes fire unconditionally, and `test_rule_9_shape_changes_are_the_only_ones` pins
@@ -101,18 +103,19 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
 def test_null_value_is_the_metric_of_the_null(ref):
     """``result.null_value`` equals the caller's own call with ``fit=`` set, row for row.
 
-    At the caller's ``n_samples`` and under an explicit ``random_state``: at ``n_samples>0`` with
-    ``random_state=None`` the engine draws a fresh seed per call, so the identity would be
-    asserted against a different sample and would fail for a reason that has nothing to do with
-    the reference. The reference run forwards the seed, which is what makes the explicit-seed
-    form exact rather than approximate.
+    At the caller's ``n_samples`` and under the seed the reference derives from the caller's
+    ``random_state``: at ``n_samples>0`` with ``random_state=None`` the engine draws a fresh seed
+    per call, so the identity would be asserted against a different sample and would fail for a
+    reason that has nothing to do with the reference. The derived seed is a function of the
+    caller's, which is what makes the explicit-seed form exact rather than approximate.
     """
     _, adata = ref
     a = _cov(adata)[0]
-    kw = dict(covariate=a, groupby="patient", n_samples=4, random_state=7)
-    with_ref = tcri.tl.mutual_information(adata, **kw, inplace=False)["result"]
-    of_null = tcri.tl.mutual_information(adata, **kw, fit="null.phenotype",
-                                         null_model=None, inplace=False)["result"]
+    kw = dict(covariate=a, groupby="patient", n_samples=4)
+    with_ref = tcri.tl.mutual_information(adata, **kw, random_state=7, inplace=False)["result"]
+    of_null = tcri.tl.mutual_information(adata, **kw, random_state=_reference.null_seed(7),
+                                         fit="null.phenotype", null_model=None,
+                                         inplace=False)["result"]
     merged = with_ref.merge(of_null[["patient", "value", "denom"]], on="patient",
                             suffixes=("", "_own"))
     np.testing.assert_allclose(merged["null_value"], merged["value_own"], atol=1e-12)
@@ -139,21 +142,22 @@ def test_the_reference_forwards_every_argument(ref):
 
 
 def test_the_adjusted_value_of_a_fit_against_itself_is_zero(ref):
-    """Point a metric's reference at its own fit and the adjusted value is exactly zero.
+    """Point a metric's reference at its own fit and the adjusted value is zero.
 
-    The cleanest statement of what `adjusted` is. Asserted at ``n_samples=0`` and again at
-    ``n_samples=30`` with a fixed seed, because the second is where an unforwarded
-    ``random_state`` shows up: two independent samples of the same fit differ, and the
-    adjusted value would be sampling noise rather than zero.
+    The cleanest statement of what `adjusted` is. Exactly zero at ``n_samples=0``, where both
+    sides are the one point value. At ``n_samples=30`` the two sides are independent samples of
+    the same fit, so the paired differences scatter around zero and their interval covers it.
     """
     _, adata = ref
     a = _cov(adata)[0]
-    for n_samples in (0, 30):
-        res = tcri.tl.mutual_information(
-            adata, covariate=a, groupby="patient", n_samples=n_samples, random_state=3,
-            fit="null.phenotype", null_model="null.phenotype", inplace=False)["result"]
-        np.testing.assert_allclose(res["adjusted"].to_numpy(dtype=float), 0.0, atol=1e-12,
-                                   err_msg=f"n_samples={n_samples}")
+    kw = dict(covariate=a, groupby="patient", random_state=3, fit="null.phenotype",
+              null_model="null.phenotype", inplace=False)
+    res = tcri.tl.mutual_information(adata, n_samples=0, **kw)["result"]
+    np.testing.assert_allclose(res["adjusted"].to_numpy(dtype=float), 0.0, atol=1e-12)
+
+    res = tcri.tl.mutual_information(adata, n_samples=30, **kw)["result"]
+    assert (res["adjusted_hdi_low"] < 0).all() and (res["adjusted_hdi_high"] > 0).all(), (
+        res[["adjusted", "adjusted_hdi_low", "adjusted_hdi_high"]])
 
 
 def test_a_delta_adjusted_value_is_closed_within_its_own_result(ref):
@@ -189,6 +193,140 @@ def test_endpoint_means_use_their_own_masks(ref):
     assert np.isfinite(gap).any()
     # equal wherever every endpoint draw was finite, which on this fixture is every row
     assert float(np.nanmax(gap)) < 1e-9 or float(np.nanmax(gap)) > 0.0
+
+
+# ── the paired draws ─────────────────────────────────────────────────────────
+
+def _labels_of(table):
+    return [c for c in table.columns
+            if c != "draw" and not c.startswith(("value", "null_", "adjusted", "denom"))]
+
+
+def test_adjusted_is_paired_per_draw(ref):
+    """``table`` carries ``null_value`` and ``adjusted = value - null_value`` on every draw,
+    ``adjusted`` varies across the draws, and ``result`` summarizes those draws: its mean,
+    ``adjusted_sd`` and the HDI of the paired differences, row for row."""
+    from tcri._stats import hdi
+
+    _, adata = ref
+    a = _cov(adata)[0]
+    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=20,
+                                     random_state=0, inplace=False)
+    table, result = res["table"], res["result"]
+    np.testing.assert_allclose(table["adjusted"], table["value"] - table["null_value"],
+                               atol=1e-12)
+    labels = _labels_of(table)
+    assert (table.groupby(labels, observed=True)["adjusted"].nunique() > 1).all(), (
+        "adjusted is constant across draws")
+
+    for _, row in result.iterrows():
+        draws = table.loc[table["patient"] == row["patient"], "adjusted"].to_numpy(dtype=float)
+        assert len(draws) == 20
+        lo, hi = hdi(draws, prob=0.94)
+        assert row["adjusted"] == pytest.approx(draws.mean(), abs=1e-12)
+        assert row["adjusted_sd"] == pytest.approx(draws.std(ddof=1), abs=1e-12)
+        assert (row["adjusted_hdi_low"], row["adjusted_hdi_high"]) == pytest.approx((lo, hi))
+        assert row["adjusted_hdi_high"] > row["adjusted_hdi_low"]
+        null = table.loc[table["patient"] == row["patient"], "null_value"].mean()
+        assert row["null_value"] == pytest.approx(null, abs=1e-12)
+
+
+def test_every_scored_metric_pairs_its_draws(ref):
+    """The same per-draw identity on every scored metric and on the perturbation, with the
+    delta endpoints paired too, and no row of ``result`` gained or lost."""
+    model, adata = ref
+    a, b = _cov(adata)[:2]
+    kw = dict(groupby="patient", n_samples=5, random_state=2, inplace=False)
+    calls = {
+        "mutual_information": lambda: tcri.tl.mutual_information(adata, covariate=a, **kw),
+        "clonotypic_entropy": lambda: tcri.tl.clonotypic_entropy(adata, covariate=a, **kw),
+        "phenotypic_entropy": lambda: tcri.tl.phenotypic_entropy(adata, covariate=a, **kw),
+        "phenotypic_flux": lambda: tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b, **kw),
+        "delta_clonotypic_entropy": lambda: tcri.tl.delta_clonotypic_entropy(
+            adata, cov_from=a, cov_to=b, **kw),
+        "delta_phenotypic_entropy": lambda: tcri.tl.delta_phenotypic_entropy(
+            adata, cov_from=a, cov_to=b, **kw),
+        "gene_importance": lambda: tcri.perturb.gene_importance(
+            model, adata, genes=list(adata.var_names[:3]), **kw),
+    }
+    for name, call in calls.items():
+        fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
+        res = call()
+        table, result = res["table"], res["result"]
+        assert len(table) and len(result), name
+        for native, null, adjusted in _reference.column_pairs(fn.tcri_values,
+                                                               fn.tcri_denominators):
+            assert null in table.columns, f"{name}: no per-draw {null}"
+            if adjusted is not None:
+                np.testing.assert_allclose(table[adjusted], table[native] - table[null],
+                                           atol=1e-12, equal_nan=True, err_msg=name)
+        assert {"adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high"} <= set(result.columns)
+        assert len(result) == len(table.drop_duplicates(_labels_of(table))), name
+
+
+def test_a_per_draw_difference_between_two_conditions_has_an_interval(ref):
+    """The adjusted value at two covariate levels, differenced draw by draw within each
+    patient, has a spread: each side is a per-draw quantity, so the difference is too."""
+    from tcri._stats import hdi
+
+    _, adata = ref
+    a, b = _cov(adata)[:2]
+    kw = dict(groupby="patient", n_samples=20, random_state=4, inplace=False)
+    at_a = tcri.tl.mutual_information(adata, covariate=a, **kw)["table"]
+    at_b = tcri.tl.mutual_information(adata, covariate=b, **kw)["table"]
+    both = at_a.merge(at_b, on=["patient", "draw"], suffixes=("_a", "_b"))
+    assert len(both)
+    for patient, rows in both.groupby("patient", observed=True):
+        diff = (rows["adjusted_b"] - rows["adjusted_a"]).to_numpy(dtype=float)
+        lo, hi = hdi(diff, prob=0.94)
+        assert hi - lo > 0, f"{patient}: a zero-width interval on a per-draw difference"
+
+
+def test_the_fit_and_the_null_draw_from_different_seeds(ref):
+    """The null's draws come from the seed :func:`null_seed` derives from the caller's: its
+    per-draw values are the null's own call at that seed, and not at the caller's."""
+    _, adata = ref
+    a = _cov(adata)[0]
+    kw = dict(covariate=a, groupby="patient", n_samples=8, inplace=False)
+    table = tcri.tl.mutual_information(adata, random_state=11, **kw)["table"]
+
+    def null_draws(seed):
+        own = tcri.tl.mutual_information(adata, random_state=seed, fit="null.phenotype",
+                                         null_model=None, **kw)["table"]
+        return table[["patient", "draw"]].merge(own, on=["patient", "draw"])["value"]
+
+    seed = _reference.null_seed(11)
+    assert seed != 11
+    np.testing.assert_allclose(table["null_value"], null_draws(seed), atol=1e-12)
+    assert not np.allclose(table["null_value"], null_draws(11)), (
+        "the null drew from the caller's own seed")
+
+
+def test_null_seed_is_derived_and_reproducible():
+    """The same input gives the same seed, a different stream from the caller's; ``None``
+    stays unseeded; a seeded NumPy generator reproduces."""
+    assert _reference.null_seed(None) is None
+    assert _reference.null_seed(5) == _reference.null_seed(5) != 5
+    assert _reference.null_seed(5) != _reference.null_seed(6)
+    assert _reference.null_seed(np.int64(5)) == _reference.null_seed(5)
+    assert isinstance(_reference.null_seed(-3), int)
+    assert (_reference.null_seed(np.random.default_rng(1))
+            == _reference.null_seed(np.random.default_rng(1)))
+
+
+def test_without_draws_adjusted_is_the_point_difference(ref):
+    """At ``n_samples=0`` each side is one point value: ``adjusted`` is their difference, on
+    the one draw ``table`` holds and in ``result``, with no spread."""
+    _, adata = ref
+    a = _cov(adata)[0]
+    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=0,
+                                     inplace=False)
+    table, result = res["table"], res["result"]
+    assert set(table["draw"]) == {0}
+    np.testing.assert_allclose(result["adjusted"], result["value"] - result["null_value"],
+                               atol=1e-12)
+    for column in ("adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high"):
+        assert result[column].isna().all(), column
 
 
 # ── selecting the reference, and selecting the fit ───────────────────────────
@@ -524,7 +662,7 @@ def test_h5ad_round_trip(ref, tmp_path):
 # ── the figures ──────────────────────────────────────────────────────────────
 
 def test_pl_draws_the_reference_behind_the_value(ref):
-    """On the value panel the grey mark sits at the value's own x positions and the tick labels
+    """On the value panel the gray mark sits at the value's own x positions and the tick labels
     do not move; the adjusted panel draws a zero rule and no reference."""
     import matplotlib
     matplotlib.use("Agg")
@@ -538,10 +676,10 @@ def test_pl_draws_the_reference_behind_the_value(ref):
     ticks = [t.get_text() for t in ax.get_xticklabels()]
     value_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                               if c.get_label() != REFERENCE_LABEL])
-    grey_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+    gray_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                              if c.get_label() == REFERENCE_LABEL])
-    assert len(grey_x), "no reference collection was drawn"
-    np.testing.assert_allclose(np.sort(grey_x), np.sort(value_x))
+    assert len(gray_x), "no reference collection was drawn"
+    np.testing.assert_allclose(np.sort(gray_x), np.sort(value_x))
     assert [t.get_text() for t in ax.get_xticklabels()] == ticks
 
     adjusted_ax = tcri.pl.mutual_information(adata, quantity="adjusted")
@@ -558,7 +696,7 @@ def test_pl_draws_the_reference_behind_the_value(ref):
 
 def test_pl_draws_the_adjusted_quantity_by_default(ref):
     """The default panel is the adjusted value against a zero rule, alone. ``quantity="value"``
-    is the value with one grey null pass behind it and no zero rule; and with no reference the
+    is the value with one gray null pass behind it and no zero rule; and with no reference the
     default is the value, labeled as having none.
 
     The tick labels are compared as a SET: each panel orders x by its own quantity's median,
@@ -572,7 +710,7 @@ def test_pl_draws_the_adjusted_quantity_by_default(ref):
     a = _cov(adata)[0]
     res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient")["result"]
 
-    def grey(ax):
+    def gray(ax):
         return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
 
     def colored_y(ax):
@@ -595,12 +733,12 @@ def test_pl_draws_the_adjusted_quantity_by_default(ref):
                                np.sort(res["adjusted"].to_numpy(dtype=float)))
     assert default.get_ylabel().startswith("adjusted"), default.get_ylabel()
     assert zero_rule(default), "no zero rule on the adjusted panel"
-    assert not grey(default), "the adjusted panel drew a reference; zero IS the reference there"
+    assert not gray(default), "the adjusted panel drew a reference; zero IS the reference there"
     assert not entries(default)
 
     value = tcri.pl.mutual_information(adata, quantity="value")
     np.testing.assert_allclose(colored_y(value), np.sort(res["value"].to_numpy(dtype=float)))
-    assert len(grey(value)) == 1, "the value panel draws one grey pass"
+    assert len(gray(value)) == 1, "the value panel draws one gray pass"
     assert not zero_rule(value)
     assert entries(value) == [REFERENCE_LEGEND]
     assert ticks(value) == ticks(default)
@@ -608,7 +746,7 @@ def test_pl_draws_the_adjusted_quantity_by_default(ref):
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
     plain = tcri.pl.mutual_information(adata)
     np.testing.assert_allclose(colored_y(plain), colored_y(value))
-    assert not grey(plain) and not zero_rule(plain)
+    assert not gray(plain) and not zero_rule(plain)
     assert "no reference" in plain.get_ylabel()
 
 
@@ -887,7 +1025,7 @@ def test_an_all_nan_reference_is_no_reference(ref):
     the replicate path the shared collapse empties the frame and the panel renders with no
     marks at all; on the box-and-strip path seaborn is handed an all-NaN y and raises. What the
     panel should show is the value, drawn normally, with "no reference" on the label and
-    nothing grey named in the legend -- on `render_metric` and on `pl.gene_importance`, which
+    nothing gray named in the legend -- on `render_metric` and on `pl.gene_importance`, which
     is a second implementation of the same rule.
     """
     import matplotlib
@@ -906,7 +1044,7 @@ def test_an_all_nan_reference_is_no_reference(ref):
         adata.uns[key] = {**_encode(payload), "params": blob["params"],
                           "version": blob["version"]}
 
-    def grey(ax):
+    def gray(ax):
         return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
 
     def entries(ax):
@@ -919,7 +1057,7 @@ def test_an_all_nan_reference_is_no_reference(ref):
     blank_the_reference(K.PHENOTYPIC_ENTROPY, "phenotypic_entropy")
     ax = tcri.pl.phenotypic_entropy(adata)
     assert ax.collections, "the value marks were dropped along with the reference"
-    assert not grey(ax)
+    assert not gray(ax)
     assert "no reference" in ax.get_ylabel()
 
     # the gene twin's box-and-strip path, where the reference is a second seaborn pass
@@ -928,7 +1066,7 @@ def test_an_all_nan_reference_is_no_reference(ref):
     blank_the_reference(K.GENE_IMPORTANCE, "gene_importance")
     ax = tcri.pl.gene_importance(adata, n_top=4)
     assert ax.collections, "the value marks were dropped along with the reference"
-    assert not grey(ax)
+    assert not gray(ax)
     assert REFERENCE_LEGEND not in entries(ax)
     assert "no reference" in ax.get_ylabel()
 
@@ -936,7 +1074,7 @@ def test_an_all_nan_reference_is_no_reference(ref):
 def test_the_reference_dodges_with_the_value(ref):
     """With a `splitby` hue the value marks dodge, so the reference has to dodge with them.
 
-    Drawn with `hue=None` the grey marks land at the category centre while the value marks sit
+    Drawn with `hue=None` the gray marks land at the category center while the value marks sit
     either side of it, so the reference reads as a third arm and its box pools two arms that
     belong to different distributions.
     """
@@ -951,16 +1089,16 @@ def test_the_reference_dodges_with_the_value(ref):
     ax = tcri.pl.clonotypic_entropy(adata, quantity="value")
     value_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                               if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
-    grey_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+    gray_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                              if c.get_label() == REFERENCE_LABEL and len(c.get_offsets())])
-    assert len(grey_x)
-    # each grey mark sits in a dodge band the value marks occupy. Compared as OFFSETS FROM THE
-    # CATEGORY CENTRE, because the strip jitter moves individual points by a few hundredths; a
+    assert len(gray_x)
+    # each gray mark sits in a dodge band the value marks occupy. Compared as OFFSETS FROM THE
+    # CATEGORY CENTER, because the strip jitter moves individual points by a few hundredths; a
     # reference that does not dodge sits at offset 0 while the value marks sit at +-0.2.
-    grey_offsets = np.abs(grey_x - np.round(grey_x))
+    gray_offsets = np.abs(gray_x - np.round(gray_x))
     value_offsets = np.abs(value_x - np.round(value_x))
-    assert grey_offsets.mean() > 0.5 * value_offsets.mean(), (
-        f"the reference did not dodge: mean |offset| {grey_offsets.mean():.3f} against the "
+    assert gray_offsets.mean() > 0.5 * value_offsets.mean(), (
+        f"the reference did not dodge: mean |offset| {gray_offsets.mean():.3f} against the "
         f"value marks' {value_offsets.mean():.3f}")
 
 
@@ -968,7 +1106,7 @@ def test_the_perturbation_reference_dodges_too(ref):
     """The same assertion for `pl.gene_importance`, because it is a SECOND implementation.
 
     The twin and `render_metric` are parallel code paths, so a property held on one can be lost
-    on the other: a single grey box against two coloured ones pools both arms, and a gene whose
+    on the other: a single gray box against two colored ones pools both arms, and a gene whose
     null differs between arms then reads as if it did not. Asserting the property on both paths
     is what stops the pair drifting.
     """
@@ -981,26 +1119,24 @@ def test_the_perturbation_reference_dodges_too(ref):
                                  groupby="patient", splitby="disease_status")
     ax = tcri.pl.gene_importance(adata, n_top=4, quantity="value")
 
-    grey = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
+    gray = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                            if c.get_label() == REFERENCE_LABEL and len(c.get_offsets())])
     value = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                             if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
-    assert len(grey), "no reference was drawn"
-    assert np.abs(grey - np.round(grey)).mean() > 0.5 * np.abs(value - np.round(value)).mean(), (
-        "the perturbation reference pooled both arms into one box at the category centre")
+    assert len(gray), "no reference was drawn"
+    assert np.abs(gray - np.round(gray)).mean() > 0.5 * np.abs(value - np.round(value)).mean(), (
+        "the perturbation reference pooled both arms into one box at the category center")
 
-    # one grey box per arm per gene, matching the value marks
-    grey_boxes = sum(1 for p in ax.patches if p.get_label() == REFERENCE_LABEL)
+    # one gray box per arm per gene, matching the value marks
+    gray_boxes = sum(1 for p in ax.patches if p.get_label() == REFERENCE_LABEL)
     value_boxes = sum(1 for p in ax.patches if p.get_label() != REFERENCE_LABEL)
-    assert grey_boxes == value_boxes, f"{grey_boxes} grey boxes against {value_boxes} value"
+    assert gray_boxes == value_boxes, f"{gray_boxes} gray boxes against {value_boxes} value"
 
 
-def test_the_draw_path_carries_the_reference_and_refuses_a_constant_violin(ref):
-    """The adjusted value is a per-group constant on `table`, so a violin of it is a spike.
-
-    The default panel therefore falls back to the group-level mark, and the value panel draws
-    the violin with the reference behind it as the one number it is rather than ignoring it.
-    """
+def test_the_draw_path_draws_the_adjusted_draws_and_the_reference(ref):
+    """Where draws are the sample, the adjusted value is a violin over its paired draws, like
+    the value; and the value panel draws the null behind its violins as one marker at its
+    mean per x position."""
     import matplotlib
     matplotlib.use("Agg")
     from matplotlib.collections import PolyCollection
@@ -1010,17 +1146,22 @@ def test_the_draw_path_carries_the_reference_and_refuses_a_constant_violin(ref):
     a = _cov(adata)[0]
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=6,
                                random_state=1)
+    patients = adata.obs["patient"].nunique()
+
+    def violins(ax):
+        return [c for c in ax.collections if isinstance(c, PolyCollection)]
+
+    def reference_marks(ax):
+        return sum(len(c.get_offsets()) for c in ax.collections
+                   if c.get_label() == REFERENCE_LABEL)
+
     ax = tcri.pl.mutual_information(adata)
-    assert not [c for c in ax.collections if isinstance(c, PolyCollection)], (
-        "the adjusted value was drawn as a violin of a constant")
-    assert len(ax.collections), "the adjusted panel drew nothing"
-    assert not [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+    assert len(violins(ax)) == patients, "the paired draws were not drawn"
+    assert not reference_marks(ax)
 
     value_ax = tcri.pl.mutual_information(adata, quantity="value")
-    assert [c for c in value_ax.collections if isinstance(c, PolyCollection)], (
-        "the value panel drew no violins over the draws")
-    assert [c for c in value_ax.collections if c.get_label() == REFERENCE_LABEL], (
-        "the draw path drew violins and no reference at all")
+    assert len(violins(value_ax)) == patients
+    assert reference_marks(value_ax) == patients, "the null was not drawn behind the violins"
 
 
 def test_the_endpoints_view_refuses_the_adjusted_value(ref):
@@ -1063,10 +1204,10 @@ def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
     assert K.fits(back) == K.fits(adata)
 
 
-def test_the_grey_marks_are_named_in_the_legend(ref):
-    """The reference artists are underscore-labelled, which is what keeps matplotlib from
-    listing each one; so without an explicit handle a panel shows grey boxes beside the
-    coloured ones and nothing says what they are. A reader can take them for a third arm.
+def test_the_gray_marks_are_named_in_the_legend(ref):
+    """The reference artists are underscore-labeled, which is what keeps matplotlib from
+    listing each one; so without an explicit handle a panel shows gray boxes beside the
+    colored ones and nothing says what they are. A reader can take them for a third arm.
 
     The entry is APPENDED, never replacing what the panel already had: the box-and-strip
     legend carries the split levels and the endpoints view carries the matched-clone sizes.
@@ -1101,7 +1242,7 @@ def test_the_grey_marks_are_named_in_the_legend(ref):
     assert ax.get_legend().get_title().get_text() == "clones matched"
     assert entries(ax)[-1] == REFERENCE_LEGEND
 
-    # ...and nothing is named when nothing grey was drawn
+    # ...and nothing is named when nothing gray was drawn
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
     assert REFERENCE_LEGEND not in entries(tcri.pl.mutual_information(adata))
 
