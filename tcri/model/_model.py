@@ -54,13 +54,13 @@ _PARAM_BASES = ("q_p_c", "q_p_ct", "scvi$$$")
 #: Namespaces whose pre-existing store parameters are EXPECTED rather than a collision.
 #: ``tcri.null._rebuild`` holds a name in here while it reconstructs a fitted null: finding that
 #: null's parameters already in the store is the entire point of a rebuild, so the constructor's
-#: "will CONTINUE that fit" warning would fire on every reference run and mean nothing.
+#: collision check would refuse every reference run.
 _EXPECTED_PARAMS: set = set()
 
 
 @contextlib.contextmanager
 def expect_params(name: str):
-    """Silence the store-collision warning for ``name`` inside the block."""
+    """Allow a model to be constructed under ``name`` while the store holds its entries."""
     _EXPECTED_PARAMS.add(str(name))
     try:
         yield
@@ -68,9 +68,9 @@ def expect_params(name: str):
         _EXPECTED_PARAMS.discard(str(name))
 
 
-#: True while ``TCRIModel.load`` builds a model. The constructor's collision warning describes a
-#: new fit continuing from entries already in the store; a load replaces those entries instead,
-#: and ``TCRIModule.restore_param_store`` warns about that.
+#: True while ``TCRIModel.load`` builds a model. The constructor refuses a name the store already
+#: holds; a load replaces those entries instead, and ``TCRIModule.restore_param_store`` warns
+#: about that.
 _LOADING = contextvars.ContextVar("tcri_loading", default=False)
 
 
@@ -102,11 +102,11 @@ def _is_generated_name(name) -> bool:
 def _owns_param(name: str, key: str) -> bool:
     """Does the model called ``name`` own the store entry ``key``?
 
-    Ownership is what the constructor warning keys on. ``key.startswith(f"{name}.")`` alone is
-    wrong DOWNWARD: a null's namespace is ``f"{parent}.null.{kind}"``, so a parent would claim
-    its own nulls' parameters and warn about a collision with itself. So the namespace has to
-    match exactly, which means stripping it and requiring what remains to be one of this model's
-    own entries.
+    Ownership is what the constructor's collision check keys on. ``key.startswith(f"{name}.")``
+    alone is wrong DOWNWARD: a null's namespace is ``f"{parent}.null.{kind}.{token}"``, so a
+    parent would claim its own nulls' parameters and refuse a collision with itself. So the
+    namespace has to match exactly, which means stripping it and requiring what remains to be one
+    of this model's own entries.
     """
     prefix = f"{name}."
     return key.startswith(prefix) and key[len(prefix):].startswith(_PARAM_BASES)
@@ -268,6 +268,57 @@ def _int_at_least(name: str, value, minimum: int) -> int:
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}, got {value!r}")
     return value
+
+
+def _device_count(devices):
+    """How many devices a Lightning ``devices`` value asks for; ``None`` for ``"auto"``.
+
+    ``-1`` and ``"-1"`` mean every device, returned as ``-1``. A list or a comma-separated string
+    names devices one by one; any other integer or integer string is a count.
+    """
+    if isinstance(devices, str):
+        text = devices.strip()
+        if text == "auto":
+            return None
+        if "," in text:
+            return len([part for part in text.split(",") if part.strip()])
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    if isinstance(devices, (list, tuple, range)):
+        return len(devices)
+    if isinstance(devices, int) and not isinstance(devices, bool):
+        return devices
+    return None
+
+
+def _multi_device_request(kwargs) -> Optional[str]:
+    """The ``train()`` argument that asks for more than one device, or ``None``.
+
+    The guide concentrations live in Pyro's store, outside the module, so a distributed fit
+    leaves every process with its own: they are not synchronized, and neither are the networks,
+    which Pyro's optimizer steps outside the wrapper that would average their gradients.
+    """
+    count = _device_count(kwargs.get("devices", "auto"))
+    if count is not None and (count > 1 or count == -1):
+        return f"devices={kwargs['devices']!r}"
+    num_nodes = kwargs.get("num_nodes", 1)
+    if isinstance(num_nodes, int) and not isinstance(num_nodes, bool) and num_nodes > 1:
+        return f"num_nodes={num_nodes!r}"
+    strategy = kwargs.get("strategy", "auto")
+    if isinstance(strategy, str):
+        name = strategy.strip().lower()
+        if name != "auto" and not name.startswith("single"):
+            return f"strategy={strategy!r}"
+        return None
+    try:
+        from lightning.pytorch.strategies import ParallelStrategy
+    except ImportError:
+        return None
+    if isinstance(strategy, ParallelStrategy):
+        return f"strategy={type(strategy).__name__}"
+    return None
 
 
 def _accepted_train_kwargs() -> set[str]:
@@ -458,7 +509,9 @@ class TCRIModel(BaseModelClass):
         ``name`` namespaces this model's entries in Pyro's PROCESS-GLOBAL parameter store, so
         two models can be fitted in one session without overwriting each other. Left empty, a
         name is generated (``tcri-`` and 12 hex digits) and recorded with the model, so a load
-        restores the model under the same one.
+        restores the model under the same one. A ``name`` whose entries the store already holds,
+        because another model of that name was fitted or loaded in this session, raises
+        ``ValueError``; continuing a fit is another ``train()`` on the same object.
 
         ``permutation`` is ``(axis, perm)`` and makes this model a NULL: the named label
         vector is reordered by ``perm`` before anything is derived from it, and nothing else
@@ -523,25 +576,24 @@ class TCRIModel(BaseModelClass):
         if self._seed is not None:
             self._apply_seed(self._seed)
 
-        # Pyro's param store is PROCESS-GLOBAL: a model constructed under a name the store
-        # already holds silently inherits that fit's q_p_c_raw/q_p_ct_raw and network weights,
-        # so it starts from the previous fit instead of from scratch. Only a `name=` passed
-        # again can do that, since a generated name is new. We warn rather than clearing,
-        # because clearing here would destroy the params of a model loaded earlier in the
-        # session. The check is scoped to THIS model's namespace: other models' parameters are
-        # the normal state of a session, not the problem it is meant to flag. A load builds the
-        # model under its saved name and then replaces those entries, so it is not checked here.
+        # Pyro's param store is PROCESS-GLOBAL, so a model constructed under a name the store
+        # already holds would share that fit's entries. It would read the old guide
+        # concentrations, and its networks would never train: `pyro.module` returns the store's
+        # existing network tensors, the optimizer steps those, and the forward pass uses the new
+        # module's own. Only a `name=` passed again can collide, since a generated name is new.
+        # It raises rather than clearing, because clearing would destroy the entries of a model
+        # fitted or loaded earlier in the session. The check is scoped to THIS model's namespace:
+        # other models' parameters are the normal state of a session. A load builds the model
+        # under its saved name and then replaces those entries, and a rebuild reads a fitted
+        # null's entries on purpose, so neither is checked here.
         _tcri_params = [k for k in pyro.get_param_store().keys()
                         if _owns_param(self._name, k)]
         if _tcri_params and self._name not in _EXPECTED_PARAMS and not _LOADING.get():
-            warnings.warn(
-                f"The global Pyro param store already holds TCRI parameters for "
-                f"name={self._name!r} ({len(_tcri_params)} entries). This model will CONTINUE "
-                "that fit rather than start fresh. Construct it with a different `name=`, or "
-                "call `pyro.clear_param_store()` (note this invalidates any model already "
-                "loaded in this session).",
-                UserWarning,
-                stacklevel=2,
+            raise ValueError(
+                f"Pyro's parameter store already holds {len(_tcri_params)} entries for "
+                f"name={self._name!r}, from a model of that name fitted or loaded earlier in "
+                f"this session. Choose a different `name=`, or restart the Python session. To "
+                f"continue that fit, call train() again on the model that made it."
             )
 
         n_vars = self.summary_stats["n_vars"]
@@ -712,7 +764,8 @@ class TCRIModel(BaseModelClass):
             Epochs over which ``kl_weight`` rises to ``max_kl_weight``, smoothly within each
             epoch; an integer ``>= 0``, and ``0`` disables annealing. Selection and the
             early-stopping count start when the ramp completes. The position lives on the
-            module, so a second ``train()`` continues the ramp instead of restarting it --
+            module and is saved with the model, so a second ``train()``, on this object or on a
+            model loaded from its save, continues the ramp instead of restarting it --
             construct a new model for a fresh ramp.
         num_particles
             Draws of the latent variables averaged per optimizer step to estimate the ELBO and
@@ -740,7 +793,11 @@ class TCRIModel(BaseModelClass):
             ``early_stopping_mode``, ``trainer_config``, ``learning_rate_monitor``,
             ``enable_checkpointing`` and ``checkpointing_monitor``. ``check_val_every_n_epoch``
             other than 1 and ``val_check_interval`` other than 1.0 raise, because patience is
-            counted in epochs. The train/validation split is fixed at 0.9.
+            counted in epochs. The train/validation split is fixed at 0.9. Training runs on one
+            device: ``devices`` above 1, a list of several devices, ``-1`` or ``"-1"``,
+            ``num_nodes`` above 1, or a multi-device ``strategy`` (DDP, FSDP, DeepSpeed and the
+            like) raises ``ValueError`` before anything is fitted. The default
+            ``devices="auto"`` resolves to one device.
 
         Notes
         -----
@@ -781,6 +838,13 @@ class TCRIModel(BaseModelClass):
             raise TypeError(
                 "train() validates once per epoch: early_stopping_patience is counted in epochs, "
                 f"so val_check_interval={kwargs['val_check_interval']!r} would change its unit."
+            )
+        multi = _multi_device_request(kwargs)
+        if multi is not None:
+            raise ValueError(
+                f"{multi} asks for more than one device, and multi-device training is not "
+                f"supported. Train on one device: leave `devices` at its default ('auto') or "
+                f"pass devices=1."
             )
         if not (math.isfinite(early_stopping_min_delta) and early_stopping_min_delta >= 0):
             raise ValueError(
@@ -1005,6 +1069,27 @@ class TCRIModel(BaseModelClass):
         """The parameter-store namespace this model owns: the ``name=`` it was constructed with,
         or the one generated when none was given."""
         return self.module.name
+
+    @property
+    def _kl_warmup_state_(self) -> dict:
+        """The KL ramp's position and the current ``kl_weight``, read off the module.
+
+        The position is two plain ints on the module, not buffers, because a buffer would change
+        the ``state_dict`` key set. scvi's ``save`` writes every model attribute whose name ends
+        in an underscore and ``load`` sets it back after construction, so this property is what
+        carries the ramp through a save: a loaded model continues the ramp where it was, and a
+        finished fit stays at full weight.
+        """
+        module = self.module
+        return {"epochs": int(module._kl_warmup_epochs), "batch": int(module._kl_warmup_batch),
+                "kl_weight": float(module.kl_weight)}
+
+    @_kl_warmup_state_.setter
+    def _kl_warmup_state_(self, state: dict) -> None:
+        module = self.module
+        module._kl_warmup_epochs = int(state["epochs"])
+        module._kl_warmup_batch = int(state["batch"])
+        module.kl_weight = float(state["kl_weight"])
 
     @property
     def use_gate(self) -> bool:

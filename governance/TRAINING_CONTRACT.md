@@ -47,9 +47,11 @@ schedules or stopping; they change with a recorded reason.
 ## Bounds
 
 - **B1** The `kl_weight` schedule is non-decreasing within and across `train()` calls and
-  reaches `max_kl_weight` in `n_epochs_kl_warmup` epochs. `train()` has no reset knob; construct
-  a new model for a fresh schedule. `test_no_reset_knob_on_train`,
-  `test_an_epoch_cut_short_counts_as_completed`.
+  reaches `max_kl_weight` in `n_epochs_kl_warmup` epochs. The ramp's position and `kl_weight`
+  are saved with the model, so a model loaded with `TCRIModel.load` or `load_tcri_session`
+  continues the ramp where it was. `train()` has no reset knob; construct a new model for a
+  fresh schedule. `test_no_reset_knob_on_train`, `test_an_epoch_cut_short_counts_as_completed`,
+  `test_a_load_keeps_the_ramp_position`.
 - **B2 One unit for the schedule.** Every schedule setting of a fit is counted in epochs: the KL
   warmup (`n_epochs_kl_warmup`, default 150), patience (`early_stopping_patience`) and the budget
   (`max_epochs`); a validation check is one epoch (B3). The warmup's position is the epochs
@@ -116,15 +118,19 @@ schedules or stopping; they change with a recorded reason.
   parent's train/validation split; only the permutation draws from a stream of its own, keyed by
   the kind so that two kinds never share one. `train()` records the arguments it actually ran
   with, the stopping arguments included, and a null replays them, because a null fitted at
-  `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. A null's
-  parameter namespace is its own, so I4 and B8 apply per namespace and neither the parent nor
-  any other null is touched by its fit. `tests/test_nulls.py`.
+  `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. Each fit of a
+  null has a parameter namespace of its own, so I4 and B8 apply per namespace and neither the
+  parent nor any other null is touched by its fit, and a refit starts fresh rather than from
+  the fit it replaces. `tests/test_nulls.py`.
 - **B11** No argument is accepted and then ignored. `train()` raises for a Trainer argument
   this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
   `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,
   `checkpointing_monitor`) and for `check_val_every_n_epoch` other than 1 or
-  `val_check_interval` other than 1.0, which would change what patience counts. Every argument
-  scvi's Trainer adds to Lightning's is either forwarded with its plain meaning, set by
+  `val_check_interval` other than 1.0, which would change what patience counts. It raises before
+  anything is fitted for more than one device (`devices` above 1, several devices, `-1`,
+  `num_nodes` above 1, or a multi-device `strategy`): the guide concentrations live in Pyro's
+  store and would not be synchronized across processes, and neither would the networks. Every
+  argument scvi's Trainer adds to Lightning's is either forwarded with its plain meaning, set by
   `train()`, or raises. The constructor raises for an unknown name; a saved record's
   `kl_weight_max` maps to `max_kl_weight`, and its `patience_epochs`/`patience` are dropped,
   both with a warning; its `use_enumeration` is dropped, with a warning only when it is true.
@@ -132,7 +138,8 @@ schedules or stopping; they change with a recorded reason.
   float raises instead of being truncated. `test_train_rejects_arguments_it_replaces`,
   `test_count_arguments_must_be_integers`,
   `test_every_scvi_trainer_argument_is_forwarded_or_replaced`,
-  `test_an_unknown_constructor_argument_raises`, `test_a_saved_use_enumeration_is_dropped`.
+  `test_an_unknown_constructor_argument_raises`, `test_a_saved_use_enumeration_is_dropped`,
+  `test_more_than_one_device_raises`, `test_a_null_is_never_fitted_on_more_than_one_device`.
 
 ## The stopping policy in one paragraph
 

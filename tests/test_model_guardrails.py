@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pyro
 import pytest
+import torch
 from anndata import AnnData
 
 from tcri.model._model import TCRIModel
@@ -59,6 +60,28 @@ def tiny_adata():
     return ad
 
 
+def _assert_store_untouched(call, match):
+    """``call()`` raises ``ValueError`` matching ``match`` and leaves the Pyro store as it was:
+    the same keys, each holding the same tensor object with the same values.
+
+    The store's own (unconstrained) tensors are compared, not values recomputed through their
+    constraints, and NaN counts as equal to NaN: a tiny unseeded fit can leave NaN in a guide
+    concentration, and that is not a change to the store.
+    """
+    before = pyro.get_param_store().get_state()["params"]
+    values = {k: v.detach().clone() for k, v in before.items()}
+
+    with pytest.raises(ValueError, match=match):
+        call()
+
+    after = pyro.get_param_store().get_state()["params"]
+    assert set(after) == set(before)
+    for key, value in values.items():
+        assert after[key] is before[key], f"{key} was replaced"
+        torch.testing.assert_close(after[key].detach(), value, rtol=0, atol=0, equal_nan=True,
+                                   msg=lambda m, key=key: f"{key} changed: {m}")
+
+
 def _model(adata, **kw):
     kw.setdefault("n_latent", 8)
     kw.setdefault("n_hidden", 16)
@@ -77,17 +100,52 @@ def test_K_clamped_to_n_clonotypes(tiny_adata):
     assert model.centers.shape[0] == 5
 
 
-def test_second_model_warns_about_shared_param_store(tiny_adata):
-    """Pyro's param store is process-global — a 2nd model built under a name the store already
-    holds silently continues that fit. A generated name never collides, so only a `name=`
-    passed twice can."""
+def test_a_second_model_under_a_held_name_raises(tiny_adata):
+    """Pyro's param store is process-global, so a 2nd model built under a name the store already
+    holds would read the first fit's guide concentrations, and its networks would not train.
+    Construction raises and leaves the store as it was. A generated name never collides, so only
+    a `name=` passed twice can."""
     pyro.clear_param_store()
     m1 = _model(tiny_adata, K=5, name="shared")
     with contextlib.redirect_stdout(io.StringIO()):
         m1.train(max_epochs=5, batch_size=256,
                  enable_progress_bar=False, enable_model_summary=False)
-    with pytest.warns(UserWarning, match="param store"):
-        _model(tiny_adata, K=5, name="shared")
+    _assert_store_untouched(lambda: _model(tiny_adata, K=5, name="shared"), "already holds")
+
+
+_ONE_EPOCH = dict(max_epochs=1, batch_size=256, accelerator="cpu",
+                  enable_progress_bar=False, enable_model_summary=False)
+
+
+def _ddp_strategy():
+    from lightning.pytorch.strategies import DDPStrategy
+    return DDPStrategy()
+
+
+@pytest.mark.parametrize("request_more", [
+    {"devices": 2}, {"devices": [0, 1]}, {"devices": -1}, {"devices": "-1"},
+    {"devices": "0,1"}, {"num_nodes": 2}, {"strategy": "ddp"}, {"strategy": "ddp_spawn"},
+    {"strategy": "fsdp"}, {"strategy": "deepspeed"}, {"strategy": _ddp_strategy},
+], ids=lambda r: ",".join(f"{k}={getattr(v, '__name__', v)}" for k, v in r.items()))
+def test_more_than_one_device_raises(tiny_adata, request_more):
+    """A distributed fit leaves each process with its own guide concentrations and networks,
+    neither synchronized, so train() refuses more than one device before anything is fitted."""
+    model = _model(tiny_adata, K=5)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.train(**_ONE_EPOCH)
+    request_more = {k: v() if callable(v) else v for k, v in request_more.items()}
+    _assert_store_untouched(lambda: model.train(**{**_ONE_EPOCH, **request_more}),
+                            "more than one device")
+
+
+@pytest.mark.parametrize("one", [{}, {"devices": "auto"}, {"devices": 1},
+                                 {"devices": "1"}])
+def test_one_device_trains(tiny_adata, one):
+    """The default, and an explicit single device, still train."""
+    model = _model(tiny_adata, K=5)
+    with contextlib.redirect_stdout(io.StringIO()):
+        model.train(**{**_ONE_EPOCH, **one})
+    assert model.training_record_["epochs_run"] == 1
 
 
 def test_batch_size_at_or_above_n_obs_warns(tiny_adata):

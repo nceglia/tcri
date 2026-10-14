@@ -594,6 +594,23 @@ class TCRIModule(PyroBaseModuleClass):
             z_loc = z_loc.mean(dim=1)
         return z_loc.cpu()
 
+    def _fitted_q_p_ct_raw(self):
+        """This module's ``q_p_ct_raw`` from the store, or ``RuntimeError`` when it is not there.
+
+        It is missing before the first training step, and after a null is refit for the same
+        parent and kind, which removes the earlier fit's entries along with that fit.
+        """
+        store = pyro.get_param_store()
+        key = self.pname("q_p_ct_raw")
+        if key not in store:
+            raise RuntimeError(
+                f"Pyro's parameter store holds no posteriors for model {self.name!r}. Either it "
+                f"has not been trained, or it is a null whose fit was replaced by a later fit of "
+                f"the same parent and kind, which removes the earlier fit's entries; use the "
+                f"model that later fit returned."
+            )
+        return store[key]
+
     @torch.no_grad()
     def get_conc_ct(self):
         """The guide's Dirichlet concentration lambda'_m for q(phi_m), shape [n_ct, P].
@@ -605,9 +622,7 @@ class TCRIModule(PyroBaseModuleClass):
         This mirrors the guide line for line. If the two ever drift apart, the metrics are
         sampling from a distribution the model never fit.
         """
-        from pyro import get_param_store
-
-        q_p_ct_raw = get_param_store()[self.pname("q_p_ct_raw")]
+        q_p_ct_raw = self._fitted_q_p_ct_raw()
         bad = ~torch.isfinite(q_p_ct_raw)
         if bad.any():
             q_p_ct_raw = torch.where(bad, torch.ones_like(q_p_ct_raw) / q_p_ct_raw.shape[1],
@@ -619,10 +634,7 @@ class TCRIModule(PyroBaseModuleClass):
         return torch.clamp(mag * sharp, min=1e-3)
 
     def get_p_ct(self):
-        from pyro import get_param_store
-
-        param_store = get_param_store()
-        q_p_ct_raw = param_store[self.pname("q_p_ct_raw")]
+        q_p_ct_raw = self._fitted_q_p_ct_raw()
         bad = ~torch.isfinite(q_p_ct_raw)
         if bad.any():
             n_phen = q_p_ct_raw.shape[1]

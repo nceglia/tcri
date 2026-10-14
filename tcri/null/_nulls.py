@@ -12,9 +12,11 @@ function that quietly triples its own runtime is worse than one that says what i
 from __future__ import annotations
 
 import builtins
+import uuid
 import warnings
 
 import numpy as np
+import pyro
 
 from .._state import keys as K
 from . import _permute
@@ -41,6 +43,27 @@ def _init_params(model):
 
 def _fit_name(kind, key_added):
     return f"null.{kind}" if key_added is None else f"null.{kind}.{key_added}"
+
+
+def _namespace(model, fit):
+    """A new parameter-store namespace for one fit of ``fit``: ``<parent>.<fit>.<token>``.
+
+    The token is 12 hex digits from ``uuid4``, so every fit, a refit of the same parent and kind
+    included, starts from an empty namespace. A refit under the earlier fit's namespace would
+    read that fit's guide concentrations, and its networks would not train (see the collision
+    check in ``TCRIModel.__init__``). The namespace is recorded with the fit, which is how
+    ``rebuild`` finds its entries.
+    """
+    return f"{model.name}.{fit}.{uuid.uuid4().hex[:12]}"
+
+
+def _drop_namespace(namespace):
+    """Remove every store entry under exactly ``namespace``; a ``key_added`` sibling's stay."""
+    from ..model._module import _null_namespace
+
+    store = pyro.get_param_store()
+    for key in [k for k in store.keys() if _null_namespace(k) == namespace]:
+        del store[key]
 
 
 def _replicate_index(adata, kind, key_added):
@@ -151,12 +174,21 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
 
-    namespace = f"{model.name}.{fit}"
+    # The fit this one replaces, read before `to_anndata` rewrites its record. Its entries are
+    # dropped once the new fit is written, and only when this parent owns them: a fit kept from
+    # another parent is that parent's to keep.
+    replaced = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
+    replaced_namespace = (str(replaced["namespace"]) if replaced.get("namespace") is not None
+                          and str(replaced.get("parent", "")) == str(model.name) else None)
+
+    namespace = _namespace(model, fit)
     null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
                      **_init_params(model))
     null._fit_name = fit
     null.train(**train_args)
     null.to_anndata(adata, fit=fit)
+    if replaced_namespace is not None and replaced_namespace != namespace:
+        _drop_namespace(replaced_namespace)
 
     adata.uns[K.fit_key(K.PERMUTATION, fit)] = perm
     adata.uns[K.fit_key(K.BUFFERS, fit)] = {

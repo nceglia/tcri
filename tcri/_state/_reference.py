@@ -299,11 +299,10 @@ def name_of(reference_of, adata=None):
 
     A fit name passes through. A null built by ``tcri.null.*`` or rebuilt becomes its fit name
     (``null.phenotype``), which ``fit=`` resolves, when ``adata``'s record for that fit has the
-    null's ``name``, its parameter-store namespace, as its namespace. A null whose fit another
-    parent has since rewritten, a null with no record on ``adata``, and any other model object
-    become their own name. An earlier null of the same parent shares the namespace and so takes
-    the fit name. A model in the params block would break the `.h5ad` write and tell a later
-    reader nothing it can act on.
+    null's ``name``, its parameter-store namespace, as its namespace. Every fit has a namespace
+    of its own, so a null whose fit has since been refit, by its parent or another, a null with
+    no record on ``adata``, and any other model object become their own name. A model in the
+    params block would break the `.h5ad` write and tell a later reader nothing it can act on.
     """
     if reference_of is None or isinstance(reference_of, str):
         return reference_of

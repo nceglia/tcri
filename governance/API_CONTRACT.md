@@ -28,11 +28,16 @@ registers are the only thing separating it from another model in the same sessio
 namespaces them: a model called `x` owns exactly the store keys under `x.`, and its nulls the keys
 under `x.null.`. A model constructed without `name=` gets a generated one (`tcri-` and 12 hex
 digits), recorded with the model, so no two models share a key. `TCRIModel.name` reads it back.
+Constructing a model under a name whose keys the store already holds raises; continuing a fit is
+another `train()` on the same object. Each fit of a null gets its own namespace,
+`x.null.<kind>.<token>`, recorded with the fit; refitting a null of the same parent and kind
+replaces the earlier fit and removes its keys from the store.
 
 **Loading.** `TCRIModel.load` and `load_tcri_session` restore the loaded model's guide
 concentrations and its nulls' parameters from the saved store, take its networks from the saved
 weights, and leave every other model's entries in the store as they are. Both restore the
-arguments the model was trained with (`train_kwargs_`), which `tcri.null.*` replays. A load that
+arguments the model was trained with (`train_kwargs_`), which `tcri.null.*` replays, and the KL
+ramp's position, so training a loaded model continues the ramp. A load that
 finds the model's entries already in the store replaces them and warns. A load raises when the
 file cannot supply a trained model's posteriors, and refuses a store that keeps them under bare
 keys, without a model name.
