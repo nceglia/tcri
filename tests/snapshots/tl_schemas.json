@@ -79,6 +79,7 @@
               "adjusted",
               "covariate",
               "draw",
+              "null",
               "null_value",
               "phenotype",
               "value"
@@ -101,7 +102,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.clonotypic_entropy"
     },
     "tcri_delta_clonotypic_entropy": {
@@ -196,6 +197,7 @@
               "cov_from",
               "cov_to",
               "draw",
+              "null",
               "null_value",
               "null_value_from",
               "null_value_to",
@@ -225,7 +227,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.delta_clonotypic_entropy"
     },
     "tcri_delta_phenotypic_entropy": {
@@ -321,6 +323,7 @@
               "cov_from",
               "cov_to",
               "draw",
+              "null",
               "null_value",
               "null_value_from",
               "null_value_to",
@@ -349,7 +352,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.delta_phenotypic_entropy"
     },
     "tcri_gene_importance": {
@@ -459,6 +462,7 @@
               "adjusted",
               "draw",
               "gene",
+              "null",
               "null_value",
               "value"
             ],
@@ -479,7 +483,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.perturb.gene_importance"
     },
     "tcri_joint_distribution": {
@@ -612,6 +616,7 @@
               "covariate",
               "denom",
               "draw",
+              "null",
               "null_denom",
               "null_value",
               "value"
@@ -634,7 +639,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.mutual_information"
     },
     "tcri_phenotypic_entropy": {
@@ -717,6 +722,7 @@
               "clonotype",
               "covariate",
               "draw",
+              "null",
               "null_value",
               "value"
             ],
@@ -738,7 +744,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.phenotypic_entropy"
     },
     "tcri_phenotypic_flux": {
@@ -824,6 +830,7 @@
               "cov_from",
               "cov_to",
               "draw",
+              "null",
               "null_value",
               "value"
             ],
@@ -846,7 +853,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 3,
+      "version": 4,
       "writer": "tcri.tl.phenotypic_flux"
     }
   }

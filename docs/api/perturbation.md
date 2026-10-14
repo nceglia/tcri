@@ -80,7 +80,8 @@ ranked by the adjusted importance whenever the result carries one, unless you ex
 
 There is no `fit=` here. This is a query on a MODEL rather than on a stored substrate, so a
 different fit is reached by handing it a different model — and a fitted `TCRIModel` passed as
-`null_model` is used directly, skipping the rebuild.
+`null_model`, or the list of them `tcri.null.phenotype` returned, is used directly, skipping the
+rebuild. `"auto"` rebuilds every fit of the phenotype reference and pools them.
 
 `kind="shift"` draws only the value, and `quantity="adjusted"` is refused there. The heatmap
 decomposes an importance across phenotypes and the reference has no such decomposition stored,

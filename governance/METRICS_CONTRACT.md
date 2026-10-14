@@ -170,8 +170,9 @@ for any clone x phenotype table, an entropy is a number whatever the table says,
 two fits is non-zero whenever the two differ at all, and an in-silico knockout moves the
 phenotype call for every gene. **So no model-based number is reported bare.** Each scored metric
 is read against a permutation reference: the same model, the same knobs, the same seed, the same
-training arguments, fitted on one permuted label vector, and `adjusted = value - null_value` is
-the part of the observed number the permuted structure accounts for.
+training arguments, fitted `n_nulls` times (default 5), each on its own permuted label vector, and
+`adjusted = value - null_value` is the part of the observed number the permuted structure
+accounts for.
 
 **One reported quantity per metric.** A scored metric reports `adjusted` and stores its two inputs,
 `value` and `null_value`, beside it; they are what a reader checking the correction needs, not
@@ -192,13 +193,19 @@ seed of its draws changed -- and every other argument forwarded verbatim. `group
 `distance_metric`, `temperature` and `n_samples` each change the estimand, so a reference
 computed at defaults is a different quantity subtracted from a different quantity.
 
-**`adjusted` is computed per paired draw.** The null is the value expected under no association.
-The fit and the null are independent fits, so draw *d* of the fit is paired with draw *d* of the
-null and `adjusted_d = value_d - null_value_d`; `table` carries `null_value` and `adjusted` on
-every draw, and `result` gives the adjusted value's mean, `adjusted_sd` and HDI
-(`adjusted_hdi_low`, `adjusted_hdi_high`) over those draws, like any value. The null's draws are
-seeded from their own seed, derived from the caller's `random_state`, so the two samples share
-no noise. At `n_samples=0` each side is one point value and `adjusted` is their difference.
+**`adjusted` is computed per paired draw, against every fit of the reference.** The null is the
+value expected under no association. The fit and each null are independent fits, so draw *d* of
+the fit is paired with draw *d* of every one of the reference's `n_nulls` fits and
+`adjusted_{i,d} = value_d - null_value_{i,d}`; `table` carries `null` (which fit), `null_value` and
+`adjusted` on every pair, and `result` gives the adjusted value's mean, `adjusted_sd` and HDI
+(`adjusted_hdi_low`, `adjusted_hdi_high`) over all the pairs, like any value, and `null_value` as
+the mean over them. Pooling the pairs is what puts the null's fit-to-fit spread into the interval:
+one null's draws do not carry it, and the mean of the nulls' draws would hide it. Each null's
+draws are seeded from their own seed, derived from the caller's `random_state` and the null's
+index, so no two samples share noise. At `n_samples=0` each side is one point value, so a row has
+one pair per null: `adjusted` is their mean, `adjusted_sd` the sd between the nulls, and no HDI
+is reported (NaN), since an interval read off that few points is not one; the HDI is reported
+only when `n_samples > 0`.
 
 **Both denominators are stored.** A normalized MI divides by a normalizer taken from the same
 joint it normalizes: at `weighted=False` the engine row-normalizes, so `h_c` is exactly

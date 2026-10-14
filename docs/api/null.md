@@ -8,6 +8,9 @@ differ at all. The floor is what tells you how much of the number is the data.
 `tcri.null` fits that floor. A null is **the same model, with the same knobs, the same seed and
 the same training arguments, on one permuted label vector** -- so `value − null_value` is the
 part of the observed number that the permuted structure accounts for, on the metric's own scale.
+A reference is `n_nulls` such fits (default 5), each on its own permutation, because a null moves
+from one fit to the next by more than one fit's own draws show; every metric pairs its draws with
+all of them.
 
 Three axes, one function each:
 
@@ -20,18 +23,22 @@ Three axes, one function each:
 ```python
 model.train(max_epochs=200, batch_size=512)
 model.to_anndata(adata)
-nulls = tcri.null.all(model, adata)     # three fits, written beside the main one
+nulls = tcri.null.all(model, adata)     # 3 x n_nulls fits (15), written beside the main one
 ```
 
-Each call writes a named fit into the same `AnnData` (see
-{doc}`One main fit, and as many named fits beside it <../concepts/index>`), together with the
-integer permutation it used and a settings record: the kind, the resolved strata and their cell
-counts, the permutation seed, the training arguments and the parent.
+Each call writes `n_nulls` named fits into the same `AnnData`, `null.phenotype[0]` to
+`null.phenotype[4]` at the default (see
+{doc}`One main fit, and as many named fits beside it <../concepts/index>`), each with the integer
+permutation it used and a settings record: the kind, the resolved strata and their cell counts,
+the permutation seed and its spawn key, the reference and index, the training arguments and the
+parent. The cost scales with `n_nulls`: that many fits per kind, and a metric's per-draw `table`
+that many times longer. Calling again replaces the whole reference.
 
 Once they are there, every scored metric picks them up on its own. `null_model` defaults to
 `"auto"`, which is the metric's entry in the table above; `result` gains `null_value` and
 `adjusted = value - null_value`, the quantity the metric reports; `null_model=None` reports the
-bare value and creates no column.
+bare value and creates no column. `null_model="null.phenotype[2]"` reads one fit alone, and the
+list of models a `tcri.null.*` call returned can be passed back as `null_model`.
 
 ```python
 mi = tcri.tl.mutual_information(adata, covariate="post")   # value, null_value, adjusted

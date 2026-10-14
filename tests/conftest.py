@@ -109,14 +109,16 @@ def _fit_the_nulls(model, adata):
     recovery accuracy, the delta intersection rule, real-data timing -- pass `null_model=None`
     and say why.
 
-    Three more fits per fixture, on models this small, and they are the only place in the suite
-    where a null is exercised through the ordinary reader surface.
+    Two fits per kind rather than the default five: a reference of more than one fit is what
+    every metric then pools, so the pooled path is the one the suite reads, at six fits per
+    fixture on models this small.
     """
     import tcri
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
+        tcri.null.all(model, adata, n_nulls=2, enable_progress_bar=False,
+                      enable_model_summary=False)
 
 
 def _seed_all(seed: int = 0) -> None:

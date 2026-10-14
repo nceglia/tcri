@@ -125,13 +125,48 @@ def fits(adata) -> list:
     return [] if names is None else [str(n) for n in names]
 
 
+def member_name(group: str, index: int) -> str:
+    """The fit name of member ``index`` of the null reference ``group``: ``null.phenotype[2]``."""
+    return f"{group}[{int(index)}]"
+
+
+def members(adata, group) -> list:
+    """The fits of the null reference ``group``, in index order; empty when it has none.
+
+    A member is a fit whose ``FIT_SETTINGS`` record names ``group`` as its ``reference``. The
+    group is read from those records rather than kept as a list of its own, so it cannot disagree
+    with the fits the object carries.
+    """
+    found = []
+    for name in fits(adata):
+        record = adata.uns.get(fit_key(FIT_SETTINGS, name)) or {}
+        reference = record.get("reference")
+        if reference is not None and str(reference) == str(group):
+            found.append((int(record.get("index", 0)), name))
+    return [name for _, name in sorted(found)]
+
+
+def resolve_group(adata, name):
+    """The null reference ``name`` names, as ``(group, members)``, or ``None`` when it names none.
+
+    Matched like :func:`resolve_fit`: literally first, then as ``null.{name}``, so
+    ``"phenotype"`` and ``"null.phenotype"`` are the same reference.
+    """
+    name = str(name)
+    for group in (name, f"null.{name}"):
+        found = members(adata, group)
+        if found:
+            return group, found
+    return None
+
+
 def resolve_fit(adata, fit):
     """Canonical fit name, accepting the bare kind.
 
     ``None`` stays ``None`` (the main fit). Otherwise the name is matched against the fits the
-    object actually carries: literally first, then as ``null.{fit}``, so ``"phenotype"`` and
-    ``"null.phenotype"`` are the same call — the way scanpy's ``basis="umap"`` finds
-    ``X_umap``.
+    object actually carries: literally first, then as ``null.{fit}``, so ``"phenotype[0]"`` and
+    ``"null.phenotype[0]"`` are the same call — the way scanpy's ``basis="umap"`` finds
+    ``X_umap``. A reference's name (``"phenotype"``) names several fits and raises, naming them.
 
     Two differences from scanpy's version, both deliberate. Resolution is against the KNOWN
     LIST rather than against key existence, because a fit name is an infix in a dozen keys
@@ -150,6 +185,13 @@ def resolve_fit(adata, fit):
         )
     if candidates:
         return candidates[0]
+    group = resolve_group(adata, fit)
+    if group is not None:
+        raise KeyError(
+            f"fit={fit!r} names the null reference {group[0]!r}, which is {len(group[1])} fits: "
+            f"{group[1]}. fit= selects one fit; name one of them. A metric's null_model= takes "
+            f"the reference whole."
+        )
     raise KeyError(
         f"no fit named {fit!r} in this object; it carries {known or 'only the main fit'}. "
         f"Build one with tcri.null.all(model, adata), or pass fit=None for the main fit."

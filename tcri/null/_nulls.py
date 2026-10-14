@@ -20,9 +20,13 @@ import pyro
 
 from .._state import keys as K
 from . import _permute
-from ._permute import KINDS, OFFSET
+from ._permute import KINDS
 
 __all__ = ["phenotype", "clonotype", "condition", "all"]
+
+#: Fits per reference by default. A pooled interval from K nulls carries (K - 1) / K of the
+#: variance between them in expectation, so 5 carries 80% of it.
+N_NULLS = 5
 
 
 def _init_params(model):
@@ -66,18 +70,30 @@ def _drop_namespace(namespace):
         del store[key]
 
 
-def _replicate_index(adata, kind, key_added):
-    """Position of ``key_added`` among this kind's existing named nulls, 0 when unnamed.
+def _remove_fit(adata, fit):
+    """Remove ``fit`` from ``adata``: its name from the fits list and every key ``fit_key`` built
+    for it.
 
-    Two nulls of one kind must not share a permutation stream, or the second would be the first
-    with a different name. The index is positional in the SORTED list of existing keys, so it is
-    reproducible from the object rather than from the order the calls happened to be made in.
+    A key is the fit's when it is ``tcri_<fit>_...`` in ``uns``, ``obs`` or ``obsm``, or
+    ``X_tcri_<fit>`` / ``X_tcri_<fit>_...`` in ``obsm``. The separator after the name keeps one
+    member's keys apart from a longer name's: ``[1]`` from ``[10]``, ``null.phenotype`` from
+    ``null.phenotype.b``.
     """
-    if key_added is None:
-        return 0
-    prefix = f"null.{kind}."
-    keys = sorted({f[len(prefix):] for f in K.fits(adata) if f.startswith(prefix)} | {str(key_added)})
-    return keys.index(str(key_added)) + 1
+    prefixes = (f"tcri_{fit}_", f"X_tcri_{fit}_")
+
+    def owned(key):
+        return str(key).startswith(prefixes) or str(key) == f"X_tcri_{fit}"
+
+    for store in (adata.uns, adata.obsm):
+        for key in [k for k in store.keys() if owned(k)]:
+            del store[key]
+    columns = [c for c in adata.obs.columns if owned(c)]
+    if columns:
+        adata.obs.drop(columns=columns, inplace=True)
+    meta = dict(adata.uns[K.METADATA])
+    remaining = [n for n in K.fits(adata) if n != fit]
+    meta.pop(K.FITS, None)
+    adata.uns[K.METADATA] = {**meta, **({K.FITS: remaining} if remaining else {})}
 
 
 def _check_the_name_is_free(adata, model, fit):
@@ -121,7 +137,7 @@ def _check_the_name_is_free(adata, model, fit):
         f"fit {fit!r} on this object belongs to parent {held!r}, not to {model.name!r}. "
         f"Writing it would overwrite another model's reference, and the two are not "
         f"interchangeable. Pass key_added= to name this one (it would land as "
-        f"{_fit_name(fit.split('.')[1], 'b')!r}).{refit}"
+        f"{_fit_name(fit.split('.')[1].split('[')[0], 'b')!r}).{refit}"
     )
 
 
@@ -143,27 +159,40 @@ def _training_for_uns(null):
     return {"history": history, "record": record}
 
 
-def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train_kwargs):
-    """The shared body: permute, construct, train, write. One per kind, no branching after this."""
-    from ..model._model import TCRIModel
+def _owned_namespace(record, model):
+    """The namespace a fit's record names, when ``model`` is the parent that owns it.
+
+    A fit kept from another parent is that parent's to keep, so its entries are never dropped.
+    """
+    if record.get("namespace") is None or str(record.get("parent", "")) != str(model.name):
+        return None
+    return str(record["namespace"])
+
+
+def _null(model, adata, *, kind, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
+          **train_kwargs):
+    """The shared body: ``n_nulls`` fits of one kind, each permuted, constructed, trained and
+    written. One per kind, no branching after this."""
+    from ..model._model import _int_at_least
 
     if kind not in KINDS:
         raise ValueError(f"kind={kind!r} is not one of {list(KINDS)}")
+    n_nulls = _int_at_least("n_nulls", n_nulls, 1)
     if adata.uns.get(K.METADATA) is None:
         raise ValueError(
             "this AnnData carries no tcri substrate: call model.to_anndata(adata) on the "
             "parent before building a reference against it."
         )
 
-    fit = _fit_name(kind, key_added)
-    _check_the_name_is_free(adata, model, fit)
+    group = _fit_name(kind, key_added)
+    names = [K.member_name(group, i) for i in range(n_nulls)]
+    earlier = K.members(adata, group)
+    for fit in dict.fromkeys(earlier + names):
+        _check_the_name_is_free(adata, model, fit)
 
     strata = _permute.resolve_strata(adata, kind, within)
-    resolved_seed = int(seed) if seed is not None else int(
-        (model.init_params_.get("kwargs", {}).get("seed") or getattr(model, "_seed", None) or 0)
-        + OFFSET[kind] + _replicate_index(adata, kind, key_added)
-    )
-    perm, sizes = _permute.build_permutation(adata, strata, np.random.default_rng(resolved_seed))
+    base_seed = int(seed) if seed is not None else int(
+        model.init_params_.get("kwargs", {}).get("seed") or getattr(model, "_seed", None) or 0)
 
     train_args = {**(getattr(model, "train_kwargs_", None) or {}), **train_kwargs}
     if not train_args:
@@ -174,12 +203,35 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
 
+    nulls = [_fit_member(model, adata, kind=kind, group=group, index=i, n_nulls=n_nulls,
+                         strata=strata, seed=base_seed, key_added=key_added,
+                         train_args=train_args)
+             for i in range(n_nulls)]
+    # A refit with fewer nulls than the group it replaces leaves none of the earlier members
+    # behind: a reference read from the records would otherwise pool the old fits with the new.
+    for fit in earlier:
+        if fit in names:
+            continue
+        namespace = _owned_namespace(adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}, model)
+        _remove_fit(adata, fit)
+        if namespace is not None:
+            _drop_namespace(namespace)
+    return nulls
+
+
+def _fit_member(model, adata, *, kind, group, index, n_nulls, strata, seed, key_added,
+                train_args):
+    """Fit and write member ``index`` of the reference ``group``, and return it."""
+    from ..model._model import TCRIModel
+
+    fit = K.member_name(group, index)
+    rng = _permute.permutation_rng(seed, kind, key_added, index)
+    perm, sizes = _permute.build_permutation(adata, strata, rng)
+
     # The fit this one replaces, read before `to_anndata` rewrites its record. Its entries are
-    # dropped once the new fit is written, and only when this parent owns them: a fit kept from
-    # another parent is that parent's to keep.
-    replaced = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
-    replaced_namespace = (str(replaced["namespace"]) if replaced.get("namespace") is not None
-                          and str(replaced.get("parent", "")) == str(model.name) else None)
+    # dropped once the new fit is written.
+    replaced_namespace = _owned_namespace(adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {},
+                                          model)
 
     namespace = _namespace(model, fit)
     null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
@@ -203,15 +255,35 @@ def _null(model, adata, *, kind, within=None, seed=None, key_added=None, **train
         "stratum_sizes": np.asarray(sorted(sizes), dtype=np.int64),
         "n_strata": int(len(sizes)),
         "n_singleton_strata": int(sum(1 for n in sizes if n == 1)),
-        "seed": resolved_seed,
+        "seed": int(seed),
+        "spawn_key": np.asarray(_permute.spawn_key(kind, key_added, index), dtype=np.int64),
         "parent": str(model.name),
         "key_added": "" if key_added is None else str(key_added),
         "namespace": namespace,
+        "reference": group,
+        "index": int(index),
+        "n_nulls": int(n_nulls),
     }
     return null
 
 
-def phenotype(model, adata, *, within=None, seed=None, key_added=None, **train_kwargs):
+_N_NULLS_DOC = """
+    The reference is ``n_nulls`` fits, ``null.<kind>[0]`` to ``null.<kind>[n_nulls - 1]``
+    (``null.<kind>.<key_added>[i]`` when named), each on its own permutation and in its own
+    parameter namespace. A metric pairs the parent's draw *d* with draw *d* of every one of them
+    and summarizes all the pairs, so ``adjusted`` and its interval carry how much the null moves
+    from one fit to the next, which one fit cannot show. The cost grows with it: ``n_nulls``
+    fits per call (``tcri.null.all`` fits 3 x ``n_nulls``, 15 at the default), and a metric's
+    per-draw ``table`` is ``n_nulls`` times longer. Calling again replaces the whole reference.
+
+    A null's permutation is drawn from ``seed`` (default: the parent's seed), spawned by its
+    kind, ``key_added`` and index alone, so the same call reproduces the same permutations
+    whatever else the object carries. Returns the ``n_nulls`` fitted models, in index order.
+"""
+
+
+def phenotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
+              **train_kwargs):
     """Refit the parent with phenotype labels shuffled within (batch, covariate, replicate).
 
     The reference for anything that scores how much a clone's phenotype composition departs from
@@ -219,11 +291,12 @@ def phenotype(model, adata, *, within=None, seed=None, key_added=None, **train_k
     Each cell keeps its clone, its condition and its counts, so ``ct_array`` is the parent's cell
     for cell and only the labels move.
     """
-    return _null(model, adata, kind="phenotype", within=within, seed=seed,
+    return _null(model, adata, kind="phenotype", n_nulls=n_nulls, within=within, seed=seed,
                  key_added=key_added, **train_kwargs)
 
 
-def clonotype(model, adata, *, within=None, seed=None, key_added=None, **train_kwargs):
+def clonotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
+              **train_kwargs):
     """Refit the parent with clone ids shuffled within (batch, covariate, replicate).
 
     Keeps the clone-size distribution and every cell's phenotype; destroys which cells share a
@@ -231,27 +304,36 @@ def clonotype(model, adata, *, within=None, seed=None, key_added=None, **train_k
     metric that moves under this one and not under the phenotype null is reading clonal
     structure rather than phenotype structure.
     """
-    return _null(model, adata, kind="clonotype", within=within, seed=seed,
+    return _null(model, adata, kind="clonotype", n_nulls=n_nulls, within=within, seed=seed,
                  key_added=key_added, **train_kwargs)
 
 
-def condition(model, adata, *, seed=None, key_added=None, **train_kwargs):
+def condition(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **train_kwargs):
     """Refit the parent with the condition label shuffled within (clonotype, batch).
 
     Each clone keeps its cells and its size; which condition a cell sits at is random. The
     reference for anything that compares conditions -- phenotypic flux and the two deltas. It
     takes no ``within``: its strata are what make it a condition null.
     """
-    return _null(model, adata, kind="condition", seed=seed, key_added=key_added, **train_kwargs)
+    return _null(model, adata, kind="condition", n_nulls=n_nulls, seed=seed,
+                 key_added=key_added, **train_kwargs)
 
 
-def all(model, adata, *, kinds=KINDS, within=None, seed=None, key_added=None, **train_kwargs):
-    """Fit every null in ``kinds`` in sequence and return ``{kind: model}``.
+for _f in (phenotype, clonotype, condition):
+    _f.__doc__ += _N_NULLS_DOC
+del _f
+
+
+def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, key_added=None,
+        **train_kwargs):
+    """Fit every null in ``kinds`` in sequence and return ``{kind: [models]}``.
 
     The common path: one call after ``train()`` and ``to_anndata()`` and the object carries every
-    reference the metrics default to. ``condition`` is skipped, with a warning, when the
-    covariate has one level -- a condition null needs two conditions to permute between -- and
-    never skipped silently.
+    reference the metrics default to. Each kind is ``n_nulls`` fits, so the default of 5 over
+    the three kinds is 15 fits, and a metric's per-draw ``table`` is ``n_nulls`` times longer
+    than with one null. ``condition`` is skipped, with a warning, when the covariate has one
+    level -- a condition null needs two conditions to permute between -- and never skipped
+    silently.
     """
     kinds = [kinds] if isinstance(kinds, str) else list(kinds)
     unknown = [k for k in kinds if k not in KINDS]
@@ -277,7 +359,8 @@ def all(model, adata, *, kinds=KINDS, within=None, seed=None, key_added=None, **
                 UserWarning, stacklevel=2,
             )
             continue
-        out[kind] = _null(model, adata, kind=kind, seed=seed, key_added=key_added,
+        out[kind] = _null(model, adata, kind=kind, n_nulls=n_nulls, seed=seed,
+                          key_added=key_added,
                           within=(within if kind != "condition" else None), **train_kwargs)
     return out
 

@@ -40,8 +40,9 @@ def test_clonotypic_entropy_shapes_and_range(trained_model):
 
     sampled = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0)
     assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(sampled["result"].columns)
-    assert len(sampled["table"]) == 8 * len(sampled["result"]), (
-        "`table` keeps every draw; `result` is what reduces it"
+    n_nulls = sampled["table"]["null"].nunique()
+    assert len(sampled["table"]) == 8 * n_nulls * len(sampled["result"]), (
+        "`table` keeps every draw, paired with every null; `result` is what reduces it"
     )
 
 
@@ -63,7 +64,7 @@ def test_mutual_information_scalar_and_draws(trained_model):
 
     summ = tcri.tl.mutual_information(adata, covariate=cov, n_samples=8, random_state=0)
     assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(summ["result"].columns)
-    assert len(summ["table"]) == 8
+    assert len(summ["table"]) == 8 * summ["table"]["null"].nunique()
 
 
 def test_mutual_information_unnormalized_is_bits(trained_model):

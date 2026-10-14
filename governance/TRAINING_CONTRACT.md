@@ -115,13 +115,15 @@ schedules or stopping; they change with a recorded reason.
   is true only when the stopping rule ended the fit; a fit ended by another limit, such as
   `max_steps`, records false and warns. `test_a_fit_ended_by_another_limit_is_not_an_early_stop`.
 - **B10** A permutation null is fitted with the parent's knobs, the parent's seed and the
-  parent's train/validation split; only the permutation draws from a stream of its own, keyed by
-  the kind so that two kinds never share one. `train()` records the arguments it actually ran
+  parent's train/validation split; only the permutation draws from a stream of its own, spawned
+  from the seed by the null's kind, `key_added` and index and by nothing else on the object, so
+  no two nulls share one and a null fitted on a copy, or in another order, draws the same
+  permutation. A reference is `n_nulls` such fits, `null.<kind>[i]`. `train()` records the arguments it actually ran
   with, the stopping arguments included, and a null replays them, because a null fitted at
   `train()`'s defaults is not the parent's model on permuted labels. The permutation is stored beside the fit it produced. Each fit of a
   null has a parameter namespace of its own, so I4 and B8 apply per namespace and neither the
   parent nor any other null is touched by its fit, and a refit starts fresh rather than from
-  the fit it replaces. `tests/test_nulls.py`.
+  the fit it replaces; refitting a reference replaces all its fits. `tests/test_nulls.py`.
 - **B11** No argument is accepted and then ignored. `train()` raises for a Trainer argument
   this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
   `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,

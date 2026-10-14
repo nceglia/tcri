@@ -101,23 +101,28 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
 
 
 def test_null_value_is_the_metric_of_the_null(ref):
-    """``result.null_value`` equals the caller's own call with ``fit=`` set, row for row.
+    """``result.null_value`` is the mean of the caller's own call with ``fit=`` set to each fit
+    of the reference, row for row.
 
     At the caller's ``n_samples`` and under the seed the reference derives from the caller's
-    ``random_state``: at ``n_samples>0`` with ``random_state=None`` the engine draws a fresh seed
-    per call, so the identity would be asserted against a different sample and would fail for a
-    reason that has nothing to do with the reference. The derived seed is a function of the
-    caller's, which is what makes the explicit-seed form exact rather than approximate.
+    ``random_state`` and each null's index: at ``n_samples>0`` with ``random_state=None`` the
+    engine draws a fresh seed per call, so the identity would be asserted against a different
+    sample and would fail for a reason that has nothing to do with the reference. The derived
+    seed is a function of the caller's, which is what makes the explicit-seed form exact rather
+    than approximate.
     """
     _, adata = ref
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", n_samples=4)
     with_ref = tcri.tl.mutual_information(adata, **kw, random_state=7, inplace=False)["result"]
-    of_null = tcri.tl.mutual_information(adata, **kw, random_state=_reference.null_seed(7),
-                                         fit="null.phenotype", null_model=None,
-                                         inplace=False)["result"]
-    merged = with_ref.merge(of_null[["patient", "value", "denom"]], on="patient",
-                            suffixes=("", "_own"))
+    members = K.members(adata, "null.phenotype")
+    assert len(members) > 1
+    own = pd.concat([
+        tcri.tl.mutual_information(adata, **kw, random_state=_reference.null_seed(7, i),
+                                   fit=fit, null_model=None, inplace=False)["table"]
+        for i, fit in enumerate(members)])
+    of_null = own.groupby("patient", observed=True)[["value", "denom"]].mean().reset_index()
+    merged = with_ref.merge(of_null, on="patient", suffixes=("", "_own"))
     np.testing.assert_allclose(merged["null_value"], merged["value_own"], atol=1e-12)
     np.testing.assert_allclose(merged["null_denom"], merged["denom_own"], atol=1e-12)
 
@@ -150,8 +155,8 @@ def test_the_adjusted_value_of_a_fit_against_itself_is_zero(ref):
     """
     _, adata = ref
     a = _cov(adata)[0]
-    kw = dict(covariate=a, groupby="patient", random_state=3, fit="null.phenotype",
-              null_model="null.phenotype", inplace=False)
+    kw = dict(covariate=a, groupby="patient", random_state=3, fit="null.phenotype[0]",
+              null_model="null.phenotype[0]", inplace=False)
     res = tcri.tl.mutual_information(adata, n_samples=0, **kw)["result"]
     np.testing.assert_allclose(res["adjusted"].to_numpy(dtype=float), 0.0, atol=1e-12)
 
@@ -199,13 +204,14 @@ def test_endpoint_means_use_their_own_masks(ref):
 
 def _labels_of(table):
     return [c for c in table.columns
-            if c != "draw" and not c.startswith(("value", "null_", "adjusted", "denom"))]
+            if c not in ("draw", "null")
+            and not c.startswith(("value", "null_", "adjusted", "denom"))]
 
 
 def test_adjusted_is_paired_per_draw(ref):
-    """``table`` carries ``null_value`` and ``adjusted = value - null_value`` on every draw,
-    ``adjusted`` varies across the draws, and ``result`` summarizes those draws: its mean,
-    ``adjusted_sd`` and the HDI of the paired differences, row for row."""
+    """``table`` carries ``null_value`` and ``adjusted = value - null_value`` on every pair of
+    draws, one per draw and null, ``adjusted`` varies across them, and ``result`` summarizes all
+    the pairs: their mean, ``adjusted_sd`` and the HDI of the paired differences, row for row."""
     from tcri._stats import hdi
 
     _, adata = ref
@@ -219,9 +225,10 @@ def test_adjusted_is_paired_per_draw(ref):
     assert (table.groupby(labels, observed=True)["adjusted"].nunique() > 1).all(), (
         "adjusted is constant across draws")
 
+    n_nulls = len(K.members(adata, "null.phenotype"))
     for _, row in result.iterrows():
         draws = table.loc[table["patient"] == row["patient"], "adjusted"].to_numpy(dtype=float)
-        assert len(draws) == 20
+        assert len(draws) == 20 * n_nulls
         lo, hi = hdi(draws, prob=0.94)
         assert row["adjusted"] == pytest.approx(draws.mean(), abs=1e-12)
         assert row["adjusted_sd"] == pytest.approx(draws.std(ddof=1), abs=1e-12)
@@ -283,23 +290,26 @@ def test_a_per_draw_difference_between_two_conditions_has_an_interval(ref):
 
 
 def test_the_fit_and_the_null_draw_from_different_seeds(ref):
-    """The null's draws come from the seed :func:`null_seed` derives from the caller's: its
-    per-draw values are the null's own call at that seed, and not at the caller's."""
+    """Each null's draws come from the seed :func:`null_seed` derives from the caller's and that
+    null's index: its per-draw values are its own call at that seed, and not at the caller's."""
     _, adata = ref
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", n_samples=8, inplace=False)
     table = tcri.tl.mutual_information(adata, random_state=11, **kw)["table"]
 
-    def null_draws(seed):
-        own = tcri.tl.mutual_information(adata, random_state=seed, fit="null.phenotype",
-                                         null_model=None, **kw)["table"]
-        return table[["patient", "draw"]].merge(own, on=["patient", "draw"])["value"]
+    for i, fit in enumerate(K.members(adata, "null.phenotype")):
+        mine = table[table["null"] == i]
 
-    seed = _reference.null_seed(11)
-    assert seed != 11
-    np.testing.assert_allclose(table["null_value"], null_draws(seed), atol=1e-12)
-    assert not np.allclose(table["null_value"], null_draws(11)), (
-        "the null drew from the caller's own seed")
+        def null_draws(seed):
+            own = tcri.tl.mutual_information(adata, random_state=seed, fit=fit,
+                                             null_model=None, **kw)["table"]
+            return mine[["patient", "draw"]].merge(own, on=["patient", "draw"])["value"]
+
+        seed = _reference.null_seed(11, i)
+        assert seed != 11
+        np.testing.assert_allclose(mine["null_value"], null_draws(seed), atol=1e-12)
+        assert not np.allclose(mine["null_value"], null_draws(11)), (
+            f"{fit} drew from the caller's own seed")
 
 
 def test_null_seed_is_derived_and_reproducible():
@@ -312,21 +322,36 @@ def test_null_seed_is_derived_and_reproducible():
     assert isinstance(_reference.null_seed(-3), int)
     assert (_reference.null_seed(np.random.default_rng(1))
             == _reference.null_seed(np.random.default_rng(1)))
+    # one stream per null of a reference; index 0 is the one-null stream
+    assert _reference.null_seed(5, 0) == _reference.null_seed(5)
+    assert len({_reference.null_seed(5, i) for i in range(5)}) == 5
 
 
-def test_without_draws_adjusted_is_the_point_difference(ref):
-    """At ``n_samples=0`` each side is one point value: ``adjusted`` is their difference, on
-    the one draw ``table`` holds and in ``result``, with no spread."""
+def test_without_draws_a_row_has_one_pair_per_null(ref):
+    """At ``n_samples=0`` each side is one point value, so a row has one pair per null:
+    ``adjusted`` is their mean, ``adjusted_sd`` the sd between the nulls, and the HDI is NaN.
+    With draws, the HDI is reported."""
     _, adata = ref
     a = _cov(adata)[0]
+    n_nulls = len(K.members(adata, "null.phenotype"))
     res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=0,
                                      inplace=False)
     table, result = res["table"], res["result"]
-    assert set(table["draw"]) == {0}
+    assert set(table["draw"]) == {0} and sorted(set(table["null"])) == list(range(n_nulls))
     np.testing.assert_allclose(result["adjusted"], result["value"] - result["null_value"],
                                atol=1e-12)
-    for column in ("adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high"):
+    for _, row in result.iterrows():
+        pairs = table.loc[table["patient"] == row["patient"], "adjusted"].to_numpy(dtype=float)
+        assert len(pairs) == n_nulls
+        assert row["adjusted"] == pytest.approx(pairs.mean(), abs=1e-12)
+        assert row["adjusted_sd"] == pytest.approx(pairs.std(ddof=1), abs=1e-12)
+    for column in ("adjusted_hdi_low", "adjusted_hdi_high"):
         assert result[column].isna().all(), column
+
+    drawn = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=10,
+                                       random_state=0, inplace=False)["result"]
+    for column in ("adjusted_hdi_low", "adjusted_hdi_high"):
+        assert drawn[column].notna().all(), column
 
 
 # ── selecting the reference, and selecting the fit ───────────────────────────
@@ -417,25 +442,28 @@ def test_missing_null_names_the_fix(ref):
 
 
 def test_the_bare_kind_resolves(ref):
-    """``fit="phenotype"`` and ``fit="null.phenotype"`` are one call; an unknown name lists what
-    the object carries; an ambiguous one raises naming both rather than guessing."""
+    """``fit="phenotype[0]"`` and ``fit="null.phenotype[0]"`` are one call; a reference's name
+    names its fits; an unknown name lists what the object carries; an ambiguous one raises naming
+    both rather than guessing."""
     model, adata = ref
     a = _cov(adata)[0]
-    bare = tcri.tl.mutual_information(adata, covariate=a, fit="phenotype",
+    bare = tcri.tl.mutual_information(adata, covariate=a, fit="phenotype[0]",
                                       inplace=False)["result"]
-    full = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype",
+    full = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
                                       inplace=False)["result"]
     pd.testing.assert_frame_equal(bare, full)
 
+    with pytest.raises(KeyError, match=r"null\.phenotype\[1\]"):
+        tcri.tl.mutual_information(adata, covariate=a, fit="phenotype", inplace=False)
     with pytest.raises(KeyError, match="no fit named"):
         tcri.tl.mutual_information(adata, covariate=a, fit="nope", inplace=False)
 
     # both `x` and `null.x` present: refuse rather than prefer one silently
     meta = dict(adata.uns[K.METADATA])
-    meta[K.FITS] = list(K.fits(adata)) + ["phenotype"]
+    meta[K.FITS] = list(K.fits(adata)) + ["phenotype[0]"]
     adata.uns[K.METADATA] = meta
     with pytest.raises(KeyError, match="ambiguous"):
-        K.resolve_fit(adata, "phenotype")
+        K.resolve_fit(adata, "phenotype[0]")
 
 
 def test_fit_selects_the_substrate(ref):
@@ -448,7 +476,7 @@ def test_fit_selects_the_substrate(ref):
     a = _cov(adata)[0]
     main = tcri.tl.mutual_information(adata, covariate=a, null_model=None,
                                       inplace=False)["result"]
-    null = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype",
+    null = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
                                       null_model=None, inplace=False)["result"]
     assert not np.isclose(float(main["value"].iloc[0]), float(null["value"].iloc[0]), atol=1e-6)
     assert float(null["value"].iloc[0]) < float(main["value"].iloc[0]), (
@@ -462,18 +490,18 @@ def test_a_result_on_a_null_does_not_overwrite_the_main_key(ref):
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
     main = tcri.get.result(adata, "mutual_information")["result"]["value"].to_numpy().copy()
 
-    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", fit="null.phenotype",
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", fit="null.phenotype[0]",
                                null_model=None)
     np.testing.assert_array_equal(
         tcri.get.result(adata, "mutual_information")["result"]["value"].to_numpy(), main)
     assert tcri.get.params(adata, "mutual_information")["fit"] is None
     assert tcri.get.params(adata, "mutual_information",
-                           fit="null.phenotype")["fit"] == "null.phenotype"
-    assert K.fit_key(K.MUTUAL_INFORMATION, "null.phenotype") in adata.uns
+                           fit="null.phenotype[0]")["fit"] == "null.phenotype[0]"
+    assert K.fit_key(K.MUTUAL_INFORMATION, "null.phenotype[0]") in adata.uns
 
 
 def test_key_added_and_fit_compose(ref):
-    """``key_added="x", fit="null.phenotype"`` writes ``x_null.phenotype``, not ``x``.
+    """``key_added="x", fit="null.phenotype[0]"`` writes ``x_null.phenotype[0]``, not ``x``.
 
     The fit suffix applies to whichever base is chosen, never only to the default -- otherwise a
     caller's own named key would be overwritten by a run on a different fit, which is the bug
@@ -481,9 +509,9 @@ def test_key_added_and_fit_compose(ref):
     """
     _, adata = ref
     a = _cov(adata)[0]
-    tcri.tl.mutual_information(adata, covariate=a, key_added="x", fit="null.phenotype",
+    tcri.tl.mutual_information(adata, covariate=a, key_added="x", fit="null.phenotype[0]",
                                null_model=None)
-    assert "x_null.phenotype" in adata.uns and "x" not in adata.uns
+    assert "x_null.phenotype[0]" in adata.uns and "x" not in adata.uns
 
 
 def test_substrates_do_not_collide(ref):
@@ -496,7 +524,7 @@ def test_substrates_do_not_collide(ref):
     for k, v in before.items():
         np.testing.assert_array_equal(np.asarray(adata.uns[k]), v, err_msg=k)
     for k in before:
-        assert K.fit_key(k, "null.phenotype") in adata.uns
+        assert K.fit_key(k, "null.phenotype[0]") in adata.uns
 
 
 def test_an_incomparable_fit_is_refused(ref):
@@ -504,13 +532,17 @@ def test_an_incomparable_fit_is_refused(ref):
     _, adata = ref
     a = _cov(adata)[0]
 
-    # a compatible hand-written fit: the phenotype null's substrate under another name
+    # a compatible hand-written fit: one phenotype null's substrate under another name, with
+    # the record of a fit `to_anndata(fit="myalt")` wrote, which belongs to no reference
     for key in list(adata.uns):
-        if "null.phenotype" in key:
-            adata.uns[key.replace("null.phenotype", "myalt")] = adata.uns[key]
+        if "null.phenotype[0]" in key:
+            adata.uns[key.replace("null.phenotype[0]", "myalt")] = adata.uns[key]
     for key in list(adata.obsm):
-        if "null.phenotype" in key:
-            adata.obsm[key.replace("null.phenotype", "myalt")] = adata.obsm[key]
+        if "null.phenotype[0]" in key:
+            adata.obsm[key.replace("null.phenotype[0]", "myalt")] = adata.obsm[key]
+    adata.uns[K.fit_key(K.FIT_SETTINGS, "myalt")] = {
+        k: v for k, v in adata.uns[K.fit_key(K.FIT_SETTINGS, "myalt")].items()
+        if k not in ("reference", "index", "n_nulls")}
     adata.uns[K.METADATA] = {**adata.uns[K.METADATA], K.FITS: K.fits(adata) + ["myalt"]}
     ok = tcri.tl.mutual_information(adata, covariate=a, null_model="myalt", inplace=False)
     assert "null_value" in ok["result"].columns
@@ -651,7 +683,11 @@ def test_h5ad_round_trip(ref, tmp_path):
     back = ad.read_h5ad(path)
 
     assert set(K.fits(back)) == set(K.fits(adata))
-    assert K.fit_key(K.MUTUAL_INFORMATION, "null.phenotype") in back.uns
+    for member in K.members(adata, "null.phenotype"):
+        assert K.fit_key(K.MUTUAL_INFORMATION, member) in back.uns
+    pd.testing.assert_frame_equal(tcri.get.result(back, "mutual_information")["table"],
+                                  tcri.get.result(adata, "mutual_information")["table"],
+                                  check_dtype=False, check_categorical=False)
     np.testing.assert_allclose(
         tcri.get.result(back, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
         tcri.get.result(adata, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
@@ -959,18 +995,19 @@ def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
     """
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]))
-    fit = tcri.get.params(adata, "gene_importance")["null_model"]
-    assert fit == "null.phenotype"
-    assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
-        k for k in adata.uns if "gene_importance" in k)
-    assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
+    assert tcri.get.params(adata, "gene_importance")["null_model"] == "null.phenotype"
+    for fit in K.members(adata, "null.phenotype"):
+        assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
+            k for k in adata.uns if "gene_importance" in k)
+        assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
 
 
 @pytest.mark.parametrize("source, key_added", [("rebuild", None), ("fit", None), ("fit", "b")])
 def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_added):
     """Passing the null itself as ``null_model`` -- rebuilt, or as ``tcri.null.*`` returned it --
-    records and keys the reference by the null's fit name, the same as the default does, so
-    ``tcri.get(fit=...)`` finds it."""
+    records the reference by its name, the same as the default does, and keys each fit's run by
+    that fit's name, so ``tcri.get(fit=...)`` finds it. The list ``tcri.null.*`` returns is the
+    whole reference; one rebuilt null is that fit alone."""
     import warnings
 
     from tcri.model._model import adopt
@@ -980,15 +1017,17 @@ def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_ad
     adata = adopt(model, adata)   # `ref` is a copy: register the parent's setup on it
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        null = (rebuild(model, adata, "phenotype") if source == "rebuild"
-                else tcri.null.phenotype(model, adata, key_added=key_added))
+        null = (rebuild(model, adata, "phenotype[0]") if source == "rebuild"
+                else tcri.null.phenotype(model, adata, n_nulls=2, key_added=key_added))
         tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]),
                                      null_model=null)
-    fit = tcri.get.params(adata, "gene_importance")["null_model"]
-    assert fit == ("null.phenotype" if key_added is None else f"null.phenotype.{key_added}")
-    assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
-        k for k in adata.uns if "gene_importance" in k)
-    assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
+    group = "null.phenotype" if key_added is None else f"null.phenotype.{key_added}"
+    recorded = tcri.get.params(adata, "gene_importance")["null_model"]
+    assert recorded == (f"{group}[0]" if source == "rebuild" else group)
+    for fit in ([recorded] if source == "rebuild" else K.members(adata, group)):
+        assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
+            k for k in adata.uns if "gene_importance" in k)
+        assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
 
 
 def test_a_non_finite_reference_does_not_delete_the_stats(ref):
@@ -1195,8 +1234,8 @@ def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
     adata.write_h5ad(path)
     back = ad.read_h5ad(path)
 
-    assert "permuted within" in _refit_hint(back, "null.clonotype", "patient")
-    for fit in (None, "null.phenotype", "null.clonotype"):
+    assert "permuted within" in _refit_hint(back, "null.clonotype[0]", "patient")
+    for fit in (None, "null.phenotype[0]", "null.clonotype[0]"):
         res = tcri.tl.mutual_information(back, covariate=a, groupby="patient", fit=fit,
                                          null_model=None, inplace=False)["result"]
         assert len(res) and np.isfinite(res["value"]).any(), fit
@@ -1286,3 +1325,122 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
                                  null_model=None)
     plain = tcri.pl.gene_importance(adata, n_top=5)
     assert not plain.get_ylabel().startswith("adjusted")
+
+
+# ── a reference of several fits ──────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def pooled():
+    """A small fit with a phenotype reference of three nulls and a condition reference of two,
+    and the models ``tcri.null.*`` returned. Returns ``(model, adata, nulls)``."""
+    from tcri.datasets import simulate_tcri
+    from tcri.model._model import TCRIModel
+
+    adata = simulate_tcri(n_clones=10, n_phenotypes=3, n_genes=20, n_cells=300,
+                          n_covariates=2, omega_concentration=0.4, seed=0)
+    adata.layers["counts"] = adata.X.copy()
+    TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                            phenotype_key="phenotype", covariate_key="covariate",
+                            batch_key="batch")
+    model = TCRIModel(adata, name="pooledparent", n_latent=8, n_hidden=16, n_layers=1,
+                      classifier_n_layers=1, classifier_hidden=16, K=3, seed=0)
+    train = dict(max_epochs=3, batch_size=64, n_epochs_kl_warmup=2, accelerator="cpu",
+                 enable_progress_bar=False, enable_model_summary=False)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.train(**train)
+        model.to_anndata(adata)
+        nulls = {"phenotype": tcri.null.phenotype(model, adata, n_nulls=3),
+                 "condition": tcri.null.condition(model, adata, n_nulls=2)}
+    return model, adata, nulls
+
+
+def _mi(adata, **kw):
+    cov = str(adata.uns[K.COVARIATE_CATEGORIES][0])
+    return tcri.tl.mutual_information(adata, covariate=cov, random_state=0, inplace=False, **kw)
+
+
+def test_the_reference_pools_every_fit(pooled):
+    """Draw *d* of the fit is paired with draw *d* of each of the three nulls; ``result``
+    summarizes all thirty pairs, whose variance is the nulls' own plus the spread between them,
+    and whose interval holds every null's mean."""
+    from tcri._stats import hdi
+
+    _, adata, _ = pooled
+    res = _mi(adata, n_samples=10)
+    table, row = res["table"], res["result"].iloc[0]
+    assert len(table) == 10 * 3 and sorted(set(table["null"])) == [0, 1, 2]
+    np.testing.assert_allclose(table["adjusted"], table["value"] - table["null_value"],
+                               atol=1e-12)
+    by_draw = table.groupby("draw")["value"]
+    assert (by_draw.nunique() == 1).all(), "the fit's draws differ between the nulls"
+
+    pairs = table["adjusted"].to_numpy(dtype=float)
+    per_null = table.groupby("null")["adjusted"]
+    within = per_null.var(ddof=0).mean()
+    between = per_null.mean().var(ddof=0)
+    assert pairs.var(ddof=0) == pytest.approx(within + between, rel=1e-9)
+    assert between > 0, "the three nulls gave one value"
+    lo, hi = hdi(pairs, prob=0.94)
+    assert (row["adjusted"], row["adjusted_hdi_low"], row["adjusted_hdi_high"]) == pytest.approx(
+        (pairs.mean(), lo, hi))
+    assert ((per_null.mean() >= lo) & (per_null.mean() <= hi)).all(), per_null.mean()
+
+
+def test_one_null_alone_is_its_pairs_in_the_pool(pooled):
+    """A null read alone, by name or as its model, draws what it draws inside its reference:
+    each null's draws are seeded by its own index, not by its position in a call."""
+    _, adata, nulls = pooled
+    pool = _mi(adata, n_samples=6)["table"]
+    by_name = _mi(adata, n_samples=6, null_model="null.phenotype[1]")
+    by_model = _mi(adata, n_samples=6, null_model=nulls["phenotype"][1])
+    np.testing.assert_allclose(by_name["table"]["null_value"].to_numpy(),
+                               pool.loc[pool["null"] == 1, "null_value"].to_numpy(), atol=1e-12)
+    pd.testing.assert_frame_equal(by_name["table"], by_model["table"])
+    assert set(by_name["table"]["null"]) == {0}
+
+
+def test_null_model_takes_the_list_tcri_null_returned(pooled):
+    """The list of models ``tcri.null.phenotype`` returned is the reference: the same pairs, and
+    recorded under the reference's name."""
+    _, adata, nulls = pooled
+    pd.testing.assert_frame_equal(_mi(adata, n_samples=4, null_model=nulls["phenotype"])["table"],
+                                  _mi(adata, n_samples=4, null_model="phenotype")["table"])
+    cov = str(adata.uns[K.COVARIATE_CATEGORIES][0])
+    tcri.tl.mutual_information(adata, covariate=cov, null_model=nulls["phenotype"])
+    assert tcri.get.params(adata, "mutual_information")["null_model"] == "null.phenotype"
+    with pytest.raises(TypeError, match="fitted models"):
+        _mi(adata, null_model=["null.phenotype[0]"])
+
+
+def test_the_stored_table_grows_by_n_nulls(pooled):
+    """Per-clone entropy, the largest table: one row per clone and draw without a reference,
+    three per clone and draw with a reference of three, at one draw and at several."""
+    _, adata, _ = pooled
+    cov = str(adata.uns[K.COVARIATE_CATEGORIES][0])
+    for n_samples in (0, 5):
+        kw = dict(covariate=cov, n_samples=n_samples, random_state=0, inplace=False)
+        bare = tcri.tl.phenotypic_entropy(adata, null_model=None, **kw)["table"]
+        with_ref = tcri.tl.phenotypic_entropy(adata, **kw)["table"]
+        assert len(bare) == bare["clonotype"].nunique() * max(n_samples, 1)
+        assert len(with_ref) == 3 * len(bare), n_samples
+
+
+def test_a_delta_pairs_its_endpoints_within_one_null(pooled):
+    """Every pair row of a delta takes its value and both endpoints from one null, so the
+    delta's closure holds pair by pair, and each null's rows are that null's own call."""
+    _, adata, _ = pooled
+    a, b = (str(c) for c in adata.uns[K.COVARIATE_CATEGORIES][:2])
+    kw = dict(cov_from=a, cov_to=b, n_samples=4, random_state=1, inplace=False)
+    table = tcri.tl.delta_phenotypic_entropy(adata, **kw)["table"]
+    assert sorted(set(table["null"])) == [0, 1]
+    closure = table["adjusted"] - (table["adjusted_to"] - table["adjusted_from"])
+    np.testing.assert_allclose(closure, table["value"] - (table["value_to"] - table["value_from"]),
+                               atol=1e-12, equal_nan=True)
+    for i in (0, 1):
+        own = tcri.tl.delta_phenotypic_entropy(adata, null_model=f"null.condition[{i}]",
+                                               **kw)["table"]
+        mine = table[table["null"] == i]
+        for column in ("null_value", "null_value_from", "null_value_to"):
+            np.testing.assert_allclose(mine[column].to_numpy(), own[column].to_numpy(),
+                                       atol=1e-12, equal_nan=True, err_msg=column)
