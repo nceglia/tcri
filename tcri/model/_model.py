@@ -37,7 +37,8 @@ from scvi.model.base import BaseModelClass
 from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
 
-from .._compute._repertoire import _missing_clonotypes
+from .._compute._genes import _INVARIANT_SEGMENTS, _segment_genes
+from .._compute._repertoire import TCRIDataWarning, _missing_clonotypes
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_key
 from ._module import TCRIModule
@@ -410,6 +411,11 @@ class TCRIModel(BaseModelClass):
         networks, and a small clone's phenotype distribution is shrunk toward the population
         by the prior (:func:`tcri.pp.pool_rare_clones` pools the smallest ones before setup).
         It still shows for the phenotype, covariate and batch columns.
+
+        A ``UserWarning`` names a few of the registered genes that are TCR V, D or J
+        segment genes outside the default ``keep`` of :func:`tcri.pp.exclude_tcr_genes`: each
+        clone expresses its own segments, so they let the model learn clone identity from
+        expression. Genes are matched by ``var_names``.
         """
         if clonotype_key == "auto":
             clonotype_key = resolve_clonotype_key(adata.obs)
@@ -447,6 +453,16 @@ class TCRIModel(BaseModelClass):
                 f"replicate={replicate!r} is not a column of adata.obs. It names the "
                 f"independent unit for statistics (usually the patient), and is used as the "
                 f"default `groupby` for every metric."
+            )
+        segments = adata.var_names[_segment_genes(adata.var_names, _INVARIANT_SEGMENTS)]
+        if len(segments):
+            named = ", ".join(segments[:3]) + (", ..." if len(segments) > 3 else "")
+            warnings.warn(
+                f"{len(segments)} of the {adata.n_vars} registered genes are TCR V, D or J segment "
+                f"genes ({named}). Each clone expresses its own, so they let the encoder and the "
+                f"classifier learn clone identity from expression. Leave them out before choosing "
+                f"variable genes with tcri.pp.exclude_tcr_genes(adata).",
+                TCRIDataWarning, stacklevel=2,
             )
         adata.obs["indices"] = list(range(len(adata.obs.index)))
         anndata_fields = [
