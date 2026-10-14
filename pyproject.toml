@@ -97,6 +97,7 @@ fragment.breaking.name = "Breaking changes"
 fragment.feat.name = "Features"
 fragment.fix.name = "Bug fixes"
 fragment.perf.name = "Performance"
+fragment.docs.name = "Documentation"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
