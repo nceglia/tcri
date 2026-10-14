@@ -17,7 +17,7 @@ from .._state import keys as K
 #: -- same initialization, same split, same minibatch order -- so the permuted labels are the
 #: only difference between a null and its parent. Name-keyed, never positional: a reordering
 #: of this dict must not silently change every recorded permutation.
-OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
+OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "covariate": 30_000}
 
 
 def spawn_key(kind: str, key_added, index: int) -> tuple:
@@ -41,12 +41,12 @@ def permutation_rng(seed: int, kind: str, key_added, index: int):
                                       spawn_key=spawn_key(kind, key_added, index))
     return np.random.default_rng(sequence)
 
-KINDS = ("phenotype", "clonotype", "condition")
+KINDS = ("phenotype", "clonotype", "covariate")
 
 #: Which label vector each kind permutes. The model's ``permutation=(axis, perm)`` names the
 #: same three axes, so the kind IS the axis; they are spelled separately because a future null
 #: could permute an axis under a different name.
-AXIS = {"phenotype": "phenotype", "clonotype": "clonotype", "condition": "condition"}
+AXIS = {"phenotype": "phenotype", "clonotype": "clonotype", "covariate": "covariate"}
 
 
 def _cols(adata):
@@ -65,7 +65,7 @@ def required_strata(adata, kind: str):
     spellings of one rule drift.
     """
     covariate_col, _, _, _, replicate = _cols(adata)
-    if kind == "condition":
+    if kind == "covariate":
         return []
     return [covariate_col] + ([replicate] if replicate else [])
 
@@ -74,11 +74,11 @@ def default_strata(adata, kind: str):
     """The default strata for ``kind``, as columns of ``obs``.
 
     ``(batch, covariate, replicate)`` for the phenotype and clonotype nulls -- the replicate
-    column only when one is registered -- and ``(clonotype, batch)`` for the condition null.
+    column only when one is registered -- and ``(clonotype, batch)`` for the covariate null.
     """
     covariate_col, clone_col, _, batch_col, replicate = _cols(adata)
-    if kind == "condition":
-        # Each clone keeps its cells and its size; which condition a cell sits at is random.
+    if kind == "covariate":
+        # Each clone keeps its cells and its size; which covariate level a cell sits at is random.
         return [clone_col, batch_col]
     strata = [batch_col, covariate_col]
     if replicate and replicate not in strata:
@@ -97,11 +97,11 @@ def resolve_strata(adata, kind: str, within=None):
     """
     if within is None:
         return default_strata(adata, kind)
-    if kind == "condition":
+    if kind == "covariate":
         raise ValueError(
-            "the condition null takes no `within`: its strata are fixed at (clonotype, batch) "
-            "so that each clone keeps its cells and its size while the condition a cell sits "
-            "at is randomized. Drop `within`, or permute a different axis."
+            "the covariate null takes no `within`: its strata are fixed at (clonotype, batch) "
+            "so that each clone keeps its cells and its size while the covariate level a cell "
+            "sits at is randomized. Drop `within`, or permute a different axis."
         )
     within = [within] if isinstance(within, str) else list(within)
     missing = [c for c in within if c not in adata.obs.columns]

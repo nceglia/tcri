@@ -1,6 +1,6 @@
-"""``simulate_cohort`` — the shape most analyses have, with clones paired across conditions.
+"""``simulate_cohort`` — the shape most analyses have, with clones paired across timepoints.
 
-The property that earns this function its place is the pairing. Simulating each condition
+The property that earns this function its place is the pairing. Simulating each timepoint
 independently and giving the runs matching clone names produces ids that line up over
 generative structure that does not, so a paired metric finds nothing and correctly reports
 nothing. These tests pin that the pairing is real.
@@ -17,14 +17,14 @@ def cohort():
     return simulate_cohort(n_patients=6, n_cells_per_sample=140, n_clones=12, seed=0)
 
 
-def test_the_shape_is_patients_x_conditions_x_arms(cohort):
+def test_the_shape_is_patients_x_timepoints_x_arms(cohort):
     obs = cohort.obs
-    assert {"clone_id", "phenotype", "condition", "patient", "disease_status"} <= set(obs.columns)
+    assert {"clone_id", "phenotype", "timepoint", "patient", "disease_status"} <= set(obs.columns)
     assert set(obs["disease_status"].unique()) == {"disease", "control"}
-    assert list(obs["condition"].cat.categories) == ["pre", "post"]
+    assert list(obs["timepoint"].cat.categories) == ["pre", "post"]
 
-    counts = obs.groupby(["patient", "condition"], observed=True).size()
-    assert counts.nunique() == 1, "every (patient, condition) should be the same size"
+    counts = obs.groupby(["patient", "timepoint"], observed=True).size()
+    assert counts.nunique() == 1, "every (patient, timepoint) should be the same size"
     assert obs["patient"].nunique() == 6
 
     # single-valued leftovers from the per-patient sims must not survive: they would point a
@@ -32,24 +32,24 @@ def test_the_shape_is_patients_x_conditions_x_arms(cohort):
     assert not ({"covariate", "batch"} & set(obs.columns))
 
 
-def test_clones_pair_across_conditions_within_a_patient(cohort):
+def test_clones_pair_across_timepoints_within_a_patient(cohort):
     """The whole point. Without this, `phenotypic_flux` and every `delta_*` measure nothing.
 
     Measured by MASS, not by count. With power-law clone sizes some rare clones simply are
-    not drawn at both conditions — that is what a heavy tail does to a finite sample, and it
+    not drawn at both timepoints — that is what a heavy tail does to a finite sample, and it
     is the behavior the intersection rule exists to handle. What has to hold is that the
     clones carrying the repertoire are paired, so the assertion is on the fraction of each
     sample's cells that the shared clones cover.
     """
     obs = cohort.obs
     for patient, g in obs.groupby("patient", observed=True):
-        at = {c: set(x["clone_id"]) for c, x in g.groupby("condition", observed=True)}
+        at = {c: set(x["clone_id"]) for c, x in g.groupby("timepoint", observed=True)}
         shared = at["pre"] & at["post"]
         assert shared, f"{patient}: no clones shared at all"
-        for condition, cells in g.groupby("condition", observed=True):
+        for timepoint, cells in g.groupby("timepoint", observed=True):
             covered = cells["clone_id"].isin(shared).mean()
             assert covered > 0.9, (
-                f"{patient}/{condition}: shared clones cover only {covered:.1%} of cells"
+                f"{patient}/{timepoint}: shared clones cover only {covered:.1%} of cells"
             )
 
 
@@ -82,20 +82,20 @@ def test_only_the_concentration_moves(cohort):
 def test_the_oracle_is_per_patient(cohort):
     """Pooling an arm's patients first mixes clones across patients and inflates the NMI, so
     a pooled oracle compared against a per-patient estimate is a unit mismatch, not a
-    benchmark. `per_sample` must therefore be one row per (patient, condition)."""
+    benchmark. `per_sample` must therefore be one row per (patient, timepoint)."""
     per_sample = cohort.uns["tcri_truth"]["per_sample"]
     assert len(per_sample) == 6 * 2
-    assert {"patient", "disease_status", "condition", "empirical_nmi_min"} <= set(per_sample.columns)
+    assert {"patient", "disease_status", "timepoint", "empirical_nmi_min"} <= set(per_sample.columns)
 
     row = per_sample.iloc[0]
-    g = cohort.obs.query("patient == @row.patient and condition == @row.condition")
+    g = cohort.obs.query("patient == @row.patient and timepoint == @row.timepoint")
     crosstab = pd.crosstab(g["clone_id"], g["phenotype"]).to_numpy(dtype=float)
     assert row["empirical_nmi_min"] == pytest.approx(
         mi_from_joint_oracle(crosstab)["nmi_min"], rel=1e-9)
 
     # and it is NOT the pooled-per-arm value, which is the mistake it exists to prevent
     arm = cohort.obs.query("disease_status == @row.disease_status "
-                           "and condition == @row.condition")
+                           "and timepoint == @row.timepoint")
     pooled = mi_from_joint_oracle(
         pd.crosstab(arm["clone_id"], arm["phenotype"]).to_numpy(dtype=float))["nmi_min"]
     assert not np.isclose(row["empirical_nmi_min"], pooled, atol=1e-3)
@@ -110,7 +110,7 @@ def test_reproducible_and_responsive_to_its_knobs(cohort):
         simulate_cohort(n_patients=4, n_cells_per_sample=80, n_clones=8,
                         seed=2).uns["tcri_truth"]["per_arm"].to_numpy())
 
-    # enrichment=1.0 means the second condition is an unbiased draw too, so the arms stop
+    # enrichment=1.0 means the second timepoint is an unbiased draw too, so the arms stop
     # separating -- the knob is what creates the effect, not the labeling
     flat = simulate_cohort(n_patients=4, n_cells_per_sample=140, n_clones=10,
                            disease_enrichment=1.0, control_enrichment=1.0, seed=0)
@@ -119,8 +119,8 @@ def test_reproducible_and_responsive_to_its_knobs(cohort):
 
 
 @pytest.mark.parametrize("kwargs,match", [
-    (dict(conditions=("only_one",)), "at least two"),
-    (dict(conditions=("a", "a")), "unique"),
+    (dict(timepoints=("only_one",)), "at least two"),
+    (dict(timepoints=("a", "a")), "unique"),
     (dict(clone_size_distribution="zipfish"), "clone_size_distribution"),
     (dict(n_patients=1), "n_patients"),
     (dict(disease_enrichment=0.5), "disease_enrichment"),
@@ -145,25 +145,25 @@ def test_clone_sizes_are_heavy_tailed(cohort):
         ranks = np.arange(1, len(sizes) + 1)
         return np.polyfit(np.log(ranks), np.log(sizes), 1)[0], sizes
 
-    obs = cohort.obs.query("condition == 'pre' and patient == 'P01'")
+    obs = cohort.obs.query("timepoint == 'pre' and patient == 'P01'")
     slope, sizes = _slope(obs)
     assert slope < -0.8, f"log-log slope {slope:+.2f} is not a heavy tail"
 
     flat = simulate_cohort(n_patients=2, n_clones=30, n_cells_per_sample=600,
                            clone_size_distribution="uniform", seed=0)
-    f_slope, f_sizes = _slope(flat.obs.query("condition == 'pre' and patient == 'P01'"))
+    f_slope, f_sizes = _slope(flat.obs.query("timepoint == 'pre' and patient == 'P01'"))
     assert f_slope > slope, "'uniform' is no flatter than 'powerlaw'"
     assert sizes.max() / sizes.sum() > 3 * (f_sizes.max() / f_sizes.sum())
 
 
-def test_conditions_generalize_past_two():
+def test_timepoints_generalize_past_two():
     """The enrichment ramps across an ordered series, so a timeseries works, not just pre/post."""
-    a = simulate_cohort(n_patients=4, conditions=("t0", "t1", "t2", "t3"),
+    a = simulate_cohort(n_patients=4, timepoints=("t0", "t1", "t2", "t3"),
                         n_clones=14, n_cells_per_sample=220, seed=0)
-    assert list(a.obs["condition"].cat.categories) == ["t0", "t1", "t2", "t3"]
+    assert list(a.obs["timepoint"].cat.categories) == ["t0", "t1", "t2", "t3"]
 
     per_arm = a.uns["tcri_truth"]["per_arm"]
-    assert list(per_arm.columns) == ["t0", "t1", "t2", "t3"], "conditions lost their order"
+    assert list(per_arm.columns) == ["t0", "t1", "t2", "t3"], "timepoints lost their order"
     r = per_arm.loc["disease"].to_numpy()
     assert r[-1] > r[0], "the disease arm did not concentrate across the series"
 
@@ -185,7 +185,7 @@ def test_the_cohort_can_be_written_to_h5ad(tmp_path):
     cause — as an `IORegistryError` out of `ut.save_tcri_session`, long after generation."""
     import anndata as ad
 
-    a = simulate_cohort(n_patients=4, conditions=("pre", "post"), n_clones=(6, 10),
+    a = simulate_cohort(n_patients=4, timepoints=("pre", "post"), n_clones=(6, 10),
                         n_cells_per_sample=60, seed=0)
     settings = a.uns["tcri_truth"]["settings"]
     assert not any(isinstance(v, tuple) for v in settings.values()), (
@@ -196,4 +196,4 @@ def test_the_cohort_can_be_written_to_h5ad(tmp_path):
     a.write_h5ad(path)
     back = ad.read_h5ad(path)
     assert back.n_obs == a.n_obs
-    assert list(back.uns["tcri_truth"]["settings"]["conditions"]) == ["pre", "post"]
+    assert list(back.uns["tcri_truth"]["settings"]["timepoints"]) == ["pre", "post"]

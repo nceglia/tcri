@@ -44,7 +44,7 @@ def _isolate_param_store():
 
 
 def _perfect_adata(n_clones=5, n_per=60, n_genes=6, seed=0):
-    """One marker gene per clone, one phenotype per clone (n_conditions=1)."""
+    """One marker gene per clone, one phenotype per clone, one covariate level."""
     rng = np.random.default_rng(seed)
     rows, clone, phen = [], [], []
     for c in range(n_clones):
@@ -88,14 +88,14 @@ def test_head_is_not_constant_after_a_short_fit():
     from tcri.model._priors import encoder_posterior
 
     ad = simulate_cohort(
-        n_patients=4, conditions=("pre", "post"), disease_fraction=0.5, n_clones=(14, 24),
+        n_patients=4, timepoints=("pre", "post"), disease_fraction=0.5, n_clones=(14, 24),
         n_phenotypes=4, n_genes=40, n_cells_per_sample=200,
         clone_size_distribution="powerlaw", clone_size_exponent=2.0,
         disease_enrichment=12.0, control_enrichment=1.1, seed=0,
     )
     TCRIModel.setup_anndata(
         ad, layer="counts", clonotype_key="clone_id", phenotype_key="phenotype",
-        covariate_key="condition", batch_key="patient",
+        covariate_key="timepoint", batch_key="patient",
     )
     model = TCRIModel(ad, n_latent=8, n_hidden=32, n_layers=1, classifier_n_layers=1,
                       classifier_hidden=32, K=4, seed=0)

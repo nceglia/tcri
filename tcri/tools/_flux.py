@@ -70,7 +70,7 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
 
 
 @tl_result(key=K.PHENOTYPIC_FLUX, version=4, schema=schemas.PhenotypicFlux,
-           default_null="condition")
+           default_null="covariate")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, exclude_pools=True, weighted=False,
                     distance_metric="kl", random_state=None, device=None, null_model="auto",
@@ -84,9 +84,9 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     A clone present at ``cov_from`` but absent at ``cov_to`` is DROPPED, not NaN-filled — a
     flux needs both endpoints to exist.
 
-    ``null_model`` names the permutation reference; ``"auto"`` is the CONDITION null, because
-    what a flux measures is movement between conditions and the reference has to be a fit in
-    which that movement is absent. ``fit`` selects which fit the number is computed on.
+    ``null_model`` names the permutation reference; ``"auto"`` is the COVARIATE null, because
+    what a flux measures is movement between covariate levels and the reference has to be a fit
+    in which that movement is absent. ``fit`` selects which fit the number is computed on.
 
     ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
     writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out

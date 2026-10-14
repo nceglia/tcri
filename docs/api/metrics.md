@@ -80,7 +80,7 @@ mi["result"][["value", "null_value", "adjusted"]]
 ```
 
 `null_model` defaults to `"auto"`: the phenotype null for the entropies, mutual information and
-gene importance, the condition null for flux and the two deltas. `None` computes no reference
+gene importance, the covariate null for flux and the two deltas. `None` computes no reference
 and creates no column; any reference or fit on the object can be named instead, or the fitted
 null models passed. `result` and `table` gain `null_v` and `adjusted` beside every native value
 column `v`, and `adjusted = value - null_value` is the quantity the metric reports, on its own

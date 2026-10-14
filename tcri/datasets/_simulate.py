@@ -435,7 +435,7 @@ def _zipf_weights(n, exponent, rng):
 def simulate_cohort(
     *,
     n_patients: int = 8,
-    conditions=("pre", "post"),
+    timepoints=("pre", "post"),
     disease_fraction: float = 0.5,
     n_clones=(12, 30),
     n_phenotypes: int = 4,
@@ -448,33 +448,33 @@ def simulate_cohort(
     omega_concentration: float = 0.9,
     seed: int = 0,
 ):
-    """A multi-patient, multi-condition cohort in one line.
+    """A multi-patient, multi-timepoint cohort in one line.
 
-    The shape most analyses actually have — patients as replicates, an ordered condition axis
+    The shape most analyses actually have — patients as replicates, an ordered timepoint axis
     *within* each patient, and a cohort label *between* them — which the single-sample
     :func:`simulate_tcri` cannot express.
 
-    >>> adata = simulate_cohort(n_patients=10, conditions=("pre", "mid", "post"))
+    >>> adata = simulate_cohort(n_patients=10, timepoints=("pre", "mid", "post"))
 
-    **Clones are paired across conditions.** Simulating each condition independently and
+    **Clones are paired across timepoints.** Simulating each timepoint independently and
     giving the runs matching clone names does *not* pair them: the ids line up but the
     underlying clone->phenotype relationship is unrelated, so ``phenotypic_flux`` and every
     ``delta_*`` would have nothing to measure. Each patient is simulated **once**, fixing that
-    patient's clone->phenotype structure and its clone sizes, and every condition is drawn
+    patient's clone->phenotype structure and its clone sizes, and every timepoint is drawn
     from that one population.
 
-    **Condition progression.** The first condition is an unbiased draw. Later ones oversample
+    **Progression.** The first timepoint is an unbiased draw. Later ones oversample
     each clone's dominant phenotype, ramping linearly to the arm's full enrichment at the last
-    condition — so disease clones commit over time and control clones barely move.
+    timepoint — so disease clones commit over time and control clones barely move.
     Nothing is relabeled, so a cell's phenotype still matches the expression it was generated
     with; only the clone->phenotype *concentration* changes.
 
     Parameters
     ----------
     n_patients
-        Total patients. Each contributes one sample per condition.
-    conditions
-        Ordered condition labels, two or more (``("pre", "post")``, or a timeseries).
+        Total patients. Each contributes one sample per timepoint.
+    timepoints
+        Ordered timepoint labels, two or more (``("pre", "post")``, or a longer series).
     disease_fraction
         Fraction assigned to the ``"disease"`` arm; the rest are ``"control"``.
     n_clones
@@ -492,7 +492,7 @@ def simulate_cohort(
         exceeds its pool supply is capped and the realized tail comes out shallower than the
         exponent asked for — still firmly heavy-tailed, just not that exact exponent.
     disease_enrichment, control_enrichment
-        How hard the final condition oversamples each clone's dominant phenotype. ``1.0`` is
+        How hard the final timepoint oversamples each clone's dominant phenotype. ``1.0`` is
         no enrichment. Jittered +/-15% per patient so replicates are not identical.
     omega_concentration
         Passed to :func:`simulate_tcri` per patient. Lower = sharper coupling at baseline;
@@ -503,9 +503,9 @@ def simulate_cohort(
     Returns
     -------
     AnnData
-        ``obs`` with ``clone_id``, ``phenotype``, ``condition``, ``patient``, ``cohort``;
+        ``obs`` with ``clone_id``, ``phenotype``, ``timepoint``, ``patient``, ``disease_status``;
         ``layers['counts']``; and ``uns['tcri_truth']`` carrying ``per_sample`` — the
-        empirical NMI of each (patient, condition) from the labels alone, computed **per
+        empirical NMI of each (patient, timepoint) from the labels alone, computed **per
         patient** because that is the unit a per-patient metric estimates — plus ``per_arm``
         and the generating ``settings``.
 
@@ -524,11 +524,11 @@ def simulate_cohort(
     Use it to check that arms are ordered as constructed and separate from a permutation null
     — not to score agreement in absolute bits.
     """
-    conditions = tuple(str(c) for c in conditions)
-    if len(conditions) < 2:
-        raise ValueError(f"conditions needs at least two labels, got {conditions}")
-    if len(set(conditions)) != len(conditions):
-        raise ValueError(f"conditions must be unique, got {conditions}")
+    timepoints = tuple(str(t) for t in timepoints)
+    if len(timepoints) < 2:
+        raise ValueError(f"timepoints needs at least two labels, got {timepoints}")
+    if len(set(timepoints)) != len(timepoints):
+        raise ValueError(f"timepoints must be unique, got {timepoints}")
     if n_patients < 2:
         raise ValueError("n_patients must be >= 2")
     if clone_size_distribution not in ("powerlaw", "uniform"):
@@ -546,7 +546,7 @@ def simulate_cohort(
     rng = np.random.default_rng(seed)
     n_disease = max(1, min(n_patients - 1, round(n_patients * disease_fraction)))
     width = max(2, len(str(n_patients)))
-    n_steps = len(conditions) - 1
+    n_steps = len(timepoints) - 1
 
     blocks = []
     for i in range(n_patients):
@@ -579,39 +579,39 @@ def simulate_cohort(
         is_modal = (pool.obs["clone_id"].map(modal).astype(str)
                     == pool.obs["phenotype"].astype(str)).to_numpy()
 
-        for step, condition in enumerate(conditions):
-            # linear ramp: unbiased at the first condition, full enrichment at the last
+        for step, timepoint in enumerate(timepoints):
+            # linear ramp: unbiased at the first timepoint, full enrichment at the last
             enrichment = 1.0 + (target - 1.0) * (step / n_steps)
             w = base_w * np.where(is_modal, enrichment, 1.0)
             idx = rng.choice(pool.n_obs, size=n_cells_per_sample, replace=False, p=w / w.sum())
 
             block = pool[idx].copy()
             block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
-            block.obs["condition"] = condition
+            block.obs["timepoint"] = timepoint
             block.obs["patient"] = patient
             block.obs["disease_status"] = arm
-            block.obs_names = [f"{patient}_{condition}_{k}" for k in range(block.n_obs)]
+            block.obs_names = [f"{patient}_{timepoint}_{k}" for k in range(block.n_obs)]
             blocks.append(block)
 
     adata = ad.concat(blocks, join="outer", label=None)
     # `covariate` and `batch` come from the per-patient sims and are single-valued there;
-    # `condition` and `patient` supersede them, and leaving them would point someone at the
+    # `timepoint` and `patient` supersede them, and leaving them would point someone at the
     # wrong column when they reach for setup_anndata(covariate_key=...)
     adata.obs = adata.obs.drop(columns=["covariate", "batch"], errors="ignore")
-    for col in ("clone_id", "phenotype", "condition", "patient", "disease_status"):
+    for col in ("clone_id", "phenotype", "timepoint", "patient", "disease_status"):
         adata.obs[col] = adata.obs[col].astype("category")
-    adata.obs["condition"] = adata.obs["condition"].cat.reorder_categories(list(conditions))
+    adata.obs["timepoint"] = adata.obs["timepoint"].cat.reorder_categories(list(timepoints))
     adata.layers["counts"] = adata.X.copy()
 
-    # The oracle, per (patient, condition). PER PATIENT on purpose: pooling an arm's patients
+    # The oracle, per (patient, timepoint). PER PATIENT on purpose: pooling an arm's patients
     # first mixes clones across patients and inflates the NMI, so comparing that against a
     # per-patient estimate would be a unit mismatch rather than a benchmark.
     rows = []
-    for (patient, arm, condition), g in adata.obs.groupby(
-            ["patient", "disease_status", "condition"], observed=True):
+    for (patient, arm, timepoint), g in adata.obs.groupby(
+            ["patient", "disease_status", "timepoint"], observed=True):
         crosstab = pd.crosstab(g["clone_id"], g["phenotype"]).to_numpy(dtype=float)
         oracle = mi_from_joint_oracle(crosstab)
-        rows.append({"patient": patient, "disease_status": arm, "condition": condition,
+        rows.append({"patient": patient, "disease_status": arm, "timepoint": timepoint,
                      "n_clones": int(g["clone_id"].nunique()),
                      "empirical_mi": oracle["mi"],
                      "empirical_nmi_min": oracle["nmi_min"],
@@ -620,14 +620,14 @@ def simulate_cohort(
 
     adata.uns["tcri_truth"] = {
         "per_sample": per_sample,
-        "per_arm": (per_sample.groupby(["disease_status", "condition"], observed=True)
-                    ["empirical_nmi_min"].mean().unstack("condition")[list(conditions)]),
+        "per_arm": (per_sample.groupby(["disease_status", "timepoint"], observed=True)
+                    ["empirical_nmi_min"].mean().unstack("timepoint")[list(timepoints)]),
         # LISTS, not tuples: h5py has no writer for a tuple, so a tuple anywhere in `uns`
         # makes the whole object unwritable to .h5ad -- which surfaces far from here, as an
         # IORegistryError out of save_tcri_session.
         "settings": {
             "n_patients": n_patients, "n_disease": n_disease,
-            "conditions": list(conditions),
+            "timepoints": list(timepoints),
             "n_clones": list(n_clones) if not isinstance(n_clones, (int, np.integer))
                         else int(n_clones),
             "n_phenotypes": n_phenotypes, "n_genes": n_genes,

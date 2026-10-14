@@ -2,7 +2,7 @@
 
 A model-based number on its own says nothing about whether the structure it measures is there.
 Mutual information is positive for any clone × phenotype table, an in-silico knockout moves the
-phenotype call for any gene, and a flux between conditions is non-zero whenever the two fits
+phenotype call for any gene, and a flux between covariate levels is non-zero whenever the two fits
 differ at all. The floor is what tells you how much of the number is the data.
 
 `tcri.null` fits that floor. A null is **the same model, with the same knobs, the same seed and
@@ -18,7 +18,7 @@ Three axes, one function each:
 |---|---|---|---|
 | {func}`phenotype <tcri.null.phenotype>` | batch, covariate, replicate | which cell carries which phenotype | clonotypic and phenotypic entropy, mutual information, gene importance |
 | {func}`clonotype <tcri.null.clonotype>` | batch, covariate, replicate | which cells share a clone | the complement: a metric that moves here and not under the phenotype null is reading clonal structure |
-| {func}`condition <tcri.null.condition>` | clonotype, batch | which condition a cell sits at | phenotypic flux and the two deltas |
+| {func}`covariate <tcri.null.covariate>` | clonotype, batch | which covariate level a cell sits at | phenotypic flux and the two deltas |
 
 ```python
 model.train(max_epochs=200, batch_size=512)
@@ -58,7 +58,7 @@ accept the model object, and the substrate readers accept `fit=`. Three checks s
 null is the one you meant. Measured at 30 epochs on a 200-cell, 3-phenotype, 8-clone fixture,
 seeds 0/1/2, with the majority-class rate of the true phenotype labels in brackets:
 
-| quantity | parent | phenotype null | clonotype null | condition null |
+| quantity | parent | phenotype null | clonotype null | covariate null |
 |---|---|---|---|---|
 | head accuracy [0.405], seed 0 | 0.630 | 0.545 | 0.460 | 0.630 |
 | head accuracy [0.535], seed 1 | 0.820 | 0.535 | 0.545 | 0.820 |
@@ -69,7 +69,7 @@ seeds 0/1/2, with the majority-class rate of the true phenotype labels in bracke
 
 Read it this way. Reconstruction is unchanged by every null, because no permutation touches the
 expression matrix. Mutual information collapses under both label nulls and is untouched by the
-condition null, which is the axis rule working. And a label null's phenotype call falls to the
+covariate null, which is the axis rule working. And a label null's phenotype call falls to the
 **majority-class rate, not to chance**: the permutation preserves each stratum's label multiset,
 so the marginal survives it and a head with nothing else to learn predicts the marginal. On
 seeds 1 and 2 the accuracy lands on that rate to three decimals. Chance would be 0.333.
@@ -94,5 +94,5 @@ been touched.
 
 ```{eval-rst}
 .. automodule:: tcri.null._nulls
-   :members: phenotype, clonotype, condition, all
+   :members: phenotype, clonotype, covariate, all
 ```

@@ -271,7 +271,7 @@ def test_every_scored_metric_pairs_its_draws(ref):
         assert len(result) == len(table.drop_duplicates(_labels_of(table))), name
 
 
-def test_a_per_draw_difference_between_two_conditions_has_an_interval(ref):
+def test_a_per_draw_difference_between_two_covariate_levels_has_an_interval(ref):
     """The adjusted value at two covariate levels, differenced draw by draw within each
     patient, has a spread: each side is a per-draw quantity, so the difference is too."""
     from tcri._stats import hdi
@@ -936,7 +936,7 @@ def test_oe_shape_smoke():
     adata = simulate_cohort(n_patients=4, n_clones=10, n_cells_per_sample=250, seed=0)
     adata.layers["counts"] = adata.X.copy()
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
-                            phenotype_key="phenotype", covariate_key="condition",
+                            phenotype_key="phenotype", covariate_key="timepoint",
                             batch_key="patient", replicate="patient")
     model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1,
                       classifier_hidden=16, K=4, seed=0, name="oesmoke")
@@ -945,7 +945,7 @@ def test_oe_shape_smoke():
         model.train(max_epochs=30, batch_size=128, n_epochs_kl_warmup=2, accelerator="cpu",
                     enable_progress_bar=False, enable_model_summary=False)
         model.to_anndata(adata)
-        tcri.null.all(model, adata, kinds=("phenotype", "condition"),
+        tcri.null.all(model, adata, kinds=("phenotype", "covariate"),
                       enable_progress_bar=False, enable_model_summary=False)
 
     levels = list(adata.uns[K.COVARIATE_CATEGORIES])
@@ -1331,7 +1331,7 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
 
 @pytest.fixture(scope="module")
 def pooled():
-    """A small fit with a phenotype reference of three nulls and a condition reference of two,
+    """A small fit with a phenotype reference of three nulls and a covariate reference of two,
     and the models ``tcri.null.*`` returned. Returns ``(model, adata, nulls)``."""
     from tcri.datasets import simulate_tcri
     from tcri.model._model import TCRIModel
@@ -1351,7 +1351,7 @@ def pooled():
         model.train(**train)
         model.to_anndata(adata)
         nulls = {"phenotype": tcri.null.phenotype(model, adata, n_nulls=3),
-                 "condition": tcri.null.condition(model, adata, n_nulls=2)}
+                 "covariate": tcri.null.covariate(model, adata, n_nulls=2)}
     return model, adata, nulls
 
 
@@ -1438,7 +1438,7 @@ def test_a_delta_pairs_its_endpoints_within_one_null(pooled):
     np.testing.assert_allclose(closure, table["value"] - (table["value_to"] - table["value_from"]),
                                atol=1e-12, equal_nan=True)
     for i in (0, 1):
-        own = tcri.tl.delta_phenotypic_entropy(adata, null_model=f"null.condition[{i}]",
+        own = tcri.tl.delta_phenotypic_entropy(adata, null_model=f"null.covariate[{i}]",
                                                **kw)["table"]
         mine = table[table["null"] == i]
         for column in ("null_value", "null_value_from", "null_value_to"):
