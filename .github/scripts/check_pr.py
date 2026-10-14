@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TYPES = ("breaking", "feat", "fix", "perf")
+TYPES = ("breaking", "feat", "fix", "perf", "docs")
 MAX_NOTE = 200
 
 #: GitHub's closing keywords, plus "Part of" for the pull requests below the top of a stack.
