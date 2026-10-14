@@ -74,27 +74,30 @@ Chains also go missing. TCRβ is recovered in more cells than TCRα, and fewer c
 both, so a clonotype defined by both chains splits a clone wherever TCRα was missed. Defining
 clonotypes by the TCRβ CDR3 within each individual avoids most of this.
 
-### Why rare clones are pooled
+### Why mutual information is computed on expanded clones
 
-How phenotype couples to clone can only be seen in a clone observed at least twice: a clone
-seen once cannot show whether its phenotype varies. Clones of two or three cells look purer
-than they are by chance, since two cells drawn at random share a phenotype with probability
-$\sum_\phi p_\phi^2$, which is large when a few phenotypes dominate. And a clone of two cells
-from one capture may be a capture artifact.
-{func}`tcri.pp.pool_rare_clones <tcri.preprocessing._preprocessing.pool_rare_clones>` therefore
-pools each individual's clones with fewer than `min_cells` cells, all from one sample, into one
-`pooled@{group}` label, and keeps every clone seen in two samples.
+The mutual information tcri reports asks how much information is shared between genotype and
+phenotype: how much a cell's clonotype tells you about its phenotype, and the reverse. A clonotype
+carries that information only when several cells share it, so the quantity is defined over expanded
+clones. A clonotype held by one cell would look perfectly informative about that cell's phenotype,
+but that is information about the cell, not about the clonotype.
+
+In a sample, expansion shows as a clonotype seen more than once. A repertoire holds far more clones
+than a run samples, so a clone that has not expanded is almost never sampled twice by chance, and a
+repeat is evidence of expansion. Two capture artifacts can fake a repeat, a doublet and ambient TCR,
+but only within one capture. A clone seen in two samples has expanded however few cells it has;
+within one capture, a few cells are needed before a repeat is trusted.
+{func}`tcri.pp.pool_rare_clones <tcri.preprocessing._preprocessing.pool_rare_clones>` applies this
+rule: `min_cells` is the evidence of expansion required within one capture, and each individual's
+clones without that evidence are pooled into one `pooled@{group}` label.
+
+Seen once does not mean not expanded: many clones have expanded and are still too small, as a share
+of the repertoire, to be sampled twice. A sample cannot show the information they share with
+phenotype, so a sample's mutual information covers the clones it resolves and depends on depth.
 
 The pooled cells stay in the fit: they train the expression model and the classifier, and they
-inform the population's phenotype distribution. The metrics leave the pools out by default
-(`exclude_pools=True`), because a pool is not a clone.
-
-### What the mutual information measures
-
-A sample's mutual information is the coupling among the clones that pooling kept and that have
-cells in that sample. Which clones pass `min_cells` depends on how deeply each individual was
-sampled, so samples of different depth resolve different parts of the repertoire: compare
-samples of similar depth, or report each sample's number of cells beside its value.
+inform the population's phenotype distribution. A pool stands for an individual's unresolved
+repertoire rather than a clone, so the metrics leave it out by default (`exclude_pools=True`).
 
 ## The model
 
