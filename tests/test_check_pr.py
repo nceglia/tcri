@@ -88,8 +88,22 @@ def test_an_edited_note_is_checked_like_ones_own():
     assert any("one line" in p for p in check_pr.problems(pr, files, lambda path: "A.\nB.\n"))
 
 
+@pytest.mark.parametrize("kind", check_pr.TYPES)
+def test_every_type_passes(kind):
+    assert _problems(_pr(), notes={f"docs/release-notes/10.{kind}.md": "A change.\n"}) == []
+
+
+def test_every_type_has_a_section_on_the_release_page():
+    """towncrier collects each type under its own heading, so a type it does not know would be
+    left out of the release page."""
+    import tomllib
+
+    config = tomllib.loads((_SCRIPT.parents[2] / "pyproject.toml").read_text())
+    assert set(config["tool"]["towncrier"]["fragment"]) == set(check_pr.TYPES)
+
+
 def test_unknown_type_is_reported():
-    notes = {"docs/release-notes/10.docs.md": "Docs.\n"}
+    notes = {"docs/release-notes/10.chore.md": "Chore.\n"}
     assert any("not one of" in p for p in _problems(_pr(), notes=notes))
 
 

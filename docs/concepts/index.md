@@ -54,6 +54,51 @@ Three index sets recur throughout:
 A **`ct` pair** is a specific $(c, m)$ combination — clonotype $c$ observed at covariate $m$.
 Every cell maps to exactly one `ct` pair.
 
+## Rare clones and sampling depth
+
+### What a sample sees
+
+A person carries far more clones than a single-cell run can sample, and clone sizes are heavily
+skewed: a few expanded memory clones are large, and most clones are small. A run of a few
+thousand cells sees most of its clones once. Seen once does not mean naive: many memory clones
+have expanded and are still too small, as a share of the repertoire, to be sampled twice.
+Whether a clone looks expanded depends on depth. A deeper sample, or one less crowded by a few
+dominant clones, carries more of the repertoire's tail past any fixed clone size.
+
+### What droplet capture adds
+
+Two capture artifacts give a cell another cell's clonotype: a droplet holding two cells (a
+doublet), and TCR transcripts released by one cell and picked up by another cell's barcode
+(ambient TCR). Both act within one capture, so neither can place a clone in a second sample.
+Chains also go missing. TCRβ is recovered in more cells than TCRα, and fewer cells still have
+both, so a clonotype defined by both chains splits a clone wherever TCRα was missed. Defining
+clonotypes by the TCRβ CDR3 within each individual avoids most of this.
+
+### Why mutual information is computed on expanded clones
+
+The mutual information tcri reports asks how much information is shared between genotype and
+phenotype: how much a cell's clonotype tells you about its phenotype, and the reverse. A clonotype
+carries that information only when several cells share it, so the quantity is defined over expanded
+clones. A clonotype held by one cell would look perfectly informative about that cell's phenotype,
+but that is information about the cell, not about the clonotype.
+
+In a sample, expansion shows as a clonotype seen more than once. A repertoire holds far more clones
+than a run samples, so a clone that has not expanded is almost never sampled twice by chance, and a
+repeat is evidence of expansion. Two capture artifacts can fake a repeat, a doublet and ambient TCR,
+but only within one capture. A clone seen in two samples has expanded however few cells it has;
+within one capture, a few cells are needed before a repeat is trusted.
+{func}`tcri.pp.pool_rare_clones <tcri.preprocessing._preprocessing.pool_rare_clones>` applies this
+rule: `min_cells` is the evidence of expansion required within one capture, and each individual's
+clones without that evidence are pooled into one `pooled@{group}` label.
+
+Seen once does not mean not expanded: many clones have expanded and are still too small, as a share
+of the repertoire, to be sampled twice. A sample cannot show the information they share with
+phenotype, so a sample's mutual information covers the clones it resolves and depends on depth.
+
+The pooled cells stay in the fit: they train the expression model and the classifier, and they
+inform the population's phenotype distribution. A pool stands for an individual's unresolved
+repertoire rather than a clone, so the metrics leave it out by default (`exclude_pools=True`).
+
 ## The model
 
 `TCRIModel` is a hierarchical Bayesian model fit with [Pyro](https://pyro.ai) on top of an
@@ -136,6 +181,32 @@ $$\gamma \sum_i \mathrm{KL}\!\big(\operatorname{softmax}(\ell_i)\;\|\;\phi_{g(i)
 This penalty is **the only thing that trains the classifier**. Without it the logits never
 enter the objective and phenotype recovery sits at chance. $\gamma$ is `phenotype_kl_weight`
 (default `1.0`).
+
+## How a fit ends
+
+`train()` counts its schedule in epochs, with one validation check per epoch. The KL weight
+rises to its maximum over `n_epochs_kl_warmup` epochs; early stopping and the choice of the
+best check start when that ramp completes. A fit stops when `early_stopping_patience` checks
+pass without a new best, but never within 2,000 optimizer steps of the first counted check. The
+model then holds the state of its best check. If the ramp does not complete within the fit, no
+check is selected, the model keeps its final state, and `train()` warns.
+
+An epoch is one pass over the training cells in batches of `batch_size`, and how far a fit gets
+depends on its optimizer steps. A small dataset makes few steps per epoch and needs many more
+epochs to reach the same point, which is what the `max_epochs` default leaves room for.
+
+`model.training_record_` says how the fit ended. Read it before the metrics:
+
+| Key | Meaning |
+|---|---|
+| `stopped_early` | True when early stopping ended the fit. False means the fit ended another way, at `max_epochs` or at a Lightning limit such as `max_time`, and may not have converged. |
+| `ramp_completed` | True when the KL ramp has completed by the end of the fit. False means no check was selected. |
+| `selected_epoch` | The best check, counted from 0, whose state the model holds; None when no check was selected. |
+| `epochs_run` | Epochs trained. |
+| `steps_per_epoch` | Optimizer steps per epoch. |
+| `warmup_epochs_taken` | How far the KL ramp has run, in epochs, at most `n_epochs_kl_warmup`; it continues from an earlier `train()` of the same model. |
+
+A null replays its parent's training arguments, so it ends by the same rule.
 
 ## What `to_anndata` writes
 

@@ -66,8 +66,9 @@ after the pull request number and the kind of change:
 docs/release-notes/<PR number>.<type>.md
 ```
 
-`<type>` is `breaking`, `feat`, `fix` or `perf`. Write one line of at most 200 characters, for
-users: what changed, not how. The file name needs the pull request number, so open the pull request
+`<type>` is `breaking`, `feat`, `fix`, `perf` or `docs`; `docs` is a change to the documentation
+alone, such as a new section of a guide. Write one line of at most 200 characters, for users: what
+changed, not how. The file name needs the pull request number, so open the pull request
 first, then add the file. A pull request with nothing user-facing (CI, refactoring, internal docs)
 carries the `no release note` label instead.
 
