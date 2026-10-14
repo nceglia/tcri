@@ -7,17 +7,20 @@ Vγ9Vδ2 cells, which mark a phenotype rather than a clone.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import logging
 import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
-from anndata import AnnData
+from anndata import AnnData, read_h5ad
 
 import tcri
-from tcri.model._model import TCRIModel
 from tcri._compute._repertoire import TCRIDataWarning
+from tcri.model._model import TCRIModel
+from tcri.utils._utils import load_tcri_session, save_tcri_session
 
 HUMAN_SEGMENTS = ["TRAV12-2", "TRAV14DV4", "TRAJ42", "TRBV20-1", "TRBD1", "TRBJ2-7", "TRGV4",
                   "TRGJ1", "TRGJP", "TRGJP1", "TRGJP2", "TRDV1", "TRDD3", "TRDJ1"]
@@ -165,3 +168,39 @@ def test_setup_warns_on_segment_genes_and_not_after_exclusion():
 
     tcri.pp.exclude_tcr_genes(adata)
     assert _segment_warnings(adata) == []
+
+
+@pytest.mark.parametrize("how", ["scvi", "session"])
+def test_loading_a_model_fitted_with_segment_genes_does_not_warn(tmp_path, how):
+    """A load runs setup again with the saved registry. The model is fitted by then, so only the
+    fresh setup warns, through either saver."""
+    adata = tcri.datasets.simulate_cohort(n_patients=2, conditions=("pre", "post"),
+                                          n_cells_per_sample=60, seed=0)
+    adata.var_names = ["TRBV20-1", "TRAJ42"] + list(adata.var_names[2:])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                                phenotype_key="phenotype", covariate_key="condition",
+                                batch_key="patient")
+    assert len([w for w in record if "segment genes" in str(w.message)]) == 1
+
+    model = TCRIModel(adata, n_latent=4, n_hidden=8, n_layers=1, classifier_n_layers=1,
+                      classifier_hidden=8, K=2, n_pseudo_obs=2, seed=0)
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.train(max_epochs=2, batch_size=64, n_epochs_kl_warmup=0,
+                    enable_progress_bar=False, enable_model_summary=False)
+        if how == "scvi":
+            model.save(str(tmp_path), overwrite=True, save_anndata=False)
+            adata.write_h5ad(tmp_path / "adata.h5ad")
+        else:
+            save_tcri_session(model, adata, str(tmp_path))
+
+    with warnings.catch_warnings(record=True) as record, \
+            contextlib.redirect_stdout(io.StringIO()):
+        warnings.simplefilter("always")
+        if how == "scvi":
+            TCRIModel.load(str(tmp_path), adata=read_h5ad(tmp_path / "adata.h5ad"))
+        else:
+            load_tcri_session(str(tmp_path))
+    assert [str(w.message) for w in record if "segment genes" in str(w.message)] == []

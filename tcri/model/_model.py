@@ -415,7 +415,8 @@ class TCRIModel(BaseModelClass):
         A ``UserWarning`` names a few of the registered genes that are TCR V, D or J
         segment genes outside the default ``keep`` of :func:`tcri.pp.exclude_tcr_genes`: each
         clone expresses its own segments, so they let the model learn clone identity from
-        expression. Genes are matched by ``var_names``.
+        expression. Genes are matched by ``var_names``. A load, which runs this method again
+        with the saved registry, does not warn.
         """
         if clonotype_key == "auto":
             clonotype_key = resolve_clonotype_key(adata.obs)
@@ -454,8 +455,10 @@ class TCRIModel(BaseModelClass):
                 f"independent unit for statistics (usually the patient), and is used as the "
                 f"default `groupby` for every metric."
             )
+        # scvi's load runs setup again with the saved registry (`source_registry`); the model
+        # is fitted by then, so the warning is given on a fresh setup only.
         segments = adata.var_names[_segment_genes(adata.var_names, _INVARIANT_SEGMENTS)]
-        if len(segments):
+        if len(segments) and kwargs.get("source_registry") is None:
             named = ", ".join(segments[:3]) + (", ..." if len(segments) > 3 else "")
             warnings.warn(
                 f"{len(segments)} of the {adata.n_vars} registered genes are TCR V, D or J segment "
