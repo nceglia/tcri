@@ -270,6 +270,57 @@ def _int_at_least(name: str, value, minimum: int) -> int:
     return value
 
 
+def _device_count(devices):
+    """How many devices a Lightning ``devices`` value asks for; ``None`` for ``"auto"``.
+
+    ``-1`` and ``"-1"`` mean every device, returned as ``-1``. A list or a comma-separated string
+    names devices one by one; any other integer or integer string is a count.
+    """
+    if isinstance(devices, str):
+        text = devices.strip()
+        if text == "auto":
+            return None
+        if "," in text:
+            return len([part for part in text.split(",") if part.strip()])
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    if isinstance(devices, (list, tuple, range)):
+        return len(devices)
+    if isinstance(devices, int) and not isinstance(devices, bool):
+        return devices
+    return None
+
+
+def _multi_device_request(kwargs) -> Optional[str]:
+    """The ``train()`` argument that asks for more than one device, or ``None``.
+
+    The guide concentrations live in Pyro's store, outside the module, so a distributed fit
+    leaves every process with its own: they are not synchronized, and neither are the networks,
+    which Pyro's optimizer steps outside the wrapper that would average their gradients.
+    """
+    count = _device_count(kwargs.get("devices", "auto"))
+    if count is not None and (count > 1 or count == -1):
+        return f"devices={kwargs['devices']!r}"
+    num_nodes = kwargs.get("num_nodes", 1)
+    if isinstance(num_nodes, int) and not isinstance(num_nodes, bool) and num_nodes > 1:
+        return f"num_nodes={num_nodes!r}"
+    strategy = kwargs.get("strategy", "auto")
+    if isinstance(strategy, str):
+        name = strategy.strip().lower()
+        if name != "auto" and not name.startswith("single"):
+            return f"strategy={strategy!r}"
+        return None
+    try:
+        from lightning.pytorch.strategies import ParallelStrategy
+    except ImportError:
+        return None
+    if isinstance(strategy, ParallelStrategy):
+        return f"strategy={type(strategy).__name__}"
+    return None
+
+
 def _accepted_train_kwargs() -> set[str]:
     """Every name ``train(**kwargs)`` may legitimately forward.
 
@@ -742,7 +793,11 @@ class TCRIModel(BaseModelClass):
             ``early_stopping_mode``, ``trainer_config``, ``learning_rate_monitor``,
             ``enable_checkpointing`` and ``checkpointing_monitor``. ``check_val_every_n_epoch``
             other than 1 and ``val_check_interval`` other than 1.0 raise, because patience is
-            counted in epochs. The train/validation split is fixed at 0.9.
+            counted in epochs. The train/validation split is fixed at 0.9. Training runs on one
+            device: ``devices`` above 1, a list of several devices, ``-1`` or ``"-1"``,
+            ``num_nodes`` above 1, or a multi-device ``strategy`` (DDP, FSDP, DeepSpeed and the
+            like) raises ``ValueError`` before anything is fitted. The default
+            ``devices="auto"`` resolves to one device.
 
         Notes
         -----
@@ -783,6 +838,13 @@ class TCRIModel(BaseModelClass):
             raise TypeError(
                 "train() validates once per epoch: early_stopping_patience is counted in epochs, "
                 f"so val_check_interval={kwargs['val_check_interval']!r} would change its unit."
+            )
+        multi = _multi_device_request(kwargs)
+        if multi is not None:
+            raise ValueError(
+                f"{multi} asks for more than one device, and multi-device training is not "
+                f"supported. Train on one device: leave `devices` at its default ('auto') or "
+                f"pass devices=1."
             )
         if not (math.isfinite(early_stopping_min_delta) and early_stopping_min_delta >= 0):
             raise ValueError(

@@ -996,3 +996,15 @@ def test_an_earlier_null_of_the_same_parent_keeps_its_own_name():
         with pytest.raises(RuntimeError, match="replaced by a later fit"):
             tcri.perturb.gene_importance(model, a, genes=list(a.var_names[:3]),
                                          null_model=stale)
+
+
+@pytest.mark.parametrize("request_more", [{"devices": 2}, {"strategy": "ddp"}])
+def test_a_null_is_never_fitted_on_more_than_one_device(request_more):
+    """A null replays the parent's `devices` and takes training overrides; asking it for more
+    than one device raises before anything is fitted or written."""
+    adata = _adata()
+    model = _parent(adata, "multidevice-" + "-".join(request_more))
+    fits = list(K.fits(adata))
+    with pytest.raises(ValueError, match="more than one device"):
+        tcri.null.phenotype(model, adata, key_added="multi", **request_more)
+    assert list(K.fits(adata)) == fits

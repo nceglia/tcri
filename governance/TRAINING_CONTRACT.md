@@ -126,8 +126,11 @@ schedules or stopping; they change with a recorded reason.
   this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
   `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,
   `checkpointing_monitor`) and for `check_val_every_n_epoch` other than 1 or
-  `val_check_interval` other than 1.0, which would change what patience counts. Every argument
-  scvi's Trainer adds to Lightning's is either forwarded with its plain meaning, set by
+  `val_check_interval` other than 1.0, which would change what patience counts. It raises before
+  anything is fitted for more than one device (`devices` above 1, several devices, `-1`,
+  `num_nodes` above 1, or a multi-device `strategy`): the guide concentrations live in Pyro's
+  store and would not be synchronized across processes, and neither would the networks. Every
+  argument scvi's Trainer adds to Lightning's is either forwarded with its plain meaning, set by
   `train()`, or raises. The constructor raises for an unknown name; a saved record's
   `kl_weight_max` maps to `max_kl_weight`, and its `patience_epochs`/`patience` are dropped,
   both with a warning; its `use_enumeration` is dropped, with a warning only when it is true.
@@ -135,7 +138,8 @@ schedules or stopping; they change with a recorded reason.
   float raises instead of being truncated. `test_train_rejects_arguments_it_replaces`,
   `test_count_arguments_must_be_integers`,
   `test_every_scvi_trainer_argument_is_forwarded_or_replaced`,
-  `test_an_unknown_constructor_argument_raises`, `test_a_saved_use_enumeration_is_dropped`.
+  `test_an_unknown_constructor_argument_raises`, `test_a_saved_use_enumeration_is_dropped`,
+  `test_more_than_one_device_raises`, `test_a_null_is_never_fitted_on_more_than_one_device`.
 
 ## The stopping policy in one paragraph
 
