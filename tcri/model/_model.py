@@ -228,6 +228,23 @@ __all__ = ["TCRIModel"]
 
 warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 
+#: scvi warns when a registered category has fewer than 3 cells. For the clonotype column that is
+#: the normal state of a repertoire, not a training problem: the clonotype never enters the
+#: networks, and a small clone's phenotype distribution is shrunk toward the population by the
+#: prior. ``indices`` gives every cell a category of its own, so it would warn on every setup.
+#: Both are silenced; the warning still shows for the phenotype, covariate and batch columns,
+#: where a category with almost no cells is a real problem.
+_SMALL_CATEGORY_WARNING = (r"Category .* in adata\.obs\['_scvi_(clonotype_col_in_registry|indices)'\] "
+                           r"has fewer than 3 cells")
+
+
+@contextlib.contextmanager
+def _quiet_small_categories():
+    """Hide scvi's small-category warning for the clonotype and ``indices`` columns."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=_SMALL_CATEGORY_WARNING, category=UserWarning)
+        yield
+
 # Neither the SLURM environment nor root-logger configuration belongs at import time.
 #
 # Deleting SLURM_NTASKS/SLURM_NTASKS_PER_NODE from os.environ stops Lightning's SLURM
@@ -387,6 +404,12 @@ class TCRIModel(BaseModelClass):
         Every cell must have a clonotype. A cell whose ``clonotype_key`` value is NaN or None,
         an empty or whitespace-only string, or the string ``"nan"`` raises ``ValueError``
         before anything is registered.
+
+        scvi warns when a registered category has fewer than 3 cells. That warning is not shown
+        for the clonotype column: small clones are expected, the clonotype does not enter the
+        networks, and a small clone's phenotype distribution is shrunk toward the population
+        by the prior (:func:`tcri.pp.pool_rare_clones` pools the smallest ones before setup).
+        It still shows for the phenotype, covariate and batch columns.
         """
         if clonotype_key == "auto":
             clonotype_key = resolve_clonotype_key(adata.obs)
@@ -438,7 +461,8 @@ class TCRIModel(BaseModelClass):
         adata_manager = AnnDataManager(
             fields=anndata_fields, setup_method_args=setup_method_args
         )
-        adata_manager.register_fields(adata, **kwargs)
+        with _quiet_small_categories():
+            adata_manager.register_fields(adata, **kwargs)
         for name, value in zip(CUSTOM_REGISTRY_KEYS,
                                (clonotype_key, phenotype_key, covariate_key, batch_key,
                                 replicate, layer)):
@@ -448,6 +472,13 @@ class TCRIModel(BaseModelClass):
             adata.uns.pop("tcri_layer", None)
         else:
             adata.uns["tcri_layer"] = layer
+
+    def _validate_anndata(self, adata=None, copy_if_view: bool = True):
+        """scvi's validation, which transfers this model's setup to an unregistered AnnData,
+        with the small-category warning hidden for the clonotype and ``indices`` columns as in
+        :meth:`setup_anndata`."""
+        with _quiet_small_categories():
+            return super()._validate_anndata(adata, copy_if_view=copy_if_view)
 
     @classmethod
     def load(cls, dir_path: str, adata: Optional[AnnData] = None, **kwargs):

@@ -7,6 +7,7 @@ epoch, and Trainer keywords the caller must be able to override.
 """
 import contextlib
 import io
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -279,3 +280,76 @@ def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
         f"to_anndata on a reversed view moved the log-posterior by {delta:.4f} for the same "
         f"cells; the prior is bound by loader position rather than by cell (NEW-1)."
     )
+
+
+def _labeled(clone, phen):
+    """An unregistered AnnData with one cell per label pair, two conditions and one patient."""
+    n = len(clone)
+    X = np.random.default_rng(0).poisson(5.0, size=(n, 5)).astype("float32")
+    ad = AnnData(
+        X=X,
+        obs=pd.DataFrame({"clone_id": clone, "true_phenotype": phen,
+                          "covariate": [f"cond_{i % 2}" for i in range(n)], "patient": "P1"}),
+        var=pd.DataFrame(index=[f"g{g}" for g in range(5)]),
+    )
+    ad.layers["counts"] = ad.X.copy()
+    return ad
+
+
+def _setup(ad):
+    TCRIModel.setup_anndata(
+        ad, layer="counts", clonotype_key="clone_id", phenotype_key="true_phenotype",
+        covariate_key="covariate", batch_key="patient",
+    )
+
+
+def _small_category_warnings(record):
+    return [str(w.message) for w in record if "has fewer than 3 cells" in str(w.message)]
+
+
+def test_small_clones_do_not_warn_at_setup():
+    """scvi warns when a registered category has fewer than 3 cells. A one-cell clone is the
+    normal state of a repertoire and the per-cell ``indices`` column has one cell per category,
+    so neither warns; every phenotype here has enough cells, so nothing warns at all."""
+    clone = ["big"] * 30 + ["single"]
+    phen = ["A", "B", "C"] * 10 + ["A"]
+    ad = _labeled(clone, phen)
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _setup(ad)
+
+    assert _small_category_warnings(record) == []
+
+
+def test_a_small_phenotype_still_warns_at_setup():
+    """The warning is hidden for the clonotype and ``indices`` columns only: a phenotype with
+    fewer than 3 cells is a real problem and still warns."""
+    clone = ["big"] * 30 + ["single"]
+    phen = ["A", "B"] * 15 + ["rare"]
+    ad = _labeled(clone, phen)
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _setup(ad)
+
+    found = _small_category_warnings(record)
+    assert len(found) == 1 and "_scvi_phenotype_col_in_registry" in found[0], found
+
+
+def test_small_clones_do_not_warn_when_setup_is_transferred():
+    """A model scoring an AnnData it was not set up on transfers its setup to it, which runs
+    scvi's check again; the clonotype and ``indices`` columns stay quiet there too."""
+    clone = ["big"] * 30 + ["single"]
+    phen = ["A", "B", "C"] * 10 + ["A"]
+    ad = _labeled(clone, phen)
+    _setup(ad)
+    model = _model(ad, K=2)
+    fresh = _labeled(clone, phen)
+    fresh.obs["indices"] = list(range(fresh.n_obs))
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        model._validate_anndata(fresh)
+
+    assert _small_category_warnings(record) == []
