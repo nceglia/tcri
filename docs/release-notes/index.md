@@ -5,6 +5,9 @@ as one-line files and are collected into a page when the release is made.
 
 <!-- Add one include per released version at the top of this list. -->
 
+```{include} 0.14.0.md
+```
+
 ```{include} 0.13.1.md
 ```
 
