@@ -1,7 +1,8 @@
 # Preprocessing (`tcri.pp`)
 
 Lightweight clone bookkeeping applied to an `AnnData` before modeling: pool
-rare clones, derive clone sizes, summarize cells and clones per group, which
+rare clones, leave the TCR V(D)J segment genes out of the fitted genes
+(`exclude_tcr_genes`), derive clone sizes, summarize cells and clones per group, which
 clones persist across covariate levels and how clonotypes are shared across
 groups, and adapt Scirpy/MuData objects into a
 tcri-ready `AnnData`. Exposed as ``tcri.pp``. `from_mudata` reads one clonotype

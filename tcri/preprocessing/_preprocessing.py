@@ -1,20 +1,26 @@
-"""Preprocessing helpers: rare-clone pooling, clone sizes and the MuData adapter.
+"""Preprocessing helpers: rare-clone pooling, TCR segment genes, clone sizes and the MuData
+adapter.
 
 Deliberately light on imports: this module is loaded by ``import tcri``, so anything
 heavy imported here is paid for on every import of the package.
 """
 from __future__ import annotations
 
+import logging
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
 
+from .._compute._genes import _INVARIANT_SEGMENTS, _looks_like_ensembl, _segment_genes
 from .._compute._repertoire import TCRIDataWarning, _missing_clonotypes, _pool_rare_clones
 from .._state import keys as K
 from .._state._resolution import clone_like_candidates
 
-__all__ = ["pool_rare_clones", "clone_size", "from_mudata"]
+logger = logging.getLogger(__name__)
+
+__all__ = ["pool_rare_clones", "exclude_tcr_genes", "clone_size", "from_mudata"]
 
 
 def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
@@ -88,6 +94,92 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     """
     _pool_rare_clones(adata, clonotype_key=clonotype_key, groupby=groupby, min_cells=min_cells,
                       samples=samples, key_added=key_added)
+
+
+def exclude_tcr_genes(adata, *, keep: Iterable[str] = _INVARIANT_SEGMENTS,
+                      gene_symbols: str | None = None, inplace: bool = True) -> np.ndarray | None:
+    """Leave the TCR V, D and J segment genes out of the genes to fit.
+
+    A clone's TCR rearrangement fixes which V, D and J segment genes its cells express, so these
+    genes act as a clone barcode in the expression matrix. Left in the fitted genes, they let the
+    encoder and the classifier learn clone identity from expression, so phenotype calls can partly
+    follow clone. Run it before choosing variable genes:
+
+    >>> tcri.pp.exclude_tcr_genes(adata)
+    >>> sc.pp.highly_variable_genes(adata, n_top_genes=2000, flavor="seurat_v3", layer="counts")
+    >>> adata = adata[:, adata.var.highly_variable].copy()
+
+    **What matches.** A gene symbol made of ``TR``, the locus (A, B, G or D), the segment (V, D or
+    J), then a digit or ``P``, ignoring case: TRBV20-1, TRAJ33, TRGJP1, mouse Trbv13-2. TRADD
+    does not match, and neither do the constant genes TRAC, TRBC1, TRBC2, TRGC1, TRGC2 and TRDC.
+
+    **What keep is for.** Some segment genes are shared by many distinct clones of one phenotype,
+    so they mark the phenotype rather than a clone. The default keeps those of MAIT cells (TRAV1-2
+    and TRAJ33; mouse Trav1 and Traj33), iNKT cells (TRAV10 and TRAJ18; mouse Trav11 and Traj18)
+    and Vγ9Vδ2 γδ T cells (TRGV9 and TRDV2). Segments that are biased in these cells but not
+    invariant, such as the MAIT and iNKT β chains, TRAJ12, TRAJ20 and TRDV1, are not kept.
+
+    ``TCRIModel.setup_anndata`` warns when the genes it registers include segment genes outside
+    the default ``keep``. One line is logged on the ``tcri`` logger: the number of genes
+    excluded, and their symbols.
+
+    Parameters
+    ----------
+    adata
+        The object whose genes are matched.
+    keep
+        Segment genes to leave in, compared ignoring case. A ``keep`` passed in replaces the
+        default; ``()`` excludes every segment gene.
+    gene_symbols
+        The ``var`` column that holds gene symbols, for when ``var_names`` are Ensembl IDs.
+        ``None`` matches ``var_names``.
+    inplace
+        Remove the excluded genes from ``adata``. With ``False``, ``adata`` is not modified and
+        the mask is returned instead.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        ``None`` when ``inplace``. Otherwise a boolean array over ``var_names``, True for the genes
+        to keep, for use in variable-gene selection.
+
+    Raises
+    ------
+    KeyError
+        When ``gene_symbols`` is not a column of ``var``.
+    TypeError
+        When ``keep`` is a single string rather than a collection of gene symbols.
+    ValueError
+        When ``gene_symbols`` is ``None`` and more than half of ``var_names`` are Ensembl gene
+        IDs, so that no symbol could match. Nothing is removed when it raises.
+    """
+    if isinstance(keep, str):
+        raise TypeError(
+            f"keep is a collection of gene symbols, not one string; got {keep!r}. Pass "
+            f"keep=({keep!r},) to keep that gene alone."
+        )
+    if gene_symbols is None:
+        if _looks_like_ensembl(adata.var_names):
+            raise ValueError(
+                "var_names are Ensembl gene IDs, so no TCR segment gene symbol can match them. "
+                "Pass the var column that holds gene symbols as gene_symbols."
+            )
+        symbols = pd.Index(adata.var_names).astype(str)
+    else:
+        if gene_symbols not in adata.var.columns:
+            raise KeyError(f"gene_symbols={gene_symbols!r} is not a column of adata.var.")
+        symbols = pd.Index(adata.var[gene_symbols]).astype(str)
+
+    excluded = _segment_genes(symbols, keep)
+    logger.info(
+        f"exclude_tcr_genes: excluded {int(excluded.sum()):,} of {adata.n_vars:,} genes"
+        + (f": {', '.join(symbols[excluded])}." if excluded.any() else ".")
+    )
+    if not inplace:
+        return ~excluded
+    if excluded.any():
+        adata._inplace_subset_var(~excluded)
+    return None
 
 
 def clone_size(adata, *, key_added=K.CLONE_SIZE, return_counts=False):

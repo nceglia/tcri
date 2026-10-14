@@ -170,8 +170,9 @@ decomposition stored.
 ## The stub
 
 ```python contract
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from anndata import AnnData
+import numpy as np
 import pandas as pd
 
 
@@ -223,6 +224,10 @@ class pp:
         adata: AnnData, *, clonotype_key: str, groupby: str, min_cells: int = ...,
         samples: Optional[str] = ..., key_added: Optional[str] = ...,
     ) -> None: ...
+    def exclude_tcr_genes(
+        adata: AnnData, *, keep: Sequence[str] = ..., gene_symbols: Optional[str] = ...,
+        inplace: bool = ...,
+    ) -> Optional[np.ndarray]: ...
     def clone_size(adata: AnnData, *, key_added: str = ..., return_counts: bool = ...) -> Any: ...
     def from_mudata(
         mdata: Any, *, clonotype_key: str, covariate_key: Optional[str] = ...,

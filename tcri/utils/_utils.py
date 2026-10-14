@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+from .._compute._repertoire import TCRIDataWarning
 from .._state import keys as K
 from .._state.storage import _tcri_version
 import os
@@ -118,15 +119,20 @@ def load_tcri_session(
     if setup_layer == "X" and "X" not in adata.layers:
         setup_layer = None
 
-    TCRIModel.setup_anndata(
-        adata,
-        layer=setup_layer,
-        clonotype_key=setup.get("clone_col", "unique_clone_id"),
-        phenotype_key=setup.get("phenotype_col", "phenotype_col"),
-        covariate_key=setup.get("covariate_col", "timepoint"),
-        batch_key=setup.get("batch_col", "patient"),
-        replicate=setup.get("replicate"),
-    )
+    # The model is fitted already, so setup's warning about TCR segment genes names nothing the
+    # caller can act on here; `TCRIModel.load` below skips it the same way.
+    with _warnings.catch_warnings():
+        _warnings.filterwarnings("ignore", message=r".* TCR V, D or J segment genes",
+                                 category=TCRIDataWarning)
+        TCRIModel.setup_anndata(
+            adata,
+            layer=setup_layer,
+            clonotype_key=setup.get("clone_col", "unique_clone_id"),
+            phenotype_key=setup.get("phenotype_col", "phenotype_col"),
+            covariate_key=setup.get("covariate_col", "timepoint"),
+            batch_key=setup.get("batch_col", "patient"),
+            replicate=setup.get("replicate"),
+        )
 
     # 3) The Pyro store saved beside the model, read before anything is loaded: a corrupt file
     # fails the load with the process-global store untouched, rather than leaving a model whose

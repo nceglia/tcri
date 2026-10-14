@@ -9,6 +9,8 @@
   ``_clonotype_sharing``, ``_make_clonotypes_replicate_specific``, ``_size_counts``,
   ``TCRIDataWarning``), the clonotype derivation record in ``uns`` (``_record_derivation``,
   ``_clonotype_source``, ``_pool_labels``), and rare-clone pooling (``_pool_rare_clones``).
+- :mod:`._genes`    — the TCR segment-gene rule (``_TCR_SEGMENT``, ``_INVARIANT_SEGMENTS``,
+  ``_segment_genes``) and the Ensembl-ID check (``_looks_like_ensembl``).
 
 This is the LOWER layer: ``tools``/``plotting``/``diagnostics`` import down into it and it must
 not import back up. ``_tables`` needs one symbol from ``tools._joint`` and takes it lazily inside
