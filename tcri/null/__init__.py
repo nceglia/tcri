@@ -6,10 +6,11 @@ Three axes, one function each, plus :func:`all` for the common path::
     model.to_anndata(adata)
     nulls = tcri.null.all(model, adata)
 
-Each call refits the parent's model, unchanged in every knob and in its seed, on one permuted
-label vector, and writes the result into ``adata`` as a named fit beside the main one. From
-there every metric can read it: ``value - null_value`` is the part of a number the structure
-accounts for, and no model-based number need be reported bare.
+Each call refits the parent's model, unchanged in every knob and in its seed, on ``n_nulls``
+permuted label vectors, and writes each fit into ``adata`` as a named fit beside the main one
+(``null.phenotype[0]``, ``null.phenotype[1]``, ...). From there every metric can read them as one
+reference: ``value - null_value`` is the part of a number the structure accounts for, paired
+draw for draw with every fit of the reference, and no model-based number need be reported bare.
 """
 from ._nulls import all, clonotype, condition, phenotype
 

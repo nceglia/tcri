@@ -331,7 +331,7 @@ def test_a_load_touches_only_its_family(synthetic_adata, tmp_path, how):
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         parent.to_anndata(adata)
-        tcri.null.phenotype(parent, adata)
+        tcri.null.phenotype(parent, adata, n_nulls=1)
     _save(parent, adata, tmp_path / "p", how)
     family = set(pyro.get_param_store().keys())
     own_networks = {k for k in family if k.startswith(f"{parent.name}.scvi$$$")}

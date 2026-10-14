@@ -93,7 +93,8 @@ def blocks():
         # that axis, since a reference computed at defaults would move the adjusted column
         # but not the value and nothing here would notice.
         import tcri
-        tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
+        tcri.null.all(model, adata, n_nulls=1, enable_progress_bar=False,
+                      enable_model_summary=False)
     logging.disable(logging.NOTSET)
     return model, adata, truth
 

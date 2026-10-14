@@ -105,8 +105,8 @@ tcri.null.all(model, adata)
 
 `to_anndata` materializes everything the rest of the package reads — see
 [Concepts](../concepts/index.md) for the full table of what it writes. `tcri.null.all` fits the
-three permutation references beside it: the same model on permuted labels, which is what every
-metric below is read against. One phenotype fit serves both entropies, mutual information and
+three permutation references beside it, five fits each: the same model on permuted labels, which
+is what every metric below is read against. One phenotype fit serves both entropies, mutual information and
 gene importance, so this is one prerequisite and not four. Pass `null_model=None` to a metric to
 report the bare number instead.
 

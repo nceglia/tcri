@@ -85,7 +85,7 @@ def pooled():
         warnings.simplefilter("ignore")
         model.train(**TRAIN)
         model.to_anndata(adata)
-        tcri.null.all(model, adata, kinds=("phenotype", "condition"))
+        tcri.null.all(model, adata, n_nulls=1, kinds=("phenotype", "condition"))
     _remember_fixture_params("pooled")
     return model, adata
 
@@ -212,7 +212,7 @@ def test_exclude_pools_equals_explicit_clones_in_gene_importance(pooled):
     kw = dict(genes=[gene], inplace=False)
     res = tcri.perturb.gene_importance(model, adata, **kw)
     with_pools = tcri.perturb.gene_importance(model, adata, exclude_pools=False, **kw)
-    null = rebuild(model, adata, "null.phenotype")
+    null = rebuild(model, adata, "null.phenotype[0]")
     kept = adata.obs[CLONES].isin(_kept(adata)).to_numpy()
     for patient in adata.obs["patient"].unique():
         in_patient = (adata.obs["patient"] == patient).to_numpy()
@@ -252,7 +252,7 @@ def test_the_reference_counts_the_clones_the_value_counts(pooled):
     for exclude_pools in (True, False):
         kw = dict(covariate=POST, exclude_pools=exclude_pools, inplace=False)
         with_ref = tcri.tl.mutual_information(adata, **kw)["result"]
-        of_null = tcri.tl.mutual_information(adata, fit="null.phenotype", null_model=None,
+        of_null = tcri.tl.mutual_information(adata, fit="null.phenotype[0]", null_model=None,
                                              **kw)["result"]
         merged = with_ref.merge(of_null[["patient", "value"]], on="patient",
                                 suffixes=("", "_own"))

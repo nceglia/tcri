@@ -30,8 +30,8 @@ under `x.null.`. A model constructed without `name=` gets a generated one (`tcri
 digits), recorded with the model, so no two models share a key. `TCRIModel.name` reads it back.
 Constructing a model under a name whose keys the store already holds raises; continuing a fit is
 another `train()` on the same object. Each fit of a null gets its own namespace,
-`x.null.<kind>.<token>`, recorded with the fit; refitting a null of the same parent and kind
-replaces the earlier fit and removes its keys from the store.
+`x.null.<kind>[i].<token>`, recorded with the fit; refitting a reference of the same parent and
+kind replaces every fit of the earlier one and removes their keys from the store.
 
 **Loading.** `TCRIModel.load` and `load_tcri_session` restore the loaded model's guide
 concentrations and its nulls' parameters from the saved store, take its networks from the saved
@@ -107,17 +107,30 @@ frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw v
 with a `draw` column. Read back with `tcri.get.result(adata, name)` and
 `tcri.get.params(adata, name)`.
 
-**References.** Every scored metric takes `null_model`, defaulting to `"auto"`: the reference is
-computed and `result` gains `null_value` and `adjusted = value - null_value` beside every native
-value column (`null_denom` has no adjusted column; a denominator is not a reported quantity).
-`table` carries them per draw, the fit's draw *d* paired with the null's draw *d*, and `result`
-summarizes the paired draws: `adjusted` is their mean, with `adjusted_sd`, `adjusted_hdi_low` and
-`adjusted_hdi_high` beside it. The adjusted value is the quantity a metric reports: `stats` is
-computed on it, and `value` and `null_value` stay stored as its inputs. `null_model=None`
-computes no reference and creates no column, and `stats` is then on the value. The reference is
-the caller's own call on the null — `fit` set to the null, `null_model=None`, and the draws
-seeded from their own seed derived from `random_state` — every other argument forwarded
-verbatim, so both sides are the same functional at the same arguments. `joint_distribution` returns a matrix rather than a scored
+**References.** `tcri.null.phenotype`, `.clonotype`, `.condition` and `.all` take `n_nulls`
+(default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
+`null.<kind>[n_nulls-1]` (`null.<kind>.<key_added>[i]` when named), each with its own
+permutation, namespace and records; the calls return the fitted models, a list per kind.
+`tcri.null.all` therefore fits 3 x `n_nulls` nulls, and a metric's per-draw `table` is `n_nulls`
+times longer than with one. A null's permutation is drawn from the seed spawned by its kind,
+`key_added` and index, so it does not depend on the fits already on the object. Every scored
+metric takes `null_model`, defaulting to `"auto"`: the reference is computed and `result` gains
+`null_value` and `adjusted = value - null_value` beside every native value column (`null_denom`
+has no adjusted column; a denominator is not a reported quantity). `table` carries them per pair
+of draws, the fit's draw *d* paired with draw *d* of every fit of the reference, `null` numbering
+those fits, and `result` summarizes all the pairs: `adjusted` is their mean, with `adjusted_sd`,
+`adjusted_hdi_low` and `adjusted_hdi_high` beside it. At `n_samples=0` a row has one pair per
+null: `adjusted_sd` is the sd between the nulls and the HDI is NaN. The adjusted value is the
+quantity a metric reports: `stats` is computed on it, and `value` and `null_value` stay stored as
+its inputs. `null_model` takes `"auto"` (every fit of the metric's default reference), a
+reference's name (`"phenotype"`, `"null.phenotype"`: every fit), one fit's name
+(`"null.phenotype[2]"`), one fitted model (that fit), or a list of fitted models (a reference of
+those fits, such as the list `tcri.null.*` returned). `null_model=None` computes no reference and
+creates no column, and `stats` is then on the value. The reference is the caller's own call on
+each null — `fit` set to the null, `null_model=None`, and the draws seeded from their own seed
+derived from `random_state` and the null's index — every other argument forwarded verbatim, so
+both sides are the same functional at the same arguments. `fit=` selects one fit, so a
+reference's name there raises, naming its fits. `joint_distribution` returns a matrix rather than a scored
 quantity and takes no `null_model`.
 
 **Substrate and fits.** One AnnData carries one main fit and any number of named ones, written
@@ -262,7 +275,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_entropy(
@@ -270,7 +283,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def mutual_information(
@@ -278,7 +291,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_flux(
@@ -286,7 +299,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_clonotypic_entropy(
@@ -294,7 +307,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_phenotypic_entropy(
@@ -302,7 +315,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Optional[str] = ..., fit: Optional[str] = ...,
+        null_model: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
 
@@ -398,19 +411,19 @@ class perturb:
 # ── permutation references (null) ────────────────────────────────────────────
 class null:
     def phenotype(
-        model: Any, adata: AnnData, *, within: Any = ..., seed: Optional[int] = ...,
-        key_added: Optional[str] = ..., **train_kwargs: Any,
-    ) -> Any: ...
+        model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
+    ) -> list: ...
     def clonotype(
-        model: Any, adata: AnnData, *, within: Any = ..., seed: Optional[int] = ...,
-        key_added: Optional[str] = ..., **train_kwargs: Any,
-    ) -> Any: ...
+        model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
+    ) -> list: ...
     def condition(
-        model: Any, adata: AnnData, *, seed: Optional[int] = ...,
+        model: Any, adata: AnnData, *, n_nulls: int = ..., seed: Optional[int] = ...,
         key_added: Optional[str] = ..., **train_kwargs: Any,
-    ) -> Any: ...
+    ) -> list: ...
     def all(
-        model: Any, adata: AnnData, *, kinds: Any = ..., within: Any = ...,
+        model: Any, adata: AnnData, *, n_nulls: int = ..., kinds: Any = ..., within: Any = ...,
         seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> dict: ...
 

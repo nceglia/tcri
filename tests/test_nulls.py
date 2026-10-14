@@ -84,7 +84,7 @@ def fitted():
     model = _parent(a, "nullparent")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        nulls = tcri.null.all(model, a)
+        nulls = tcri.null.all(model, a, n_nulls=1)
     _remember_fixture_params("nullparent")
     return model, a, nulls
 
@@ -101,7 +101,7 @@ def test_permutation_preserves_the_strata(fitted):
     _, adata, _ = fitted
     meta = adata.uns[K.METADATA]
     for kind in ("phenotype", "clonotype", "condition"):
-        fit = f"null.{kind}"
+        fit = f"null.{kind}[0]"
         perm = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, fit)])
         strata = list(adata.uns[K.fit_key(K.FIT_SETTINGS, fit)]["strata"])
         assert sorted(perm.tolist()) == list(range(adata.n_obs)), f"{kind}: not a permutation"
@@ -121,11 +121,11 @@ def test_permutation_preserves_the_strata(fitted):
 
     # clone sizes survive the clonotype shuffle
     clone = adata.obs[meta[K.Config.CLONE_COL]].astype("category").cat.codes.to_numpy()
-    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.clonotype")])
+    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.clonotype[0]")])
     assert sorted(np.bincount(clone).tolist()) == sorted(np.bincount(clone[p]).tolist())
 
     # each clone keeps its own cells under the condition shuffle
-    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.condition")])
+    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.condition[0]")])
     assert np.array_equal(clone, clone[p]), "the condition null moved cells between clones"
 
 
@@ -143,7 +143,7 @@ def test_the_ct_index_is_the_parents(fitted):
     parent_ct = np.asarray(adata.uns[K.CT_ARRAY])
     n_ct = int(adata.uns[K.FIT_SETTINGS]["n_ct"])
     for kind in ("phenotype", "clonotype", "condition"):
-        fit = f"null.{kind}"
+        fit = f"null.{kind}[0]"
         assert int(adata.uns[K.fit_key(K.FIT_SETTINGS, fit)]["n_ct"]) == n_ct, kind
         for key in (K.CT_TO_C, K.CT_TO_COV):
             np.testing.assert_array_equal(np.asarray(adata.uns[K.fit_key(key, fit)]),
@@ -181,7 +181,7 @@ def test_the_clone_map_is_a_no_op_on_the_main_fit(fitted):
         assert set(clones_at(adata, level)) == at_obs, f"clones_at disagrees at {level!r}"
 
     # ...and under the clonotype null it reads the PERMUTED map, which is the whole purpose.
-    assert not (fit_clone_labels(adata, "null.clonotype").astype(str)
+    assert not (fit_clone_labels(adata, "null.clonotype[0]").astype(str)
                 == obs_clone.astype(str)).all()
 
 
@@ -208,10 +208,11 @@ def test_within_is_validated_not_extended(fitted):
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.phenotype(model, adata, within=refined, key_added="site")
-    settings = adata.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype.site")]
+        tcri.null.phenotype(model, adata, n_nulls=1, within=refined, key_added="site")
+    settings = adata.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype.site[0]")]
     assert list(settings["strata"]) == refined
-    assert settings["seed"] != adata.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["seed"], (
+    unnamed = adata.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]
+    assert list(settings["spawn_key"]) != list(unnamed["spawn_key"]), (
         "a second null of the same kind reused the first's permutation stream")
 
 
@@ -223,14 +224,14 @@ def test_null_is_the_parent_model_on_permuted_labels(fitted):
     model, adata, nulls = fitted
     from tcri.null._nulls import _init_params
 
-    assert _init_params(model) == _init_params(nulls["phenotype"])
+    assert _init_params(model) == _init_params(nulls["phenotype"][0])
     np.testing.assert_array_equal(np.sort(model.train_indices),
-                                  np.sort(nulls["phenotype"].train_indices))
+                                  np.sort(nulls["phenotype"][0].train_indices))
 
     a, b = _adata(), _adata()
     _setup(a)
     _setup(b)
-    perm = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.phenotype")])
+    perm = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.phenotype[0]")])
     fresh_parent = TCRIModel(a, name="fresh.parent", **KNOBS)
     fresh_null = TCRIModel(b, name="fresh.null", permutation=("phenotype", perm), **KNOBS)
     for (kp, vp), (kn, vn) in zip(fresh_parent.module.named_parameters(),
@@ -262,7 +263,7 @@ def test_a_null_stops_under_its_parents_rule(monkeypatch):
         parent.train(**{**TRAIN, "max_epochs": 10, "early_stopping_min_delta": 1e6,
                         "early_stopping_patience": patience})
         parent.to_anndata(a)
-        null = tcri.null.phenotype(parent, a, callbacks=[spy])
+        (null,) = tcri.null.phenotype(parent, a, n_nulls=1, callbacks=[spy])
 
     assert len(spy.values) == patience + 1, (
         f"the null ran {len(spy.values)} gated checks; under its parent's rule it stops after "
@@ -292,7 +293,7 @@ def test_fitting_a_null_does_not_move_the_parent():
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        tcri.null.phenotype(model, a)
+        tcri.null.phenotype(model, a, n_nulls=1)
 
     assert not [w for w in caught if "already holds" in str(w.message)], (
         "the parent warned about a collision with its own null")
@@ -306,11 +307,11 @@ def test_fitting_a_null_does_not_move_the_parent():
 
 def test_null_writes_its_substrate_and_provenance(fitted):
     """The prefixed substrate, the permutation vector and the settings are all in the object,
-    the fit is listed, and the bare kind resolves to it."""
+    the fit is listed, and the bare kind with its index resolves to it."""
     model, adata, _ = fitted
-    fit = "null.phenotype"
+    fit = "null.phenotype[0]"
     assert fit in K.fits(adata)
-    assert K.resolve_fit(adata, "phenotype") == fit
+    assert K.resolve_fit(adata, "phenotype[0]") == fit
 
     for key in (K.P_CT, K.CONC_CT, K.LOCAL_SCALE, K.GATE_PROB, K.CLASSIFIER_TEMPERATURE,
                 K.CT_TO_COV, K.CT_TO_C, K.CT_ARRAY, K.COV_ARRAY, K.PERMUTATION, K.BUFFERS,
@@ -342,16 +343,16 @@ def test_a_fit_name_is_claimed_by_one_parent(fitted):
     with contextlib.redirect_stdout(io.StringIO()):
         other.train(**TRAIN)
 
-    held = np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    held = np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]).copy()
     with pytest.raises(ValueError, match="key_added"):
-        tcri.null.phenotype(other, adata)
-    np.testing.assert_array_equal(np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype")]), held)
+        tcri.null.phenotype(other, adata, n_nulls=1)
+    np.testing.assert_array_equal(np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]), held)
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.phenotype(other, adata, key_added="b")
-    assert "null.phenotype.b" in K.fits(adata)
-    np.testing.assert_array_equal(np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype")]), held)
+        tcri.null.phenotype(other, adata, n_nulls=1, key_added="b")
+    assert "null.phenotype.b[0]" in K.fits(adata)
+    np.testing.assert_array_equal(np.asarray(adata.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]), held)
 
 
 def test_all_fits_every_applicable_kind():
@@ -361,22 +362,22 @@ def test_all_fits_every_applicable_kind():
     model = _parent(a, "allkinds")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        out = tcri.null.all(model, a)
+        out = tcri.null.all(model, a, n_nulls=1)
     assert sorted(out) == ["clonotype", "condition", "phenotype"]
     for kind in out:
-        assert f"null.{kind}" in K.fits(a)
+        assert f"null.{kind}[0]" in K.fits(a)
 
     single = _adata(n_covariates=1)
     single_model = _parent(single, "onecondition")
     with contextlib.redirect_stdout(io.StringIO()), pytest.warns(UserWarning, match="condition"):
-        out = tcri.null.all(single_model, single)
+        out = tcri.null.all(single_model, single, n_nulls=1)
     assert sorted(out) == ["clonotype", "phenotype"]
-    assert "null.condition" not in K.fits(single)
+    assert "null.condition[0]" not in K.fits(single)
 
     with pytest.raises(ValueError, match="condition null takes no"):
-        tcri.null.all(model, a, within=["batch", "covariate"])
+        tcri.null.all(model, a, n_nulls=1, within=["batch", "covariate"])
     with pytest.raises(ValueError, match="not one of"):
-        tcri.null.all(model, a, kinds=("phenotype", "nonsense"))
+        tcri.null.all(model, a, n_nulls=1, kinds=("phenotype", "nonsense"))
 
 
 # ── recovery ─────────────────────────────────────────────────────────────────
@@ -391,7 +392,7 @@ def test_null_is_recoverable_from_the_parent_session(fitted, tmp_path):
     from tcri.utils import load_tcri_session, save_tcri_session
 
     model, adata, nulls = fitted
-    expected = nulls["clonotype"].predict(adata).to_numpy()
+    expected = nulls["clonotype"][0].predict(adata).to_numpy()
 
     with contextlib.redirect_stdout(io.StringIO()):
         save_tcri_session(model, adata, str(tmp_path / "run"))
@@ -399,7 +400,7 @@ def test_null_is_recoverable_from_the_parent_session(fitted, tmp_path):
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         loaded, loaded_adata = load_tcri_session(str(tmp_path / "run"), map_location="cpu")
-        back = rebuild(loaded, loaded_adata, "clonotype")
+        back = rebuild(loaded, loaded_adata, "clonotype[0]")
 
     assert loaded.train_kwargs_["max_epochs"] == TRAIN["max_epochs"], (
         "the parent's training arguments did not survive the session")
@@ -416,8 +417,8 @@ def test_a_rebuilt_null_is_on_the_device_of_the_store():
     model = _parent(a, "metadev")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.phenotype(model, a)
-    namespace = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["namespace"]
+        tcri.null.phenotype(model, a, n_nulls=1)
+    namespace = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["namespace"]
     store = pyro.get_param_store()
     keys = [k for k in store.keys() if k.startswith(f"{namespace}.")]
     assert keys, "the null registered no parameters"
@@ -426,7 +427,7 @@ def test_a_rebuilt_null_is_on_the_device_of_the_store():
             store[k] = store[k].detach().to("meta")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            back = rebuild(model, a, "phenotype")
+            back = rebuild(model, a, "phenotype[0]")
         off = [n for n, t in [*back.module.named_parameters(), *back.module.named_buffers()]
                if t.device.type != "meta"]
         assert not off, f"rebuilt null tensors not on the store's device: {off[:5]}"
@@ -448,7 +449,7 @@ def test_a_null_rebuilt_after_a_gpu_session_load_is_on_the_parents_device(fitted
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         loaded, loaded_adata = load_tcri_session(str(tmp_path / "run"), map_location="cuda")
-        back = rebuild(loaded, loaded_adata, "phenotype")
+        back = rebuild(loaded, loaded_adata, "phenotype[0]")
         device = next(loaded.module.parameters()).device
         assert device.type == "cuda", "the parent did not load onto the GPU; nothing is tested"
         off = [n for n, t in [*back.module.named_parameters(), *back.module.named_buffers()]
@@ -463,7 +464,7 @@ def test_rebuild_names_the_missing_namespace(fitted):
     model, adata, _ = fitted
     pyro.clear_param_store()
     with pytest.raises(RuntimeError, match="load_tcri_session"):
-        rebuild(model, adata, "phenotype")
+        rebuild(model, adata, "phenotype[0]")
     with pytest.raises(KeyError, match="no fit named"):
         rebuild(model, adata, "not_a_fit")
 
@@ -503,31 +504,31 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
         return float((pred == truth).mean())
 
     # 1) expression is untouched by every permutation, so reconstruction cannot move
-    for kind, null in nulls.items():
+    for kind, (null,) in nulls.items():
         with contextlib.redirect_stdout(io.StringIO()):
             ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0)
         assert ppc is not None and len(ppc), kind
 
     # 2) the substrate readers take fit=, and read that fit's own probabilities
     for kind in nulls:
-        cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}")
+        cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}[0]")
         assert cal is not None and len(cal), kind
     assert not np.allclose(
-        adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype")],
+        adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype[0]")],
         adata.obsm[K.X_PROBABILITIES]), "calibration read the main fit's probabilities"
 
     # 3) the head: both label nulls collapse toward the marginal, the condition null does not
     parent_accuracy = accuracy(None)
     for kind in ("phenotype", "clonotype"):
-        assert accuracy(f"null.{kind}") < parent_accuracy, kind
-        assert accuracy(f"null.{kind}") <= majority + 0.15, (
-            f"the {kind} null still reads the true labels: {accuracy(f'null.{kind}'):.3f} "
+        assert accuracy(f"null.{kind}[0]") < parent_accuracy, kind
+        assert accuracy(f"null.{kind}[0]") <= majority + 0.15, (
+            f"the {kind} null still reads the true labels: {accuracy(f'null.{kind}[0]'):.3f} "
             f"against a majority-class rate of {majority:.3f}")
-    assert accuracy("null.condition") == pytest.approx(parent_accuracy, abs=0.05), (
+    assert accuracy("null.condition[0]") == pytest.approx(parent_accuracy, abs=0.05), (
         "the condition null moved the phenotype call, and it moves neither phenotype nor clone")
 
     # 4) mutual information: only the two label nulls destroy the coupling it measures
-    mi = {k: float(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}",
+    mi = {k: float(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}[0]",
                                               null_model=None,
                                               inplace=False)["result"]["value"].iloc[0])
           for k in nulls}
@@ -552,10 +553,10 @@ def test_a_metric_never_trains(fitted, monkeypatch):
     adata = adata.copy()
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
     for key in list(adata.uns):
-        if "null.phenotype" in key:
+        if "null.phenotype[0]" in key:
             del adata.uns[key]
     adata.uns[K.METADATA] = {**adata.uns[K.METADATA],
-                             K.FITS: [f for f in K.fits(adata) if f != "null.phenotype"]}
+                             K.FITS: [f for f in K.fits(adata) if f != "null.phenotype[0]"]}
 
     def _explode(*a, **k):
         raise AssertionError("a metric trained a model")
@@ -587,7 +588,7 @@ def test_a_groupby_finer_than_the_strata_raises():
     model = _parent(a, "finegroupby")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.clonotype(model, a)
+        tcri.null.clonotype(model, a, n_nulls=1)
 
     spans = a.obs.groupby([a.uns[K.METADATA][K.Config.BATCH_COL],
                            a.uns[K.METADATA][K.Config.COVARIATE_COL]],
@@ -597,13 +598,13 @@ def test_a_groupby_finer_than_the_strata_raises():
     cov = list(a.uns[K.COVARIATE_CATEGORIES])[0]
     with pytest.raises(ValueError, match="spans groups"):
         tcri.tl.mutual_information(a, covariate=cov, groupby="replicate",
-                                    fit="null.clonotype", null_model=None, inplace=False)
+                                    fit="null.clonotype[0]", null_model=None, inplace=False)
     # the message names the fit, its strata and the refit that fixes it
     try:
         tcri.tl.mutual_information(a, covariate=cov, groupby="replicate",
-                                    fit="null.clonotype", null_model=None, inplace=False)
+                                    fit="null.clonotype[0]", null_model=None, inplace=False)
     except ValueError as exc:
-        assert "null.clonotype" in str(exc) and "within=" in str(exc), str(exc)
+        assert "null.clonotype[0]" in str(exc) and "within=" in str(exc), str(exc)
 
 
 # ── nulls across a load ──────────────────────────────────────────────────────
@@ -623,7 +624,8 @@ def _unnamed_parent(a, seed=0):
 def _fit_null(kind, model, a):
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return getattr(tcri.null, kind)(model, a)
+        (null,) = getattr(tcri.null, kind)(model, a, n_nulls=1)
+        return null
 
 
 def _save_plain(model, a, path):
@@ -650,7 +652,7 @@ def test_a_null_is_rebuilt_after_its_parent_is_reloaded_with_load(tmp_path):
     pyro.clear_param_store()
 
     loaded, b = _load_plain(tmp_path / "p")
-    back = rebuild(loaded, b, "phenotype")
+    back = rebuild(loaded, b, "phenotype[0]")
 
     np.testing.assert_allclose(back.predict(b).to_numpy(), expected, atol=1e-6)
 
@@ -668,8 +670,8 @@ def test_a_null_fits_after_its_parent_is_reloaded_with_load(tmp_path):
     assert loaded.train_kwargs_ == parent.train_kwargs_
     _fit_null("phenotype", loaded, b)
 
-    assert "null.phenotype" in K.fits(b)
-    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["train"] == parent.train_kwargs_
+    assert "null.phenotype[0]" in K.fits(b)
+    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["train"] == parent.train_kwargs_
 
 
 def test_a_refit_writes_to_an_object_read_back_from_h5ad(tmp_path):
@@ -687,13 +689,13 @@ def test_a_refit_writes_to_an_object_read_back_from_h5ad(tmp_path):
     second = _unnamed_parent(b, seed=1)
     with contextlib.redirect_stdout(io.StringIO()):
         second.to_anndata(b, fit="other")
-    assert K.fits(b) == ["null.phenotype", "null.clonotype", "other"]
+    assert K.fits(b) == ["null.phenotype[0]", "null.clonotype[0]", "other"]
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        tcri.null.phenotype(second, b)
+        tcri.null.phenotype(second, b, n_nulls=1)
     assert len(_rewrites(w)) == 1, [str(x.message) for x in w]
-    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == second.name
+    assert b.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["parent"] == second.name
 
 
 def test_diag_loss_reads_a_rebuilt_null(tmp_path):
@@ -710,7 +712,7 @@ def test_diag_loss_reads_a_rebuilt_null(tmp_path):
     pyro.clear_param_store()
 
     loaded, b = _load_plain(tmp_path / "p")
-    back = rebuild(loaded, b, "phenotype")
+    back = rebuild(loaded, b, "phenotype[0]")
 
     assert set(back.history_) == set(null.history_)
     for name, frame in null.history_.items():
@@ -747,7 +749,7 @@ def test_loading_another_model_leaves_the_parents_nulls(tmp_path):
 
     loaded, b = _load_plain(tmp_path / "p")
     _load_plain(tmp_path / "q")
-    back = rebuild(loaded, b, "phenotype")
+    back = rebuild(loaded, b, "phenotype[0]")
 
     np.testing.assert_allclose(back.predict(b).to_numpy(), expected, atol=1e-6)
 
@@ -779,8 +781,8 @@ def test_a_null_fitted_after_the_save_names_the_save(tmp_path, cleared):
     assert all(f"{parent.name}.null.clonotype" in str(x.message) for x in dropped)
 
     with pytest.raises(RuntimeError, match="fitted after the save"):
-        rebuild(loaded, b, "clonotype")
-    assert "null.clonotype" in K.fits(b)
+        rebuild(loaded, b, "clonotype[0]")
+    assert "null.clonotype[0]" in K.fits(b)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = tcri.tl.mutual_information(b, covariate="cov_0", null_model="clonotype",
@@ -809,23 +811,23 @@ def test_a_refit_unnamed_parent_rewrites_its_null():
     a = _adata()
     first = _unnamed_parent(a)
     _fit_null("phenotype", first, a)
-    old = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    old = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]).copy()
     second = _unnamed_parent(a, seed=1)
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        null = tcri.null.phenotype(second, a)
+        (null,) = tcri.null.phenotype(second, a, n_nulls=1)
 
     rewrites = _rewrites(w)
     assert len(rewrites) == 1 and first.name in rewrites[0], [str(x.message) for x in w]
-    settings = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]
+    settings = a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]
     assert settings["parent"] == second.name
     assert settings["namespace"] == null.name
-    assert _is_namespace_of(null.name, second, "null.phenotype")
-    new = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")])
+    assert _is_namespace_of(null.name, second, "null.phenotype[0]")
+    new = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")])
     assert not np.allclose(new, old), "the two nulls must differ to tell the rewrite apart"
     np.testing.assert_allclose(new, null.get_p_ct(), atol=1e-6)
-    np.testing.assert_allclose(rebuild(second, a, "phenotype").predict(a).to_numpy(),
+    np.testing.assert_allclose(rebuild(second, a, "phenotype[0]").predict(a).to_numpy(),
                                null.predict(a).to_numpy(), atol=1e-6)
 
 
@@ -835,13 +837,13 @@ def test_a_null_recorded_without_a_parent_name_is_rewritten():
     a = _adata()
     first = _unnamed_parent(a)
     _fit_null("phenotype", first, a)
-    key = K.fit_key(K.FIT_SETTINGS, "null.phenotype")
+    key = K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")
     a.uns[key] = {**a.uns[key], "parent": ""}
     second = _unnamed_parent(a, seed=1)
 
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        tcri.null.phenotype(second, a)
+        tcri.null.phenotype(second, a, n_nulls=1)
 
     assert len(_rewrites(w)) == 1, [str(x.message) for x in w]
     assert a.uns[key]["parent"] == second.name
@@ -855,16 +857,16 @@ def test_an_unnamed_model_whose_main_fit_is_not_here_raises():
     a = _adata()
     first = _unnamed_parent(a)
     _fit_null("phenotype", first, a)
-    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]).copy()
     other = TCRIModel(a, **{**KNOBS, "seed": 1})
     with contextlib.redirect_stdout(io.StringIO()):
         other.train(**TRAIN)
 
     with pytest.raises(ValueError, match="key_added") as e:
-        tcri.null.phenotype(other, a)
+        tcri.null.phenotype(other, a, n_nulls=1)
     assert "model.to_anndata(adata)" in str(e.value) and "copy" not in str(e.value)
-    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
-    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["parent"] == first.name
+    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]), before)
 
 
 @pytest.mark.parametrize("held, new", [("namedheld", None), (None, "namednew")],
@@ -876,13 +878,13 @@ def test_a_named_parent_on_either_side_still_raises(held, new):
     first = _parent(a, held) if held else _unnamed_parent(a)
     _fit_null("phenotype", first, a)
     second = _parent(a, new) if new else _unnamed_parent(a, seed=1)
-    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+    before = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]).copy()
 
     with pytest.raises(ValueError, match="key_added") as e:
-        tcri.null.phenotype(second, a)
+        tcri.null.phenotype(second, a, n_nulls=1)
     assert "to_anndata" not in str(e.value) and "copy" not in str(e.value)
-    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["parent"] == first.name
-    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]), before)
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["parent"] == first.name
+    np.testing.assert_array_equal(np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]), before)
 
 
 @pytest.mark.parametrize("names, remedy", [((None, None), "Refit it for this model"),
@@ -902,7 +904,7 @@ def test_rebuild_names_the_parent_a_null_belongs_to(tmp_path, names, remedy):
     loaded, b = _load_plain(tmp_path / "second")
 
     with pytest.raises(RuntimeError, match="belongs to parent") as e:
-        rebuild(loaded, b, "phenotype")
+        rebuild(loaded, b, "phenotype[0]")
     assert first.name in str(e.value) and loaded.name in str(e.value)
     assert remedy in str(e.value)
 
@@ -919,13 +921,13 @@ def test_a_null_object_this_object_no_longer_records_keeps_its_own_name():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tcri.perturb.gene_importance(second, a, genes=genes)
-        cached = tcri.get.result(a, "gene_importance", fit="null.phenotype")["result"].copy()
+        cached = tcri.get.result(a, "gene_importance", fit="null.phenotype[0]")["result"].copy()
 
         tcri.perturb.gene_importance(second, a, genes=genes, null_model=stale)
 
     assert tcri.get.params(a, "gene_importance")["null_model"] == stale.name
     pd.testing.assert_frame_equal(
-        tcri.get.result(a, "gene_importance", fit="null.phenotype")["result"], cached)
+        tcri.get.result(a, "gene_importance", fit="null.phenotype[0]")["result"], cached)
 
 
 def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_path):
@@ -937,7 +939,7 @@ def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_p
     parent = _unnamed_parent(a)
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        tcri.null.phenotype(parent, a, key_added="b")
+        tcri.null.phenotype(parent, a, n_nulls=1, key_added="b")
     _save_plain(parent, a, tmp_path / "p")
     _fit_null("phenotype", parent, a)
     a.write_h5ad(tmp_path / "p" / "after.h5ad")
@@ -946,7 +948,7 @@ def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_p
     loaded, b = _load_plain(tmp_path / "p", "after.h5ad")
 
     with pytest.raises(RuntimeError, match="fitted after the save"):
-        rebuild(loaded, b, "phenotype")
+        rebuild(loaded, b, "phenotype[0]")
 
 
 
@@ -961,18 +963,18 @@ def test_a_refit_null_starts_fresh_in_a_namespace_of_its_own():
     first = _fit_null("phenotype", model, a)
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        sibling = tcri.null.phenotype(model, a, key_added="b")
-    p_ct = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype")]).copy()
+        (sibling,) = tcri.null.phenotype(model, a, n_nulls=1, key_added="b")
+    p_ct = np.asarray(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")]).copy()
     weights = {k: v.detach().clone() for k, v in first.module.named_parameters()}
 
     second = _fit_null("phenotype", model, a)
 
     store = set(pyro.get_param_store().keys())
-    assert second.name != first.name and _is_namespace_of(second.name, model, "null.phenotype")
-    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype")]["namespace"] == second.name
+    assert second.name != first.name and _is_namespace_of(second.name, model, "null.phenotype[0]")
+    assert a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[0]")]["namespace"] == second.name
     assert not any(k.startswith(f"{first.name}.") for k in store), "the replaced fit stayed"
     assert any(k.startswith(f"{sibling.name}.") for k in store), "a sibling fit was dropped"
-    np.testing.assert_allclose(a.uns[K.fit_key(K.P_CT, "null.phenotype")], p_ct, atol=1e-6)
+    np.testing.assert_allclose(a.uns[K.fit_key(K.P_CT, "null.phenotype[0]")], p_ct, atol=1e-6)
     for name, value in second.module.named_parameters():
         torch.testing.assert_close(value.detach(), weights[name], atol=1e-6, rtol=0,
                                    msg=f"the refit's {name} is not the earlier fit's")
@@ -990,7 +992,7 @@ def test_an_earlier_null_of_the_same_parent_keeps_its_own_name():
     current = _fit_null("phenotype", model, a)
 
     assert name_of(stale, a) == stale.name
-    assert name_of(current, a) == "null.phenotype"
+    assert name_of(current, a) == "null.phenotype[0]"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with pytest.raises(RuntimeError, match="replaced by a later fit"):
@@ -1006,5 +1008,101 @@ def test_a_null_is_never_fitted_on_more_than_one_device(request_more):
     model = _parent(adata, "multidevice-" + "-".join(request_more))
     fits = list(K.fits(adata))
     with pytest.raises(ValueError, match="more than one device"):
-        tcri.null.phenotype(model, adata, key_added="multi", **request_more)
+        tcri.null.phenotype(model, adata, n_nulls=1, key_added="multi", **request_more)
     assert list(K.fits(adata)) == fits
+
+
+# ── a reference of several fits ──────────────────────────────────────────────
+
+def _permutation(adata, fit):
+    return np.asarray(adata.uns[K.fit_key(K.PERMUTATION, fit)])
+
+
+def test_a_reference_is_n_nulls_fits_on_permutations_of_their_own():
+    """``n_nulls=3`` writes three fits, ``null.phenotype[0..2]``, each with its own permutation,
+    namespace and record naming the reference, and returns the three models in index order."""
+    a = _adata()
+    model = _parent(a, "threenulls")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        nulls = tcri.null.phenotype(model, a, n_nulls=3)
+
+    members = [f"null.phenotype[{i}]" for i in range(3)]
+    assert K.members(a, "null.phenotype") == members
+    assert [n._fit_name for n in nulls] == members
+    for i, fit in enumerate(members):
+        record = a.uns[K.fit_key(K.FIT_SETTINGS, fit)]
+        assert (record["reference"], int(record["index"]), int(record["n_nulls"])) == (
+            "null.phenotype", i, 3)
+        assert _is_namespace_of(record["namespace"], model, fit)
+    perms = [_permutation(a, f) for f in members]
+    assert not any((perms[i] == perms[j]).all() for i in range(3) for j in range(i + 1, 3))
+    assert len({str(a.uns[K.fit_key(K.FIT_SETTINGS, f)]["namespace"]) for f in members}) == 3
+
+
+def test_a_nulls_permutation_does_not_depend_on_its_siblings():
+    """Two copies of the parent's object, as two processes would hold, fit the named references
+    ``a`` and ``b`` in opposite orders. Each (key, index) gets the same permutation on both
+    copies whatever was fitted before it, and no two (key, index) share one."""
+    from tcri.model._model import adopt
+
+    a = _adata()
+    model = _parent(a, "siblingseeds")
+    first, second = adopt(model, a.copy()), adopt(model, a.copy())
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for adata, order in ((first, ("a", "b")), (second, ("b", "a"))):
+            for key in order:
+                tcri.null.phenotype(model, adata, n_nulls=2, key_added=key)
+
+    fits = [f"null.phenotype.{key}[{i}]" for key in ("a", "b") for i in range(2)]
+    for fit in fits:
+        np.testing.assert_array_equal(_permutation(first, fit), _permutation(second, fit),
+                                      err_msg=fit)
+    perms = [_permutation(first, f) for f in fits]
+    assert not any((perms[i] == perms[j]).all()
+                   for i in range(len(fits)) for j in range(i + 1, len(fits)))
+
+
+def test_a_refit_with_fewer_nulls_leaves_none_of_the_earlier_ones():
+    """Refitting a reference of three as a reference of two removes the third fit: its name, every
+    key written for it, and its parameter-store entries."""
+    from tcri.model._module import _null_namespace
+
+    a = _adata()
+    model = _parent(a, "shrinking")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.phenotype(model, a, n_nulls=3)
+        third = str(a.uns[K.fit_key(K.FIT_SETTINGS, "null.phenotype[2]")]["namespace"])
+        tcri.null.phenotype(model, a, n_nulls=2)
+
+    assert K.members(a, "null.phenotype") == ["null.phenotype[0]", "null.phenotype[1]"]
+    assert "null.phenotype[2]" not in K.fits(a)
+    for store in (a.uns, a.obsm, a.obs):
+        assert not [k for k in store.keys() if "null.phenotype[2]" in str(k)], store
+    assert not [k for k in pyro.get_param_store().keys() if _null_namespace(k) == third]
+
+
+@pytest.mark.parametrize("n_nulls,error", [(0, ValueError), (True, TypeError), (1.5, TypeError)])
+def test_n_nulls_is_a_positive_integer(n_nulls, error):
+    a = _adata()
+    model = _parent(a, f"badcount-{error.__name__}-{n_nulls}")
+    with pytest.raises(error, match="n_nulls"):
+        tcri.null.phenotype(model, a, n_nulls=n_nulls)
+    assert K.fits(a) == []
+
+
+def test_fit_takes_one_fit_and_names_the_fits_of_a_reference():
+    """``fit=`` selects one fit; a reference's name there raises, naming its fits."""
+    a = _adata()
+    model = _parent(a, "fitorgroup")
+    with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.null.phenotype(model, a, n_nulls=2)
+    cov = str(a.obs["covariate"].cat.categories[0])
+    one = tcri.tl.mutual_information(a, covariate=cov, fit="phenotype[1]", null_model=None,
+                                     inplace=False)
+    assert len(one["result"]) == 1
+    with pytest.raises(KeyError, match=r"null\.phenotype\[0\]"):
+        tcri.tl.mutual_information(a, covariate=cov, fit="phenotype", null_model=None)

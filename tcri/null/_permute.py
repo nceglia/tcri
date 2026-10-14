@@ -19,6 +19,28 @@ from .._state import keys as K
 #: of this dict must not silently change every recorded permutation.
 OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
 
+
+def spawn_key(kind: str, key_added, index: int) -> tuple:
+    """The spawn key of one null's permutation stream: ``(OFFSET[kind], name, index)``.
+
+    ``name`` is 0 for the unnamed reference and ``1 + crc32(key_added)`` for a named one, so the
+    stream is a function of the null's own kind, name and index and of nothing else on the
+    object: nulls fitted on separate copies, or in any order, draw the same permutations. A
+    stream keyed by the fits already present would give a null fitted on a fresh copy the same
+    stream as its first sibling.
+    """
+    import zlib
+
+    name = 0 if key_added is None else 1 + zlib.crc32(str(key_added).encode("utf-8"))
+    return (OFFSET[kind], int(name), int(index))
+
+
+def permutation_rng(seed: int, kind: str, key_added, index: int):
+    """The generator of one null's permutation: ``seed`` spawned by :func:`spawn_key`."""
+    sequence = np.random.SeedSequence(int(seed) % 2**64,
+                                      spawn_key=spawn_key(kind, key_added, index))
+    return np.random.default_rng(sequence)
+
 KINDS = ("phenotype", "clonotype", "condition")
 
 #: Which label vector each kind permutes. The model's ``permutation=(axis, perm)`` names the

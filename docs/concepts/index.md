@@ -169,7 +169,7 @@ reference sits beside the fit it references rather than over it. A fit built by
 | Key | Meaning |
 |---|---|
 | `tcri_<fit>_permutation` | the integer permutation the null was built from, so a reload reproduces it |
-| `tcri_<fit>_fit_settings` | the kind, the resolved strata and their cell counts, the seed, the training arguments, the parent, and the joinability record |
+| `tcri_<fit>_fit_settings` | the kind, the resolved strata and their cell counts, the seed and the spawn key of the permutation, the reference the fit belongs to and its index in it, the training arguments, the parent, and the joinability record |
 | `tcri_<fit>_buffers` | the module's non-parameter state (BatchNorm running statistics, the archetypes), so the fit can be rebuilt for inference |
 
 ```{important}
@@ -193,8 +193,9 @@ other.to_anndata(adata, fit="myalt")        # tcri_myalt_p_ct, X_tcri_myalt, ...
 ```
 
 `adata.uns["tcri_metadata"]["fits"]` lists what is present. This is how
-{doc}`tcri.null <../api/null>` puts a permutation reference beside the fit it references, and it
-works for any second model, not only a null.
+{doc}`tcri.null <../api/null>` puts a permutation reference beside the fit it references, as
+`n_nulls` fits named `null.phenotype[0]`, `null.phenotype[1]` and so on, and it works for any
+second model, not only a null.
 
 "One AnnData, one model" is the natural reading of that scheme and it is the wrong one. Two
 shapes are supported, and which you want depends on what the second fit is *for*. When two fits

@@ -45,7 +45,7 @@ The key is the tool's name, so the key says what wrote it.
 |---|---|
 | `tl.mutual_information(adata)` | `uns["tcri_mutual_information"]` |
 | `tl.mutual_information(adata, key_added="mi_run2")` | `uns["mi_run2"]` |
-| `tl.mutual_information(adata, fit="null.phenotype")` | `uns["tcri_null.phenotype_mutual_information"]` |
+| `tl.mutual_information(adata, fit="null.phenotype[0]")` | `uns["tcri_null.phenotype[0]_mutual_information"]` |
 | `perturb.gene_importance(model, adata)` | `uns["tcri_gene_importance"]` |
 
 `inplace=False` returns the result without storing it. A metric's payload is a dict of frames:
@@ -76,7 +76,7 @@ data argument itself, any object argument before it (the fitted model in
 Arguments the tool *resolved* are recorded as resolved, not as the caller spelled them. A
 `groupby=None` that the tool resolved to the registered replicate column is recorded as that
 column, so a reader six months later sees the column actually used rather than a placeholder.
-The same holds for a `null_model="auto"`, which is recorded as the fit it resolved to.
+The same holds for a `null_model="auto"`, which is recorded as the reference it resolved to.
 
 `pl` reads its axes from this block: `groupby`, `splitby` and the rest come from `params`, not
 from plot arguments, which is what makes a plot a view of a specific computation.
@@ -110,20 +110,21 @@ stored `result`.
 An `AnnData` can carry several fits: the main one, and any alternative or null model written
 with `to_anndata(fit=...)`. Passing `fit=` to a metric computes it on that fit and stores it
 under the fit's own key, leaving the main fit's result in place. The name goes after the
-namespace prefix, so the keys still sort together: `tcri_null.phenotype_mutual_information`, or
-`<key_added>_<fit>` when the destination is a `key_added` of your own.
+namespace prefix, so the keys still sort together: `tcri_null.phenotype[0]_mutual_information`,
+or `<key_added>_<fit>` when the destination is a `key_added` of your own.
 
 A bare kind resolves to the fit that carries it, the way scanpy's `basis="umap"` finds `X_umap`:
-`fit="phenotype"` and `fit="null.phenotype"` are one call, one key and one `params` block. An
-ambiguous name raises rather than silently preferring one.
+`fit="phenotype[0]"` and `fit="null.phenotype[0]"` are one call, one key and one `params` block.
+An ambiguous name raises rather than silently preferring one, and so does a reference's name
+(`fit="phenotype"`), since `fit=` selects one fit and a reference is several.
 
 ## The reference alongside
 
-When a metric declares `null_model`, the decorator runs the whole call a second time against the
-named reference fit, with every other argument forwarded verbatim and the draws seeded from their
-own seed, and joins the two draw by draw: `table` and `result` gain `null_*` columns and, for the
-value columns, `adjusted*` columns, and `result` carries the adjusted value's spread over the
-paired draws. Forwarding verbatim is
+When a metric declares `null_model`, the decorator runs the whole call again on each fit of the
+named reference, with every other argument forwarded verbatim and each null's draws seeded from
+their own seed, and joins them draw by draw: `table` gains a `null` column numbering the fits,
+`table` and `result` gain `null_*` columns and, for the value columns, `adjusted*` columns, and
+`result` carries the adjusted value's spread over all the pairs. Forwarding verbatim is
 the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
 estimand, and a reference computed at defaults would be a different quantity subtracted from a
 different quantity.

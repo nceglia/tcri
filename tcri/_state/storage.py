@@ -290,11 +290,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     recorded as provenance and the ``.h5ad`` write would fail on it.
 
     **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
-    a second time against a permutation null and adds the ``null_*``/``adjusted*`` columns,
-    per draw on ``table`` and summarized on ``result`` (:mod:`tcri._state._reference`). It lives
-    here rather than in each body for one reason that is not tidiness: the reference has to be
-    *the caller's own call on the null*, and only the decorator holds the caller's bound
-    arguments. A body re-invoking itself would have to re-list what to forward, and that list
+    again on each fit of a permutation reference and adds the ``null``/``null_*``/``adjusted*``
+    columns, per pair of draws on ``table`` and summarized on ``result``
+    (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
+    is not tidiness: the reference has to be *the caller's own call on the null*, and only the
+    decorator holds the caller's bound arguments. A body re-invoking itself would have to re-list what to forward, and that list
     would drift from the signature the first time a knob was added.
 
     ``values`` names the metric's NATIVE value columns, before any reference column exists --
@@ -327,8 +327,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             arguments = bound.arguments
             adata = arguments[_data_param]
 
-            # The fit is CANONICALIZED before anything reads it, so `fit="phenotype"` and
-            # `fit="null.phenotype"` are one call rather than two `uns` keys and two params
+            # The fit is CANONICALIZED before anything reads it, so `fit="phenotype[0]"` and
+            # `fit="null.phenotype[0]"` are one call rather than two `uns` keys and two params
             # blocks. `resolve_fit` is idempotent on the canonical name, which is what makes
             # doing it here safe.
             if takes_fit and arguments.get("fit") is not None:
@@ -348,21 +348,23 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 _check_schema(schema, result, fn.__name__)
 
             # ── the reference ────────────────────────────────────────────────
-            reference_of = None
+            references = None
             if takes_null and isinstance(result, dict):
-                reference_of = _reference.resolve_reference(
+                references = _reference.resolve_reference(
                     adata, null_model=arguments.get("null_model"),
                     fit=arguments.get("fit") if takes_fit else None,
                     default_null=default_null, metric=fn.__name__,
                 )
-                if reference_of is not None:
-                    if isinstance(reference_of, str):
-                        _reference.check_joinable(
-                            adata, reference_of,
-                            against=arguments.get("fit") if takes_fit else None)
-                    reference = wrapper(**_reference_call(arguments, reference_of))
-                    _reference.attach(result, reference, values=values,
-                                      denominators=denominators)
+                if references is not None:
+                    if reference_arg == "fit":
+                        references = [_reference.fit_of(r, adata) for r in references]
+                        for r in references:
+                            _reference.check_joinable(
+                                adata, r, against=arguments.get("fit") if takes_fit else None)
+                    runs = [wrapper(**_reference_call(arguments, r,
+                                                      _reference.index_of(r, adata)))
+                            for r in references]
+                    _reference.attach(result, runs, values=values, denominators=denominators)
                     _reference.restat(result, groupby=arguments.get("groupby"),
                                       splitby=arguments.get("splitby"), per_gene=per_gene_stats)
 
@@ -376,7 +378,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     # the RESOLVED reference, never the caller's "auto" and never a model
                     # object: the params block goes into `uns` and has to be readable and
                     # h5ad-writable. An unresolved model here breaks the .h5ad write.
-                    params["null_model"] = _reference.name_of(reference_of, adata)
+                    params["null_model"] = _reference.name_of(references, adata)
                 if resolved:
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version),
@@ -385,13 +387,13 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
 
-        def _reference_call(arguments, reference_of):
-            """The caller's own arguments, on the null.
+        def _reference_call(arguments, reference_of, index):
+            """The caller's own arguments, on one fit of the reference.
 
             The fit (or model) and `null_model` change, and the draws take their own seed,
-            derived from the caller's `random_state` by `_reference.null_seed`: the fit and the
-            null are independent fits whose draws are paired, and two samples drawn from one
-            seed share their noise. Every other argument is forwarded VERBATIM -- `groupby`,
+            derived from the caller's `random_state` and the fit's `index` in its reference by
+            `_reference.null_seed`: the fit and each null are independent fits whose draws are
+            paired, and two samples drawn from one seed share their noise. Every other argument is forwarded VERBATIM -- `groupby`,
             `splitby`, `clones`, `exclude_pools`, `weighted`, `normalized`, `normalize_mode`,
             `n_clones_ref`, `distance_metric`, `temperature`, `n_samples` and `device` each
             change the estimand, and a reference computed at defaults is a different quantity
@@ -402,15 +404,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             call = {k: v for k, v in arguments.items() if k != "key_added"}
             call["null_model"] = None          # terminates the recursion
             if "random_state" in call:
-                call["random_state"] = _reference.null_seed(call["random_state"])
+                call["random_state"] = _reference.null_seed(call["random_state"], index)
             if reference_arg == "fit":
-                if not isinstance(reference_of, str):
-                    raise TypeError(
-                        f"{fn.__name__} reads a stored substrate, so its null_model names a "
-                        f"FIT on this AnnData, not a model object. Write the other model's "
-                        f"substrate first with other.to_anndata(adata, fit='myalt'), then pass "
-                        f"null_model='myalt'."
-                    )
                 call["fit"] = reference_of
             else:
                 # A query on a fitted model needs the null's NETWORKS, not its arrays, so the
@@ -419,7 +414,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # be suffixed by, and the reference would land on the caller's own key.
                 # The FIT name, captured before `reference_of` is rebound to a model: a rebuilt
                 # null's `name` is its parameter-store namespace
-                # (`<parent>.null.phenotype.<token>`), which is not what `params["null_model"]`
+                # (`<parent>.null.phenotype[0].<token>`), which is not what `params["null_model"]`
                 # records and not what `fit=` resolves.
                 # Keying the blob by it would put the reference somewhere no reader looks.
                 fit_name = _reference.name_of(reference_of, arguments[_data_param])

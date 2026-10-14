@@ -18,13 +18,18 @@ set cannot drift from the signature. Only the fit, ``null_model`` and the seed o
 differ: the null's draws are seeded by :func:`null_seed`, derived from the caller's
 ``random_state``.
 
-**``adjusted`` is computed per draw.** The fit and the null are independent fits, so draw ``d``
-of the one is paired with draw ``d`` of the other: ``table`` carries ``null_value`` and
-``adjusted`` on every draw, and ``result`` summarizes ``adjusted`` over those draws like any
-value, with its mean, ``adjusted_sd`` and an HDI. The null draws from its own seed because two
-samples drawn from one seed share their underlying noise, and the difference of two correlated
-samples has a narrower spread than two independent fits support. At ``n_samples=0`` each side
-has one draw, and ``adjusted`` is the difference of the two point values.
+**``adjusted`` is computed per draw, against every fit of the reference.** A reference is the
+fits ``tcri.null.*`` wrote for it, ``null.phenotype[0]`` to ``null.phenotype[K-1]``; the caller's
+call runs on each. The fit and each null are independent fits, so draw ``d`` of the one is
+paired with draw ``d`` of every null: ``table`` carries ``null`` (which of the K), ``null_value``
+and ``adjusted`` on every pair, and ``result`` summarizes ``adjusted`` over all of them like any
+value, with its mean, ``adjusted_sd`` and an HDI. Pooling the pairs is what puts the null's
+fit-to-fit spread into the interval; one null's draws do not carry it, and the mean of the
+nulls' draws would hide it. Each null draws from its own seed because two samples drawn from one
+seed share their underlying noise, and the difference of two correlated samples has a narrower
+spread than two independent fits support. At ``n_samples=0`` each side has one draw, so a row
+has K pairs: ``adjusted`` is their mean, ``adjusted_sd`` the sd between the nulls, and the HDI is
+NaN, because an interval read off K points is not one.
 """
 from __future__ import annotations
 
@@ -45,6 +50,9 @@ ADJUSTED_SUMMARY = {"sd": "adjusted_sd", "hdi_low": "adjusted_hdi_low",
 #: The spawn key of the reference's draws, beside the stream the caller's seed starts.
 _NULL_STREAM = 1
 
+#: The ``table`` column numbering the fits of a reference, in the order they were read.
+NULL_COLUMN = "null"
+
 #: ``fit=`` is set, so the number is ABOUT that fit; "auto" then resolves to no reference. A fit
 #: being measured is never simultaneously measured against something else, and this avoids
 #: needing a predicate for "is this fit a null" -- which is deliberately undefined, since any
@@ -52,13 +60,15 @@ _NULL_STREAM = 1
 AUTO = "auto"
 
 
-def null_seed(random_state):
-    """The seed of the reference's draws, derived from the caller's ``random_state``.
+def null_seed(random_state, index=0):
+    """The seed of null ``index``'s draws, derived from the caller's ``random_state``.
 
     ``None`` stays ``None``: both runs then draw unseeded and independently. A NumPy
     ``Generator`` gives one integer off its own stream, so a seeded generator still reproduces.
     An integer, or a ``torch.Generator``'s initial seed, starts a second stream of the same
-    seed sequence, so the reference never draws from the seed the fit drew from.
+    seed sequence, one per ``index``, so the reference never draws from the seed the fit drew
+    from and no two nulls of a reference draw from one seed. ``index`` is the fit's own index in
+    its reference, so a null's draws are the same whether it is read alone or with the others.
     """
     if random_state is None:
         return None
@@ -70,7 +80,8 @@ def null_seed(random_state):
         base = int(random_state)
     else:
         base = int(np.random.default_rng(random_state).integers(0, 2**63 - 1))
-    stream = np.random.SeedSequence(base % 2**64, spawn_key=(_NULL_STREAM,))
+    spawn = (_NULL_STREAM,) + ((int(index),) if index else ())
+    stream = np.random.SeedSequence(base % 2**64, spawn_key=spawn)
     return int(stream.generate_state(1)[0] % (2**31 - 1))
 
 
@@ -114,35 +125,78 @@ def usable_reference(frame, column="null_value") -> bool:
 
 
 def resolve_reference(adata, *, null_model, fit, default_null, metric):
-    """The fit name the reference is computed on, or ``None`` for no reference.
+    """The fits (or models) the reference is computed on, as a list, or ``None`` for none.
 
-    ``None`` -> no reference. ``"auto"`` -> the metric's default kind from the contract, unless
-    ``fit`` is set. Anything else goes through :func:`..keys.resolve_fit`, so a bare kind
-    (``"clonotype"``), a full fit name (``"null.clonotype"``) and a hand-written fit
-    (``"myalt"``) are one rule.
+    ``None`` -> no reference. ``"auto"`` -> every fit of the metric's default reference from the
+    contract, unless ``fit`` is set. A name selects one fit when it names one (``"myalt"``,
+    ``"null.phenotype[2]"``, or ``"phenotype[2]"``) and every fit of a reference when it names a
+    reference (``"phenotype"``, ``"null.phenotype"``, ``"null.phenotype.b"``), so a bare kind and
+    a full name are one rule, as in :func:`..keys.resolve_fit`. A model is that one fit, and a
+    list of models is a reference of those fits: the list ``tcri.null.*`` returns can be passed
+    straight back.
     """
     if null_model is None:
         return None
+    if isinstance(null_model, (list, tuple)):
+        references = list(null_model)
+        if not references or any(r is None or isinstance(r, str) for r in references):
+            raise TypeError(
+                f"null_model={null_model!r}: a list names a reference by its fitted models, "
+                f"such as the list tcri.null.* returns. Name a reference or one fit by its name "
+                f"instead, e.g. null_model='phenotype'."
+            )
+        return references
     if not isinstance(null_model, str):
-        # A fitted model, accepted only where the reference needs networks rather than arrays
-        # (`perturb.gene_importance`); the decorator refuses it everywhere else.
-        return null_model
+        return [null_model]
     if null_model == AUTO:
         if fit is not None:
             return None
         if default_null is None:
             return None
-        try:
-            return K.resolve_fit(adata, default_null)
-        except KeyError:
+        group = K.resolve_group(adata, default_null)
+        if group is None:
             raise KeyError(
                 f"{metric} defaults to the {default_null!r} null and this AnnData carries no "
-                f"such fit. Build the references once with `tcri.null.all(model, adata)` (or "
-                f"`tcri.null.{default_null}(model, adata)` for this one), or pass "
+                f"such reference. Build the references once with `tcri.null.all(model, adata)` "
+                f"(or `tcri.null.{default_null}(model, adata)` for this one), or pass "
                 f"`null_model=None` to report the bare value. A metric never fits a null "
                 f"itself: that is a decision with a cost, and it is yours."
-            ) from None
-    return K.resolve_fit(adata, null_model)
+            )
+        return list(group[1])
+    known = K.fits(adata)
+    if null_model in known or f"null.{null_model}" in known:
+        return [K.resolve_fit(adata, null_model)]
+    group = K.resolve_group(adata, null_model)
+    if group is not None:
+        return list(group[1])
+    return [K.resolve_fit(adata, null_model)]   # raises, naming what the object carries
+
+
+def fit_of(reference_of, adata):
+    """The fit a substrate metric's reference is computed on.
+
+    A name passes through. A model is read as the fit ``adata`` records for it; a model with no
+    fit on this object raises, because a metric that reads a stored substrate cannot compute on
+    a model's networks.
+    """
+    if isinstance(reference_of, str):
+        return reference_of
+    name = name_of(reference_of, adata)
+    if name in K.fits(adata):
+        return name
+    raise TypeError(
+        f"this metric reads a stored substrate, and the model {name!r} has no fit on this "
+        f"AnnData. Write its substrate first with model.to_anndata(adata, fit='myalt'), then "
+        f"pass null_model='myalt', or pass the models tcri.null.* returned for this object."
+    )
+
+
+def index_of(reference_of, adata):
+    """A reference fit's own index in its reference, from its record; 0 when it has none."""
+    name = reference_of if isinstance(reference_of, str) else name_of(reference_of, adata)
+    record = adata.uns.get(K.fit_key(K.FIT_SETTINGS, name)) or {}
+    index = record.get("index")
+    return 0 if index is None else int(index)
 
 
 #: The five things that have to agree before one fit's numbers can be subtracted from another's.
@@ -191,17 +245,21 @@ def _labels(result, values, reference_columns=()):
     return [c for c in result.columns if c not in drop]
 
 
-def attach(payload, reference, *, values, denominators=()):
+def attach(payload, references, *, values, denominators=()):
     """Add the reference and adjusted columns to ``table`` and ``result``, in place.
 
-    The reference's ``table`` is joined onto this one on the row LABELS and the draw, never
-    positionally: a null's rows are the parent's by construction, but a join says so and an
-    alignment by position only assumes it. Draw ``d`` of the fit is paired with draw ``d`` of
-    the null, and every adjusted column is their difference on that draw. ``result`` then gains
-    the null's mean over its draws and the adjusted values summarized over the paired draws:
-    ``adjusted`` with ``adjusted_sd``, ``adjusted_hdi_low`` and ``adjusted_hdi_high``, and the
-    delta endpoints' ``adjusted_from`` and ``adjusted_to`` as means. A row with no reference
-    row gets NaN rather than being dropped, so the caller's own rows stay authoritative.
+    ``references`` is the caller's call run on each fit of the reference, in order. Their
+    ``table``s are stacked with ``null`` numbering them, and joined onto this one on the row
+    LABELS and the draw, never positionally: a null's rows are the parent's by construction, but
+    a join says so and an alignment by position only assumes it. Draw ``d`` of the fit is paired
+    with draw ``d`` of every null, and every adjusted column is their difference on that pair.
+    ``result`` then gains the nulls' mean over all their draws and the adjusted values
+    summarized over all the pairs: ``adjusted`` with ``adjusted_sd``, ``adjusted_hdi_low`` and
+    ``adjusted_hdi_high``, and the delta endpoints' ``adjusted_from`` and ``adjusted_to`` as
+    means. With one draw per side (``n_samples=0``) a row has one pair per null: ``adjusted_sd``
+    is then the sd between the nulls and the HDI is NaN, since an interval read off that few
+    points is not one. A row with no reference row gets NaN rather than being dropped, so the
+    caller's own rows stay authoritative.
 
     ``adjusted`` equals ``value - null_value`` whenever every draw is finite on both sides. A
     draw that is non-finite on one side leaves the mean of that side and drops out of the
@@ -210,9 +268,12 @@ def attach(payload, reference, *, values, denominators=()):
     from .._compute._tables import build_result   # the lower layer, reached lazily
 
     result, table = payload.get("result"), payload.get("table")
-    ref_table = reference.get("table")
-    if any(frame is None or not len(frame) for frame in (result, table, ref_table)):
+    frames = [r.get("table") for r in references]
+    frames = [f.assign(**{NULL_COLUMN: i}) for i, f in enumerate(frames)
+              if f is not None and len(f)]
+    if not frames or any(frame is None or not len(frame) for frame in (result, table)):
         return payload
+    ref_table = pd.concat(frames, ignore_index=True)
 
     present = [v for v in values if v in table.columns and v in ref_table.columns]
     if "value" not in present:
@@ -220,15 +281,15 @@ def attach(payload, reference, *, values, denominators=()):
     pairs = column_pairs(present, denominators)
     per_draw = [c for _, n, a in pairs for c in (n, a) if c]
     labels = [c for c in _labels(table, (*values, "draw"),
-                                 (*per_draw, *ADJUSTED_SUMMARY.values()))
+                                 (*per_draw, *ADJUSTED_SUMMARY.values(), NULL_COLUMN))
               if c in ref_table.columns]
     keys = labels + (["draw"] if "draw" in table.columns and "draw" in ref_table.columns
                      else [])
     if not keys:
         raise ValueError("cannot pair a reference with no label or draw columns")
 
-    ref = ref_table[keys + present].rename(columns={v: n for v, n, _ in pairs})
-    merged = table.merge(ref, on=keys, how="left", validate="many_to_one")
+    ref = ref_table[keys + [NULL_COLUMN] + present].rename(columns={v: n for v, n, _ in pairs})
+    merged = table.merge(ref, on=keys, how="left", validate="one_to_many")
     for native, null, adjusted in pairs:
         if adjusted is not None:
             merged[adjusted] = (merged[native].to_numpy(dtype=float)
@@ -239,6 +300,9 @@ def attach(payload, reference, *, values, denominators=()):
     summary = build_result(merged[group + ["draw"] + per_draw], value="adjusted",
                            extra_values=[c for c in per_draw if c != "adjusted"])
     summary = summary.rename(columns=ADJUSTED_SUMMARY)
+    if "draw" not in merged.columns or merged["draw"].nunique() <= 1:
+        summary[ADJUSTED_SUMMARY["hdi_low"]] = np.nan
+        summary[ADJUSTED_SUMMARY["hdi_high"]] = np.nan
     nulls = [n for _, n, _ in pairs]
     differences = [a for _, _, a in pairs if a is not None]
     summary = summary[group + nulls + differences[:1] + list(ADJUSTED_SUMMARY.values())
@@ -298,12 +362,26 @@ def name_of(reference_of, adata=None):
     """The h5ad-writable name of whatever the reference was computed on.
 
     A fit name passes through. A null built by ``tcri.null.*`` or rebuilt becomes its fit name
-    (``null.phenotype``), which ``fit=`` resolves, when ``adata``'s record for that fit has the
+    (``null.phenotype[0]``), which ``fit=`` resolves, when ``adata``'s record for that fit has the
     null's ``name``, its parameter-store namespace, as its namespace. Every fit has a namespace
     of its own, so a null whose fit has since been refit, by its parent or another, a null with
-    no record on ``adata``, and any other model object become their own name. A model in the
-    params block would break the `.h5ad` write and tell a later reader nothing it can act on.
+    no record on ``adata``, and any other model object become their own name. A list of
+    references is named by its one entry, by the reference whose fits it is exactly
+    (``null.phenotype``), or else as the list of its entries' names. A model in the params block
+    would break the `.h5ad` write and tell a later reader nothing it can act on.
     """
+    if isinstance(reference_of, (list, tuple)):
+        names = [name_of(r, adata) for r in reference_of]
+        if len(names) == 1:
+            return names[0]
+        if adata is not None:
+            groups = {str((adata.uns.get(K.fit_key(K.FIT_SETTINGS, n)) or {}).get("reference"))
+                      for n in names}
+            if len(groups) == 1:
+                (group,) = groups
+                if K.members(adata, group) == names:
+                    return group
+        return names
     if reference_of is None or isinstance(reference_of, str):
         return reference_of
     name = str(getattr(reference_of, "name", "") or "model")

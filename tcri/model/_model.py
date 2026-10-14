@@ -576,7 +576,7 @@ class TCRIModel(BaseModelClass):
             name = _generated_name()
         self._name = str(name)
         self._permutation = permutation
-        #: The fit name a null's substrate is written under on its AnnData (``null.phenotype``),
+        #: The fit name a null's substrate is written under on its AnnData (``null.phenotype[0]``),
         #: set by ``tcri.null.*`` and ``rebuild``; ``None`` otherwise. A null's ``name`` is its
         #: parameter-store namespace, which is not that.
         self._fit_name = None
