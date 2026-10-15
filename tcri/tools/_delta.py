@@ -126,7 +126,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
 
 
 @tl_result(key=K.DELTA_CLONOTYPIC_ENTROPY, version=4, schema=schemas.DeltaClonotypicEntropy,
-           values=("value", "value_from", "value_to"), default_null="condition")
+           values=("value", "value_from", "value_to"), default_null="covariate")
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
                              weighted=False, normalized=True, n_clones_ref=None,
@@ -152,7 +152,7 @@ def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
 
 
 @tl_result(key=K.DELTA_PHENOTYPIC_ENTROPY, version=4, schema=schemas.DeltaPhenotypicEntropy,
-           values=("value", "value_from", "value_to"), default_null="condition")
+           values=("value", "value_from", "value_to"), default_null="covariate")
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
                              weighted=False, normalized=True, random_state=None, device=None,

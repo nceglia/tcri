@@ -55,6 +55,8 @@ REMOVED = {
     ],
     # model/utils cleanup
     "ml": ["plot_loss", "plot_archetypes"],
+    # the covariate's null is tcri.null.covariate
+    "null": ["condition"],
 }
 
 #: Module-level names that must NOT be on the top-level package. They are module machinery, not

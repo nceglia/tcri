@@ -71,21 +71,21 @@ LABELS = ["covariate", "cov_from", "cov_to", "patient", "disease_status", "clono
 @pytest.fixture(scope="module")
 def pooled():
     """A pooled cohort, registered on the pooled column and fitted with the phenotype and
-    condition nulls. Returns ``(model, adata)``."""
+    covariate nulls. Returns ``(model, adata)``."""
     from .conftest import _remember_fixture_params
 
     adata = simulate_cohort(n_patients=4, n_clones=(10, 16), n_cells_per_sample=60, seed=0)
     adata.layers["counts"] = adata.X.copy()
     tcri.pp.pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key=CLONES,
-                            phenotype_key="phenotype", covariate_key="condition",
+                            phenotype_key="phenotype", covariate_key="timepoint",
                             batch_key="patient", replicate="patient")
     model = TCRIModel(adata, name="pooled", **KNOBS)
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model.train(**TRAIN)
         model.to_anndata(adata)
-        tcri.null.all(model, adata, n_nulls=1, kinds=("phenotype", "condition"))
+        tcri.null.all(model, adata, n_nulls=1, kinds=("phenotype", "covariate"))
     _remember_fixture_params("pooled")
     return model, adata
 
@@ -323,7 +323,7 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
         return _mi_from_joint(joint.to_numpy(dtype=float), normalized=True, mode="min")
 
     for patient, rows in per_clone.groupby("patient", observed=True):
-        at = obs[(obs["condition"] == POST) & (obs["patient"] == patient)]
+        at = obs[(obs["timepoint"] == POST) & (obs["patient"] == patient)]
         cells = at[at[CLONES].isin(kept)]
         assert set(rows["clonotype"]) == set(cells[CLONES])
         assert _observed(by_default, patient) == pytest.approx(_empirical_mi(cells), abs=1e-12)
@@ -331,7 +331,7 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
     some = kept[::2]
     subset = tcri.diag.permutation_null(adata, clones=some, **kw)
     for patient in subset["patient"]:
-        at = obs[(obs["condition"] == POST) & (obs["patient"] == patient)]
+        at = obs[(obs["timepoint"] == POST) & (obs["patient"] == patient)]
         cells = at[at[CLONES].isin(some)]
         assert _observed(subset, patient) == pytest.approx(_empirical_mi(cells), abs=1e-12)
 

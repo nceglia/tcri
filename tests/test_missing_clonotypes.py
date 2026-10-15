@@ -82,7 +82,7 @@ def test_setup_raises_on_missing_clonotype(value, dtype):
 @pytest.mark.parametrize(("column", "label", "axis"), [
     ("clone_id", "clonotype", "clonotype"),
     ("phenotype", "phenotype", "phenotype"),
-    ("covariate", "covariate", "condition"),
+    ("covariate", "covariate", "covariate"),
 ])
 def test_init_raises_on_a_label_removed_after_setup(column, label, axis, permuted):
     """A clonotype, phenotype or covariate removed from ``obs`` after setup gives that cell code

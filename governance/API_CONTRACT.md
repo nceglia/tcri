@@ -107,7 +107,7 @@ frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw v
 with a `draw` column. Read back with `tcri.get.result(adata, name)` and
 `tcri.get.params(adata, name)`.
 
-**References.** `tcri.null.phenotype`, `.clonotype`, `.condition` and `.all` take `n_nulls`
+**References.** `tcri.null.phenotype`, `.clonotype`, `.covariate` and `.all` take `n_nulls`
 (default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
 `null.<kind>[n_nulls-1]` (`null.<kind>.<key_added>[i]` when named), each with its own
 permutation, namespace and records; the calls return the fitted models, a list per kind.
@@ -418,7 +418,7 @@ class null:
         model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
         seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> list: ...
-    def condition(
+    def covariate(
         model: Any, adata: AnnData, *, n_nulls: int = ..., seed: Optional[int] = ...,
         key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> list: ...
@@ -441,7 +441,7 @@ class ut:
 # ── synthetic data (datasets) ────────────────────────────────────────────────
 class datasets:
     def simulate_cohort(
-        *, n_patients: int = ..., conditions: Any = ..., disease_fraction: float = ...,
+        *, n_patients: int = ..., timepoints: Any = ..., disease_fraction: float = ...,
         n_clones: Any = ..., n_phenotypes: int = ..., n_genes: int = ...,
         n_cells_per_sample: int = ..., clone_size_distribution: str = ...,
         clone_size_exponent: float = ..., disease_enrichment: float = ...,

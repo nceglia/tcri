@@ -273,8 +273,8 @@ def _refit_hint(adata, fit, groupby):
     strata = [] if raw is None else [str(c) for c in raw]
     if not strata:
         return f" This is fit {fit!r}."
-    if str(settings.get("kind")) == "condition":
-        return (f" This is fit {fit!r}, a condition null, whose strata are fixed at {strata} and "
+    if str(settings.get("kind")) == "covariate":
+        return (f" This is fit {fit!r}, a covariate null, whose strata are fixed at {strata} and "
                 f"are not yours to choose. Use a groupby no finer than they are.")
     extended = strata + ([str(groupby)] if str(groupby) not in strata else [])
     return (f" This is fit {fit!r}, permuted within {strata}, which is coarser than "

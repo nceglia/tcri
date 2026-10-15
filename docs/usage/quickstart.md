@@ -18,17 +18,17 @@ import tcri
 adata = sc.read_h5ad("your_data.h5ad")
 # expected: adata.layers["counts"] (raw counts)
 #           adata.obs["clone_id"], adata.obs["phenotype"],
-#           adata.obs["condition"], adata.obs["patient"]
+#           adata.obs["timepoint"], adata.obs["patient"]
 ```
 
 No paired data yet? {func}`simulate_cohort <tcri.datasets.simulate_cohort>` gives a synthetic
 cohort with the shape the rest of this page assumes — patients as replicates, an ordered
-condition axis within each patient, and a `disease_status` label between them:
+timepoint axis within each patient, and a `disease_status` label between them:
 
 ```python
 adata = tcri.datasets.simulate_cohort(seed=0)
 
-# obs: clone_id, phenotype, condition ("pre"/"post"), patient,
+# obs: clone_id, phenotype, timepoint ("pre"/"post"), patient,
 #      disease_status ("disease"/"control")
 ```
 
@@ -50,7 +50,7 @@ tcri.ml.TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="condition",
+    covariate_key="timepoint",
     batch_key="patient",
     replicate="patient",
 )

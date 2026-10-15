@@ -25,7 +25,7 @@ def _cohort(seed=0):
     from tcri.datasets import simulate_cohort
 
     return simulate_cohort(
-        n_patients=4, conditions=("pre", "post"), disease_fraction=0.5, n_clones=(14, 24),
+        n_patients=4, timepoints=("pre", "post"), disease_fraction=0.5, n_clones=(14, 24),
         n_phenotypes=4, n_genes=40, n_cells_per_sample=200,
         clone_size_distribution="powerlaw", clone_size_exponent=2.0,
         disease_enrichment=12.0, control_enrichment=1.1, seed=seed,
@@ -51,7 +51,7 @@ def _fit_p_ct(adata, **model_kwargs):
 
     pyro.clear_param_store()
     TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
-                            phenotype_key="phenotype", covariate_key="condition",
+                            phenotype_key="phenotype", covariate_key="timepoint",
                             batch_key="patient")
     m = TCRIModel(adata, n_latent=8, n_hidden=32, n_layers=1, classifier_n_layers=1,
                   classifier_hidden=32, K=4, seed=0, **model_kwargs)
@@ -68,8 +68,8 @@ def _fit_p_ct(adata, **model_kwargs):
 
 def test_hierarchy_moves_with_the_covariate_shuffle():
     ad = _cohort()
-    shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="condition", seed=0)
-    changed = (ad.obs["condition"].astype(str).to_numpy() != shuffled.obs["condition"].astype(str).to_numpy()).mean()
+    shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="timepoint", seed=0)
+    changed = (ad.obs["timepoint"].astype(str).to_numpy() != shuffled.obs["timepoint"].astype(str).to_numpy()).mean()
     assert changed > 0.2, f"the shuffle is nearly a no-op ({changed:.2%} of cells relabeled)"
 
     p0, k0 = _fit_p_ct(ad)
@@ -89,7 +89,7 @@ def test_hierarchy_is_invariant_with_the_readout_off():
     same shuffle leaves the fitted p_ct bitwise identical. Paired with the test above, this is
     what attributes the movement to the readout and not to the shuffle."""
     ad = _cohort()
-    shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="condition", seed=0)
+    shuffled = _shuffle_covariate_within_clone(ad, clone_key="clone_id", cov_key="timepoint", seed=0)
     p0, _ = _fit_p_ct(ad, label_error_rate=None)
     p1, _ = _fit_p_ct(shuffled, label_error_rate=None)
     assert np.array_equal(p0, p1), (

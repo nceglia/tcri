@@ -13,7 +13,7 @@ complete notebook, with outputs, is in `examples/example.ipynb` in the repositor
 ## 1. Build a cohort
 
 {func}`simulate_cohort <tcri.datasets.simulate_cohort>` gives the shape most analyses have:
-patients as replicates, an ordered condition axis *within* each patient, and a
+patients as replicates, an ordered timepoint axis *within* each patient, and a
 `disease_status` label *between* them.
 
 ```python
@@ -22,7 +22,7 @@ from tcri.datasets import simulate_cohort
 
 adata = simulate_cohort(
     n_patients=16,
-    conditions=("pre", "post"),
+    timepoints=("pre", "post"),
     disease_fraction=0.5,
     n_clones=(14, 24),                   # ragged, as real cohorts are
     n_phenotypes=4,
@@ -38,13 +38,13 @@ adata = simulate_cohort(
 
 Two properties matter downstream:
 
-- **Clones are paired across conditions.** Each patient is simulated once, fixing its
-  clone→phenotype structure, and every condition is drawn from that one population. Without
+- **Clones are paired across timepoints.** Each patient is simulated once, fixing its
+  clone→phenotype structure, and every timepoint is drawn from that one population. Without
   this, `phenotypic_flux` and the `delta_*` metrics would have nothing to measure.
 - **Clone sizes are heavy-tailed** — a power law, as real repertoires are: a few large
   expanded clones over a long tail of singletons.
 
-Only the clone→phenotype *concentration* changes between conditions. Disease clones
+Only the clone→phenotype *concentration* changes between timepoints. Disease clones
 commit; control clones barely move. Nothing is relabeled, so each cell's phenotype still
 matches the expression it was generated with.
 
@@ -91,7 +91,7 @@ TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="condition",   # the axis a delta is taken across
+    covariate_key="timepoint",   # the axis a delta is taken across
     batch_key="patient",         # one-hot into the networks
     replicate="patient",         # the independent unit for statistics
 )
@@ -201,7 +201,7 @@ tcri.tl.delta_phenotypic_entropy(
 HDIs do not subtract — you cannot recover the interval of a difference from the endpoints'
 intervals, which is why this is a function rather than arithmetic you do yourself.
 
-Support is the **intersection**: clones present at both conditions, within each patient. A
+Support is the **intersection**: clones present at both timepoints, within each patient. A
 delta needs both endpoints, and the drop is warned about because it moves `n`.
 
 There is deliberately **no `delta_mutual_information`**. MI has no item axis, so it is already

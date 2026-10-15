@@ -26,7 +26,7 @@ is a mixture of many rare clones, not a clone, so at `exclude_pools=True` (the d
 metric counts the registered labels minus the pools: exactly the clones `pool_rare_clones` kept.
 An explicit `clones=` selects among them; `exclude_pools=False` counts each pool as one clone. A
 column with no pooling step has nothing to exclude, whatever its labels look like. No tool applies
-a second threshold, per condition or otherwise: the pooling rule is the only rule for which
+a second threshold, per covariate level or otherwise: the pooling rule is the only rule for which
 clones count.
 
 The counted clones are the rows of the joint, so they are the clones `weighted=False` gives equal
@@ -185,7 +185,7 @@ adjusted column: a difference of two normalizers is not a quantity anyone report
 | quantity | read against | what the reference destroys |
 |---|---|---|
 | clonotypic entropy, phenotypic entropy, mutual information, gene importance | the phenotype null | which cell carries which phenotype |
-| phenotypic flux, both deltas | the condition null | which condition a cell sits at |
+| phenotypic flux, both deltas | the covariate null | which covariate level a cell sits at |
 
 The reference is **the caller's own call on the null** -- the fit, `null_model=None` and the
 seed of its draws changed -- and every other argument forwarded verbatim. `groupby`, `splitby`,
@@ -254,8 +254,8 @@ DEFAULTS = {
 
 # the permutation axes, and the random stream each one's permutation is drawn from. Keyed by
 # NAME, never positional: a reordering here must not silently change every recorded permutation
-NULLS = ["phenotype", "clonotype", "condition"]
-OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "condition": 30_000}
+NULLS = ["phenotype", "clonotype", "covariate"]
+OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "covariate": 30_000}
 
 # which null each scored quantity is read against at null_model="auto". joint_distribution has
 # no entry (it returns a matrix, not a scored quantity); knockout has none (it returns the
@@ -265,9 +265,9 @@ DEFAULT_NULL = {
     "clonotypic_entropy":       "phenotype",
     "phenotypic_entropy":       "phenotype",
     "mutual_information":       "phenotype",
-    "phenotypic_flux":          "condition",
-    "delta_clonotypic_entropy": "condition",
-    "delta_phenotypic_entropy": "condition",
+    "phenotypic_flux":          "covariate",
+    "delta_clonotypic_entropy": "covariate",
+    "delta_phenotypic_entropy": "covariate",
     "gene_importance":          "phenotype",
 }
 

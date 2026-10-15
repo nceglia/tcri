@@ -12,9 +12,9 @@ permuted label vectors, and writes each fit into ``adata`` as a named fit beside
 reference: ``value - null_value`` is the part of a number the structure accounts for, paired
 draw for draw with every fit of the reference, and no model-based number need be reported bare.
 """
-from ._nulls import all, clonotype, condition, phenotype
+from ._nulls import all, clonotype, covariate, phenotype
 
 #: `rebuild` is deliberately NOT re-exported: it reconstructs a null for inference and is the
 #: perturbation's private route to `null_model="auto"`, not something a user calls. Import it as
 #: `from tcri.null._rebuild import rebuild`.
-__all__ = ["phenotype", "clonotype", "condition", "all"]
+__all__ = ["phenotype", "clonotype", "covariate", "all"]

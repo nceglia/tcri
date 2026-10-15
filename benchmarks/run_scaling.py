@@ -37,7 +37,7 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 logging.disable(logging.INFO)
 
-#: (label, n_patients, n_clones, cells per (patient, condition))
+#: (label, n_patients, n_clones, cells per (patient, timepoint))
 PRESETS = {
     "smoke":   [("xs", 4, 10, 150)],
     "reduced": [("xs", 4, 12, 200), ("s", 8, 20, 400), ("m", 16, 30, 600)],
@@ -83,14 +83,14 @@ def run_cell(label, n_patients, n_clones, n_cells, *, device, epochs, n_samples,
     t = Timer(device)
 
     with t("simulate"):
-        adata = simulate_cohort(n_patients=n_patients, conditions=("pre", "post"),
+        adata = simulate_cohort(n_patients=n_patients, timepoints=("pre", "post"),
                                 n_clones=n_clones, n_cells_per_sample=n_cells,
                                 clone_size_distribution="powerlaw", seed=seed)
 
     with t("setup"):
         pyro.clear_param_store()
         TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
-                                phenotype_key="phenotype", covariate_key="condition",
+                                phenotype_key="phenotype", covariate_key="timepoint",
                                 batch_key="patient", replicate="patient")
         model = TCRIModel(adata, n_latent=10, n_hidden=64, n_layers=2,
                           classifier_n_layers=1, classifier_hidden=64, K=4, seed=seed)
