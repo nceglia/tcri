@@ -117,7 +117,8 @@ def _owns_param(name: str, key: str) -> bool:
 #: ``TCRIModel.__init__``; everything else the model derives -- the clone x phenotype prior, the
 #: archetypes, ``ct_array``, ``_target_phenotypes`` -- follows from those three, so permuting a
 #: vector at the point it is read is the whole intervention.
-PERMUTABLE = ("phenotype", "clonotype", "condition")
+PERMUTABLE = ("phenotype", "clonotype", "covariate")
+PHENOTYPE_AXIS, CLONOTYPE_AXIS, COVARIATE_AXIS = PERMUTABLE
 
 #: Registry entries tcri adds AFTER scvi's `register_fields`. `AnnDataManager.transfer_fields`
 #: rebuilds a registry from the fields alone, so these do not survive a transfer to a second
@@ -657,7 +658,7 @@ class TCRIModel(BaseModelClass):
         # categories are never touched, so P, the label space and every downstream index are
         # the parent's; only which cell carries which label moves.
         pvals_np = _apply_permutation(_label_codes(ph_series, phenotype_col, "phenotype"),
-                                      "phenotype", permutation)
+                                      PHENOTYPE_AXIS, permutation)
         target_codes = torch.tensor(pvals_np, dtype=torch.long)
         # ---- TCRIModel.__init__ -------------
         if gate_prob is not None and not (0.0 <= gate_prob <= 1.0):
@@ -666,7 +667,7 @@ class TCRIModel(BaseModelClass):
         cvals = self.adata.obs[clonotype_col].astype("category")
         c_count = len(cvals.cat.categories)
         c_array_np = _apply_permutation(_label_codes(cvals, clonotype_col, "clonotype"),
-                                        "clonotype", permutation)
+                                        CLONOTYPE_AXIS, permutation)
         clone_phenotype_prior = np.zeros((c_count, P), dtype=np.float32)
         for i in range(len(c_array_np)):
             clone_phenotype_prior[c_array_np[i], pvals_np[i]] += 1
@@ -688,7 +689,7 @@ class TCRIModel(BaseModelClass):
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
         cov_series = self.adata.obs[covariate_col].astype("category")
         cov_array_np = _apply_permutation(_label_codes(cov_series, covariate_col, "covariate"),
-                                          "condition", permutation)
+                                          COVARIATE_AXIS, permutation)
         df_ct = pd.DataFrame({"c": c_array_np, "t": cov_array_np})
         combos = df_ct.drop_duplicates().sort_values(["c", "t"])
         ct_list = combos.values.tolist()

@@ -96,7 +96,9 @@ Different estimands, both valid; the docstrings say which question each answers.
 (never by slicing the AnnData) and adds a group axis; clones are assumed disjoint across
 groups. `splitby` produces the contrast between split levels in the `stats` slot: a two-sided
 Mann–Whitney U on per-group values, uncorrected across contrasts, with the replicate unit
-being the group, so items are averaged to one value per group before the test.
+being the group, so items are averaged to one value per group before the test; the contrast
+refuses a frame holding more than one row per group and level. `delta` is the second level's mean
+minus the first's. A contrast whose p is undefined has blank `stars`.
 
 **Return shape.** Every `tl` returns `{table, result, stats}` and stores the same object under
 `uns[key_added or "tcri_<metric>"]` with a `params` block recording every argument, defaults
@@ -108,7 +110,7 @@ frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw v
 with a `draw` column. Read back with `tcri.get.result(adata, name)` and
 `tcri.get.params(adata, name)`.
 
-**References.** `tcri.null.phenotype`, `.clonotype`, `.condition` and `.all` take `n_nulls`
+**References.** `tcri.null.phenotype`, `.clonotype`, `.covariate` and `.all` take `n_nulls`
 (default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
 `null.<kind>[n_nulls-1]` (`null.<kind>.<key_added>[i]` when named), each with its own
 permutation, namespace and records; the calls return the fitted models, a list per kind.
@@ -419,7 +421,7 @@ class null:
         model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
         seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> list: ...
-    def condition(
+    def covariate(
         model: Any, adata: AnnData, *, n_nulls: int = ..., seed: Optional[int] = ...,
         key_added: Optional[str] = ..., **train_kwargs: Any,
     ) -> list: ...
@@ -442,7 +444,7 @@ class ut:
 # ── synthetic data (datasets) ────────────────────────────────────────────────
 class datasets:
     def simulate_cohort(
-        *, n_patients: int = ..., conditions: Any = ..., disease_fraction: float = ...,
+        *, n_patients: int = ..., timepoints: Any = ..., disease_fraction: float = ...,
         n_clones: Any = ..., n_phenotypes: int = ..., n_genes: int = ...,
         n_cells_per_sample: int = ..., clone_size_distribution: str = ...,
         clone_size_exponent: float = ..., disease_enrichment: float = ...,

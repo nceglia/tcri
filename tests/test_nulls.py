@@ -96,11 +96,11 @@ def test_permutation_preserves_the_strata(fitted):
 
     This is what "within" means, and it is the only thing standing between a reference and a
     number computed on a differently shaped dataset. Also asserted per kind: clone SIZES survive
-    the clonotype shuffle, and each clone keeps its own cells under the condition shuffle.
+    the clonotype shuffle, and each clone keeps its own cells under the covariate shuffle.
     """
     _, adata, _ = fitted
     meta = adata.uns[K.METADATA]
-    for kind in ("phenotype", "clonotype", "condition"):
+    for kind in ("phenotype", "clonotype", "covariate"):
         fit = f"null.{kind}[0]"
         perm = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, fit)])
         strata = list(adata.uns[K.fit_key(K.FIT_SETTINGS, fit)]["strata"])
@@ -108,7 +108,7 @@ def test_permutation_preserves_the_strata(fitted):
 
         col = {"phenotype": meta[K.Config.PHENOTYPE_COL],
                "clonotype": meta[K.Config.CLONE_COL],
-               "condition": meta[K.Config.COVARIATE_COL]}[kind]
+               "covariate": meta[K.Config.COVARIATE_COL]}[kind]
         codes = adata.obs[col].astype("category").cat.codes.to_numpy()
         moved = codes[perm]
         keys = pd.MultiIndex.from_arrays([adata.obs[c].astype(str).to_numpy() for c in strata])
@@ -124,9 +124,9 @@ def test_permutation_preserves_the_strata(fitted):
     p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.clonotype[0]")])
     assert sorted(np.bincount(clone).tolist()) == sorted(np.bincount(clone[p]).tolist())
 
-    # each clone keeps its own cells under the condition shuffle
-    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.condition[0]")])
-    assert np.array_equal(clone, clone[p]), "the condition null moved cells between clones"
+    # each clone keeps its own cells under the covariate shuffle
+    p = np.asarray(adata.uns[K.fit_key(K.PERMUTATION, "null.covariate[0]")])
+    assert np.array_equal(clone, clone[p]), "the covariate null moved cells between clones"
 
 
 def test_the_ct_index_is_the_parents(fitted):
@@ -136,13 +136,13 @@ def test_the_ct_index_is_the_parents(fitted):
 
     The asymmetry is the point. A phenotype permutation touches neither the clone nor the
     covariate, so nothing about the ct index or a cell's place in it can move; the clonotype and
-    condition nulls move most cells. Asserting movement for all three would be green on a null
+    covariate nulls move most cells. Asserting movement for all three would be green on a null
     that permuted nothing at all.
     """
     _, adata, _ = fitted
     parent_ct = np.asarray(adata.uns[K.CT_ARRAY])
     n_ct = int(adata.uns[K.FIT_SETTINGS]["n_ct"])
-    for kind in ("phenotype", "clonotype", "condition"):
+    for kind in ("phenotype", "clonotype", "covariate"):
         fit = f"null.{kind}[0]"
         assert int(adata.uns[K.fit_key(K.FIT_SETTINGS, fit)]["n_ct"]) == n_ct, kind
         for key in (K.CT_TO_C, K.CT_TO_COV):
@@ -201,7 +201,7 @@ def test_within_is_validated_not_extended(fitted):
     with pytest.raises(ValueError, match="not in adata.obs"):
         _permute.resolve_strata(adata, "clonotype", [covariate_col, "no_such_column"])
     with pytest.raises(ValueError, match="no `within`"):
-        _permute.resolve_strata(adata, "condition", ["batch"])
+        _permute.resolve_strata(adata, "covariate", ["batch"])
 
     refined = ["batch", covariate_col, "site"]
     assert _permute.resolve_strata(adata, "phenotype", refined) == refined
@@ -356,25 +356,25 @@ def test_a_fit_name_is_claimed_by_one_parent(fitted):
 
 
 def test_all_fits_every_applicable_kind():
-    """``all`` matches the single functions under the same seed, and skips ``condition`` loudly
-    when there is only one condition to permute between."""
+    """``all`` matches the single functions under the same seed, and skips ``covariate`` loudly
+    when there is only one covariate level to permute between."""
     a = _adata()
     model = _parent(a, "allkinds")
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         out = tcri.null.all(model, a, n_nulls=1)
-    assert sorted(out) == ["clonotype", "condition", "phenotype"]
+    assert sorted(out) == ["clonotype", "covariate", "phenotype"]
     for kind in out:
         assert f"null.{kind}[0]" in K.fits(a)
 
     single = _adata(n_covariates=1)
-    single_model = _parent(single, "onecondition")
-    with contextlib.redirect_stdout(io.StringIO()), pytest.warns(UserWarning, match="condition"):
+    single_model = _parent(single, "onelevel")
+    with contextlib.redirect_stdout(io.StringIO()), pytest.warns(UserWarning, match="covariate null"):
         out = tcri.null.all(single_model, single, n_nulls=1)
     assert sorted(out) == ["clonotype", "phenotype"]
-    assert "null.condition[0]" not in K.fits(single)
+    assert "null.covariate[0]" not in K.fits(single)
 
-    with pytest.raises(ValueError, match="condition null takes no"):
+    with pytest.raises(ValueError, match="covariate null takes no"):
         tcri.null.all(model, a, n_nulls=1, within=["batch", "covariate"])
     with pytest.raises(ValueError, match="not one of"):
         tcri.null.all(model, a, n_nulls=1, kinds=("phenotype", "nonsense"))
@@ -488,7 +488,7 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
     clonotype permutation destroys exactly that prior; the noisy-label readout also ties the
     head to the hierarchy. So "the head is intact" is true of ``f_cls`` and not of the call.
 
-    The condition null is the clean case: it reproduces its parent's accuracy and its mutual
+    The covariate null is the clean case: it reproduces its parent's accuracy and its mutual
     information, because neither the phenotype nor the clone of any cell moved.
     """
     import tcri
@@ -517,15 +517,15 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
         adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype[0]")],
         adata.obsm[K.X_PROBABILITIES]), "calibration read the main fit's probabilities"
 
-    # 3) the head: both label nulls collapse toward the marginal, the condition null does not
+    # 3) the head: both label nulls collapse toward the marginal, the covariate null does not
     parent_accuracy = accuracy(None)
     for kind in ("phenotype", "clonotype"):
         assert accuracy(f"null.{kind}[0]") < parent_accuracy, kind
         assert accuracy(f"null.{kind}[0]") <= majority + 0.15, (
             f"the {kind} null still reads the true labels: {accuracy(f'null.{kind}[0]'):.3f} "
             f"against a majority-class rate of {majority:.3f}")
-    assert accuracy("null.condition[0]") == pytest.approx(parent_accuracy, abs=0.05), (
-        "the condition null moved the phenotype call, and it moves neither phenotype nor clone")
+    assert accuracy("null.covariate[0]") == pytest.approx(parent_accuracy, abs=0.05), (
+        "the covariate null moved the phenotype call, and it moves neither phenotype nor clone")
 
     # 4) mutual information: only the two label nulls destroy the coupling it measures
     mi = {k: float(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}[0]",
@@ -535,8 +535,8 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
     parent_mi = float(tcri.tl.mutual_information(adata, covariate=cov, null_model=None,
                                                  inplace=False)["result"]["value"].iloc[0])
     assert mi["phenotype"] < 0.25 * parent_mi and mi["clonotype"] < 0.25 * parent_mi, mi
-    assert mi["condition"] == pytest.approx(parent_mi, rel=0.1), (
-        f"the condition null destroyed clone-phenotype coupling, which is not its axis: {mi}")
+    assert mi["covariate"] == pytest.approx(parent_mi, rel=0.1), (
+        f"the covariate null destroyed clone-phenotype coupling, which is not its axis: {mi}")
 
 
 def test_a_metric_never_trains(fitted, monkeypatch):

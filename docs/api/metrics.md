@@ -49,8 +49,8 @@ contrast lands in `stats` — you do not call a second function.
 | `mean_a`, `sd_a`, `n_a` | first level's mean over replicates, its spread, and how many |
 | `ci_low_a`, `ci_high_a` | between-replicate interval on that mean |
 | `mean_b`, `sd_b`, `n_b`, `ci_low_b`, `ci_high_b` | the same for the second level |
-| `delta` | `mean_a - mean_b` |
-| `stat`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker |
+| `delta` | `mean_b - mean_a` |
+| `stat`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker; blank when no test could be run |
 
 The interval columns are `ci_*` — **between** replicates. The `hdi_*` columns that appear in
 `result` are a different quantity, the **within**-group spread over posterior draws, and they
@@ -80,7 +80,7 @@ mi["result"][["value", "null_value", "adjusted"]]
 ```
 
 `null_model` defaults to `"auto"`: the phenotype null for the entropies, mutual information and
-gene importance, the condition null for flux and the two deltas. `None` computes no reference
+gene importance, the covariate null for flux and the two deltas. `None` computes no reference
 and creates no column; any reference or fit on the object can be named instead, or the fitted
 null models passed. `result` and `table` gain `null_v` and `adjusted` beside every native value
 column `v`, and `adjusted = value - null_value` is the quantity the metric reports, on its own

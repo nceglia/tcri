@@ -22,7 +22,7 @@ from .._state import keys as K
 from . import _permute
 from ._permute import KINDS
 
-__all__ = ["phenotype", "clonotype", "condition", "all"]
+__all__ = ["phenotype", "clonotype", "covariate", "all"]
 
 #: Fits per reference by default. A pooled interval from K nulls carries (K - 1) / K of the
 #: variance between them in expectation, so 5 carries 80% of it.
@@ -288,8 +288,8 @@ def phenotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_adde
 
     The reference for anything that scores how much a clone's phenotype composition departs from
     the repertoire's: clonotypic and phenotypic entropy, mutual information, gene importance.
-    Each cell keeps its clone, its condition and its counts, so ``ct_array`` is the parent's cell
-    for cell and only the labels move.
+    Each cell keeps its clone, its covariate level and its counts, so ``ct_array`` is the parent's
+    cell for cell and only the labels move.
     """
     return _null(model, adata, kind="phenotype", n_nulls=n_nulls, within=within, seed=seed,
                  key_added=key_added, **train_kwargs)
@@ -308,18 +308,18 @@ def clonotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_adde
                  key_added=key_added, **train_kwargs)
 
 
-def condition(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **train_kwargs):
-    """Refit the parent with the condition label shuffled within (clonotype, batch).
+def covariate(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **train_kwargs):
+    """Refit the parent with the covariate label shuffled within (clonotype, batch).
 
-    Each clone keeps its cells and its size; which condition a cell sits at is random. The
-    reference for anything that compares conditions -- phenotypic flux and the two deltas. It
-    takes no ``within``: its strata are what make it a condition null.
+    Each clone keeps its cells and its size; which covariate level a cell sits at is random. The
+    reference for anything that compares covariate levels -- phenotypic flux and the two deltas.
+    It takes no ``within``: its strata are what make it a covariate null.
     """
-    return _null(model, adata, kind="condition", n_nulls=n_nulls, seed=seed,
+    return _null(model, adata, kind="covariate", n_nulls=n_nulls, seed=seed,
                  key_added=key_added, **train_kwargs)
 
 
-for _f in (phenotype, clonotype, condition):
+for _f in (phenotype, clonotype, covariate):
     _f.__doc__ += _N_NULLS_DOC
 del _f
 
@@ -331,19 +331,19 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
     The common path: one call after ``train()`` and ``to_anndata()`` and the object carries every
     reference the metrics default to. Each kind is ``n_nulls`` fits, so the default of 5 over
     the three kinds is 15 fits, and a metric's per-draw ``table`` is ``n_nulls`` times longer
-    than with one null. ``condition`` is skipped, with a warning, when the covariate has one
-    level -- a condition null needs two conditions to permute between -- and never skipped
+    than with one null. ``covariate`` is skipped, with a warning, when the covariate has one
+    level -- a covariate null needs two levels to permute between -- and never skipped
     silently.
     """
     kinds = [kinds] if isinstance(kinds, str) else list(kinds)
     unknown = [k for k in kinds if k not in KINDS]
     if unknown:
         raise ValueError(f"kinds={kinds!r}: {unknown!r} is not one of {list(KINDS)}")
-    if within is not None and "condition" in kinds:
+    if within is not None and "covariate" in kinds:
         # Silently dropping it would make the recorded strata differ from the strata the caller
         # asked for, on the one null whose strata are not theirs to choose.
         raise ValueError(
-            "the condition null takes no `within`, so passing one to `all` while 'condition' is "
+            "the covariate null takes no `within`, so passing one to `all` while 'covariate' is "
             "in `kinds` would silently drop it. Either drop `within`, or call the kinds "
             "separately, or pass kinds=('phenotype', 'clonotype')."
         )
@@ -351,17 +351,17 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
     n_levels = len(adata.uns[K.COVARIATE_CATEGORIES])
     out = {}
     for kind in kinds:
-        if kind == "condition" and n_levels < 2:
+        if kind == "covariate" and n_levels < 2:
             warnings.warn(
-                f"skipping the condition null: the covariate has {n_levels} level(s) and a "
-                f"condition null permutes cells between conditions. The metrics that default "
+                f"skipping the covariate null: the covariate has {n_levels} level(s) and a "
+                f"covariate null permutes cells between its levels. The metrics that default "
                 f"to it (phenotypic_flux, the two deltas) are not defined here either.",
                 UserWarning, stacklevel=2,
             )
             continue
         out[kind] = _null(model, adata, kind=kind, n_nulls=n_nulls, seed=seed,
                           key_added=key_added,
-                          within=(within if kind != "condition" else None), **train_kwargs)
+                          within=(within if kind != "covariate" else None), **train_kwargs)
     return out
 
 

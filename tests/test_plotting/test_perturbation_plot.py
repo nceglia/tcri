@@ -113,7 +113,7 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     stats = res["stats"]
     assert set(stats["quantity"]) == {"adjusted"}
     stars = stats.set_index("gene")["stars"]
-    assert [t.get_text() for t in ax.texts] == [stars[g] or "ns" for g in genes]
+    assert [t.get_text() for t in ax.texts] == [stars[g] for g in genes if stars[g]]
 
     value_ax = tcri.pl.gene_importance(a, n_top=6, quantity="value")
     assert not value_ax.texts, "the adjusted importance's star was drawn over the value's marks"

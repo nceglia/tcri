@@ -13,11 +13,11 @@ The clone→phenotype table counted from that sample is one realization of the u
 distribution $P(c, \phi)$, and its variance is largest where the counts are smallest.
 
 Information-theoretic quantities — the entropies, the mutual information between clonotype and
-phenotype, and the divergence between a clone's phenotype distributions across conditions — are
+phenotype, and the divergence between a clone's phenotype distributions across covariate levels — are
 a natural description of the clonotype–phenotype relationship. TCRi computes them on an
 inferred joint rather than on the empirical table. Cells of the same clonotype, wherever and
 whenever they were sampled, share a clone-level phenotype profile and a common latent
-expression space, so a clone observed at different depths in different conditions is estimated
+expression space, so a clone observed at different depths at different covariate levels is estimated
 from all of its cells rather than from each sample independently.
 
 ### Advantages over the empirical distribution

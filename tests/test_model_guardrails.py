@@ -283,7 +283,7 @@ def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
 
 
 def _labeled(clone, phen):
-    """An unregistered AnnData with one cell per label pair, two conditions and one patient."""
+    """An unregistered AnnData with one cell per label pair, two covariate levels and one patient."""
     n = len(clone)
     X = np.random.default_rng(0).poisson(5.0, size=(n, 5)).astype("float32")
     ad = AnnData(

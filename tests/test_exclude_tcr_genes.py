@@ -136,7 +136,7 @@ def test_logs_one_line_naming_the_excluded_genes(caplog):
 
 def _labeled(genes):
     """An unregistered AnnData over ``genes`` with two clones, two phenotypes and two
-    conditions."""
+    covariate levels."""
     adata = _adata(genes)
     adata = AnnData(X=np.vstack([adata.X] * 3), var=adata.var)
     adata.obs = pd.DataFrame({"clone_id": ["c1", "c2"] * 6, "phenotype": ["A", "B"] * 6,
@@ -174,13 +174,13 @@ def test_setup_warns_on_segment_genes_and_not_after_exclusion():
 def test_loading_a_model_fitted_with_segment_genes_does_not_warn(tmp_path, how):
     """A load runs setup again with the saved registry. The model is fitted by then, so only the
     fresh setup warns, through either saver."""
-    adata = tcri.datasets.simulate_cohort(n_patients=2, conditions=("pre", "post"),
+    adata = tcri.datasets.simulate_cohort(n_patients=2, timepoints=("pre", "post"),
                                           n_cells_per_sample=60, seed=0)
     adata.var_names = ["TRBV20-1", "TRAJ42"] + list(adata.var_names[2:])
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
-                                phenotype_key="phenotype", covariate_key="condition",
+                                phenotype_key="phenotype", covariate_key="timepoint",
                                 batch_key="patient")
     assert len([w for w in record if "segment genes" in str(w.message)]) == 1
 

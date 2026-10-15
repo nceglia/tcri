@@ -41,9 +41,9 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     real however small, and it is kept whatever ``min_cells`` is.
 
     **Choosing min_cells.** Raising it keeps fewer clones, and each kept clone's estimates rest
-    on more cells. A clone seen through very few cells in a condition looks purer there than it
-    is, which pushes mutual information up most when phenotype is only weakly tied to clone.
-    Raise it when precision matters more than keeping clones.
+    on more cells. A clone seen through very few cells at a covariate level looks purer there
+    than it is, which pushes mutual information up most when phenotype is only weakly tied to
+    clone. Raise it when precision matters more than keeping clones.
 
     **When to pass samples.** Pass it when individuals were captured in more than one sample.
     Without it, each group counts as one sample, and the rule is ``min_cells`` alone.
@@ -68,7 +68,7 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
         integer.
     samples
         The column naming each cell's capture, its 10x sample or library, which need not be the
-        condition. ``None`` counts each group as one sample.
+        covariate level. ``None`` counts each group as one sample.
     key_added
         The column to write; ``f"{clonotype_key}_pooled"`` when ``None``. It must differ from
         ``clonotype_key``, ``groupby`` and ``samples``.

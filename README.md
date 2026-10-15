@@ -32,7 +32,7 @@ paired single-cell data. It fits a hierarchical Bayesian model (on top of
 [scvi-tools](https://scvi-tools.org) / [Pyro](https://pyro.ai)) that ties each clone's
 phenotype distribution to gene expression, then reads out **information-theoretic
 summaries** — clonotypic and phenotypic entropy, clone↔phenotype mutual information, and
-phenotypic flux across conditions — over the learned clone × phenotype joint distribution.
+phenotypic flux across covariate levels — over the learned clone × phenotype joint distribution.
 
 It is built on the [scverse](https://scverse.org) stack
 ([AnnData](https://anndata.readthedocs.io), [scanpy](https://scanpy.readthedocs.io),
@@ -45,7 +45,7 @@ gene-expression matrix.
   learns each clone's phenotype distribution while reconstructing counts with a ZINB
   decoder.
 - **Information-theoretic metrics** — clonotypic entropy `H(c|φ)`, phenotypic entropy
-  `H(φ|c)`, normalized mutual information `I(c;φ)`, and phenotypic flux between conditions,
+  `H(φ|c)`, normalized mutual information `I(c;φ)`, and phenotypic flux between covariate levels,
   all in bits over the posterior joint.
 - **Uncertainty-aware** — every metric can be reported as a posterior mean ± HDI by
   drawing from the fitted Dirichlet posterior (`n_samples > 0`).
@@ -89,7 +89,7 @@ tcri.ml.TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="condition",
+    covariate_key="timepoint",
     batch_key="patient",
     replicate="patient",
 )
@@ -114,7 +114,7 @@ tcri.pl.gene_importance(adata)
 ```
 
 No paired data yet? `tcri.datasets.simulate_cohort()` returns a synthetic AnnData with
-patients as replicates, an ordered `condition` axis within each, and a `disease_status` label
+patients as replicates, an ordered `timepoint` axis within each, and a `disease_status` label
 between them — the basis for the
 [tutorials](https://tcri.readthedocs.io/en/latest/tutorials/index.html).
 `tcri.datasets.simulate_tcri()` is the single-sample alternative, with a mutual information

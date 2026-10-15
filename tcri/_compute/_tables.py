@@ -273,8 +273,8 @@ def _refit_hint(adata, fit, groupby):
     strata = [] if raw is None else [str(c) for c in raw]
     if not strata:
         return f" This is fit {fit!r}."
-    if str(settings.get("kind")) == "condition":
-        return (f" This is fit {fit!r}, a condition null, whose strata are fixed at {strata} and "
+    if str(settings.get("kind")) == "covariate":
+        return (f" This is fit {fit!r}, a covariate null, whose strata are fixed at {strata} and "
                 f"are not yours to choose. Use a groupby no finer than they are.")
     extended = strata + ([str(groupby)] if str(groupby) not in strata else [])
     return (f" This is fit {fit!r}, permuted within {strata}, which is coarser than "
@@ -489,7 +489,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
     # the plotting layer so the marks cannot describe a different unit from the p-value.
     per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
-    contrasts = compare_groups(per_group, value=value, splitby=splitby)
+    contrasts = compare_groups(per_group, value=value, splitby=splitby, replicate=groupby)
     if contrasts is None or not len(contrasts):
         return None
     rows = []
@@ -505,7 +505,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
             row[f"ci_high_{suffix}"] = arm["ci_high"]
             row[f"n_{suffix}"] = arm["n_groups"]
         row["delta"] = float(c["delta"])
-        row["stat"] = float(c["U"])
+        row["stat"] = float(c["stat"])
         row["p"] = float(c["p"])
         row["stars"] = c["stars"]
         rows.append(row)
