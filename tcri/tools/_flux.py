@@ -73,8 +73,7 @@ def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clo
            default_null="condition")
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, exclude_pools=True, weighted=False,
-                    distance_metric="kl", random_state=None, device=None, null_model="auto",
-                    fit=None, key_added=None, inplace=True):
+                    distance_metric="kl", random_state=None, device=None, fit=None):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
     kl) — computed once, cached, returned.
 

@@ -79,8 +79,7 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
            default_null="phenotype", reference_arg="model", per_gene_stats=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
-                    random_state=None, null_model="auto", key_added=None,
-                    inplace=True) -> dict:
+                    random_state=None) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
     distribution moves when the gene is silenced. Computed once, cached, returned.
 

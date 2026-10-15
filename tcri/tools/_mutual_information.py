@@ -59,8 +59,7 @@ def _mi_from_joint(J: np.ndarray, *, normalized: bool = True, mode: str = "min",
 def mutual_information(
     adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
     temperature=1.0, clones=None, exclude_pools=True, weighted=False, normalized=True,
-    normalize_mode="min", random_state=None, device=None,
-    null_model="auto", fit=None, key_added=None, inplace=True,
+    normalize_mode="min", random_state=None, device=None, fit=None,
 ):
     """I(c;φ|covariate) in bits — computed once, cached, and returned.
 
