@@ -136,8 +136,6 @@ def joint_distribution(
     random_state=None,
     device=None,
     fit=None,
-    key_added=None,
-    inplace=True,
 ) -> dict:
     """Clone×phenotype distribution from the learned posterior of ``p_ct``.
 

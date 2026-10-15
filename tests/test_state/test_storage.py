@@ -10,6 +10,8 @@ params capture and the ``inplace``/``key_added`` handling are exercised too.
 """
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,7 +43,7 @@ def _store(adata, key, payload, version=1, **call_kwargs):
     """Store ``payload`` through the REAL decorator, not through ``_encode``."""
 
     @tl_result(key=key, version=version)
-    def _tool(adata, *, groupby=None, key_added=None, inplace=True):
+    def _tool(adata, *, groupby=None):
         return payload
 
     return _tool(adata, **call_kwargs)
@@ -74,7 +76,7 @@ def test_data_param_names_the_store_target_and_drops_the_objects_before_it(adata
         pass
 
     @tl_result(key="tcri_q", data_param="adata")
-    def _query(model, adata, *, genes=None, key_added=None, inplace=True):
+    def _query(model, adata, *, genes=None):
         return pd.DataFrame({"value": [1.0]})
 
     _query(_Model(), adata, genes=["a"])
@@ -84,13 +86,55 @@ def test_data_param_names_the_store_target_and_drops_the_objects_before_it(adata
         tl_result(key="tcri_q", data_param="nope")(_query)
 
 
+def test_the_decorator_publishes_the_parameters_it_owns():
+    """``key_added`` and ``inplace``, and ``null_model`` on a tool with a reference, belong to the
+    decorator: it publishes them after the wrapped function's own parameters and reads them
+    itself, so the body declares only what it computes with. A tool without a reference has no
+    ``null_model`` to accept."""
+
+    @tl_result(key="tcri_plain")
+    def _plain(adata, *, groupby=None):
+        return pd.DataFrame({"v": [1.0]})
+
+    @tl_result(key="tcri_scored", default_null="phenotype")
+    def _scored(adata, *, groupby=None, fit=None):
+        return pd.DataFrame({"v": [1.0]})
+
+    assert list(inspect.signature(_plain).parameters) == [
+        "adata", "groupby", "key_added", "inplace"]
+    assert list(inspect.signature(_scored).parameters) == [
+        "adata", "groupby", "fit", "null_model", "key_added", "inplace"]
+    with pytest.raises(TypeError, match="null_model"):
+        _plain(AnnData(X=np.zeros((1, 1), dtype="float32")), null_model=None)
+
+
+def _declares_null_model(adata, *, null_model="auto"):
+    return {}
+
+
+def _declares_key_added(adata, *, key_added=None):
+    return {}
+
+
+def _declares_inplace(adata, *, inplace=True):
+    return {}
+
+
+@pytest.mark.parametrize("body, owned", [(_declares_null_model, "null_model"),
+                                         (_declares_key_added, "key_added"),
+                                         (_declares_inplace, "inplace")])
+def test_a_body_that_declares_an_owned_parameter_is_refused(body, owned):
+    """The body would accept a value it never reads: the decorator reads it instead."""
+    with pytest.raises(TypeError, match=owned):
+        tl_result(key="tcri_owned", default_null="phenotype")(body)
+
+
 def test_params_capture_includes_untouched_defaults(adata):
     """Provenance that records only explicitly-passed arguments cannot answer "what was this
     run with" — which is the entire point of storing it."""
 
     @tl_result(key="tcri_y")
-    def _tool(adata, *, covariate="cov_0", n_samples=0, weighted=False,
-              key_added=None, inplace=True):
+    def _tool(adata, *, covariate="cov_0", n_samples=0, weighted=False):
         return pd.DataFrame({"v": [1.0]})
 
     _tool(adata, covariate="pre")
@@ -117,7 +161,7 @@ def test_with_resolved_params_records_the_effective_value(adata):
     column it actually used, not the placeholder the caller passed."""
 
     @tl_result(key="tcri_r")
-    def _tool(adata, *, groupby=None, key_added=None, inplace=True):
+    def _tool(adata, *, groupby=None):
         effective = groupby or "patient"
         return with_resolved_params({"table": pd.DataFrame({"v": [1.0]})}, groupby=effective)
 
@@ -199,7 +243,7 @@ def test_schema_check_names_the_missing_keys(adata):
         result: object
 
     @tl_result(key="tcri_s", schema=Needs)
-    def _tool(adata, *, key_added=None, inplace=True):
+    def _tool(adata):
         return {"table": pd.DataFrame({"v": [1.0]})}   # 'result' missing
 
     with pytest.raises(ValueError, match=r"missing required keys \['result'\]"):
@@ -251,7 +295,7 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     frame = pd.DataFrame({"a": np.arange(4.0), "b": np.arange(4.0)[::-1]}, index=idx)
 
     @tl_result(key="tcri_multi_probe", version=1)
-    def probe(adata, *, key_added=None, inplace=True):
+    def probe(adata):
         return {"table": frame}
 
     adata = ad.AnnData(X=np.zeros((2, 2), dtype="float32"))

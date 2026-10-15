@@ -12,7 +12,7 @@ __all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_pp
 
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", temperature=1.0,
-                           clones=None, exclude_pools=True, random_state=None, fit=None):
+                           clones=None, exclude_pools=True, fit=None):
     """Model vs empirical per-clone phenotype frequencies: a per-clone distance plus a
     per-covariate aggregate. adata-only.
 

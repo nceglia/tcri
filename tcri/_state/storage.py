@@ -9,15 +9,19 @@ Why this exists rather than each tool writing its own ``uns`` entry: the metric 
 stored once, and every ``pl.*`` reads that cache instead of recomputing, so a plot cannot
 disagree with the table the user holds.
 
-Usage — the wrapped function declares the full contract signature (including ``key_added`` /
-``inplace``, for signature conformance) and returns its *natural* result. The decorator owns
-storage; the body does not::
+Usage — the wrapped function declares the parameters it computes with and returns its
+*natural* result. The decorator owns storage and the reference, and the parameters that steer
+them: it adds ``key_added``, ``inplace`` and, for a tool with a reference, ``null_model`` to the
+published signature::
 
-    @tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation)
-    def mutual_information(adata, *, covariate, groupby=None, ...,
-                           key_added=None, inplace=True):
+    @tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation,
+               default_null="phenotype")
+    def mutual_information(adata, *, covariate, groupby=None, ..., fit=None):
         ...
         return {"table": table, "result": result}
+
+    # published: mutual_information(adata, *, covariate, groupby=None, ..., fit=None,
+    #                               null_model="auto", key_added=None, inplace=True)
 
 The decorator reads ``inplace`` / ``key_added`` from the call, optionally checks the result
 against a ``schema`` TypedDict, auto-captures the remaining arguments as ``params``, serializes
@@ -72,9 +76,9 @@ def _tcri_version() -> str:
 
 
 
-#: Never recorded as provenance. The data argument is excluded by POSITION (see ``tl_result``)
-#: rather than by name, so a tool is free to call its first parameter whatever fits.
-_RESERVED = {"key_added", "inplace"}
+#: The parameters ``tl_result`` adds to a wrapped tool's signature and reads itself. A wrapped
+#: function never declares them; ``null_model`` is added only for a tool with a reference.
+_OWNED = ("null_model", "key_added", "inplace")
 
 _DF = "__tcri_df__"
 _SERIES = "__tcri_series__"
@@ -270,18 +274,34 @@ def _check_schema(schema, result, fn_name: str) -> None:
         raise ValueError(f"{fn_name}: result missing required keys {sorted(missing)}")
 
 
+def _with_owned(sig: inspect.Signature, owned) -> inspect.Signature:
+    """``sig`` with the decorator's keyword-only parameters added after its own.
+
+    They go before a ``**kwargs``, which must stay last.
+    """
+    params = list(sig.parameters.values())
+    tail = [p for p in params if p.kind is inspect.Parameter.VAR_KEYWORD]
+    head = [p for p in params if p.kind is not inspect.Parameter.VAR_KEYWORD]
+    return sig.replace(parameters=[*head, *owned, *tail])
+
+
 def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
               values=("value",), denominators=(), default_null=None, reference_arg="fit",
               per_gene_stats=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return it.
 
-    ``functools.wraps`` keeps the wrapped signature, so the ``.pyi`` conformance check sees the
-    contract signature exactly — which is why every wrapped body must DECLARE ``key_added`` and
-    ``inplace`` even though it never reads them.
+    The decorator owns three parameters, :data:`_OWNED`: ``key_added`` and ``inplace`` on every
+    tool, and ``null_model`` on a tool with a ``default_null``. It declares them on its own
+    wrapper, reads them there, and publishes the wrapped function's signature followed by them,
+    so the ``.pyi`` conformance check sees the whole contract signature. The wrapped function
+    declares only the parameters it computes with; declaring an owned one raises ``TypeError``,
+    because the body would accept a value it never reads.
 
-    ``params`` captures every declared argument except :data:`_RESERVED`, **including defaults
-    the caller never passed**, via ``bind`` + ``apply_defaults``. That is the point: provenance
-    that only records explicit arguments cannot answer "what was this run with".
+    ``params`` captures every argument the wrapped function declares, **including defaults the
+    caller never passed**, via ``bind`` + ``apply_defaults``. That is the point: provenance that
+    only records explicit arguments cannot answer "what was this run with". ``key_added`` and
+    ``inplace`` say where the result goes rather than what it is, and are not recorded;
+    ``null_model`` is recorded as the reference it resolved to.
 
     ``data_param`` names the AnnData argument when it is not the first parameter. A tool that
     takes the fitted model first (``perturb.gene_importance(model, adata, ...)``) stores into
@@ -289,7 +309,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     not a setting, and is excluded from ``params`` with it. Otherwise the model itself would be
     recorded as provenance and the ``.h5ad`` write would fail on it.
 
-    **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
+    **The reference.** When the tool has a ``default_null``, the decorator runs it
     again on each fit of a permutation reference and adds the ``null``/``null_*``/``adjusted*``
     columns, per pair of draws on ``table`` and summarized on ``result``
     (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
@@ -309,8 +329,6 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     def deco(fn):
         sig = inspect.signature(fn)
         names = list(sig.parameters)
-        takes_null = "null_model" in names
-        takes_fit = "fit" in names
         if data_param is None:
             # the data argument, whatever it is called
             _data_param, leading = names[0], set()
@@ -319,9 +337,15 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 raise TypeError(f"{fn.__name__} has no parameter {data_param!r}")
             _data_param = data_param
             leading = set(names[: names.index(data_param)])
+        clash = [n for n in names if n in _OWNED]
+        if clash:
+            raise TypeError(
+                f"{fn.__name__} declares {clash}: tl_result adds these to the signature and "
+                f"reads them itself, so the wrapped function must not declare them")
+        takes_null = default_null is not None
+        takes_fit = "fit" in names
 
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        def run(args, kwargs, *, null_model, key_added, inplace):
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = bound.arguments
@@ -333,9 +357,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             # doing it here safe.
             if takes_fit and arguments.get("fit") is not None:
                 arguments["fit"] = _keys.resolve_fit(adata, arguments["fit"])
-                result = fn(**dict(arguments))
-            else:
-                result = fn(*args, **kwargs)
+            result = fn(*bound.args, **bound.kwargs)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
             # and never leaks into the returned object
@@ -351,7 +373,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             references = None
             if takes_null and isinstance(result, dict):
                 references = _reference.resolve_reference(
-                    adata, null_model=arguments.get("null_model"),
+                    adata, null_model=null_model,
                     fit=arguments.get("fit") if takes_fit else None,
                     default_null=default_null, metric=fn.__name__,
                 )
@@ -362,18 +384,19 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                             _reference.check_joinable(
                                 adata, r, against=arguments.get("fit") if takes_fit else None)
                     runs = [wrapper(**_reference_call(arguments, r,
-                                                      _reference.index_of(r, adata)))
+                                                      _reference.index_of(r, adata),
+                                                      inplace=inplace))
                             for r in references]
                     _reference.attach(result, runs, values=values, denominators=denominators)
                     _reference.restat(result, groupby=arguments.get("groupby"),
                                       splitby=arguments.get("splitby"), per_gene=per_gene_stats)
 
-            if arguments.get("inplace", True):
+            if inplace:
                 blob = _encode(result)
                 if not isinstance(blob, dict):
                     blob = {"value": blob}
                 params = {k: v for k, v in arguments.items()
-                          if k not in _RESERVED and k != _data_param and k not in leading}
+                          if k != _data_param and k not in leading}
                 if takes_null:
                     # the RESOLVED reference, never the caller's "auto" and never a model
                     # object: the params block goes into `uns` and has to be readable and
@@ -383,11 +406,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     params.update(resolved)
                 blob = {**blob, "params": _encode(params), "version": int(version),
                         "tool": key, "tcri_version": _tcri_version()}
-                dest = arguments.get("key_added") or key
+                dest = key_added or key
                 adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
 
-        def _reference_call(arguments, reference_of, index):
+        def _reference_call(arguments, reference_of, index, *, inplace):
             """The caller's own arguments, on one fit of the reference.
 
             The fit (or model) and `null_model` change, and the draws take their own seed,
@@ -401,8 +424,9 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             the reference's own frame is cached under its fit key: plottable by `key=`,
             available to the identity test, and not computed twice.
             """
-            call = {k: v for k, v in arguments.items() if k != "key_added"}
+            call = dict(arguments)
             call["null_model"] = None          # terminates the recursion
+            call["inplace"] = inplace
             if "random_state" in call:
                 call["random_state"] = _reference.null_seed(call["random_state"], index)
             if reference_arg == "fit":
@@ -425,6 +449,23 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 call[reference_arg] = reference_of
                 call["key_added"] = _keys.fit_key(key, fit_name)
             return call
+
+        # The parameters the decorator owns are declared HERE, on the wrapper, and read here;
+        # the published signature is the wrapped function's own followed by these. Their
+        # defaults therefore have one definition, and a tool without a reference has no
+        # `null_model` to accept.
+        if takes_null:
+            def wrapper(*args, null_model="auto", key_added=None, inplace=True, **kwargs):
+                return run(args, kwargs, null_model=null_model, key_added=key_added,
+                           inplace=inplace)
+        else:
+            def wrapper(*args, key_added=None, inplace=True, **kwargs):
+                return run(args, kwargs, null_model=None, key_added=key_added, inplace=inplace)
+
+        owned = [p for p in inspect.signature(wrapper).parameters.values()
+                 if p.kind is inspect.Parameter.KEYWORD_ONLY]
+        functools.update_wrapper(wrapper, fn)
+        wrapper.__signature__ = _with_owned(sig, owned)
 
         wrapper.tcri_default_null = default_null
         wrapper.tcri_values = tuple(values)

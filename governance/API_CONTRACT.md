@@ -1,10 +1,11 @@
 # API contract
 
 The public surface and every signature on it. The stub at the end of this file is parsed by
-`tests/test_contract_conformance.py`, which asserts two things: the set of public callables
-the package exposes equals the set the stub declares, in both directions, and every live
-signature matches its declaration (parameter names, kinds, and which carry defaults). Nothing
-else binds the interface. Adding a public function is a contract change by construction: the
+`tests/test_contract_conformance.py`, which asserts three things: the set of public callables
+the package exposes equals the set the stub declares, in both directions; every live
+signature matches its declaration (parameter names, kinds, and which carry defaults); and every
+declared parameter is read by the function that declares it. Nothing else binds the
+interface. Adding a public function is a contract change by construction: the
 test fails until it is declared here.
 
 Namespaces: `tcri.ml` (`TCRIModel`), `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.diag`,
@@ -277,7 +278,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
+        device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_entropy(
@@ -285,7 +286,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Any = ..., fit: Optional[str] = ...,
+        fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def mutual_information(
@@ -293,7 +294,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
+        device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def phenotypic_flux(
@@ -301,7 +302,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Any = ..., fit: Optional[str] = ...,
+        fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_clonotypic_entropy(
@@ -309,7 +310,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
-        device: Any = ..., null_model: Any = ..., fit: Optional[str] = ...,
+        device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
     def delta_phenotypic_entropy(
@@ -317,7 +318,7 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
-        null_model: Any = ..., fit: Optional[str] = ...,
+        fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> dict: ...
 
@@ -378,7 +379,7 @@ class diag:
     def joint_distribution_ppc(
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: str = ...,
         temperature: float = ..., clones: Any = ..., exclude_pools: bool = ...,
-        random_state: Any = ..., fit: Optional[str] = ...,
+        fit: Optional[str] = ...,
     ) -> pd.DataFrame: ...
     def phenotype_calibration(
         adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ...,
