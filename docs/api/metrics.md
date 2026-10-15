@@ -49,8 +49,8 @@ contrast lands in `stats` — you do not call a second function.
 | `mean_a`, `sd_a`, `n_a` | first level's mean over replicates, its spread, and how many |
 | `ci_low_a`, `ci_high_a` | between-replicate interval on that mean |
 | `mean_b`, `sd_b`, `n_b`, `ci_low_b`, `ci_high_b` | the same for the second level |
-| `delta` | `mean_a - mean_b` |
-| `stat`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker |
+| `delta` | `mean_b - mean_a` |
+| `stat`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker; blank when no test could be run |
 
 The interval columns are `ci_*` — **between** replicates. The `hdi_*` columns that appear in
 `result` are a different quantity, the **within**-group spread over posterior draws, and they

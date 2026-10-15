@@ -182,10 +182,11 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
     assert quantity == "adjusted"
     per_group = (result.groupby(["patient", "disease_status"], observed=True)[quantity]
                  .mean().reset_index())
-    direct = compare_groups(per_group, value=quantity, splitby="disease_status").iloc[0]
+    direct = compare_groups(per_group, value=quantity, splitby="disease_status",
+                            replicate="patient").iloc[0]
     assert row["p"] == pytest.approx(float(direct["p"]))
     assert row["delta"] == pytest.approx(float(direct["delta"]))
-    assert row["stat"] == pytest.approx(float(direct["U"]))
+    assert row["stat"] == pytest.approx(float(direct["stat"]))
 
 
 def test_stats_carries_the_between_replicate_spread(cohort):
@@ -250,7 +251,9 @@ def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_
 
 
 def test_compare_groups_unpaired():
-    """Mann–Whitney contrast on a tidy per-unit frame (R vs NR)."""
+    """Mann–Whitney contrast on a per-replicate frame (R vs NR), equal to scipy's."""
+    from scipy.stats import mannwhitneyu
+
     from tcri._stats import compare_groups
 
     df = pd.DataFrame({
@@ -258,33 +261,67 @@ def test_compare_groups_unpaired():
         "response": ["R"] * 4 + ["NR"] * 4,
         "MI": [0.8, 0.75, 0.82, 0.79, 0.4, 0.35, 0.45, 0.5],
     })
-    out = compare_groups(df, value="MI", splitby="response", reference="NR")
+    out = compare_groups(df, value="MI", splitby="response", replicate="patient")
     assert len(out) == 1
     row = out.iloc[0]
-    assert {row["group_a"], row["group_b"]} == {"R", "NR"}
-    assert row["mean_b"] > row["mean_a"] or row["mean_a"] > row["mean_b"]
-    assert "p" in out.columns and "stars" in out.columns and "delta" in out.columns
+    assert (row["group_a"], row["group_b"]) == ("NR", "R")
+    nr, r = df.loc[df.response == "NR", "MI"], df.loc[df.response == "R", "MI"]
+    U, p = mannwhitneyu(nr, r, alternative="two-sided")
+    assert row["stat"] == pytest.approx(U) and row["p"] == pytest.approx(p)
+    assert row["delta"] == pytest.approx(r.mean() - nr.mean())
+    assert (row["n_a"], row["n_b"]) == (4, 4)
 
 
-def test_compare_groups_paired_direction():
-    """Paired posterior-draw contrast emits p_gt + HDI via prob_direction.
+def test_compare_groups_signed_rank_on_paired_replicates():
+    """Paired: the signed-rank test on each replicate's difference, level b minus level a,
+    equal to scipy's; a zero difference leaves the test and ``n``."""
+    from scipy.stats import wilcoxon
 
-    The branch takes a frame whose cells are draw VECTORS, which no ``tl`` emits, so it is
-    exercised directly here rather than through a metric.
-    """
     from tcri._stats import compare_groups
 
-    rng = np.random.default_rng(0)
-    rows = []
-    for u in range(5):
-        rows.append({"unit": u, "arm": "A", "v": rng.normal(0.0, 0.1, size=200)})
-        rows.append({"unit": u, "arm": "B", "v": rng.normal(0.5, 0.1, size=200)})  # B > A
-    df = pd.DataFrame(rows)
-    out = compare_groups(df, value="v", splitby="arm", reference="A", paired=True,
-                         pair_on="unit")
-    assert len(out) == 1
-    assert out.iloc[0]["delta"] > 0 and out.iloc[0]["p_gt"] > 0.9  # B-A positive, high direction prob
-    assert "hdi_low" in out.columns
+    a = [0.10, 0.20, 0.15, 0.30, 0.25, 0.40]
+    b = [0.30, 0.45, 0.20, 0.55, 0.25, 0.70]          # p5's difference is exactly 0
+    df = pd.DataFrame({"patient": [f"p{i}" for i in range(6)] * 2,
+                       "timepoint": ["pre"] * 6 + ["post"] * 6, "v": a + b})
+    row = compare_groups(df, value="v", splitby="timepoint", replicate="patient",
+                         paired=True).iloc[0]
+    assert (row["group_a"], row["group_b"]) == ("post", "pre")
+    diffs = np.array(a) - np.array(b)                # pre - post: level b minus level a
+    W, p = wilcoxon(diffs[diffs != 0])
+    assert row["stat"] == pytest.approx(W) and row["p"] == pytest.approx(p)
+    assert (row["n_a"], row["n_b"]) == (5, 5), "the zero difference counted as a replicate"
+
+
+@pytest.mark.parametrize("b", [[0.10, 0.20], [0.30, 0.20]], ids=["no-change", "one-change"])
+def test_compare_groups_signed_rank_needs_two_differences(b):
+    """Fewer than two non-zero differences: the row is kept with NaN p and blank stars, and the
+    test is not run (scipy would return p = 1.0, or raise on a single zero)."""
+    from tcri._stats import compare_groups
+
+    df = pd.DataFrame({"patient": ["p0", "p1"] * 2, "timepoint": ["pre"] * 2 + ["post"] * 2,
+                       "v": [0.10, 0.20] + b})
+    row = compare_groups(df, value="v", splitby="timepoint", replicate="patient",
+                         paired=True).iloc[0]
+    assert np.isnan(row["p"]) and np.isnan(row["stat"]) and row["stars"] == ""
+
+
+def test_compare_groups_refuses_rows_that_are_not_replicates():
+    """Two rows for one replicate at one level are items or draws, not replicates: refused,
+    so a per-clone frame can never be tested as if each clone were a patient."""
+    from tcri._stats import compare_groups
+
+    df = pd.DataFrame({"patient": ["p0", "p0", "p1", "p2"],
+                       "response": ["R", "R", "NR", "NR"], "v": [0.1, 0.2, 0.3, 0.4]})
+    with pytest.raises(ValueError, match="replicate 'p0' has 2 rows"):
+        compare_groups(df, value="v", splitby="response", replicate="patient")
+
+
+def test_compare_groups_refuses_a_non_numeric_value():
+    from tcri._stats import compare_groups
+
+    df = pd.DataFrame({"patient": ["p0", "p1"], "response": ["R", "NR"], "v": ["a", "b"]})
+    with pytest.raises(ValueError, match="not numeric"):
+        compare_groups(df, value="v", splitby="response", replicate="patient")
 
 
 def test_build_result_survives_an_empty_table():

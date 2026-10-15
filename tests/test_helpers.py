@@ -78,6 +78,7 @@ def test_stars_thresholds():
     assert S.stars(5e-3) == "**"
     assert S.stars(0.04) == "*"
     assert S.stars(0.2) == "ns"
+    assert S.stars(float("nan")) == "", "an undefined p reads as a test that was run"
 
 
 def test_hdi_hugs_skew():
@@ -96,11 +97,6 @@ def test_hdi_hugs_skew():
 
     g = np.random.default_rng(0).normal(size=20000)
     assert np.allclose(S.hdi(g, prob=0.94), np.percentile(g, [3, 97]), atol=0.08)
-
-
-def test_prob_direction():
-    p_gt, p_lt = S.prob_direction([1, 1, -1, 1.0])
-    assert abs(p_gt - 0.75) < 1e-9 and abs(p_lt - 0.25) < 1e-9
 
 
 def test_distance_kernels():

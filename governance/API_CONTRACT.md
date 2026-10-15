@@ -95,7 +95,9 @@ Different estimands, both valid; the docstrings say which question each answers.
 (never by slicing the AnnData) and adds a group axis; clones are assumed disjoint across
 groups. `splitby` produces the contrast between split levels in the `stats` slot: a two-sided
 Mann–Whitney U on per-group values, uncorrected across contrasts, with the replicate unit
-being the group, so items are averaged to one value per group before the test.
+being the group, so items are averaged to one value per group before the test; the contrast
+refuses a frame holding more than one row per group and level. `delta` is the second level's mean
+minus the first's. A contrast whose p is undefined has blank `stars`.
 
 **Return shape.** Every `tl` returns `{table, result, stats}` and stores the same object under
 `uns[key_added or "tcri_<metric>"]` with a `params` block recording every argument, defaults
