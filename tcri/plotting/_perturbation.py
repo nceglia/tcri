@@ -67,7 +67,8 @@ def _star_labels(ax, stats, genes, *, groupby, quantity):
             UserWarning, stacklevel=3,
         )
         return
-    lut = {row["gene"]: (row.get("stars") or "ns") for _, row in stats.iterrows()}
+    # blank stars are a test that was not run (an undefined p): nothing is drawn for that gene
+    lut = {row["gene"]: row.get("stars") for _, row in stats.iterrows() if row.get("stars")}
     ymin, ymax = ax.get_ylim()
     y = ymax + 0.03 * ((ymax - ymin) or 1.0)
     drawn = 0

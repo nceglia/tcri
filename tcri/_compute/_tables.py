@@ -489,7 +489,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
     # the plotting layer so the marks cannot describe a different unit from the p-value.
     per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
-    contrasts = compare_groups(per_group, value=value, splitby=splitby)
+    contrasts = compare_groups(per_group, value=value, splitby=splitby, replicate=groupby)
     if contrasts is None or not len(contrasts):
         return None
     rows = []
@@ -505,7 +505,7 @@ def build_stats(result, *, groupby, splitby, value="value"):
             row[f"ci_high_{suffix}"] = arm["ci_high"]
             row[f"n_{suffix}"] = arm["n_groups"]
         row["delta"] = float(c["delta"])
-        row["stat"] = float(c["U"])
+        row["stat"] = float(c["stat"])
         row["p"] = float(c["p"])
         row["stars"] = c["stars"]
         rows.append(row)

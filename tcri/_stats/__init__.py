@@ -1,8 +1,8 @@
 """Statistics primitives and the between-group contrast — private, shared.
 
 ``_core`` holds the primitives and ``_compare`` builds the contrast out of them:
-``compare_groups`` is written entirely in terms of ``hdi``, ``mann_whitney``,
-``prob_direction`` and ``stars``, which is why the two live together here rather than under
+``compare_groups`` is written entirely in terms of ``mann_whitney``, ``signed_rank`` and
+``stars``, which is why the two live together here rather than under
 ``tools/``, where a contrast reads as a metric rather than as the machinery a metric reaches
 for.
 
@@ -16,7 +16,7 @@ performs. ``tests/test_removal_ledger.py`` pins that distinction.
 """
 from __future__ import annotations
 
-from ._core import hdi, mann_whitney, prob_direction, stars
+from ._core import hdi, mann_whitney, signed_rank, stars
 from ._compare import compare_groups
 
-__all__ = ["hdi", "mann_whitney", "prob_direction", "stars", "compare_groups"]
+__all__ = ["hdi", "mann_whitney", "signed_rank", "stars", "compare_groups"]

@@ -1,18 +1,24 @@
 """Shared statistics helpers.
 
-The significance helpers plus the posterior-summary primitives the metric layer needs
-(true HDI, signed-direction probability).
+The significance helpers plus the posterior-summary primitive the metric layer needs (a true
+HDI).
 
 ``hdi`` is the interval primitive the metric layer uses.
 """
 from __future__ import annotations
 
 import numpy as np
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, wilcoxon
 
 
 def stars(p: float) -> str:
-    """Significance stars for a p-value."""
+    """Significance stars for a p-value; blank for an undefined one.
+
+    A NaN p is a test that was not run, so it gets no marker at all rather than ``"ns"``, which
+    reads as a test that was run and found nothing.
+    """
+    if not np.isfinite(p):
+        return ""
     if p < 1e-4:
         return "****"
     if p < 1e-3:
@@ -24,12 +30,18 @@ def stars(p: float) -> str:
     return "ns"
 
 
-def mann_whitney(a, b, *, alternative: str = "two-sided"):
+def mann_whitney(a, b):
     """Mann–Whitney U + two-sided p (thin wrapper for a single import site)."""
-    return mannwhitneyu(np.asarray(a, float), np.asarray(b, float), alternative=alternative)
+    return mannwhitneyu(np.asarray(a, float), np.asarray(b, float), alternative="two-sided")
 
 
-# ── posterior-summary primitives (metric layer) ──────────────────────────────
+def signed_rank(differences):
+    """Wilcoxon signed-rank W + two-sided p on paired differences (thin wrapper for a single
+    import site). Zero differences are left out, scipy's default."""
+    return wilcoxon(np.asarray(differences, float), alternative="two-sided")
+
+
+# ── posterior-summary primitive (metric layer) ───────────────────────────────
 def hdi(samples, *, prob: float = 0.94):
     """True highest-density interval: the *narrowest* window holding ``prob`` mass.
 
@@ -47,10 +59,3 @@ def hdi(samples, *, prob: float = 0.94):
     widths = s[inc:] - s[:n - inc]          # width of every inc-spanning window
     i = int(np.argmin(widths))
     return (float(s[i]), float(s[i + inc]))
-
-
-def prob_direction(delta):
-    """Signed-contrast probabilities for a difference-draw vector."""
-    d = np.asarray(delta, float)
-    p_gt = float((d > 0).mean())
-    return p_gt, 1.0 - p_gt
