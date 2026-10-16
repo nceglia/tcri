@@ -153,12 +153,13 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
     stopped_early = bool(epochs_actual >= 0 and epochs_actual < epochs)
 
     t0 = time.time()
+    # no replicate is registered, so the whole object is one replicate and the summary one row
     est = tcri.tl.mutual_information(
         adata, null_model=None, covariate="cov_0", n_samples=n_samples, weighted=True,
-        normalize_mode=normalize_mode, device=device, random_state=seed,
-    )
+        normalize_mode=normalize_mode, device=device, random_state=seed, inplace=False,
+    )["replicate"]["summary"].iloc[0]
     t_metric = time.time() - t0
-    est_mean = float(est["mean"]) if isinstance(est, dict) else float(est)
+    est_mean = float(est["value"])
 
     key = "nmi_average" if normalize_mode == "average" else "nmi_min"
     true_v, emp_v = truth[f"true_{key}"], truth[f"empirical_{key}"]
@@ -172,7 +173,7 @@ def run_cell(fuzz, n_cells, k_infer, seed, *, device, n_samples, epochs,
         ae_vs_true=abs(est_mean - true_v), ae_vs_empirical=abs(est_mean - emp_v),
         t_train=t_train, t_metric=t_metric, t_total=time.time() - t_all,
     )
-    if isinstance(est, dict):
+    if n_samples and int(n_samples) > 0:
         row.update(hdi_low=est["hdi_low"], hdi_high=est["hdi_high"],
                    covers_empirical=bool(est["hdi_low"] <= emp_v <= est["hdi_high"]))
     if baseline:

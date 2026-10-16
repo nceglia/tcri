@@ -19,7 +19,9 @@ import pytest
 
 from tests._governance import GOVERNANCE, contract_namespace
 from tcri._compute._distance import phenotype_distance
-from tcri.tools._entropy import _clonotypic_one, _phenotypic_one
+from tcri._compute._tables import ZeroNormalizer
+from tcri.tools._entropy import (_clonotypic_one, _clonotypic_replicate, _phenotypic_one,
+                                 _phenotypic_replicate)
 from tcri.tools._mutual_information import _mi_from_joint
 
 MC = contract_namespace("METRICS_CONTRACT.md")
@@ -163,6 +165,110 @@ def test_pinned_values_on_the_reference_joint():
     p, q = J[0] / J[0].sum(), J[2] / J[2].sum()
     for metric, expected in g.items():
         assert float(phenotype_distance(metric)(p, q)) == pytest.approx(expected, **tol), metric
+
+
+def test_pinned_replicate_values_on_the_reference_joint():
+    """H(P|C) and H(C|P) of the contract's joint, as given and row-normalized (each clone's row
+    summing to one, the joint ``weighted=False`` builds), to 1e-9."""
+    J = np.array(GOLDEN["joint"], dtype=float)
+    cols = [f"p{j}" for j in range(J.shape[1])]
+    tol = dict(abs=1e-9)
+    for form, M in (("joint", J), ("row_normalized", J / J.sum(axis=1, keepdims=True))):
+        g = GOLDEN["replicate"][form]
+        assert _phenotypic_replicate(M, cols, normalized=False)["value"] == pytest.approx(
+            g["phenotypic_entropy"], **tol), form
+        assert _clonotypic_replicate(M, cols, normalized=False)["value"] == pytest.approx(
+            g["clonotypic_entropy"]["raw"], **tol), form
+        assert _clonotypic_replicate(M, cols, normalized=True)["value"] == pytest.approx(
+            g["clonotypic_entropy"]["normalized"], **tol), form
+
+
+# ── the replicate values ────────────────────────────────────────────────────
+
+def _random_joints(n=20, seed=11):
+    rng = np.random.default_rng(seed)
+    for _ in range(n):
+        n_c, n_p = int(rng.integers(2, 8)), int(rng.integers(2, 6))
+        yield rng.random((n_c, n_p)) + 0.05, [f"p{j}" for j in range(n_p)]
+
+
+def test_replicate_entropies_weight_the_item_values_by_the_joint():
+    """H(P|C) is each clone's H[P(φ|c)] weighted by P(c); H(C|P), in bits, is each phenotype's
+    H[P(c|φ)] weighted by P(φ). The weights are the joint's own shares."""
+    for J, cols in _random_joints():
+        ids = [f"c{i}" for i in range(J.shape[0])]
+        P = J / J.sum()
+        items = _phenotypic_one(ids, J, cols, normalized=False)
+        want = sum(P.sum(1)[i] * items[c] for i, c in enumerate(ids))
+        assert _phenotypic_replicate(J, cols, normalized=False)["value"] == pytest.approx(
+            want, abs=1e-12)
+        items = _clonotypic_one(J, cols, normalized=False)
+        want = sum(P.sum(0)[j] * items[ph] for j, ph in enumerate(cols))
+        assert _clonotypic_replicate(J, cols, normalized=False)["value"] == pytest.approx(
+            want, abs=1e-12)
+
+
+def test_replicate_entropies_decompose_mutual_information():
+    """I = H(P) − H(P|C) = H(C) − H(C|P), in bits."""
+    for J, cols in _random_joints():
+        P = J / J.sum()
+        p_c, p_ph = P.sum(1), P.sum(0)
+        H_c = -np.sum(p_c * np.log2(p_c))
+        H_p = -np.sum(p_ph * np.log2(p_ph))
+        mi = _mi_from_joint(J, normalized=False)
+        assert H_p - _phenotypic_replicate(J, cols, normalized=False)["value"] == pytest.approx(
+            mi, abs=1e-9)
+        assert H_c - _clonotypic_replicate(J, cols, normalized=False)["value"] == pytest.approx(
+            mi, abs=1e-9)
+
+
+def test_replicate_values_of_the_row_normalized_joint():
+    """With every clone's row summing to one, H(P|C) is the plain mean of the clones' values
+    and normalized H(C|P) is 1 − I / log₂C."""
+    for J, cols in _random_joints():
+        R = J / J.sum(axis=1, keepdims=True)
+        ids = [f"c{i}" for i in range(R.shape[0])]
+        items = _phenotypic_one(ids, R, cols, normalized=False)
+        assert _phenotypic_replicate(R, cols, normalized=False)["value"] == pytest.approx(
+            np.mean(list(items.values())), abs=1e-12)
+        mi = _mi_from_joint(R, normalized=False)
+        assert _clonotypic_replicate(R, cols, normalized=True)["value"] == pytest.approx(
+            1 - mi / np.log2(R.shape[0]), abs=1e-9)
+
+
+def test_a_zero_mass_clone_or_phenotype_has_no_weight_in_a_replicate_value():
+    """A clone or phenotype with no mass adds nothing to a replicate value and does not make it
+    NaN, where the item value of that clone or phenotype is NaN."""
+    J = np.array(GOLDEN["joint"], dtype=float)
+    cols = ["p0", "p1"]
+    padded = np.zeros((J.shape[0] + 1, J.shape[1] + 1))
+    padded[:-1, :-1] = J
+    wide = cols + ["empty"]
+    assert _phenotypic_replicate(padded, wide, normalized=False)["value"] == pytest.approx(
+        _phenotypic_replicate(J, cols, normalized=False)["value"], abs=1e-12)
+    for normalized in (False, True):
+        assert _clonotypic_replicate(padded, wide, normalized=normalized)["value"] == (
+            pytest.approx(_clonotypic_replicate(J, cols, normalized=normalized)["value"],
+                          abs=1e-12)), normalized
+    assert np.isnan(_clonotypic_one(padded, wide, normalized=False)["empty"])
+
+
+def test_an_empty_joint_is_a_nan_replicate_value():
+    for kernel in (_phenotypic_replicate, _clonotypic_replicate):
+        assert np.isnan(kernel(np.zeros((2, 2)), ["a", "b"], normalized=True)["value"])
+
+
+def test_a_normalizer_of_zero_raises():
+    """A normalized replicate value with a normalizer of 0 raises: one clone for clonotypic
+    entropy, one phenotype for phenotypic entropy. The values in bits are defined."""
+    one_clone = np.array([[3.0, 1.0], [0.0, 0.0]])
+    with pytest.raises(ZeroNormalizer, match="1 clone"):
+        _clonotypic_replicate(one_clone, ["a", "b"], normalized=True)
+    assert _clonotypic_replicate(one_clone, ["a", "b"], normalized=False)["value"] == 0.0
+    one_phenotype = np.array([[3.0], [1.0]])
+    with pytest.raises(ZeroNormalizer, match="1 phenotype"):
+        _phenotypic_replicate(one_phenotype, ["a"], normalized=True)
+    assert _phenotypic_replicate(one_phenotype, ["a"], normalized=False)["value"] == 0.0
 
 
 # ── the contract's equations, recomputed from a reference ──────────────────

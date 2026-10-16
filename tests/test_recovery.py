@@ -33,6 +33,7 @@ import pyro
 import pytest
 
 import tcri
+from .conftest import frames
 from tcri.tools._mutual_information import _mi_from_joint
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 
@@ -238,9 +239,8 @@ def test_model_mi_tracks_the_true_mi_across_difficulty():
         # `null_model=None` throughout this file: it scores the fitted MI against a
         # closed-form oracle across a difficulty sweep, so the quantity compared has to be the
         # metric itself and not a difference.
-        est = tcri.tl.mutual_information(
-            adata, null_model=None, covariate="cov_0", weighted=True, normalize_mode="average",
-        )["result"]
+        est = frames(tcri.tl.mutual_information(
+            adata, null_model=None, covariate="cov_0", weighted=True, normalize_mode="average", inplace=False))[1]
         got.append((_truth(adata)["true_nmi_average"], float(est["value"].iloc[0])))
 
     truths = [g[0] for g in got]
@@ -289,10 +289,9 @@ def test_posterior_interval_is_well_formed_and_tracks_the_plug_in():
                         enable_progress_bar=False, enable_model_summary=False)
             model.to_anndata(adata)
 
-        summary = tcri.tl.mutual_information(
+        summary = frames(tcri.tl.mutual_information(
             adata, null_model=None, covariate="cov_0", n_samples=100, weighted=True,
-            normalize_mode="average", random_state=seed,
-        )["result"].iloc[0]
+            normalize_mode="average", random_state=seed, inplace=False))[1].iloc[0]
         lo, hi, mean = summary["hdi_low"], summary["hdi_high"], summary["value"]
 
         assert np.isfinite([lo, hi, mean]).all(), f"non-finite summary: {dict(summary)}"

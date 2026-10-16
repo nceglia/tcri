@@ -6,9 +6,9 @@ from ._base import render_metric
 __all__ = ["mutual_information"]
 
 
-def mutual_information(adata, *, quantity="auto", key=None, order=None, hue_order=None,
-                       palette=None, legend=True, ax=None, figsize=(8, 4), save=None,
-                       show=None, return_df=False):
+def mutual_information(adata, *, view="replicate", quantity="auto", key=None, order=None,
+                       hue_order=None, palette=None, legend=True, ax=None, figsize=(8, 4),
+                       save=None, show=None, return_df=False):
     """Clone-phenotype mutual information (bits, normalized), from the cached
     ``tl.mutual_information``.
 
@@ -19,6 +19,8 @@ def mutual_information(adata, *, quantity="auto", key=None, order=None, hue_orde
     ----------
     adata
         The object ``tl.mutual_information`` stored its result in.
+    view
+        ``"replicate"``, the only level mutual information has; ``"item"`` raises.
     quantity
         ``"auto"`` draws the adjusted value when the result carries a reference and the value
         otherwise; ``"adjusted"`` or ``"value"`` asks for one by name.
@@ -41,14 +43,14 @@ def mutual_information(adata, *, quantity="auto", key=None, order=None, hue_orde
     show
         Show the figure.
     return_df
-        Return the cached ``result`` frame instead of drawing.
+        Return the replicate summary instead of drawing.
 
     Returns
     -------
     matplotlib.axes.Axes or pandas.DataFrame
-        The axes drawn on, or the cached ``result`` with ``return_df=True``.
+        The axes drawn on, or the replicate summary with ``return_df=True``.
     """
     return render_metric(adata, "mutual_information", ylabel="mutual information (bits)",
-                         quantity=quantity, key=key, order=order, hue_order=hue_order,
+                         view=view, quantity=quantity, key=key, order=order, hue_order=hue_order,
                          palette=palette, legend=legend, ax=ax, figsize=figsize, save=save,
                          show=show, return_df=return_df)

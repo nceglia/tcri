@@ -254,7 +254,7 @@ def _readout(model, adata):
         model.to_anndata(ad)
     for level in ad.obs["timepoint"].cat.categories:
         res = tcri.tl.mutual_information(ad, covariate=level, null_model=None, inplace=False)
-        out[f"mi_{level}"] = np.asarray(res["result"]["value"], dtype=float)
+        out[f"mi_{level}"] = np.asarray(res["replicate"]["summary"]["value"], dtype=float)
     return out
 
 
@@ -457,7 +457,7 @@ def test_a_session_records_and_restores_the_registered_replicate(synthetic_adata
     with contextlib.redirect_stdout(io.StringIO()):
         loaded_model.to_anndata(loaded)
     after = tcri.tl.mutual_information(loaded, covariate=level, null_model=None, inplace=False)
-    assert after["result"]["patient"].tolist() == before["result"]["patient"].tolist()
+    assert after["replicate"]["summary"]["patient"].tolist() == before["replicate"]["summary"]["patient"].tolist()
 
 
 def test_a_session_without_a_recorded_replicate_loads_without_one(synthetic_adata, tmp_path):

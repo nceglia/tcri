@@ -16,6 +16,7 @@ import pytest
 from anndata import AnnData
 
 import tcri
+from .conftest import frames
 from tcri._compute._repertoire import _record_derivation
 from tcri._state import keys as K
 
@@ -169,8 +170,8 @@ def _entropy_denominators(adata, level, *, groupby, group_column):
     shows no count and is skipped.
     """
     arguments = dict(covariate=level, groupby=groupby, inplace=False)
-    raw = tcri.tl.clonotypic_entropy(adata, normalized=False, **arguments)["result"]
-    scaled = tcri.tl.clonotypic_entropy(adata, **arguments)["result"]
+    raw = frames(tcri.tl.clonotypic_entropy(adata, normalized=False, **arguments))[1]
+    scaled = frames(tcri.tl.clonotypic_entropy(adata, **arguments))[1]
     both = raw.merge(scaled, on=[group_column, "phenotype"], suffixes=("_raw", "_scaled"))
     both = both[both["value_scaled"] > 0]
     counts = np.rint(2.0 ** (both["value_raw"] / both["value_scaled"])).astype(int)
@@ -210,8 +211,8 @@ def test_repertoire_summary_n_clones_is_the_entropy_denominator(cohort):
         assert max(resolved.values()) <= bound
         assert bound == sum(n_clones.values())
 
-        pinned = tcri.tl.clonotypic_entropy(adata, covariate=level, n_clones_ref=largest,
-                                            inplace=False)["result"]
+        pinned = frames(tcri.tl.clonotypic_entropy(adata, covariate=level, n_clones_ref=largest,
+                                            inplace=False))[1]
         assert (pinned["value"] <= 1).all()
 
 

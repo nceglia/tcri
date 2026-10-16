@@ -7,8 +7,8 @@ test a renamed or dropped column passes the suite while making every result stor
 version unreadable.
 
 This test runs each tool twice on the ``cohort`` fixture — once with only its required arguments,
-once with grouping, splitting and draws — records the slots, their column names and index levels,
-and compares that against ``tests/snapshots/tl_schemas.json``. Changing the fields fails until the
+once with grouping, splitting and draws — records the slots (a level's frames as
+``<level>.<frame>``), their column names and index levels, and compares that against ``tests/snapshots/tl_schemas.json``. Changing the fields fails until the
 version is bumped and the snapshot updated::
 
     pytest tests/test_result_schemas.py --update-schema-snapshot
@@ -69,6 +69,16 @@ def _run(name, kwargs, model, adata):
     return getattr(tcri.tl, name)(adata, inplace=False, **kwargs)
 
 
+def _slots(result):
+    """``slot -> value``, a level's frames named ``<level>.<frame>``."""
+    for slot, value in result.items():
+        if isinstance(value, dict):
+            for frame, inner in value.items():
+                yield f"{slot}.{frame}", inner
+        else:
+            yield slot, value
+
+
 def _observe(result, placeholders):
     """The slots of a result: type, column names and index levels, fixture names masked."""
     def names(labels):
@@ -80,7 +90,7 @@ def _observe(result, placeholders):
             "columns": names(value.columns) if isinstance(value, pd.DataFrame) else [],
             "index": [str(level) for level in value.index.names] if isinstance(value, pd.DataFrame) else [],
         }
-        for slot, value in result.items()
+        for slot, value in _slots(result)
     }
 
 

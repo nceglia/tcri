@@ -57,6 +57,12 @@ REMOVED = {
     "ml": ["plot_loss", "plot_archetypes"],
     # the covariate's null is tcri.null.covariate
     "null": ["condition"],
+    # the stored frames are read with tcri.get.result, items, stats and draws
+    "get": [
+        "table", "joint_distribution", "mutual_information", "clonotypic_entropy",
+        "phenotypic_entropy", "phenotypic_flux", "delta_clonotypic_entropy",
+        "delta_phenotypic_entropy", "gene_importance",
+    ],
 }
 
 #: Module-level names that must NOT be on the top-level package. They are module machinery, not
@@ -138,14 +144,15 @@ def test_removed_columns_stay_removed(cohort):
     """No slot of any stored result carries a removed column, at the widest call each tool has.
 
     The maximal calls of the schema snapshot are reused so the check covers every column a
-    reference adds: ``groupby``, ``splitby``, draws, and the metric's default null.
+    reference adds: ``groupby``, ``splitby``, draws, and the metric's default null. A level's
+    frames are walked as ``<level>.<frame>``.
     """
-    from tests.test_result_schemas import _calls, _run
+    from tests.test_result_schemas import _calls, _run, _slots
 
     model, adata = cohort
     for name, (_minimal, maximal) in _calls(adata).items():
         payload = _run(name, maximal, model, adata)
-        for slot, frame in payload.items():
+        for slot, frame in _slots(payload):
             if not isinstance(frame, pd.DataFrame):
                 continue
             bad = [c for c in frame.columns

@@ -150,15 +150,22 @@ def _colors_for(adata, key, levels, palette):
     return resolve_colors(adata, key or "tcri_level", levels, palette=palette, persist=persist)
 
 
-def filter_quantity(stats, quantity):
-    """The rows of ``stats`` for one quantity, or ``stats`` unchanged when it carries none.
+def filter_quantity(stats, quantity, *, comparison="split"):
+    """The rows of ``stats`` for one comparison and quantity; a frame without a ``comparison``
+    or ``quantity`` column is not filtered on it.
 
-    A ``stats`` frame holds one row per contrast and names the column it contrasted in
-    ``quantity``. The star a panel draws has to be about the quantity on its axis, so the rows
-    are selected by that name here: a value panel of a result whose contrast is on the adjusted
-    value gets no rows, and no star, rather than a star about a different column.
+    A ``stats`` frame holds one row per contrast, says in ``comparison`` what it compares, and
+    names the column it contrasted in ``quantity``. The star a panel draws has to be about the
+    comparison and the quantity on its axis, so the rows are selected by both here: a value
+    panel of a result whose contrast is on the adjusted value gets no rows, and no star, rather
+    than a star about a different column; and comparison and split levels that share a label
+    cannot match each other's rows.
     """
-    if stats is None or not len(stats) or "quantity" not in stats.columns:
+    if stats is None or not len(stats):
+        return stats
+    if "comparison" in stats.columns:
+        stats = stats.loc[stats["comparison"] == comparison]
+    if "quantity" not in stats.columns:
         return stats
     return stats.loc[stats["quantity"] == quantity]
 
@@ -485,8 +492,13 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
 def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=False, key=None,
                   order=None, hue_order=None, palette=None, legend=True, ax=None,
                   figsize=(8, 4), save=None, show=None, return_df=False, annotate=True,
-                  rotation=90, decorate=None):
+                  rotation=90, decorate=None, view="replicate"):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
+
+    ``view`` picks the level of a result stored by level: ``"replicate"`` draws the replicate
+    summary, one value per replicate, and stars the tests; ``"item"`` draws the item summary,
+    one value per replicate and item. A metric with no items raises for ``"item"``. A result
+    stored as ``{table, result, stats}`` is drawn from ``result``.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
     items are a handful of phenotypes, wrong for phenotypic entropy, whose items are every
@@ -506,10 +518,22 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
     from .._compute._tables import collapse_to_replicates
 
     check_quantity(quantity)
+    if view not in ("replicate", "item"):
+        raise ValueError(f"view must be 'replicate' or 'item', got {view!r}")
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)
-    result = payload["result"]
-    table = payload.get("table")
+    if "replicate" in payload:
+        if view == "item":
+            level = payload.get("item")
+            if level is None:
+                raise ValueError(
+                    f"{name} has no item view: it has one value per replicate and no items.")
+        else:
+            level = payload["replicate"]
+            item_col, item_as_x = None, False
+        result, table = level["summary"], level["draws"]
+    else:
+        result, table = payload["result"], payload.get("table")
     stats = payload.get("stats")
     if return_df:
         return result
@@ -545,6 +569,9 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
     single = False
     if item_as_x and item_col in d.columns:
         x, hue = item_col, (splitby if (splitby and splitby in d.columns) else None)
+    elif view == "item" and has_groups:
+        # one point per item within each replicate: the replicates are on x
+        x, hue = groupby, (splitby if (splitby and splitby in d.columns) else None)
     elif splitby is not None and splitby in d.columns:
         x, hue = splitby, None
     elif has_groups:

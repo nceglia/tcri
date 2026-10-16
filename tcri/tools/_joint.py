@@ -199,10 +199,11 @@ def joint_distribution(
 
     Returns
     -------
-    pandas.DataFrame
-        Columns = phenotype categories. Index = clonotype (``+ sample_id`` for
-        ``n_samples>0``, ``+ covariate`` leading level for ``covariate=None``).
-        Provenance in ``df.attrs["params"]``.
+    dict or None
+        ``None``; with ``inplace=False`` nothing is stored and ``{table, result}`` is returned,
+        read otherwise with ``tcri.get.result``. Each is a frame with the phenotype categories
+        as columns. Index = clonotype (``+ sample_id`` for ``n_samples>0``, ``+ covariate``
+        leading level for ``covariate=None``); ``result`` is the mean over draws.
     """
     blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
         adata,

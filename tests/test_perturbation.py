@@ -26,6 +26,7 @@ import torch
 from scipy.stats import mannwhitneyu
 
 import tcri
+from .conftest import frames
 from tcri._state import keys as K
 
 
@@ -286,7 +287,8 @@ def test_no_replicate_registered_gives_one_group(cohort):
     cell: one row per gene, no group column, ``groupby`` recorded as ``None``."""
     model, adata = cohort
     adata = _without_replicate(adata)
-    res = tcri.perturb.gene_importance(model, adata, genes=[0, 1, 2])
+    tcri.perturb.gene_importance(model, adata, genes=[0, 1, 2])
+    res = tcri.get.result(adata, "gene_importance")
     assert list(res["result"]["gene"]) == [adata.var_names[i] for i in (0, 1, 2)]
     assert "patient" not in res["result"].columns
     assert tcri.get.params(adata, "gene_importance")["groupby"] is None
@@ -312,12 +314,12 @@ def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
     provenance records the settings and never the model."""
     model, adata = cohort
     adata = adata.copy()
-    res = tcri.perturb.gene_importance(model, adata, genes=[0, 1], n_samples=3,
-                                       random_state=0, splitby="disease_status")
+    kw = dict(genes=[0, 1], n_samples=3, random_state=0, splitby="disease_status")
+    assert tcri.perturb.gene_importance(model, adata, **kw) is None
+    res = tcri.perturb.gene_importance(model, adata.copy(), **kw, inplace=False)
     back = tcri.get.result(adata, "gene_importance")
     for slot in ("table", "result", "stats", "shift"):
         pd.testing.assert_frame_equal(back[slot], res[slot])
-    pd.testing.assert_frame_equal(tcri.get.gene_importance(adata, which="shift"), res["shift"])
 
     params = tcri.get.params(adata, "gene_importance")
     assert "model" not in params and "adata" not in params
@@ -330,8 +332,8 @@ def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
     pd.testing.assert_frame_equal(reread["result"], res["result"])
 
     tcri.perturb.gene_importance(model, adata, genes=[0], key_added="gi_one")
-    assert "gi_one" in adata.uns and len(tcri.get.result(adata, "gene_importance",
-                                                         key="gi_one")["result"]) == 6
+    assert "gi_one" in adata.uns and len(frames(tcri.get.result(adata, "gene_importance",
+                                                         key="gi_one"))[1]) == 6
     before = set(adata.uns)
     tcri.perturb.gene_importance(model, adata, genes=[0], inplace=False, key_added="never")
     assert "never" not in adata.uns and set(adata.uns) == before

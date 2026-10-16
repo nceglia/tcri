@@ -53,9 +53,9 @@ def _store(adata, key, payload, version=1, **call_kwargs):
 
 def test_dataframe_result_keeps_payload_and_params_separate(adata):
     df = pd.DataFrame({"MI": [0.1, 0.2]}, index=pd.Index(["P0", "P1"], name="patient"))
-    returned = _store(adata, "tcri_x", df, version=7, groupby="patient")
+    assert _store(adata, "tcri_x", df, version=7, groupby="patient") is None
+    pd.testing.assert_frame_equal(_store(adata, "tcri_x", df, inplace=False), df)
 
-    pd.testing.assert_frame_equal(returned, df)
     got = load_result(adata, "tcri_x")
     pd.testing.assert_frame_equal(got, df)
     assert got.index.name == "patient"
@@ -165,9 +165,12 @@ def test_with_resolved_params_records_the_effective_value(adata):
         effective = groupby or "patient"
         return with_resolved_params({"table": pd.DataFrame({"v": [1.0]})}, groupby=effective)
 
-    result = _tool(adata)
-    assert "__tcri_resolved_params__" not in result, "the tag leaked into the returned object"
+    assert _tool(adata) is None
     assert load_result_params(adata, "tcri_r")["groupby"] == "patient"
+    assert "__tcri_resolved_params__" not in load_result(adata, "tcri_r"), (
+        "the tag leaked into the stored result")
+    result = _tool(adata, inplace=False)
+    assert "__tcri_resolved_params__" not in result, "the tag leaked into the returned object"
 
 
 # ── h5ad safety ──────────────────────────────────────────────────────────────
@@ -323,7 +326,7 @@ def test_the_blob_records_the_tool_and_the_tcri_version(adata):
 
 
 def test_get_result_strips_the_provenance():
-    """`tcri.get.result` returns what the tool returned, provenance removed."""
+    """`tcri.get.result` returns the stored result, provenance removed."""
     adata = AnnData(X=np.zeros((2, 2), dtype="float32"))
     _store(adata, "tcri_x", {"table": pd.DataFrame({"v": [1.0]})})
 

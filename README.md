@@ -102,11 +102,13 @@ model.to_anndata(adata)
 # 3. fit the permutation references, once: every metric is read against one
 tcri.null.all(model, adata)
 
-# 4. read out information-theoretic metrics (bits), each with its own floor
+# 4. compute information-theoretic metrics (bits), each with its own floor; each call stores
+#    its result in adata.uns and tcri.get reads it back
 #    -> value, null_value, adjusted = value - null_value
-mi = tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
-ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
-flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
+tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
+tcri.tl.clonotypic_entropy(adata, covariate="pre")
+tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
+mi = tcri.get.replicates(adata, "mutual_information")   # one row per patient
 
 # 5. ask the fitted model which genes the phenotype calls rest on
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")

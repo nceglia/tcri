@@ -63,7 +63,7 @@ def _star_labels(ax, stats, genes, *, groupby, quantity):
             f"not starring the ranking: `splitby` has more than two levels, so each gene "
             f"carries {stats.groupby('gene', observed=True).size().max()} contrasts and this "
             f"panel has one position per gene. Read them from "
-            f"`tcri.get.gene_importance(adata, which='stats')`, or plot two levels at a time.",
+            f"`tcri.get.stats(adata, 'gene_importance')`, or plot two levels at a time.",
             UserWarning, stacklevel=3,
         )
         return

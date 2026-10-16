@@ -8,6 +8,7 @@ relies on clones being disjoint across groups (a TCR clone never spans two patie
 """
 from __future__ import annotations
 
+import itertools
 import warnings
 
 import numpy as np
@@ -406,9 +407,15 @@ def build_result(table, *, value="value", extra_values=()):
 
     def _extra(chunk):
         # the endpoints of a delta: their posterior means, carried so the paired view is
-        # renderable from the delta result alone and therefore matched by construction
-        return {c: float(np.nanmean(chunk[c].to_numpy(dtype=float))) if len(chunk) else np.nan
-                for c in extra_values}
+        # renderable from the delta result alone and therefore matched by construction. A column
+        # with no number in it (a replicate with no joint) has a NaN mean, an expected outcome
+        # rather than a numpy warning.
+        out = {}
+        for c in extra_values:
+            v = chunk[c].to_numpy(dtype=float)
+            v = v[~np.isnan(v)]
+            out[c] = float(v.mean()) if v.size else np.nan
+        return out
 
     if not keys:
         agg = summarize(table[value].to_numpy())
@@ -478,6 +485,11 @@ def build_stats(result, *, groupby, splitby, value="value"):
     has one implementation of "Mann-Whitney two levels and star the p". This function owns the
     part that is specific to a metric result: collapsing items to groups first, and attaching
     the between-replicate spread of each arm.
+
+    Every pair of split levels that has a replicate row gets its row, whatever the values: an
+    arm with no finite value has ``n`` 0 and the row has NaN statistics and blank stars, so the
+    rows are fixed by the replicates and their splits. ``comparison`` is ``"split"`` on these
+    rows.
     """
     if splitby is None or groupby is None or result is None or not len(result):
         return None
@@ -490,12 +502,11 @@ def build_stats(result, *, groupby, splitby, value="value"):
     per_group = collapse_to_replicates(result, groupby=groupby, splitby=splitby, value=value)
 
     contrasts = compare_groups(per_group, value=value, splitby=splitby, replicate=groupby)
-    if contrasts is None or not len(contrasts):
-        return None
+    tested = {(c["group_a"], c["group_b"]): c for _, c in contrasts.iterrows()}
+    levels = sorted(per_group[splitby].dropna().unique().tolist(), key=str)
     rows = []
-    for _, c in contrasts.iterrows():
-        a, b = c["group_a"], c["group_b"]
-        row = {splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
+    for a, b in itertools.combinations(levels, 2):
+        row = {"comparison": "split", splitby: f"{a} vs {b}", "level_a": a, "level_b": b,
                "replicate_unit": groupby, "quantity": value}
         for suffix, level in (("a", a), ("b", b)):
             arm = across_groups(per_group.loc[per_group[splitby] == level, value])
@@ -504,58 +515,42 @@ def build_stats(result, *, groupby, splitby, value="value"):
             row[f"ci_low_{suffix}"] = arm["ci_low"]
             row[f"ci_high_{suffix}"] = arm["ci_high"]
             row[f"n_{suffix}"] = arm["n_groups"]
-        row["delta"] = float(c["delta"])
-        row["stat"] = float(c["stat"])
-        row["p"] = float(c["p"])
-        row["stars"] = c["stars"]
+        c = tested.get((a, b))
+        if c is None:
+            # an arm with no finite value: compare_groups has no row for it
+            row.update(delta=row["mean_b"] - row["mean_a"], stat=np.nan, p=np.nan, stars="")
+        else:
+            row.update(delta=float(c["delta"]), stat=float(c["stat"]), p=float(c["p"]),
+                       stars=c["stars"])
         rows.append(row)
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows) if rows else None
 
 
-def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
-                 compute, extra_labels=None, fit=None):
-    """Build the long ``table`` every metric shares: one row per (covariate, group, item, draw).
+class ZeroNormalizer(ValueError):
+    """A replicate kernel's normalizer is 0, so its normalized value is undefined.
 
-    ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
-    ``{item: value}`` mapping; without one (mutual_information) it is a scalar.
+    Raised inside ``compute``, where the replicate is not known; :func:`metric_frames` re-raises
+    it as a ``ValueError`` naming the replicate and the covariate level.
+    """
 
-    The group loop lives here rather than in each metric so the four metrics cannot diverge on
-    what ``groupby`` means. The clones counted come from :func:`_resolve_clones`. Clone
-    restriction is intersected with the group's clones, never shadowed: ``groupby=...``
-    together with ``clones=[...]`` keeps only the clones in both, in the order of ``clones``.
-    Without ``clones``, leaving out the pools keeps each group's clones in the group's own
-    order.
+
+def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_empty):
+    """Yield ``(label_row, clones)`` for every group: its labels and the clones it counts.
+
+    The group loop lives here so every metric means the same thing by ``groupby``. The clones
+    counted come from :func:`_resolve_clones`. Clone restriction is intersected with the group's
+    clones, never shadowed: ``groupby=...`` together with ``clones=[...]`` keeps only the clones
+    in both, in the order of ``clones``. Without ``clones``, leaving out the pools keeps each
+    group's clones in the group's own order. With no ``groupby`` the whole object is one group,
+    with no group label. ``skip_empty`` leaves out a group that counts no clone; otherwise it is
+    yielded with an empty list.
     """
     obs = adata.obs
     clone_labels = fit_clone_labels(adata, fit)
     counted = _resolve_clones(adata, clones, exclude_pools)
-    # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
-    # `covariate=None` through would add an all-NaN column to every row of its result
-    base = {"covariate": covariate} if covariate is not None else {}
-    if extra_labels:
-        base.update({k: v for k, v in extra_labels.items() if v is not None})
-
-    def _emit(rows, label_row, per_draw):
-        for draw, payload in enumerate(per_draw):
-            if item_col is None:
-                # a draw's payload is a scalar, or a mapping of value columns when the metric
-                # carries more than one. Mutual information is the only metric with no item
-                # axis, so it is the only one that reaches this branch with a mapping; both
-                # branches unpack a payload the same way.
-                rows.append({**label_row, "draw": draw,
-                             **(payload if isinstance(payload, dict) else {"value": payload})})
-            else:
-                for item, value in payload.items():
-                    row = {**label_row, item_col: item, "draw": draw}
-                    # an item's payload is a scalar, or a mapping of value columns when the
-                    # metric carries more than one (the delta and its two endpoints)
-                    row.update(value if isinstance(value, dict) else {"value": value})
-                    rows.append(row)
-
-    rows = []
     if groupby is None:
-        _emit(rows, dict(base), compute(counted))
-        return pd.DataFrame(rows)
+        yield dict(base), counted
+        return
 
     _validate_group_clones(clone_labels, obs[groupby], groupby,
                            hint=_refit_hint(adata, fit, groupby))
@@ -565,7 +560,7 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, i
             f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
             f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
             f"from every row of this result.",
-            UserWarning, stacklevel=3,
+            UserWarning, stacklevel=4,
         )
 
     for g in obs[groupby].dropna().unique().tolist():
@@ -578,10 +573,83 @@ def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, i
             else:
                 allowed = set(group_clones)
                 group_clones = [c for c in counted if c in allowed]
-            if not group_clones:
+            if not group_clones and skip_empty:
                 continue
         label_row = {**base, groupby: g}
         if splitby is not None:
             label_row[splitby] = obs.loc[gmask, splitby].iloc[0]
-        _emit(rows, label_row, compute(group_clones))
+        yield label_row, group_clones
+
+
+def metric_frames(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
+                  compute, metric, fit=None):
+    """Build a metric's per-draw frames: ``(replicate_draws, item_draws)``.
+
+    ``compute(clone_subset)`` returns one ``(replicate, items)`` pair per draw: ``replicate`` maps
+    value columns to the replicate's number for its whole joint, and ``items`` maps each item to
+    a mapping of value columns, or is ``None`` for a metric with no items. ``replicate_draws`` has
+    one row per (covariate, group, draw); ``item_draws`` one row per (covariate, group, item,
+    draw), or is ``None`` when ``item_col`` is ``None``.
+
+    Every group has its replicate rows: a group with no joint at ``covariate``, or none of its
+    clones left by ``clones=`` or ``exclude_pools``, gets them as NaN rather than no rows, so the
+    row set is fixed by the inputs. Its item rows are whatever ``compute`` returns for an empty
+    joint.
+
+    Raises
+    ------
+    ValueError
+        When a replicate's normalizer is 0 (:class:`ZeroNormalizer`), naming the replicate and
+        the covariate level.
+    """
+    base = {"covariate": covariate} if covariate is not None else {}
+    rep_rows, item_rows = [], []
+    for label_row, group_clones in _groups(adata, groupby=groupby, splitby=splitby,
+                                           clones=clones, exclude_pools=exclude_pools, fit=fit,
+                                           base=base, skip_empty=False):
+        try:
+            per_draw = compute(group_clones)
+        except ZeroNormalizer as err:
+            where = (f"{groupby}={label_row[groupby]!r}" if groupby is not None
+                     else "the whole object")
+            raise ValueError(f"{metric}: {where} at covariate {covariate!r}: {err}") from None
+        for draw, (replicate, items) in enumerate(per_draw):
+            rep_rows.append({**label_row, "draw": draw, **replicate})
+            for item, vals in (items or {}).items():
+                item_rows.append({**label_row, item_col: item, "draw": draw, **vals})
+    item_draws = pd.DataFrame(item_rows) if item_col is not None else None
+    return pd.DataFrame(rep_rows), item_draws
+
+
+def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
+                 compute, extra_labels=None, fit=None):
+    """Build the long ``table`` of a metric stored in the ``{table, result, stats}`` layout: one
+    row per (covariate, group, item, draw).
+
+    ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
+    ``{item: value}`` mapping; without one it is a scalar. A group that counts no clone has no
+    rows. The groups are those of :func:`_groups`.
+    """
+    # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
+    # `covariate=None` through would add an all-NaN column to every row of its result
+    base = {"covariate": covariate} if covariate is not None else {}
+    if extra_labels:
+        base.update({k: v for k, v in extra_labels.items() if v is not None})
+
+    rows = []
+    for label_row, group_clones in _groups(adata, groupby=groupby, splitby=splitby,
+                                           clones=clones, exclude_pools=exclude_pools, fit=fit,
+                                           base=base, skip_empty=True):
+        for draw, payload in enumerate(compute(group_clones)):
+            if item_col is None:
+                # a draw's payload is a scalar, or a mapping of value columns
+                rows.append({**label_row, "draw": draw,
+                             **(payload if isinstance(payload, dict) else {"value": payload})})
+            else:
+                for item, value in payload.items():
+                    row = {**label_row, item_col: item, "draw": draw}
+                    # an item's payload is a scalar, or a mapping of value columns when the
+                    # metric carries more than one (the delta and its two endpoints)
+                    row.update(value if isinstance(value, dict) else {"value": value})
+                    rows.append(row)
     return pd.DataFrame(rows)

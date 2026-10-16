@@ -174,7 +174,7 @@ def main():
     rec["total_seconds"] = round(sum(s.t.values()), 1)
     # a headline MI so a config that trained badly is visible, not just slow
     try:
-        mi = tcri.get.result(adata, "mutual_information")["result"]["value"]
+        mi = tcri.get.replicates(adata, "mutual_information")["value"]
         rec["mi_mean"] = float(np.nanmean(mi))
     except Exception:
         pass

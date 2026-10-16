@@ -239,20 +239,25 @@ print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
 # %% [markdown]
 # ## 4. `tl` — compute once, cached with provenance
 #
-# Every `tl` returns the **same three slots** and stores that object in `uns`:
+# Every `tl` call stores its result in `uns` and returns `None`; `tcri.get` reads it back.
+# Mutual information and the two entropies store it **by level**:
 #
-# | slot | one row per | reduced over |
+# | frame | one row per | read with |
 # |---|---|---|
-# | `table` | (covariate, group, item, draw) | nothing — the substrate |
-# | `result` | (covariate, group, item) | `draw` only |
-# | `stats` | (split_a, split_b) | items → groups, then contrast |
+# | `replicate.summary` | (covariate, replicate) | `tcri.get.replicates` |
+# | `replicate.draws` | (covariate, replicate, draw) | `tcri.get.draws` |
+# | `item.summary` | (covariate, replicate, item) | `tcri.get.items` |
+# | `item.draws` | (covariate, replicate, item, draw) | `tcri.get.draws(..., items=True)` |
+# | `stats` | (split_a, split_b) | `tcri.get.stats` |
 #
-# `result` is built *from* `table`, so the two cannot drift. `stats` appears only when
-# `splitby` is set, and its **n counts replicates, never items** — 18 clones from 4 patients
-# give n=4, not n=18.
+# A summary is built *from* its draws, so the two cannot drift. Mutual information has one
+# value per joint and no item level. `stats` appears only when `splitby` is set, and its
+# **n counts replicates, never items** — 18 clones from 4 patients give n=4, not n=18. The
+# other `tl` functions store `table` and `result`, and `stats` when they contrast groups,
+# read with `tcri.get.result`.
 
 # %%
-mi_post = tcri.tl.mutual_information(
+tcri.tl.mutual_information(
     adata,
     covariate="post",
     groupby="patient",     # could be omitted -- `replicate` is registered
@@ -262,36 +267,39 @@ mi_post = tcri.tl.mutual_information(
     weighted=False,        # one vote per CLONE; True = one vote per CELL
     random_state=SEED,
 )
-print("slots:", sorted(mi_post))
-mi_post["result"][["patient", "disease_status", "value", "sd", "hdi_low", "hdi_high"]].round(4)
+print("levels:", sorted(tcri.get.result(adata, "mutual_information")))
+mi_post = tcri.get.replicates(adata, "mutual_information")
+mi_post[["patient", "disease_status", "value", "sd", "hdi_low", "hdi_high"]].round(4)
 
 # %%
 # the contrast. `n_a`/`n_b` count PATIENTS -- that is what makes pseudoreplication impossible
-mi_post["stats"][["level_a", "level_b", "n_a", "n_b", "mean_a", "mean_b",
-                  "delta", "p", "stars"]].round(4)
+mi_stats = tcri.get.stats(adata, "mutual_information")
+mi_stats[["level_a", "level_b", "n_a", "n_b", "mean_a", "mean_b", "delta", "p", "stars"]].round(4)
 
 # %% [markdown]
-# **`n_clones_ref` matters here.** This cohort has ragged clone counts by design, and
-# `clonotypic_entropy` normalizes by `log2(C)` where `C` is that group's own supported clone
-# count. Two patients with different `C` are therefore on different scales. Passing
-# `n_clones_ref` pins one denominator for everyone.
+# **`n_clones_ref` matters here.** This cohort has ragged clone counts by design. A patient's
+# clonotypic entropy, the replicate value H(C|P), is normalized by `log2(C)`, where `C` is the
+# number of clones that patient has at the covariate, so two patients with different `C` are on
+# different scales. Passing `n_clones_ref` normalizes every patient by `log2(n_clones_ref)`
+# instead. The table reads the replicate summary both ways, one row per patient.
 
 # %%
 free = tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient",
-                                  random_state=SEED, inplace=False)["result"]
+                                  random_state=SEED, inplace=False)["replicate"]["summary"]
 pinned = tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient",
                                     n_clones_ref=int(adata.obs.groupby("patient", observed=True)
                                                      ["clone_id"].nunique().max()),
-                                    random_state=SEED, inplace=False)["result"]
-comparison = (free.groupby("patient", observed=True)["value"].mean().rename("own log2(C)")
+                                    random_state=SEED, inplace=False)["replicate"]["summary"]
+comparison = (free.set_index("patient")["value"].rename("own log2(C)")
               .to_frame()
-              .join(pinned.groupby("patient", observed=True)["value"].mean().rename("pinned")))
+              .join(pinned.set_index("patient")["value"].rename("pinned")))
 comparison["difference"] = comparison["pinned"] - comparison["own log2(C)"]
 comparison.round(4).head(8)
 
 # %%
 # the other metrics, plus the joint they all reduce
-jd = tcri.tl.joint_distribution(adata, covariate="post", n_samples=20, random_state=SEED)
+tcri.tl.joint_distribution(adata, covariate="post", n_samples=20, random_state=SEED)
+jd = tcri.get.result(adata, "joint_distribution")
 print(f"joint: {jd['result'].shape} (clone x phenotype), rows sum to 1: "
       f"{np.allclose(jd['result'].sum(axis=1), 1.0)}")
 
@@ -308,8 +316,8 @@ tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="d
                            n_samples=100, random_state=SEED, key_added="mi_pre")
 
 pre_vs_post = pd.concat([
-    tcri.get.result(adata, "mutual_information", key="mi_pre")["result"].assign(timepoint="pre"),
-    mi_post["result"].assign(timepoint="post"),
+    tcri.get.replicates(adata, "mutual_information", key="mi_pre").assign(timepoint="pre"),
+    mi_post.assign(timepoint="post"),
 ])
 pre_vs_post.groupby(["disease_status", "timepoint"], observed=True)["value"].mean().unstack("timepoint").round(4)
 
@@ -317,18 +325,22 @@ pre_vs_post.groupby(["disease_status", "timepoint"], observed=True)["value"].mea
 # ### Reading results back
 #
 # `tcri.get` is how anything reads a cached result without knowing the storage format — `pl`
-# uses it, and so should your own code. `params` carries every argument the tool ran with,
-# including defaults that were never passed, so a figure from six months ago can still say
-# what produced it.
+# uses it, and so should your own code. With `inplace=False` a call stores nothing and returns
+# the whole result instead, the same frames `tcri.get` reads. `params` carries every argument
+# the tool ran with, including defaults that were never passed, so a figure from six months ago
+# can still say what produced it.
 
 # %%
-assert tcri.get.result(adata, "mutual_information")["result"].equals(mi_post["result"])
+fresh = tcri.tl.mutual_information(adata, covariate="post", groupby="patient",
+                                   splitby="disease_status", n_samples=100,
+                                   random_state=SEED, inplace=False)
+assert fresh["replicate"]["summary"].equals(mi_post)
 params = tcri.get.params(adata, "mutual_information")
 print({k: params[k] for k in ("covariate", "groupby", "splitby", "n_samples",
                               "normalize_mode", "weighted")})
 
-# the unreduced substrate: one row per draw
-tcri.get.table(adata, "mutual_information", which="table").head().round(4)
+# the unreduced substrate: one row per patient, null fit and draw
+tcri.get.draws(adata, "mutual_information").head().round(4)
 
 # %% [markdown]
 # ## 5. `pl` — twins that render the cache
@@ -346,9 +358,9 @@ tcri.get.table(adata, "mutual_information", which="table").head().round(4)
 fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.5))
 tcri.pl.mutual_information(adata, ax=axes[0, 0])
 axes[0, 0].set_title("mutual_information — post\ndots = patients, bracket from `stats`", fontsize=10)
-tcri.pl.clonotypic_entropy(adata, ax=axes[0, 1])
+tcri.pl.clonotypic_entropy(adata, view="item", ax=axes[0, 1])
 axes[0, 1].set_title("clonotypic_entropy — one value per PHENOTYPE", fontsize=10)
-tcri.pl.phenotypic_entropy(adata, ax=axes[1, 0])
+tcri.pl.phenotypic_entropy(adata, view="item", ax=axes[1, 0])
 axes[1, 0].set_title("phenotypic_entropy — one value per CLONE", fontsize=10)
 tcri.pl.phenotypic_flux(adata, ax=axes[1, 1])
 axes[1, 1].set_title("phenotypic_flux — how far clones moved pre → post", fontsize=10)
@@ -382,12 +394,13 @@ print("stored in uns   :", adata.uns[K.colors("disease_status")])
 # That one belongs to you, not the package.
 
 # %%
-d_phen = tcri.tl.delta_phenotypic_entropy(
+tcri.tl.delta_phenotypic_entropy(
     adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
     n_samples=60, random_state=SEED)
-d_clon = tcri.tl.delta_clonotypic_entropy(
+tcri.tl.delta_clonotypic_entropy(
     adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
     n_samples=60, random_state=SEED)
+d_phen = tcri.get.result(adata, "delta_phenotypic_entropy")
 
 print("Δ phenotypic entropy (post − pre), per arm:")
 print(d_phen["result"].groupby("disease_status", observed=True)["value"]
@@ -422,8 +435,8 @@ with tempfile.TemporaryDirectory() as tmp:
     print("wrote:", sorted(manifest))
 
     reloaded_model, reloaded = tcri.ut.load_tcri_session(f"{tmp}/run")
-    cached = tcri.get.result(reloaded, "mutual_information")["result"]
+    cached = tcri.get.replicates(reloaded, "mutual_information")
     print(f"\nreloaded {reloaded.n_obs} cells")
     print(f"cached MI survived the round trip: "
-          f"{np.allclose(cached['value'], mi_post['result']['value'])}")
+          f"{np.allclose(cached['value'], mi_post['value'])}")
     print(f"provenance survived: {tcri.get.params(reloaded, 'mutual_information')['covariate']!r}")

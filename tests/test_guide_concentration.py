@@ -124,7 +124,8 @@ def test_guide_concentration_reaches_the_metric_draw(fitted):
         b = adata.copy()
         if not use_guide:
             del b.uns[K.CONC_CT]
-        jd = tcri.tl.joint_distribution(b, covariate=None, n_samples=120, random_state=0)
+        jd = tcri.tl.joint_distribution(b, covariate=None, n_samples=120, random_state=0,
+                                        inplace=False)
         # `table` is the unreduced substrate -- one block of rows per draw. `result` has
         # already averaged them, and an interval width cannot be read off a posterior mean.
         v = jd["table"].to_numpy(dtype=float).reshape(120, -1)

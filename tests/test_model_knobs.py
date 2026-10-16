@@ -25,6 +25,8 @@ import torch
 from anndata import AnnData
 
 from tcri.model._model import TCRIModel
+
+from .conftest import frames
 from tcri.model._training import UnifiedTrainingPlan
 
 
@@ -485,6 +487,6 @@ def test_device_does_not_change_results(adata):
     _train(m)
     m.to_anndata(adata)
     cov = list(adata.uns["tcri_covariate_categories"])[0]
-    a = tcri.tl.mutual_information(adata, covariate=cov, device=None, null_model=None)["result"]
-    b = tcri.tl.mutual_information(adata, covariate=cov, device="cpu", null_model=None)["result"]
+    a = frames(tcri.tl.mutual_information(adata, covariate=cov, device=None, null_model=None, inplace=False))[1]
+    b = frames(tcri.tl.mutual_information(adata, covariate=cov, device="cpu", null_model=None, inplace=False))[1]
     assert float(a["value"].iloc[0]) == pytest.approx(float(b["value"].iloc[0]), rel=1e-12)
