@@ -196,13 +196,19 @@ tcri.diag.archetypes(model)
 plt.show()
 
 # %% [markdown]
-# **`joint_distribution_ppc`** — does the model's clone×phenotype table resemble the observed
-# crosstab? Per-clone L1 distance, where 0 is perfect and 2 is maximal.
+# **`joint_distribution_ppc`** — does the fit reproduce the phenotype labels it was trained
+# on, clone by clone? Each posterior draw simulates replicate labels for every cell from the
+# fit's own label likelihood; a clone's `p` is where its observed labels fall among those
+# replicates. When the fit is right, `p` is uniform across clones, so the figure is a QQ plot
+# of `p` against uniform for each clone-size bin: curves on the diagonal mean the fit
+# reproduces its data, curves below it mean the observed labels sit farther from the fit than
+# its replicates do. Every diagnostic draws its figure with `plot=True` (the default) and
+# returns the same values either way.
 
 # %%
-ppc = tcri.diag.joint_distribution_ppc(adata, distance_metric="l1")
-print(f"median per-clone L1: {ppc['distance'].median():.3f}")
-ppc.head()
+ppc = tcri.diag.joint_distribution_ppc(adata, random_state=SEED)
+plt.show()
+ppc["calibration"].query("size_bin == 'all'").groupby("covariate")["ks"].median()
 
 # %% [markdown]
 # **`phenotype_calibration`** — when the classifier says 0.8, is it right 80% of the time?
@@ -210,29 +216,23 @@ ppc.head()
 
 # %%
 calib = tcri.diag.phenotype_calibration(adata, n_bins=8)
-print(f"ECE = {calib.attrs['ECE']:.3f}")
-
-fig, ax = plt.subplots(figsize=(4.5, 4.5))
-ax.plot([0, 1], [0, 1], ls="--", lw=0.8, c="0.5", label="perfect")
-ax.plot(calib["mean_pred"], calib["emp_freq"], marker="o", color="#AE81FF", label="observed")
-ax.set_xlabel("predicted probability"); ax.set_ylabel("empirical frequency")
-ax.set_title("phenotype calibration"); ax.legend(frameon=False)
 plt.show()
 
 # %% [markdown]
-# **`reconstruction_ppc`** — does the decoder generate counts like the real ones?
+# **`reconstruction_ppc`** — does the decoder generate counts like the real ones? Each dot is
+# one simulation's statistic over the observed one; 1 is a match.
 # **`permutation_null`** — how large is the metric under shuffled labels? This is the
 # reference any MI should be read against, and it is *model-free*: it scores the empirical
 # crosstab and draws no posterior samples.
 
 # %%
 recon = tcri.diag.reconstruction_ppc(model, adata, n_sims=25, random_state=SEED)
-print("reconstruction PPC:")
-print(recon.round(3).to_string(index=False))
+plt.show()
 
 null = tcri.diag.permutation_null(adata, metric="mutual_information", covariate="post",
                                   n_perm=200, random_state=SEED)
-print("\npermutation null — `observed` is the real labels, `null_mean` is shuffled:")
+plt.show()
+print("permutation null — `observed` is the real labels, `null_mean` is shuffled:")
 print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
       .round(4).to_string(index=False))
 

@@ -1,8 +1,10 @@
 # Diagnostics (`tcri.diag`)
 
-Model-checking and metric-validation utilities: posterior-predictive checks for the
-learned joint, phenotype-probability calibration, reconstruction PPCs, permutation nulls
-for the metrics, and training-curve inspection. Exposed as ``tcri.diag``.
+Model-checking and metric-validation utilities: a posterior-predictive check of the clone x
+phenotype fit, phenotype-probability calibration, reconstruction PPCs, permutation nulls for
+the metrics, and training-curve inspection. Exposed as ``tcri.diag``. Each check returns what it
+computed and, with ``plot=True`` (the default), draws its figure from those values; ``ax=`` and
+``save=`` place and write it.
 
 ## Posterior-predictive & null checks
 

@@ -1214,7 +1214,7 @@ class TCRIModel(BaseModelClass):
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
         ``CT_ARRAY``/``COV_ARRAY``, ``LOCAL_SCALE``, ``GATE_PROB``,
-        ``CLASSIFIER_TEMPERATURE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
+        ``CLASSIFIER_TEMPERATURE``, ``LABEL_ERROR_RATE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
         ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from :meth:`predict`); ``obs``:
         ``PHENOTYPE`` argmax hard label.
 
@@ -1295,6 +1295,11 @@ class TCRIModel(BaseModelClass):
         gp = self.module.gate_prob
         adata.uns[_key(K.GATE_PROB)] = float(gp) if gp is not None else float("nan")
         adata.uns[_key(K.CLASSIFIER_TEMPERATURE)] = float(self.module.classifier_temperature)
+        # ε of the label readout, so the label likelihood can be rebuilt from the object alone
+        # (`diag.joint_distribution_ppc` draws replicate labels from it). NaN for a label-free
+        # fit, the same sentinel GATE_PROB uses, because h5ad cannot store None.
+        eps = self.module.label_error_rate
+        adata.uns[_key(K.LABEL_ERROR_RATE)] = float(eps) if eps is not None else float("nan")
 
         # 3) latent mean -----------------------------------------------------
         adata.obsm[_key(K.X_TCRI)] = self.get_latent_representation(
