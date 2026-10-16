@@ -53,7 +53,7 @@ def fresh_trained_model(synthetic_adata):
 
 CANONICAL_UNS = [
     K.METADATA, K.P_CT, K.CT_TO_COV, K.CT_TO_C, K.CT_ARRAY, K.COV_ARRAY,
-    K.LOCAL_SCALE, K.GATE_PROB, K.CLASSIFIER_TEMPERATURE,
+    K.LOCAL_SCALE, K.GATE_PROB, K.CLASSIFIER_TEMPERATURE, K.LABEL_ERROR_RATE,
     K.COVARIATE_CATEGORIES, K.CLONOTYPE_CATEGORIES, K.PHENOTYPE_CATEGORIES,
 ]
 CANONICAL_OBSM = [K.X_TCRI, K.X_LOGITS, K.X_LOGPOSTERIOR, K.X_PROBABILITIES]
@@ -77,6 +77,11 @@ def test_to_anndata_writes_canonical_set(trained_model):
         assert np.isnan(adata.uns[K.GATE_PROB])  # no gate -> nan sentinel (serializable)
     else:
         assert adata.uns[K.GATE_PROB] == float(gp)
+    eps = model.module.label_error_rate
+    if eps is None:
+        assert np.isnan(adata.uns[K.LABEL_ERROR_RATE])  # label-free -> nan sentinel
+    else:
+        assert adata.uns[K.LABEL_ERROR_RATE] == float(eps)
 
 
 def test_setup_anndata_leaves_analysis_obs_untouched(synthetic_adata):

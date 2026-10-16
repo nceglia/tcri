@@ -52,10 +52,12 @@ TOOLS = {
                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
     "delta_phenotypic_entropy": (tcri.tl.delta_phenotypic_entropy,
                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
-    "joint_distribution_ppc": (tcri.diag.joint_distribution_ppc, {}),
+    "joint_distribution_ppc": (tcri.diag.joint_distribution_ppc,
+                               {"n_samples": 3, "n_replicates": 10, "random_state": 0,
+                                "plot": False}),
     "permutation_null": (tcri.diag.permutation_null,
                          {"covariate": POST, "groupby": "patient", "n_perm": 20,
-                          "random_state": 0}),
+                          "random_state": 0, "plot": False}),
 }
 STORED = {name for name in TOOLS if hasattr(tcri.tl, name)}
 
@@ -309,7 +311,7 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
     ``clones=`` restricts to exactly its clones."""
     _, adata = pooled
     obs = adata.obs
-    kw = dict(covariate=POST, groupby="patient", n_perm=20, random_state=0)
+    kw = dict(covariate=POST, groupby="patient", n_perm=20, random_state=0, plot=False)
     kept = _kept(adata)
     by_default = tcri.diag.permutation_null(adata, **kw)
     per_clone = tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
