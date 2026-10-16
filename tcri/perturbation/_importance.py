@@ -81,7 +81,7 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
                     random_state=None) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
-    distribution moves when the gene is silenced. Computed once, cached, returned.
+    distribution moves when the gene is silenced. Stored, and read with ``tcri.get.result``.
 
     Parameters
     ----------
@@ -123,7 +123,8 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
 
     Returns
     -------
-    dict
+    dict or None
+        ``None``; with ``inplace=False`` nothing is stored and the result is returned:
         ``table`` (one row per gene, group, draw), ``result`` (per gene and group, with
         ``sd``/``hdi_*`` over draws), ``stats`` (per-gene contrast, or ``None``) and
         ``shift`` (per gene, phenotype and group: ``baseline``, ``perturbed``, ``shift``).

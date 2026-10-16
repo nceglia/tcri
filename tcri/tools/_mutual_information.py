@@ -62,13 +62,14 @@ def mutual_information(
     temperature=1.0, clones=None, exclude_pools=True, weighted=False, normalized=True,
     normalize_mode="min", random_state=None, device=None, fit=None,
 ):
-    """I(c;φ|covariate) in bits — computed once, cached, and returned.
+    """I(c;φ|covariate) in bits, one value per replicate.
 
-    Returns the replicate summary, one row per replicate, and stores ``{replicate: {draws,
-    summary}, stats}`` under ``uns[key_added or 'tcri_mutual_information']``; with
-    ``inplace=False`` nothing is stored and that whole result is returned. Mutual information has
-    one value per joint, so it has no item level. ``pl.mutual_information`` renders from the
-    cache rather than recomputing, so the plot cannot disagree with the frame in your hand.
+    Stores ``{replicate: {draws, summary}, stats}`` under ``uns[key_added or
+    'tcri_mutual_information']`` and returns ``None``; with ``inplace=False`` nothing is stored
+    and that whole result is returned. The replicate summary is read with
+    ``tcri.get.replicates`` and the tests with ``tcri.get.stats``. Mutual information has one
+    value per joint, so it has no item level. ``pl.mutual_information`` renders the stored
+    result rather than recomputing, so the plot cannot disagree with it.
 
     ``groupby`` is the replicate; left implicit it resolves to the column registered as
     ``replicate`` at ``setup_anndata``, and the effective value is recorded in provenance.

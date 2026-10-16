@@ -4,14 +4,15 @@ Every ``tl`` metric stores its result under a namespaced ``uns`` key. This modul
 everything else reads it back without knowing the blob format: ``pl`` renders from here, and so
 should any user code that wants the frame a plot was drawn from.
 
-Mutual information and the two entropies store their result by level, ``{replicate, item,
-stats}``, each level holding ``draws`` and ``summary``. A call returns the replicate summary;
-:func:`items`, :func:`stats` and :func:`draws` read the rest:
+A ``tl`` call stores its result and returns ``None``; this module is how it is read. Mutual
+information and the two entropies store their result by level, ``{replicate, item, stats}``,
+each level holding ``draws`` and ``summary``:
 
     tcri.tl.phenotypic_entropy(adata, covariate="pre", splitby="response")
-    tcri.get.items(adata, "phenotypic_entropy")    # one row per replicate and clone
-    tcri.get.stats(adata, "phenotypic_entropy")    # the tests
-    tcri.get.draws(adata, "phenotypic_entropy")    # replicate rows, one per draw
+    tcri.get.replicates(adata, "phenotypic_entropy")  # one row per replicate
+    tcri.get.items(adata, "phenotypic_entropy")       # one row per replicate and clone
+    tcri.get.stats(adata, "phenotypic_entropy")       # the tests
+    tcri.get.draws(adata, "phenotypic_entropy")       # replicate rows, one per draw
 
 :func:`result` returns the whole stored result, provenance stripped, and :func:`params` the
 provenance.
@@ -24,7 +25,7 @@ from __future__ import annotations
 from ._state import keys as _K
 from ._state.storage import load_result as _load_result, load_result_params as _load_result_params
 
-__all__ = ["result", "params", "items", "stats", "draws", "fits"]
+__all__ = ["result", "params", "replicates", "items", "stats", "draws", "fits"]
 
 #: tool name -> canonical uns key
 _RESULTS = {
@@ -44,7 +45,8 @@ _CALLS = {
     "gene_importance": "tcri.perturb.gene_importance(model, adata, ...)",
 }
 
-#: Written beside every result; stripped by :func:`result`, which returns what ``tl`` returned.
+#: Written beside every result; stripped by :func:`result`, which returns the stored result, the
+#: same one ``inplace=False`` returns.
 _PROVENANCE = ("params", "version", "tool", "tcri_version")
 
 
@@ -129,6 +131,15 @@ def _level(adata, name, level, *, key=None, fit=None):
             f"{name!r} has no {level} level: it has one value per replicate and no items."
         )
     return payload[level]
+
+
+def replicates(adata, name: str, *, key=None, fit=None):
+    """The replicate summary of a stored result: one row per (covariate, replicate), with the
+    reference columns when a reference was computed.
+
+    Raises ``KeyError`` for a result not stored by level.
+    """
+    return _level(adata, name, "replicate", key=key, fit=fit)["summary"]
 
 
 def items(adata, name: str, *, key=None, fit=None):

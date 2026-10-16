@@ -79,9 +79,8 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
     }
     for name, call in calls.items():
         fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
-        payload = call()
-        if isinstance(payload, pd.DataFrame):
-            payload = tcri.get.result(adata, name)
+        assert call() is None, f"{name}: a storing call returned its result"
+        payload = tcri.get.result(adata, name)
         if "replicate" in payload:
             levels = [lv for lv in ("replicate", "item") if payload.get(lv) is not None]
             slots = {f"{lv}.{f}": payload[lv][f] for lv in levels for f in ("draws", "summary")}
@@ -756,7 +755,8 @@ def test_pl_draws_the_adjusted_quantity_by_default(ref):
 
     _, adata = ref
     a = _cov(adata)[0]
-    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
+    res = tcri.get.replicates(adata, "mutual_information")
 
     def gray(ax):
         return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]

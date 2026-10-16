@@ -173,11 +173,11 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     normalizer for cross-group comparability (else per-group #supported clones). See module
     docstring.
 
-    Returns the replicate summary, one row per replicate, and stores ``{replicate, item,
-    stats}``, each level holding ``draws`` and ``summary``, under ``uns[key_added or
-    'tcri_clonotypic_entropy']``. The item level has one row per replicate and phenotype, read
-    with ``tcri.get.items``. With ``inplace=False`` nothing is stored and the whole result is
-    returned.
+    Stores ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``, under
+    ``uns[key_added or 'tcri_clonotypic_entropy']`` and returns ``None``; with
+    ``inplace=False`` nothing is stored and the whole result is returned. The replicate level has
+    one row per replicate, read with ``tcri.get.replicates``; the item level one row per
+    replicate and phenotype, read with ``tcri.get.items``.
 
     A replicate with no joint at ``covariate`` has a NaN replicate row and one NaN item row per
     phenotype. With ``normalized=True``, a replicate with one clone raises ``ValueError`` naming
@@ -207,11 +207,11 @@ def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
                        normalized=True, random_state=None, device=None, fit=None):
     """H(P|C) per replicate and H[P(φ|c)] per clone (bits). See module docstring.
 
-    Returns the replicate summary, one row per replicate, and stores ``{replicate, item,
-    stats}``, each level holding ``draws`` and ``summary``, under ``uns[key_added or
-    'tcri_phenotypic_entropy']``. The item level has one row per replicate and clone, read with
-    ``tcri.get.items``. With ``inplace=False`` nothing is stored and the whole result is
-    returned.
+    Stores ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``, under
+    ``uns[key_added or 'tcri_phenotypic_entropy']`` and returns ``None``; with
+    ``inplace=False`` nothing is stored and the whole result is returned. The replicate level has
+    one row per replicate, read with ``tcri.get.replicates``; the item level one row per
+    replicate and clone, read with ``tcri.get.items``.
 
     A replicate with no joint at ``covariate`` has a NaN replicate row and no item rows. With
     ``normalized=True`` and one phenotype, the call raises ``ValueError``; ``normalized=False``

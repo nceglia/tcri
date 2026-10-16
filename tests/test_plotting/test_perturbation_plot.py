@@ -84,7 +84,8 @@ def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
     """
     model, adata = cohort
     a = adata.copy()
-    res = tcri.perturb.gene_importance(model, a)
+    tcri.perturb.gene_importance(model, a)
+    res = tcri.get.result(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, n_top=5)
 
     def ranked(col):
@@ -105,7 +106,8 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     from ``stats`` -- a per-gene test over patients, never a bracket between genes."""
     model, adata = cohort
     a = adata.copy()
-    res = tcri.perturb.gene_importance(model, a, splitby="disease_status")
+    tcri.perturb.gene_importance(model, a, splitby="disease_status")
+    res = tcri.get.result(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, n_top=6)
     genes = [t.get_text() for t in ax.get_xticklabels()]
     # `stats` carries one row per gene, on the adjusted importance. The default panel draws
@@ -127,9 +129,9 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     patients = sorted(three.obs["patient"].astype(str).unique())
     lut = {p: "abc"[i % 3] for i, p in enumerate(patients)}
     three.obs["arm3"] = three.obs["patient"].astype(str).map(lut).astype("category")
-    res3 = tcri.perturb.gene_importance(model, three, genes=list(three.var_names[:3]),
-                                        splitby="arm3")
-    assert res3["stats"]["gene"].duplicated().any(), "the fixture has no multi-contrast gene"
+    tcri.perturb.gene_importance(model, three, genes=list(three.var_names[:3]), splitby="arm3")
+    assert tcri.get.stats(three, "gene_importance")["gene"].duplicated().any(), (
+        "the fixture has no multi-contrast gene")
     with _warnings.catch_warnings(record=True) as caught:
         _warnings.simplefilter("always")
         ax3 = tcri.pl.gene_importance(three, n_top=3)
@@ -169,7 +171,8 @@ def test_rank_view_without_groups_draws_points_then_violins(cohort):
 def test_shift_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
     model, adata = cohort
     a = adata.copy()
-    res = tcri.perturb.gene_importance(model, a)
+    tcri.perturb.gene_importance(model, a)
+    res = tcri.get.result(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, kind="shift", n_top=7)
 
     assert len(ax.images) == 1

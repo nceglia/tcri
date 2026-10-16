@@ -7,10 +7,10 @@ held fixed. Exposed as ``tcri.perturb``.
 Two functions on one kernel, mirroring the split between `predict()` (per cell) and the
 `tl` metrics (per group, with replicates, a contrast and a cache):
 
-| function | returns | stores |
+| function | computes | where it lands |
 |---|---|---|
-| {func}`knockout <tcri.perturbation.knockout>` | per-cell probabilities with a gene, or a gene program, silenced — the `predict()` frame | `obsm[key_added]` only when asked |
-| {func}`gene_importance <tcri.perturbation.gene_importance>` | one importance per gene and group: the L1 distance the mean phenotype call moves when the gene is silenced | `uns["tcri_gene_importance"]`, drawn by {func}`tcri.pl.gene_importance` |
+| {func}`knockout <tcri.perturbation.knockout>` | per-cell probabilities with a gene, or a gene program, silenced — the `predict()` frame | returned, and written to `obsm[key_added]` only when asked |
+| {func}`gene_importance <tcri.perturbation.gene_importance>` | one importance per gene and group: the L1 distance the mean phenotype call moves when the gene is silenced | `uns["tcri_gene_importance"]`, read with `tcri.get.result` and drawn by {func}`tcri.pl.gene_importance`; the call returns `None` |
 
 The pass is deterministic. The head reads the encoder's posterior mean, so no encoder sample
 is drawn; `n_samples` draws the clone × covariate prior from the fitted posterior, shared by
@@ -43,7 +43,7 @@ tcri.perturb.knockout(adata_model, adata, genes=["GZMB", "PRF1"], key_added="X_k
    :members:
 ```
 
-The payload has the three slots every metric has plus a fourth:
+The payload has the three slots flux and the deltas store, plus a fourth:
 
 | slot | one row per | holds |
 |---|---|---|
@@ -64,10 +64,11 @@ and the same rule, so `adjusted = value - null_value` is the part of a gene's im
 its relationship to phenotype accounts for rather than its expression level.
 
 ```python
-tcri.null.all(model, adata)                       # once, after to_anndata
-gi = tcri.perturb.gene_importance(model, adata)   # value, null_value, adjusted
-tcri.pl.gene_importance(adata)                    # ranked by the adjusted importance
-tcri.pl.gene_importance(adata, quantity="value")  # the bare ranking, for comparison
+tcri.null.all(model, adata)                          # once, after to_anndata
+tcri.perturb.gene_importance(model, adata)
+tcri.get.result(adata, "gene_importance")["result"]  # value, null_value, adjusted
+tcri.pl.gene_importance(adata)                       # ranked by the adjusted importance
+tcri.pl.gene_importance(adata, quantity="value")     # the bare ranking, for comparison
 ```
 
 The correction matters most here. Silencing a gene is an intervention whose size scales with the

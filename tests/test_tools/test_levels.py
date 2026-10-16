@@ -1,8 +1,9 @@
 """The replicate and item levels of mutual information and the two entropies at one covariate.
 
 Each metric stores ``{replicate, item, stats}``, a level holding ``draws`` and ``summary``, and
-returns its replicate summary. These tests pin the row sets (every replicate has a replicate row),
-the error for a normalizer of 0, the case with no replicate, and the ``tcri.get`` views.
+returns ``None``; ``inplace=False`` returns that result instead. These tests pin the row sets
+(every replicate has a replicate row), the error for a normalizer of 0, the case with no
+replicate, and the ``tcri.get`` views.
 """
 from __future__ import annotations
 
@@ -39,14 +40,24 @@ def _call(metric, adata, **kw):
 
 
 @pytest.mark.parametrize("metric", METRICS)
-def test_the_call_returns_the_replicate_summary_it_stores(metric, cohort):
+def test_replicates_is_the_stored_replicate_summary(metric, cohort):
+    """``tcri.get.replicates`` is the stored replicate summary, one row per replicate."""
     _, adata = cohort
     adata = adata.copy()
-    returned = getattr(tcri.tl, metric)(adata, covariate=_cov(adata), groupby="patient")
-    assert isinstance(returned, pd.DataFrame)
-    assert sorted(returned["patient"].astype(str)) == sorted(_patients(adata))
-    pd.testing.assert_frame_equal(returned,
+    assert getattr(tcri.tl, metric)(adata, covariate=_cov(adata), groupby="patient") is None
+    replicates = tcri.get.replicates(adata, metric)
+    assert sorted(replicates["patient"].astype(str)) == sorted(_patients(adata))
+    pd.testing.assert_frame_equal(replicates,
                                   tcri.get.result(adata, metric)["replicate"]["summary"])
+
+
+def test_replicates_refuses_a_result_not_stored_by_level(cohort):
+    _, adata = cohort
+    adata = adata.copy()
+    a, b = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b)
+    with pytest.raises(KeyError, match="not stored by level"):
+        tcri.get.replicates(adata, "phenotypic_flux")
 
 
 @pytest.mark.parametrize("metric", METRICS)

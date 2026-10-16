@@ -127,12 +127,12 @@ so the numbers are inspectable and not only drawn.
 
 ## 4. `tl` — compute once, cached with provenance
 
-Mutual information and the two entropies store their result **by level** in `uns` and return
-the replicate summary:
+Every `tl` call stores its result in `uns` and returns `None`; `tcri.get` reads it back.
+Mutual information and the two entropies store their result **by level**:
 
 | frame | one row per | read with |
 |---|---|---|
-| `replicate.summary` | (covariate, replicate) | the call's return |
+| `replicate.summary` | (covariate, replicate) | `tcri.get.replicates` |
 | `replicate.draws` | (covariate, replicate, draw) | `tcri.get.draws` |
 | `item.summary` | (covariate, replicate, item) | `tcri.get.items` |
 | `item.draws` | (covariate, replicate, item, draw) | `tcri.get.draws(..., items=True)` |
@@ -141,15 +141,16 @@ the replicate summary:
 A summary is built *from* its draws, so the two cannot drift. Mutual information has one value
 per joint and no item level. `stats` appears only when `splitby` is set; it tests the replicate
 values, so its **n counts replicates, never items** — 18 clones from 4 patients give n=4, not
-n=18. The other `tl` functions store and return `table` and `result`, and `stats` when they
-contrast groups.
+n=18. The other `tl` functions store `table` and `result`, and `stats` when they contrast
+groups, read with `tcri.get.result`. With `inplace=False` a call stores nothing and returns the
+whole result instead.
 
 ```python
-res = tcri.tl.mutual_information(
+tcri.tl.mutual_information(
     adata, covariate="pre", groupby="patient", splitby="disease_status", n_samples=100
 )
-res                                           # one row per patient
-tcri.get.stats(adata, "mutual_information")   # the disease vs control contrast
+tcri.get.replicates(adata, "mutual_information")   # one row per patient
+tcri.get.stats(adata, "mutual_information")        # the disease vs control contrast
 ```
 
 ```{important}

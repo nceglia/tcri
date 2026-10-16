@@ -124,10 +124,9 @@ def test_grouped_comparison_runs_over_patients(fitted):
     import tcri
 
     _m, a = fitted
-    res = tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT,
-                                     null_model=None,
-                                     n_samples=0, weighted=True, normalize_mode="average")
-    df = res
+    tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT, null_model=None,
+                               n_samples=0, weighted=True, normalize_mode="average")
+    df = tcri.get.replicates(a, "mutual_information")
     assert isinstance(df, pd.DataFrame) and len(df) == a.obs[GROUP].nunique()
     assert set(df[SPLIT].unique()) <= {"R", "NR"}
     assert "value" in df.columns, f"expected a 'value' column, got {list(df.columns)}"
@@ -160,7 +159,7 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
     import tcri
 
     _m, a = fitted
-    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0)["result"]
+    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0, inplace=False)["result"]
 
     # each (covariate, clone) row is a distribution over phenotypes. Check normalization
     # BEFORE collapsing: summing over covariates gives a row total of 1 per covariate the

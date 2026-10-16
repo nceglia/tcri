@@ -37,10 +37,10 @@ conceptual reference is [Information-theoretic metrics](../concepts/index.md).
 
 ## The `stats` slot
 
-Mutual information and the two entropies store `{replicate, item, stats}` and return the
-replicate summary; the other metrics return `{table, result, stats}`. When you pass `splitby`,
-the between-group contrast lands in `stats`, read with `tcri.get.stats` — you do not call a
-second function.
+Mutual information and the two entropies store `{replicate, item, stats}`; the other metrics
+store `{table, result, stats}`. Every call returns `None`, and `tcri.get` reads the stored
+result. When you pass `splitby`, the between-group contrast lands in `stats`, read with
+`tcri.get.stats` — you do not call a second function.
 
 | column | meaning |
 |---|---|
@@ -81,8 +81,8 @@ structure in it, so each is read against a **permutation reference**: the same m
 permuted label vectors, five fits by default (see {doc}`tcri.null <null>`).
 
 ```python
-mi = tcri.tl.mutual_information(adata, covariate="post")
-mi[["value", "null_value", "adjusted"]]
+tcri.tl.mutual_information(adata, covariate="post")
+tcri.get.replicates(adata, "mutual_information")[["value", "null_value", "adjusted"]]
 ```
 
 `null_model` defaults to `"auto"`: the phenotype null for the entropies, mutual information and

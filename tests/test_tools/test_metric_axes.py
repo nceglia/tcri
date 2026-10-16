@@ -101,13 +101,14 @@ def blocks():
 
 
 def _value(res):
-    """The comparable value column of a tool's return: the replicate summary a metric stored by
-    level returns, or the ``result`` of a ``{table, result, stats}`` payload.
+    """The comparable value column of a tool's full result (``inplace=False``): the replicate
+    summary of a metric stored by level, or the ``result`` of a ``{table, result, stats}``
+    payload.
 
     This keeps the axis assertions about the AXES rather than about unpacking a per-metric
-    return type.
+    result shape.
     """
-    return res["value"] if isinstance(res, pd.DataFrame) else res["result"]["value"]
+    return frames(res, level="replicate")[1]["value"]
 
 
 def _clones_of(adata, patient):
@@ -142,8 +143,8 @@ def test_covariate_axis_is_live(blocks, metric):
     """Different covariate levels must give different results."""
     _model, adata, _truth = blocks
     fn = getattr(tcri.tl, metric)
-    a = _value(fn(adata, covariate="cov_0")).to_numpy(dtype=float)
-    b = _value(fn(adata, covariate="cov_1")).to_numpy(dtype=float)
+    a = _value(fn(adata, covariate="cov_0", inplace=False)).to_numpy(dtype=float)
+    b = _value(fn(adata, covariate="cov_1", inplace=False)).to_numpy(dtype=float)
     assert not np.allclose(a, b, equal_nan=True), (
         f"{metric} returns the same values for cov_0 and cov_1; the covariate axis is inert"
     )
@@ -166,7 +167,7 @@ def test_groupby_is_live_and_routes_exactly(blocks):
     for _, row in grouped.iterrows():
         direct = float(_value(tcri.tl.mutual_information(
             adata, covariate="cov_0", clones=_clones_of(adata, row["patient"]),
-            normalize_mode="average",
+            normalize_mode="average", inplace=False,
         )).iloc[0])
         assert float(row["value"]) == pytest.approx(direct, rel=1e-12), (
             f"groupby value for {row['patient']} ({row['value']}) differs from the same metric "
@@ -196,21 +197,27 @@ def test_clones_restriction_is_live(blocks):
     _model, adata, _truth = blocks
     p0, p1 = _clones_of(adata, "P0"), _clones_of(adata, "P1")
 
-    a = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0)).iloc[0])
-    b = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p1)).iloc[0])
-    both = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0 + p1)).iloc[0])
+    a = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0,
+                                                inplace=False)).iloc[0])
+    b = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p1,
+                                                inplace=False)).iloc[0])
+    both = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", clones=p0 + p1,
+                                                   inplace=False)).iloc[0])
     assert a != b, "clones= does not change the result"
     assert both not in (a, b), "restricting to both blocks equals one of them alone"
 
-    jd = tcri.tl.joint_distribution(adata, covariate="cov_0", clones=p0)["result"]
+    jd = tcri.tl.joint_distribution(adata, covariate="cov_0", clones=p0,
+                                    inplace=False)["result"]
     assert set(jd.index) <= set(p0), "joint_distribution returned clones outside `clones=`"
 
 
 def test_weighted_is_live(blocks):
     """``weighted`` selects the clone marginal, so it must change the number."""
     _model, adata, _truth = blocks
-    unweighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=False)).iloc[0])
-    weighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=True)).iloc[0])
+    unweighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=False,
+                                                         inplace=False)).iloc[0])
+    weighted = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", weighted=True,
+                                                       inplace=False)).iloc[0])
     assert unweighted != weighted, (
         "weighted=True and weighted=False agree; the clone marginal is not being applied"
     )
@@ -220,8 +227,11 @@ def test_normalize_mode_is_live(blocks):
     """``min`` and ``average`` are different normalizers (METRICS_CONTRACT.md eq 6 vs the
     ``min`` default)."""
     _model, adata, _truth = blocks
-    lo = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="min")).iloc[0])
-    av = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="average")).iloc[0])
+    lo = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", normalize_mode="min",
+                                                 inplace=False)).iloc[0])
+    av = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0",
+                                                 normalize_mode="average",
+                                                 inplace=False)).iloc[0])
     assert lo != av
     assert lo >= av - 1e-12, "min(H) <= mean(H), so NMI_min must be >= NMI_average"
 
@@ -229,15 +239,18 @@ def test_normalize_mode_is_live(blocks):
 def test_temperature_is_live(blocks):
     """Analysis-time temperature tempers the mean table, so it must move the metric."""
     _model, adata, _truth = blocks
-    base = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=1.0)).iloc[0])
-    hot = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=3.0)).iloc[0])
+    base = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=1.0,
+                                                   inplace=False)).iloc[0])
+    hot = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", temperature=3.0,
+                                                  inplace=False)).iloc[0])
     assert base != hot, "temperature does not reach the computation"
 
 
 def test_n_samples_returns_a_posterior_summary(blocks):
     """``n_samples>0`` switches from a scalar to a mean/sd/HDI summary that brackets itself."""
     _model, adata, _truth = blocks
-    point = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=0)).iloc[0])
+    point = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=0,
+                                                    inplace=False)).iloc[0])
     res = frames(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50,
                                      random_state=0, inplace=False))[1].iloc[0]
 
@@ -257,8 +270,8 @@ def test_random_state_makes_draws_reproducible(blocks):
     """Same seed, same summary; different seed, different summary."""
     _model, adata, _truth = blocks
     kw = dict(covariate="cov_0", n_samples=40)
-    val = lambda rs: float(tcri.tl.mutual_information(adata, random_state=rs, **kw)["value"]
-                           .iloc[0])
+    val = lambda rs: float(_value(tcri.tl.mutual_information(adata, random_state=rs,
+                                                             inplace=False, **kw)).iloc[0])
     assert val(0) == val(0), "same random_state gave a different answer"
     assert val(0) != val(1), "random_state does not reach the draw"
 
@@ -315,13 +328,13 @@ def test_joint_distribution_still_returns_every_covariate(blocks):
     every covariate level in one object."""
     _model, adata, _truth = blocks
 
-    jd = tcri.tl.joint_distribution(adata, covariate=None)["result"]
+    jd = tcri.tl.joint_distribution(adata, covariate=None, inplace=False)["result"]
     assert jd.index.nlevels == 2 and jd.index.names[0] == "covariate"
     assert set(jd.index.get_level_values("covariate")) == set(
         adata.uns["tcri_covariate_categories"]
     )
 
-    one = tcri.tl.joint_distribution(adata, covariate="cov_0")["result"]
+    one = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["result"]
     assert one.index.nlevels == 1
     assert len(one) < len(jd), "restricting to one covariate did not reduce the table"
 
@@ -363,24 +376,28 @@ def test_metrics_take_an_anndata_only(blocks):
         assert "adata_or_jd" not in inspect.signature(fn).parameters
         assert "adata" in inspect.signature(fn).parameters
 
-    table = tcri.tl.joint_distribution(adata, covariate="cov_0")["result"]
+    table = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["result"]
     with pytest.raises(AttributeError):
         tcri.tl.mutual_information(table, covariate="cov_0")
 
 
 def test_the_joint_is_cached_like_every_other_metric(blocks):
     """``joint_distribution`` is probabilistic -- n_samples, temperature, weighted,
-    random_state -- so it records how it was derived: it stores and returns the same slots as
-    every other tool, and a recompute REPLACES the cached entry, as scanpy does."""
+    random_state -- so it records how it was derived: it stores its result like every other
+    tool, the slots an ``inplace=False`` call returns, and a recompute REPLACES the cached
+    entry, as scanpy does."""
     _model, adata, _truth = blocks
 
-    res = tcri.tl.joint_distribution(adata, covariate="cov_0", n_samples=4, random_state=0)
-    assert set(res) == {"table", "result"}
-    # wide on purpose: a joint is a matrix whose rows sum to 1
-    assert np.allclose(res["result"].sum(axis=1).to_numpy(), 1.0)
-    assert len(res["table"]) == 4 * len(res["result"]), "table keeps one row per draw"
-
+    kw = dict(covariate="cov_0", n_samples=4, random_state=0)
+    assert tcri.tl.joint_distribution(adata, **kw) is None
     cached = tcri.get.result(adata, "joint_distribution")
+    assert set(cached) == {"table", "result"}
+    # wide on purpose: a joint is a matrix whose rows sum to 1
+    assert np.allclose(cached["result"].sum(axis=1).to_numpy(), 1.0)
+    assert len(cached["table"]) == 4 * len(cached["result"]), "table keeps one row per draw"
+
+    res = tcri.tl.joint_distribution(adata, **kw, inplace=False)
+    assert set(res) == set(cached)
     pd.testing.assert_frame_equal(cached["result"], res["result"])
 
     params = tcri.get.params(adata, "joint_distribution")
@@ -417,7 +434,7 @@ def test_groupby_honors_the_callers_clone_restriction(blocks):
     assert set(restricted["patient"]) == set(unrestricted["patient"]), (
         "a group with none of the requested clones keeps its row, as NaN")
     direct = float(_value(tcri.tl.mutual_information(
-        adata, covariate="cov_0", clones=subset)).iloc[0])
+        adata, covariate="cov_0", clones=subset, inplace=False)).iloc[0])
     assert float(kept["value"].iloc[0]) == pytest.approx(direct, rel=1e-12)
 
 
@@ -471,7 +488,8 @@ def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
     """
     _model, adata, _truth = blocks
     out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_0", n_samples=16,
-                                  distance_metric=distance_metric, random_state=random_state)["result"]
+                                  distance_metric=distance_metric, random_state=random_state,
+                                  inplace=False)["result"]
     values = out["value"].to_numpy(float)
     worst = float(np.nanmax(values))
     assert worst == pytest.approx(0.0, abs=1e-12), (
@@ -486,5 +504,5 @@ def test_real_flux_keeps_posterior_spread(blocks):
     'fixing' self-flux by collapsing the draw path altogether."""
     _model, adata, _truth = blocks
     out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_1", n_samples=16,
-                                  random_state=0)["result"]
+                                  random_state=0, inplace=False)["result"]
     assert (out["sd"].to_numpy(float) > 0).any(), "no spread across draws; the draw path is dead"

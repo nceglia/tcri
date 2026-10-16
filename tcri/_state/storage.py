@@ -281,23 +281,29 @@ def _check_schema(schema, result, fn_name: str) -> None:
 
 
 def _with_owned(sig: inspect.Signature, owned) -> inspect.Signature:
-    """``sig`` with the decorator's keyword-only parameters added after its own.
+    """``sig`` with the decorator's keyword-only parameters added after its own, and its return
+    annotation widened by ``None``, which a storing call returns.
 
     They go before a ``**kwargs``, which must stay last.
     """
     params = list(sig.parameters.values())
     tail = [p for p in params if p.kind is inspect.Parameter.VAR_KEYWORD]
     head = [p for p in params if p.kind is not inspect.Parameter.VAR_KEYWORD]
-    return sig.replace(parameters=[*head, *owned, *tail])
+    returns = sig.return_annotation
+    if returns is not inspect.Signature.empty:
+        name = returns if isinstance(returns, str) else getattr(returns, "__name__", str(returns))
+        returns = f"{name} | None"
+    return sig.replace(parameters=[*head, *owned, *tail], return_annotation=returns)
 
 
 def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
               values=("value",), denominators=(), default_null=None, reference_arg="fit",
               per_gene_stats=False):
-    """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return it.
+    """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return ``None``.
 
-    A result stored by level, ``{replicate, item, stats}``, returns its replicate summary when
-    stored, and the whole result with ``inplace=False``; any other result is returned whole.
+    With ``inplace=False`` nothing is stored and the whole result is returned. A stored result is
+    read back through :mod:`tcri.get` only, so there is one copy of it, which cannot drift from a
+    returned one.
 
     The decorator owns three parameters, :data:`_OWNED`: ``key_added`` and ``inplace`` on every
     tool, and ``null_model`` on a tool with a ``default_null``. It declares them on its own
@@ -360,12 +366,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             bound.apply_defaults()
             result = _run(dict(bound.arguments), null_model=null_model, key_added=key_added,
                           inplace=inplace)
-            # A result with levels returns its replicate summary; the rest is read from the
-            # stored result. With `inplace=False` nothing is stored, so the whole result is the
-            # only way to reach the item frames, the draws and the tests, and it is returned.
-            if _has_levels(result) and inplace:
-                return result["replicate"]["summary"]
-            return result
+            return None if inplace else result
 
         def _run(arguments, *, null_model, key_added, inplace):
             """Compute, attach the reference, store; return the full result.

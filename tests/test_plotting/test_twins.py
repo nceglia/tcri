@@ -437,8 +437,8 @@ def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
 
     from tcri._compute._tables import collapse_to_replicates
 
-    res = getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient",
-                                   splitby="disease_status")
+    getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient", splitby="disease_status")
+    res = tcri.get.replicates(adata, metric)
     ax = getattr(tcri.pl, metric)(adata)
 
     # whatever the x axis is, every dot is a replicate -- never an item
@@ -461,8 +461,8 @@ def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
     _, adata = cohort
     adata = adata.copy()
     cov = _cov(adata)
-    res = tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient",
-                                     splitby="disease_status")
+    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
+    res = tcri.get.replicates(adata, "phenotypic_entropy")
 
     from tcri.plotting._base import REFERENCE_LABEL
 

@@ -1,10 +1,12 @@
 """The four engine-backed metric twins and the group contrast: shapes, bits/normalization,
 and the group-comparison math.
 
-Every ``tl`` returns the same three payload keys — ``table`` (one row per draw, never
-reduced), ``result`` (reduced over draws), ``stats`` (the between-split contrast, ``None``
-without ``splitby``) — and stores that object under its ``uns`` key. These tests read the
-payload rather than a bare float/Series, so there is one shape to learn rather than a return
+Every ``tl`` stores its result under its ``uns`` key and returns ``None``; with
+``inplace=False`` it stores nothing and returns that result. Mutual information and the two
+entropies hold ``{replicate, item, stats}``, each level ``draws`` (one row per draw, never
+reduced) and ``summary`` (reduced over draws); flux holds ``table``, ``result`` and ``stats``.
+``stats`` is the between-split contrast, ``None`` without ``splitby``. These tests read the
+result rather than a bare float/Series, so there is one shape to learn rather than a return
 type per combination of axes.
 """
 import numpy as np
@@ -65,7 +67,8 @@ def test_phenotypic_entropy_shapes_and_range(trained_model):
 def test_mutual_information_scalar_and_draws(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    point = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0)
+    point = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0,
+                                       inplace=False)["replicate"]["summary"]
     assert len(point) == 1, "no group and no item axis -> a single row"
     assert -1e-9 <= _one(point) <= 1 + 1e-9  # normalized (min) in [0,1]
 
@@ -81,7 +84,8 @@ def test_mutual_information_unnormalized_is_bits(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
     mi_bits = _one(tcri.tl.mutual_information(adata, covariate=cov, n_samples=0,
-                                              normalized=False))
+                                              normalized=False,
+                                              inplace=False)["replicate"]["summary"])
     assert mi_bits >= -1e-9  # raw MI in bits, non-negative
 
 
@@ -98,50 +102,68 @@ def test_metric_groupby_tidy(trained_model):
     assert {"patient", "phenotype", "value"}.issubset(ce.columns)
 
 
-def test_every_metric_returns_what_it_cached(trained_model):
-    """The store-once invariant, on all five tools: what you get back IS what is in ``uns``.
+def _assert_same_result(stored, returned, obj):
+    """``stored`` and ``returned`` hold the same slots and, level by level, the same frames."""
+    assert set(stored) == set(returned), obj
+    for slot, value in returned.items():
+        if value is None:
+            assert stored[slot] is None, f"{obj}.{slot}"
+        elif isinstance(value, dict):
+            _assert_same_result(stored[slot], value, f"{obj}.{slot}")
+        else:
+            pd.testing.assert_frame_equal(stored[slot], value, check_dtype=False,
+                                          obj=f"{obj}.{slot}")
 
-    If ``pl.*`` recomputed the metric from ``adata`` instead of reading the cache, the plot and
-    the frame in the caller's hand could disagree — a different ``n_samples``, a different draw,
-    a ``distance_metric`` that differed between ``tl`` and ``pl``.
+
+def test_every_tool_stores_what_inplace_false_returns(trained_model):
+    """The store-once invariant, on every stored tool: a call stores its result and returns
+    ``None``, and ``inplace=False`` returns that same result and stores nothing.
+
+    ``tcri.get`` is then the one reader of a stored result. If ``pl.*`` recomputed the metric
+    from ``adata`` instead of reading the cache, the plot and the frame in the caller's hand
+    could disagree — a different ``n_samples``, a different draw, a ``distance_metric`` that
+    differed between ``tl`` and ``pl``.
     """
-    _, adata = trained_model
+    model, adata = trained_model
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
+    assert rest, "the fixture needs two covariate levels for flux and the deltas"
+    pair = dict(cov_from=cov, cov_to=rest[0])
+
+    def importance(obj, **kwargs):
+        return tcri.perturb.gene_importance(model, obj, **kwargs)
 
     calls = {
-        "joint_distribution": dict(covariate=cov),
-        "mutual_information": dict(covariate=cov),
-        "clonotypic_entropy": dict(covariate=cov),
-        "phenotypic_entropy": dict(covariate=cov),
+        "joint_distribution": (tcri.tl.joint_distribution, K.JOINT_DISTRIBUTION,
+                               dict(covariate=cov)),
+        "mutual_information": (tcri.tl.mutual_information, K.MUTUAL_INFORMATION,
+                               dict(covariate=cov)),
+        "clonotypic_entropy": (tcri.tl.clonotypic_entropy, K.CLONOTYPIC_ENTROPY,
+                               dict(covariate=cov)),
+        "phenotypic_entropy": (tcri.tl.phenotypic_entropy, K.PHENOTYPIC_ENTROPY,
+                               dict(covariate=cov)),
+        "phenotypic_flux": (tcri.tl.phenotypic_flux, K.PHENOTYPIC_FLUX, pair),
+        "delta_clonotypic_entropy": (tcri.tl.delta_clonotypic_entropy,
+                                     K.DELTA_CLONOTYPIC_ENTROPY, pair),
+        "delta_phenotypic_entropy": (tcri.tl.delta_phenotypic_entropy,
+                                     K.DELTA_PHENOTYPIC_ENTROPY, pair),
+        "gene_importance": (importance, K.GENE_IMPORTANCE,
+                            dict(genes=list(adata.var_names[:2]), covariate=cov)),
     }
-    if rest:
-        calls["phenotypic_flux"] = dict(cov_from=cov, cov_to=rest[0])
 
-    for name, kwargs in calls.items():
-        returned = getattr(tcri.tl, name)(adata, **kwargs)
-        cached = tcri.get.result(adata, name)
-        if isinstance(returned, pd.DataFrame):
-            # a metric stored by level returns its replicate summary
-            pd.testing.assert_frame_equal(cached["replicate"]["summary"], returned,
-                                          check_dtype=False, obj=name)
-            full = getattr(tcri.tl, name)(adata, **kwargs, inplace=False)
-            assert set(cached) == set(full), name
-            for level in ("replicate", "item"):
-                for frame_name, frame in (full.get(level) or {}).items():
-                    pd.testing.assert_frame_equal(cached[level][frame_name], frame,
-                                                  check_dtype=False,
-                                                  obj=f"{name}.{level}.{frame_name}")
-        else:
-            assert set(cached) == set(returned), name
-            for slot, frame in returned.items():
-                if frame is None:
-                    assert cached[slot] is None, f"{name}.{slot}"
-                else:
-                    pd.testing.assert_frame_equal(cached[slot], frame, check_dtype=False,
-                                                  obj=f"{name}.{slot}")
+    for name, (fn, key, kwargs) in calls.items():
+        fresh = adata.copy()
+        fresh.uns.pop(key, None)
+        before = set(fresh.uns)
+        returned = fn(fresh, **kwargs, inplace=False)
+        assert key not in fresh.uns, f"{name}: inplace=False stored its result"
+        assert set(fresh.uns) == before, f"{name}: inplace=False wrote to uns"
+
+        assert fn(adata, **kwargs) is None, f"{name}: a storing call returned its result"
+        _assert_same_result(tcri.get.result(adata, name), returned, name)
+
         params = tcri.get.params(adata, name)
-        for key, value in kwargs.items():
-            assert params[key] == value, f"{name}: params lost {key}"
+        for param, value in kwargs.items():
+            assert params[param] == value, f"{name}: params lost {param}"
 
 
 def test_phenotypic_flux_over_common_clones(trained_model):
@@ -150,7 +172,7 @@ def test_phenotypic_flux_over_common_clones(trained_model):
     if len(covs) < 2:
         pytest.skip("needs >=2 covariates")
     res = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1], n_samples=0,
-                                  distance_metric="l1")
+                                  distance_metric="l1", inplace=False)
     out = res["result"]
     assert {"cov_from", "cov_to", "clonotype", "value"}.issubset(out.columns)
     v = out["value"].dropna().to_numpy()

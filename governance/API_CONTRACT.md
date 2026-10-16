@@ -102,24 +102,24 @@ holding more than one row per group and level. `delta` is the second level's mea
 first's. Every pair of split levels with a group has its row, `comparison` `"split"`; an arm with
 no finite value has `n` 0 and NaN statistics. A contrast whose p is undefined has blank `stars`.
 
-**Return shape.** Every `tl` stores its result under `uns[key_added or "tcri_<metric>"]` with a
-`params` block recording every argument, defaults included; `inplace=False` returns the whole
-result and stores nothing. Mutual information and the two entropies store `{replicate, item,
-stats}` and return the replicate summary. Each level holds `draws`, one row per (covariate,
-replicate[, item], draw), never reduced, and `summary`, which reduces over draw only. The
-replicate level has one row per replicate, NaN when the replicate has no joint at the covariate;
-the item level has one row per replicate and phenotype (clonotypic entropy) or clone (phenotypic
-entropy), and mutual information has no item level. The other tools return and store `{table,
-result, stats}`: `table` one row per (covariate, group, item, draw), `result` reduced over draw
-only. Every summary and `result` carries `value`, `sd`, `hdi_low`, `hdi_high` (a true
-highest-density interval, NaN at `n_samples ≤ 1`); `stats` is `None` without `splitby` and
-otherwise carries one row per contrast, with `quantity` naming the column contrasted. Every
-frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw values as rows
-with a `draw` column. Read back with `tcri.get.result(adata, name)` (the whole result),
-`tcri.get.items`, `tcri.get.stats` and `tcri.get.draws(adata, name, items=False)` (the frames
-of a result stored by level), and `tcri.get.params(adata, name)`. A normalized replicate value
-whose normalizer is 0 raises `ValueError` naming the metric, the replicate and the covariate
-level.
+**Return shape.** Every `tl`, and `perturb.gene_importance`, stores its result under `uns[key_added
+or "tcri_<metric>"]` with a `params` block recording every argument, defaults included, and returns
+`None`; `inplace=False` stores nothing and returns the whole result. Nothing is read from a returned
+object: `tcri.get` is the only reader of a stored result. Mutual information and the two entropies
+store `{replicate, item, stats}`. Each level holds `draws`, one row per (covariate, replicate[,
+item], draw), never reduced, and `summary`, which reduces over draw only. The replicate level has
+one row per replicate, NaN when the replicate has no joint at the covariate; the item level has one
+row per replicate and phenotype (clonotypic entropy) or clone (phenotypic entropy), and mutual
+information has no item level. The other tools store `{table, result, stats}`: `table` one row per
+(covariate, group, item, draw), `result` reduced over draw only. Every summary and `result` carries
+`value`, `sd`, `hdi_low`, `hdi_high` (a true highest-density interval, NaN at `n_samples ≤ 1`);
+`stats` is `None` without `splitby` and otherwise carries one row per contrast, with `quantity`
+naming the column contrasted. Every frame survives an h5ad round trip: flat columns, no vectors in
+cells, per-draw values as rows with a `draw` column. Read back with `tcri.get.result(adata, name)`
+(the whole result), `tcri.get.replicates`, `tcri.get.items`, `tcri.get.stats` and
+`tcri.get.draws(adata, name, items=False)` (the frames of a result stored by level), and
+`tcri.get.params(adata, name)`. A normalized replicate value whose normalizer is 0 raises
+`ValueError` naming the metric, the replicate and the covariate level.
 
 **References.** `tcri.null.phenotype`, `.clonotype`, `.covariate` and `.all` take `n_nulls`
 (default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
@@ -181,7 +181,8 @@ intervene on the expression matrix, read the phenotype call back through the per
 `predict()` uses (`use_gate=True`, the default) or through the head alone (`use_gate=False`).
 The pass is deterministic at `n_samples=0`; no encoder sample is ever drawn. `knockout`
 returns the `predict()` frame and stores nothing unless `key_added` names an `obsm` slot;
-`gene_importance` returns and stores `{table, result, stats, shift}`, where `shift` is the
+`gene_importance` stores `{table, result, stats, shift}` and returns `None` (the whole result at
+`inplace=False`), where `shift` is the
 signed per-phenotype decomposition of each importance, and its `stats` contrast is per gene. It
 takes `null_model` like every scored metric and no `fit`: it is a query on a model, so a
 different fit is reached by handing it a different model, and `"auto"` rebuilds the phenotype
@@ -284,7 +285,7 @@ class tl:
         clones: Any = ..., exclude_pools: bool = ..., temperature: float = ...,
         random_state: Any = ..., device: Any = ..., fit: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def clonotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -292,7 +293,7 @@ class tl:
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
         device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def phenotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -300,7 +301,7 @@ class tl:
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def mutual_information(
         adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -308,7 +309,7 @@ class tl:
         normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
         device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def phenotypic_flux(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -316,7 +317,7 @@ class tl:
         distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def delta_clonotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -324,7 +325,7 @@ class tl:
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
         device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
     def delta_phenotypic_entropy(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
@@ -332,7 +333,7 @@ class tl:
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
 
 
 # ── plotting (pl): twins render what tl stored ───────────────────────────────
@@ -386,6 +387,30 @@ class pl:
     ) -> dict: ...
 
 
+# ── stored results (get) ──────────────────────────────────────────────────────
+class get:
+    def result(
+        adata: AnnData, name: str, *, key: Optional[str] = ..., fit: Optional[str] = ...,
+    ) -> Any: ...
+    def params(
+        adata: AnnData, name: str, *, key: Optional[str] = ..., fit: Optional[str] = ...,
+    ) -> dict: ...
+    def replicates(
+        adata: AnnData, name: str, *, key: Optional[str] = ..., fit: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
+    def items(
+        adata: AnnData, name: str, *, key: Optional[str] = ..., fit: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
+    def stats(
+        adata: AnnData, name: str, *, key: Optional[str] = ..., fit: Optional[str] = ...,
+    ) -> Optional[pd.DataFrame]: ...
+    def draws(
+        adata: AnnData, name: str, *, items: bool = ..., key: Optional[str] = ...,
+        fit: Optional[str] = ...,
+    ) -> pd.DataFrame: ...
+    def fits(adata: AnnData) -> list: ...
+
+
 # ── diagnostics (diag) ───────────────────────────────────────────────────────
 class diag:
     def joint_distribution_ppc(
@@ -420,7 +445,7 @@ class perturb:
         n_samples: int = ..., use_gate: bool = ..., batch_size: int = ...,
         random_state: Any = ..., null_model: Any = ..., key_added: Optional[str] = ...,
         inplace: bool = ...,
-    ) -> dict: ...
+    ) -> Optional[dict]: ...
 
 
 # ── permutation references (null) ────────────────────────────────────────────

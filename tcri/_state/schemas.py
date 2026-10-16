@@ -7,7 +7,7 @@ trailing comments are documentation of the payload layout; nothing parses them.
 
 ``replicate``
     ``{draws, summary}``. ``draws`` has one row per (covariate, group, draw), ``summary`` the same
-    rows summarized over the draws, one per (covariate, group). The call returns ``summary``.
+    rows summarized over the draws, one per (covariate, group), read with ``tcri.get.replicates``.
 
 ``item``
     ``{draws, summary}`` for the metric's items, one row per (covariate, group, item[, draw]).

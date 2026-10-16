@@ -1,20 +1,27 @@
 # Stored results: compute once, plot from the store
 
-Every `tcri.tl` metric, and `tcri.perturb.gene_importance`, computes a result and writes it to
-`adata.uns`. Every `tcri.pl` function reads that stored result and never recomputes it. A plot
-therefore cannot disagree with the frame in your hand:
+Every `tcri.tl` metric, and `tcri.perturb.gene_importance`, computes a result, writes it to
+`adata.uns` and returns `None`, the scanpy convention. `tcri.get` is the only reader of the stored
+result, and every `tcri.pl` function draws it through `tcri.get` and never recomputes it. There
+is one copy of each result, so a plot cannot disagree with the frame in your hand:
 
 ```python
-res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None)
+tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None)
 
-stored = tcri.get.result(adata, "mutual_information")
-pd.testing.assert_frame_equal(stored["replicate"]["summary"], res)
-
-tcri.pl.mutual_information(adata)          # draws res, nothing is recomputed
+mi = tcri.get.replicates(adata, "mutual_information")   # one row per patient
+tcri.pl.mutual_information(adata)                         # draws mi, nothing is recomputed
 ```
 
-`null_model=None` is in that call because the metrics default to `null_model="auto"`, which needs
-a reference fit on the object; the reference is the last section below.
+With `inplace=False` the call stores nothing and returns the whole result instead:
+
+```python
+res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None,
+                                 inplace=False)
+res["replicate"]["summary"]                               # the same frame, and nothing stored
+```
+
+`null_model=None` is in those calls because the metrics default to `null_model="auto"`, which
+needs a reference fit on the object; the reference is the last section below.
 
 This page describes that convention — where a result lands, what is recorded beside it, how it
 survives a round trip through `.h5ad`, and what stops it from changing by accident.
@@ -57,7 +64,7 @@ Mutual information and the two entropies store their result by level:
 adata.uns["tcri_<metric>"]
 ├── replicate
 │   ├── draws      one row per replicate and draw (and null fit)
-│   └── summary    one row per replicate           ← returned by tl.<metric>()
+│   └── summary    one row per replicate           ← get.replicates
 ├── item           (the entropies; mutual information has none)
 │   ├── draws      one row per replicate, item and draw (and null fit)
 │   └── summary    one row per replicate and item
@@ -65,11 +72,10 @@ adata.uns["tcri_<metric>"]
 └── params, version, tool, tcri_version
 ```
 
-The call returns the replicate summary, the main result. `inplace=False` returns the whole
-result instead, without storing it. Every replicate has its replicate row, NaN when it has no
-cells at the covariate or no clone left by `clones=`.
+The replicate summary is the main result, read with `get.replicates`. Every replicate has its
+replicate row, NaN when it has no cells at the covariate or no clone left by `clones=`.
 
-The other tools return and store a dict of frames: `table` is the unreduced substrate, one row
+The other tools store a dict of frames: `table` is the unreduced substrate, one row
 per covariate, group and item (and draw, with `n_samples > 0`), and `result` is the reduced
 per-group frame the plots consume. The tools that contrast groups add `stats`;
 `joint_distribution`, which contrasts nothing, has only the two; `gene_importance` adds `shift`,
@@ -104,11 +110,13 @@ from plot arguments, which is what makes a plot a view of a specific computation
 
 ## Reading it back
 
-`tcri.get` is the read side. Nothing else needs to know the blob format.
+`tcri.get` is the read side, and the only one: a `tl` call returns `None`, so a stored result is
+read here or not at all. Nothing else needs to know the blob format.
 
 | Call | Returns |
 |---|---|
 | `get.result(adata, "phenotypic_entropy")` | the whole stored result, provenance stripped |
+| `get.replicates(adata, "phenotypic_entropy")` | the replicate summary |
 | `get.items(adata, "phenotypic_entropy")` | the item summary |
 | `get.stats(adata, "phenotypic_entropy")` | the tests, or `None` |
 | `get.draws(adata, "phenotypic_entropy")` | the replicate draws |
@@ -125,7 +133,8 @@ first — tcri.pl.* renders the stored result and never recomputes it.
 ```
 
 `get.items` and `get.draws(items=True)` raise for mutual information, which has no items, and
-`get.items` and `get.draws` raise for a result stored as `{table, result, stats}`.
+`get.replicates`, `get.items` and `get.draws` raise for a result stored as `table` and `result`
+(flux, the deltas, the joint and gene importance), which `get.result` reads.
 
 `pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
 summary, or with `view="item"` the item summary, or the stored `result` of the other tools.
@@ -174,7 +183,7 @@ therefore encoded before it is stored, and the encoding never uses a user label 
 
 Storing columns positionally is what lets a phenotype called `CD8/GZMK` and two columns with the
 same label survive the trip. Reading inverts the encoding, so `get.result` gives back the slots
-`tl` returned, with their values, column labels and index levels. Each encoded structure is
+`tl` computed, with their values, column labels and index levels. Each encoded structure is
 tagged (`__tcri_df__`, `__tcri_series__`, `__tcri_map__`, `__tcri_multiindex__`), so the decoder
 recognizes its own output and passes everything else through.
 

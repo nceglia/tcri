@@ -41,7 +41,8 @@ bare value and creates no column. `null_model="null.phenotype[2]"` reads one fit
 list of models a `tcri.null.*` call returned can be passed back as `null_model`.
 
 ```python
-mi = tcri.tl.mutual_information(adata, covariate="post")   # value, null_value, adjusted
+tcri.tl.mutual_information(adata, covariate="post")
+tcri.get.replicates(adata, "mutual_information")           # value, null_value, adjusted
 tcri.pl.mutual_information(adata)                          # the adjusted value, on a zero rule
 tcri.pl.mutual_information(adata, quantity="value")        # the value, reference drawn behind it
 ```
