@@ -57,9 +57,9 @@ def test_import_tcri_does_not_hijack_global_warning_filters():
 def test_preprocessing_import_is_light():
     """``import tcri`` must not drag in umap.
 
-    umap pulls pynndescent and numba behind it, so importing it at module scope adds
-    that compile cost to every ``import tcri``. It is needed only for the opt-in
-    ``to_anndata(compute_umap=True)`` path, which imports it locally.
+    umap pulls pynndescent and numba behind it, so importing it would add that compile cost
+    to every ``import tcri``. tcri never uses it; an embedding of the latent space is computed
+    with scanpy or rapids-singlecell on ``obsm["X_tcri"]``.
     """
     import subprocess
     import sys
