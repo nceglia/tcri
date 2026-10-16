@@ -113,6 +113,10 @@ pe = tcri.tl.phenotypic_entropy(adata, covariate="pre")
 flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
 
+Mutual information and the two entropies return one row per replicate. The entropies also have
+one value per item, per phenotype or per clone, read with
+`tcri.get.items(adata, "phenotypic_entropy")`.
+
 ```{important}
 For the classical NMI, pass `normalize_mode="average"` explicitly. The default
 (`"min"`) is group-comparable, which is usually what you want when clone counts differ
@@ -145,8 +149,9 @@ res = tcri.tl.mutual_information(
     adata, covariate="pre", groupby="patient", splitby="disease_status"
 )
 
-res["result"]   # one row per patient, carrying its disease_status label
-res["stats"]    # the disease-vs-control contrast: mean_a/mean_b, delta, stat, p, stars
+res                                             # one row per patient, with its disease_status
+tcri.get.stats(adata, "mutual_information")     # the disease-vs-control contrast:
+                                                # mean_a/mean_b, delta, stat, p, stars
 ```
 
 `groupby` is the replicate — one value per patient — and `splitby` is the cohort label,

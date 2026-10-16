@@ -37,11 +37,14 @@ conceptual reference is [Information-theoretic metrics](../concepts/index.md).
 
 ## The `stats` slot
 
-Every metric returns `{table, result, stats}`. When you pass `splitby`, the between-group
-contrast lands in `stats` — you do not call a second function.
+Mutual information and the two entropies store `{replicate, item, stats}` and return the
+replicate summary; the other metrics return `{table, result, stats}`. When you pass `splitby`,
+the between-group contrast lands in `stats`, read with `tcri.get.stats` — you do not call a
+second function.
 
 | column | meaning |
 |---|---|
+| `comparison` | what the row compares: `"split"`, two levels of `splitby` |
 | *`<splitby>`* | the contrast as a label, e.g. `disease_status` → `"disease vs control"` |
 | `quantity` | which column was contrasted: `"adjusted"` when a reference was computed, `"value"` otherwise |
 | `level_a`, `level_b` | the two levels contrasted |
@@ -52,13 +55,16 @@ contrast lands in `stats` — you do not call a second function.
 | `delta` | `mean_b - mean_a` |
 | `stat`, `p`, `stars` | Mann-Whitney statistic, p-value, significance marker; blank when no test could be run |
 
+Every pair of split levels with a replicate has its row. An arm whose replicates have no finite
+value has `n` 0, and the row has NaN statistics and blank stars.
+
 The interval columns are `ci_*` — **between** replicates. The `hdi_*` columns that appear in
-`result` are a different quantity, the **within**-group spread over posterior draws, and they
+the summaries are a different quantity, the **within**-group spread over posterior draws, and they
 are deliberately absent here: an interval over patients and an interval over draws are not
 interchangeable.
 
-**`n` counts replicates, never items.** Items are collapsed to their group before the contrast,
-so 18 clones from 4 patients give n=4. Handing the row-level frame to a rank test instead is
+**`n` counts replicates, never items.** The contrast runs on one value per replicate, so 18
+clones from 4 patients give n=4. Handing the row-level frame to a rank test instead is
 what produces a starred p-value off a handful of patients.
 
 With more than two levels every pair is reported; multiplicity is yours to handle.
@@ -76,13 +82,13 @@ permuted label vectors, five fits by default (see {doc}`tcri.null <null>`).
 
 ```python
 mi = tcri.tl.mutual_information(adata, covariate="post")
-mi["result"][["value", "null_value", "adjusted"]]
+mi[["value", "null_value", "adjusted"]]
 ```
 
 `null_model` defaults to `"auto"`: the phenotype null for the entropies, mutual information and
 gene importance, the covariate null for flux and the two deltas. `None` computes no reference
 and creates no column; any reference or fit on the object can be named instead, or the fitted
-null models passed. `result` and `table` gain `null_v` and `adjusted` beside every native value
+null models passed. Every frame gains `null_v` and `adjusted` beside every native value
 column `v`, and `adjusted = value - null_value` is the quantity the metric reports, on its own
 scale. The fit's draw *d* is paired with draw *d* of every fit of the reference and all the pairs
 are summarized, so the interval carries how much the null moves from one fit to the next; with
@@ -97,11 +103,11 @@ what is being measured. Its draws take their own seed, derived from your `random
 
 **The adjusted value is computed per draw.** The null is the value expected under no
 association, and the fit and the null are independent fits, so the fit's draw *d* is paired with
-the null's draw *d*. `table` carries `null_value` and `adjusted` on every draw, and `result`
-gives the adjusted value's mean with `adjusted_sd`, `adjusted_hdi_low` and `adjusted_hdi_high`
+the null's draw *d*. The per-draw frames carry `null_value` and `adjusted` on every draw, and
+the summaries give the adjusted value's mean with `adjusted_sd`, `adjusted_hdi_low` and `adjusted_hdi_high`
 over those draws, so it has an interval like any value. At `n_samples=0` there is one draw on
 each side, and `adjusted` is the difference of the two point values.
 
 **Mutual information stores both denominators.** A normalized MI divides by a normalizer taken
-from the same joint it normalizes, and a null does not share it, so `result` carries `denom` and
-`null_denom`. `value * denom` and `null_value * null_denom` recover both numbers in bits.
+from the same joint it normalizes, and a null does not share it, so its replicate summary
+carries `denom` and `null_denom`. `value * denom` and `null_value * null_denom` recover both numbers in bits.

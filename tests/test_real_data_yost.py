@@ -29,6 +29,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from .conftest import frames
+
 warnings.filterwarnings("ignore")
 
 pytestmark = pytest.mark.slow
@@ -103,12 +105,12 @@ def test_metrics_run_and_are_in_range(fitted):
     # `null_model=None` throughout this file: the fixture fits real counts for 120 epochs, so
     # a permutation reference would repeat that cost, and what is asserted here is only that
     # the metrics run and land in range on real data.
-    mi = float(tcri.tl.mutual_information(a, covariate=COV, null_model=None, n_samples=0, weighted=True,
-                                          normalize_mode="average")["result"]["value"].iloc[0])
+    mi = float(frames(tcri.tl.mutual_information(a, covariate=COV, null_model=None, n_samples=0, weighted=True,
+                                          normalize_mode="average", inplace=False))[1]["value"].iloc[0])
     assert np.isfinite(mi) and 0.0 <= mi <= 1.0, f"NMI out of range: {mi}"
 
-    ce = tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0, null_model=None)["result"]
-    pe = tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0, null_model=None)["result"]
+    ce = frames(tcri.tl.clonotypic_entropy(a, covariate=COV, n_samples=0, null_model=None, inplace=False))[1]
+    pe = frames(tcri.tl.phenotypic_entropy(a, covariate=COV, n_samples=0, null_model=None, inplace=False))[1]
     for name, s in (("clonotypic", ce), ("phenotypic", pe)):
         v = s["value"].to_numpy(dtype=float)
         v = v[np.isfinite(v)]
@@ -125,14 +127,14 @@ def test_grouped_comparison_runs_over_patients(fitted):
     res = tcri.tl.mutual_information(a, covariate=COV, groupby=GROUP, splitby=SPLIT,
                                      null_model=None,
                                      n_samples=0, weighted=True, normalize_mode="average")
-    df = res["result"]
+    df = res
     assert isinstance(df, pd.DataFrame) and len(df) == a.obs[GROUP].nunique()
     assert set(df[SPLIT].unique()) <= {"R", "NR"}
     assert "value" in df.columns, f"expected a 'value' column, got {list(df.columns)}"
     assert df["value"].notna().any()
 
     # splitby is set, so the contrast exists -- and its n counts PATIENTS, not clones
-    stats = res["stats"]
+    stats = tcri.get.stats(a, "mutual_information")
     assert stats is not None and len(stats) == 1
     row = stats.iloc[0]
     assert {row["level_a"], row["level_b"]} == {"R", "NR"}

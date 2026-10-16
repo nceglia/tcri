@@ -53,7 +53,7 @@ The payload has the three slots every metric has plus a fourth:
 | `shift` | (gene, phenotype, group) | `baseline`, `perturbed`, `shift = baseline − perturbed`, averaged over draws |
 
 `shift` sums to zero over phenotypes: a positive entry is mass the phenotype **loses** when
-the gene is silenced. Read any slot back with `tcri.get.gene_importance(adata, which=...)`.
+the gene is silenced. Read the slots back with `tcri.get.result(adata, "gene_importance")`.
 
 ## The reference
 

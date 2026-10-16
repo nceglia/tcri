@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from ..conftest import frames
 from tcri._state import keys as K
 
 
@@ -19,52 +20,61 @@ def _cov(adata):
     return list(adata.uns[K.COVARIATE_CATEGORIES])[0]
 
 
-def _one(res):
-    """The single value of a metric computed with no group and no item axis."""
-    return float(res["result"]["value"].iloc[0])
+def _one(summary):
+    """The single value of a metric computed with no group."""
+    return float(summary["value"].iloc[0])
 
 
 def test_clonotypic_entropy_shapes_and_range(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    res = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=0)
-    assert set(res) == {"table", "result", "stats"}
+    res = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=0, inplace=False)
+    assert set(res) == {"replicate", "item", "stats"}
     assert res["stats"] is None, "no splitby -> no contrast"
 
-    out = res["result"]
+    out = res["item"]["summary"]
     assert set(out["phenotype"]) == set(adata.uns[K.PHENOTYPE_CATEGORIES]), (
         "H(c|phi) is one value per PHENOTYPE"
     )
-    finite = out["value"].dropna().to_numpy()
-    assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()  # normalized bits in [0,1]
+    for frame in (out, res["replicate"]["summary"]):
+        finite = frame["value"].dropna().to_numpy()
+        assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()  # normalized, in [0,1]
+    assert len(res["replicate"]["summary"]) == 1, "no group -> one replicate value"
 
-    sampled = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0)
-    assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(sampled["result"].columns)
-    n_nulls = sampled["table"]["null"].nunique()
-    assert len(sampled["table"]) == 8 * n_nulls * len(sampled["result"]), (
-        "`table` keeps every draw, paired with every null; `result` is what reduces it"
-    )
+    sampled = tcri.tl.clonotypic_entropy(adata, covariate=cov, n_samples=8, random_state=0,
+                                         inplace=False)
+    for level in ("replicate", "item"):
+        draws, summary = sampled[level]["draws"], sampled[level]["summary"]
+        assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(summary.columns)
+        assert len(draws) == 8 * draws["null"].nunique() * len(summary), (
+            "`draws` keeps every draw, paired with every null; `summary` is what reduces it"
+        )
 
 
 def test_phenotypic_entropy_shapes_and_range(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    out = tcri.tl.phenotypic_entropy(adata, covariate=cov, n_samples=0)["result"]
+    res = tcri.tl.phenotypic_entropy(adata, covariate=cov, n_samples=0, inplace=False)
+    out = res["item"]["summary"]
     assert "clonotype" in out.columns, "H(phi|c) is one value per CLONE"
-    finite = out["value"].dropna().to_numpy()
-    assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()
+    for frame in (out, res["replicate"]["summary"]):
+        finite = frame["value"].dropna().to_numpy()
+        assert (finite >= -1e-9).all() and (finite <= 1 + 1e-9).all()
 
 
 def test_mutual_information_scalar_and_draws(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
     point = tcri.tl.mutual_information(adata, covariate=cov, n_samples=0)
-    assert len(point["result"]) == 1, "no group and no item axis -> a single row"
+    assert len(point) == 1, "no group and no item axis -> a single row"
     assert -1e-9 <= _one(point) <= 1 + 1e-9  # normalized (min) in [0,1]
 
-    summ = tcri.tl.mutual_information(adata, covariate=cov, n_samples=8, random_state=0)
-    assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(summ["result"].columns)
-    assert len(summ["table"]) == 8 * summ["table"]["null"].nunique()
+    summ = tcri.tl.mutual_information(adata, covariate=cov, n_samples=8, random_state=0,
+                                      inplace=False)
+    assert "item" not in summ, "mutual information has one value per joint and no items"
+    assert {"value", "sd", "hdi_low", "hdi_high"}.issubset(summ["replicate"]["summary"].columns)
+    draws = summ["replicate"]["draws"]
+    assert len(draws) == 8 * draws["null"].nunique()
 
 
 def test_mutual_information_unnormalized_is_bits(trained_model):
@@ -78,13 +88,13 @@ def test_mutual_information_unnormalized_is_bits(trained_model):
 def test_metric_groupby_tidy(trained_model):
     _, adata = trained_model
     cov = _cov(adata)
-    mi = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
-                                    n_samples=0)["result"]
+    mi = frames(tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
+                                    n_samples=0, inplace=False))[1]
     assert {"patient", "value"}.issubset(mi.columns)
     assert len(mi) == adata.obs["patient"].nunique()
 
-    ce = tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient",
-                                    n_samples=0)["result"]
+    ce = frames(tcri.tl.clonotypic_entropy(adata, covariate=cov, groupby="patient",
+                                    n_samples=0, inplace=False))[1]
     assert {"patient", "phenotype", "value"}.issubset(ce.columns)
 
 
@@ -110,13 +120,25 @@ def test_every_metric_returns_what_it_cached(trained_model):
     for name, kwargs in calls.items():
         returned = getattr(tcri.tl, name)(adata, **kwargs)
         cached = tcri.get.result(adata, name)
-        assert set(cached) == set(returned), name
-        for slot, frame in returned.items():
-            if frame is None:
-                assert cached[slot] is None, f"{name}.{slot}"
-            else:
-                pd.testing.assert_frame_equal(cached[slot], frame, check_dtype=False,
-                                              obj=f"{name}.{slot}")
+        if isinstance(returned, pd.DataFrame):
+            # a metric stored by level returns its replicate summary
+            pd.testing.assert_frame_equal(cached["replicate"]["summary"], returned,
+                                          check_dtype=False, obj=name)
+            full = getattr(tcri.tl, name)(adata, **kwargs, inplace=False)
+            assert set(cached) == set(full), name
+            for level in ("replicate", "item"):
+                for frame_name, frame in (full.get(level) or {}).items():
+                    pd.testing.assert_frame_equal(cached[level][frame_name], frame,
+                                                  check_dtype=False,
+                                                  obj=f"{name}.{level}.{frame_name}")
+        else:
+            assert set(cached) == set(returned), name
+            for slot, frame in returned.items():
+                if frame is None:
+                    assert cached[slot] is None, f"{name}.{slot}"
+                else:
+                    pd.testing.assert_frame_equal(cached[slot], frame, check_dtype=False,
+                                                  obj=f"{name}.{slot}")
         params = tcri.get.params(adata, name)
         for key, value in kwargs.items():
             assert params[key] == value, f"{name}: params lost {key}"
@@ -174,8 +196,8 @@ def test_build_stats_delegates_to_the_one_contrast(cohort):
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
     res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
-                                     splitby="disease_status")
-    stats, result = res["stats"], res["result"]
+                                     splitby="disease_status", inplace=False)
+    stats, result = res["stats"], res["replicate"]["summary"]
 
     row = stats.iloc[0]
     quantity = row["quantity"]
@@ -199,7 +221,8 @@ def test_stats_carries_the_between_replicate_spread(cohort):
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
     res = tcri.tl.mutual_information(adata, covariate=cov, groupby="patient",
-                                     splitby="disease_status", n_samples=8, random_state=0)
+                                     splitby="disease_status", n_samples=8, random_state=0,
+                                     inplace=False)
     row = res["stats"].iloc[0]
 
     assert row["replicate_unit"] == "patient"
@@ -208,7 +231,7 @@ def test_stats_carries_the_between_replicate_spread(cohort):
         assert row[f"ci_low_{suffix}"] <= row[f"mean_{suffix}"] <= row[f"ci_high_{suffix}"]
         assert row[f"sd_{suffix}"] > 0
 
-    assert {"hdi_low", "hdi_high"} <= set(res["result"].columns)
+    assert {"hdi_low", "hdi_high"} <= set(res["replicate"]["summary"].columns)
     assert not {"hdi_low", "hdi_high"} & set(res["stats"].columns), (
         "a within-group posterior interval leaked into the between-replicate slot"
     )
@@ -222,11 +245,10 @@ def test_stats_carries_the_between_replicate_spread(cohort):
 def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_col, cohort):
     """n is the number of PATIENTS, on every metric — including the ones with an item axis.
 
-    The item-bearing metrics are where this bites: `result` holds one row per (patient, clone),
-    so handing it straight to a rank test compares hundreds of clones and reports a star off
+    The item-bearing metrics are where this bites: the item summary holds one row per (patient,
+    clone), so handing it to a rank test would compare hundreds of clones and report a star off
     six patients. Checked here on all three because the same assertion on `mutual_information`
-    alone proves nothing — MI has no item axis, so its `result` is already one row per patient
-    and the collapse is a no-op.
+    alone proves nothing — MI has no item axis.
     """
     _, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
@@ -235,14 +257,14 @@ def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_
         kwargs.update(cov_from=cov, cov_to=cov)
     else:
         kwargs["covariate"] = cov
-    res = getattr(tcri.tl, metric)(adata, **kwargs)
+    res = getattr(tcri.tl, metric)(adata, **kwargs, inplace=False)
 
     row = res["stats"].iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3, (
         f"{metric}: n={row['n_a']}/{row['n_b']} is not the 3 patients per arm"
     )
     if item_col is not None:
-        n_rows = len(res["result"])
+        n_rows = len(res["item"]["summary"])
         assert n_rows > 6, "fixture is too small for this test to discriminate"
         assert row["n_a"] + row["n_b"] < n_rows, (
             f"{metric}: the contrast saw {row['n_a'] + row['n_b']} of {n_rows} item rows -- "

@@ -258,6 +258,12 @@ def with_resolved_params(result: dict, **resolved) -> dict:
     return {**result, _RESOLVED_PARAMS: resolved}
 
 
+def _has_levels(result) -> bool:
+    """Whether a result is laid out by level, ``{replicate, item, stats}``, rather than as
+    ``{table, result, stats}``."""
+    return isinstance(result, dict) and "replicate" in result
+
+
 def _check_schema(schema, result, fn_name: str) -> None:
     """Presence-only check of a TypedDict's required keys.
 
@@ -275,6 +281,9 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
               per_gene_stats=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return it.
 
+    A result stored by level, ``{replicate, item, stats}``, returns its replicate summary when
+    stored, and the whole result with ``inplace=False``; any other result is returned whole.
+
     ``functools.wraps`` keeps the wrapped signature, so the ``.pyi`` conformance check sees the
     contract signature exactly — which is why every wrapped body must DECLARE ``key_added`` and
     ``inplace`` even though it never reads them.
@@ -291,7 +300,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
 
     **The reference.** When the wrapped function declares ``null_model``, the decorator runs it
     again on each fit of a permutation reference and adds the ``null``/``null_*``/``adjusted*``
-    columns, per pair of draws on ``table`` and summarized on ``result``
+    columns, per pair of draws on the per-draw frames (each level's ``draws``, or ``table``) and
+    summarized on the summaries (each level's ``summary``, or ``result``)
     (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
     is not tidiness: the reference has to be *the caller's own call on the null*, and only the
     decorator holds the caller's bound arguments. A body re-invoking itself would have to re-list what to forward, and that list
@@ -324,7 +334,20 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         def wrapper(*args, **kwargs):
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
-            arguments = bound.arguments
+            result = _run(dict(bound.arguments))
+            # A result with levels returns its replicate summary; the rest is read from the
+            # stored result. With `inplace=False` nothing is stored, so the whole result is the
+            # only way to reach the item frames, the draws and the tests, and it is returned.
+            if _has_levels(result) and bound.arguments.get("inplace", True):
+                return result["replicate"]["summary"]
+            return result
+
+        def _run(arguments):
+            """Compute, attach the reference, store; return the full result.
+
+            The reference runs come back through here too, so they return their draws, which
+            the pairing needs, whatever the outer call returns.
+            """
             adata = arguments[_data_param]
 
             # The fit is CANONICALIZED before anything reads it, so `fit="phenotype[0]"` and
@@ -333,9 +356,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             # doing it here safe.
             if takes_fit and arguments.get("fit") is not None:
                 arguments["fit"] = _keys.resolve_fit(adata, arguments["fit"])
-                result = fn(**dict(arguments))
-            else:
-                result = fn(*args, **kwargs)
+            result = fn(**arguments)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
             # and never leaks into the returned object
@@ -361,12 +382,19 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                         for r in references:
                             _reference.check_joinable(
                                 adata, r, against=arguments.get("fit") if takes_fit else None)
-                    runs = [wrapper(**_reference_call(arguments, r,
-                                                      _reference.index_of(r, adata)))
+                    runs = [_run(_bind(_reference_call(arguments, r,
+                                                       _reference.index_of(r, adata))))
                             for r in references]
-                    _reference.attach(result, runs, values=values, denominators=denominators)
-                    _reference.restat(result, groupby=arguments.get("groupby"),
-                                      splitby=arguments.get("splitby"), per_gene=per_gene_stats)
+                    if _has_levels(result):
+                        _reference.attach_levels(result, runs, values=values,
+                                                 denominators=denominators)
+                        _reference.restat_levels(result, groupby=arguments.get("groupby"),
+                                                 splitby=arguments.get("splitby"))
+                    else:
+                        _reference.attach(result, runs, values=values, denominators=denominators)
+                        _reference.restat(result, groupby=arguments.get("groupby"),
+                                          splitby=arguments.get("splitby"),
+                                          per_gene=per_gene_stats)
 
             if arguments.get("inplace", True):
                 blob = _encode(result)
@@ -386,6 +414,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 dest = arguments.get("key_added") or key
                 adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
+
+        def _bind(call):
+            """A call's full argument mapping, defaults included."""
+            bound = sig.bind(**call)
+            bound.apply_defaults()
+            return dict(bound.arguments)
 
         def _reference_call(arguments, reference_of, index):
             """The caller's own arguments, on one fit of the reference.

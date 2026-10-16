@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from ..conftest import frames
 from tcri._state import keys as K
 from tests.test_plotting.test_twins import METRIC_ARGS, _n_points, _n_violins
 
@@ -61,7 +62,7 @@ def test_pl_return_df_is_the_cached_result(cohort):
     a = adata.copy()
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2])
     pd.testing.assert_frame_equal(tcri.pl.gene_importance(a, return_df=True),
-                                  tcri.get.result(a, "gene_importance")["result"])
+                                  frames(tcri.get.result(a, "gene_importance"))[1])
 
 
 def test_kind_is_validated(cohort):

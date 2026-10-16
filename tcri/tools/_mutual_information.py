@@ -13,10 +13,11 @@ from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
 from .._compute._tables import (
+    ZeroNormalizer,
     build_result,
     build_stats,
     joint_draws,
-    metric_table,
+    metric_frames,
     resolve_groupby,
     validate_splitby,
 )
@@ -64,8 +65,10 @@ def mutual_information(
 ):
     """I(c;φ|covariate) in bits — computed once, cached, and returned.
 
-    Returns ``{"table", "result", "stats"}`` and stores the same object under
-    ``uns[key_added or 'tcri_mutual_information']``. ``pl.mutual_information`` renders from that
+    Returns the replicate summary, one row per replicate, and stores ``{replicate: {draws,
+    summary}, stats}`` under ``uns[key_added or 'tcri_mutual_information']``; with
+    ``inplace=False`` nothing is stored and that whole result is returned. Mutual information has
+    one value per joint, so it has no item level. ``pl.mutual_information`` renders from the
     cache rather than recomputing, so the plot cannot disagree with the frame in your hand.
 
     ``groupby`` is the replicate; left implicit it resolves to the column registered as
@@ -83,6 +86,10 @@ def mutual_information(
     and the MI counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
     selecting among them. ``False`` counts each pool as one clone. A column with no pooling
     step has nothing to leave out.
+
+    A replicate with no joint at ``covariate`` has a NaN row. With ``normalized=True``, a
+    replicate whose normalizer is 0 (one clone, or one phenotype) raises ``ValueError`` naming
+    it; ``normalized=False`` reports its bits.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -96,14 +103,18 @@ def mutual_information(
         for _ids, J in draws:
             value, denom = _mi_from_joint(J, normalized=normalized, mode=normalize_mode,
                                           return_denom=True)
-            out.append({"value": value, "denom": denom})
+            if normalized and np.isfinite(denom) and not denom > 0:
+                raise ZeroNormalizer(
+                    f"its normalizer ({normalize_mode!r} of the clone and phenotype entropies) "
+                    f"is 0: it has one clone or one phenotype. Pass normalized=False for bits, "
+                    f"or leave this replicate out with clones=.")
+            out.append(({"value": value, "denom": denom}, None))
         return out
 
-    table = metric_table(adata, covariate=covariate, groupby=gkey, splitby=splitby,
-                         clones=clones, exclude_pools=exclude_pools, item_col=None,
-                         compute=_compute, fit=fit)
-    result = build_result(table, extra_values=("denom",))
-    stats = build_stats(result, groupby=gkey, splitby=splitby)
-
-    payload = {"table": table, "result": result, "stats": stats}
+    rep_draws, _ = metric_frames(adata, covariate=covariate, groupby=gkey, splitby=splitby,
+                                 clones=clones, exclude_pools=exclude_pools, item_col=None,
+                                 compute=_compute, metric="mutual_information", fit=fit)
+    rep_summary = build_result(rep_draws, extra_values=("denom",))
+    payload = {"replicate": {"draws": rep_draws, "summary": rep_summary},
+               "stats": build_stats(rep_summary, groupby=gkey, splitby=splitby)}
     return with_resolved_params(payload, groupby=gkey) if resolved else payload

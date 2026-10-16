@@ -26,6 +26,7 @@ import torch
 from scipy.stats import mannwhitneyu
 
 import tcri
+from .conftest import frames
 from tcri._state import keys as K
 
 
@@ -317,7 +318,6 @@ def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
     back = tcri.get.result(adata, "gene_importance")
     for slot in ("table", "result", "stats", "shift"):
         pd.testing.assert_frame_equal(back[slot], res[slot])
-    pd.testing.assert_frame_equal(tcri.get.gene_importance(adata, which="shift"), res["shift"])
 
     params = tcri.get.params(adata, "gene_importance")
     assert "model" not in params and "adata" not in params
@@ -330,8 +330,8 @@ def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
     pd.testing.assert_frame_equal(reread["result"], res["result"])
 
     tcri.perturb.gene_importance(model, adata, genes=[0], key_added="gi_one")
-    assert "gi_one" in adata.uns and len(tcri.get.result(adata, "gene_importance",
-                                                         key="gi_one")["result"]) == 6
+    assert "gi_one" in adata.uns and len(frames(tcri.get.result(adata, "gene_importance",
+                                                         key="gi_one"))[1]) == 6
     before = set(adata.uns)
     tcri.perturb.gene_importance(model, adata, genes=[0], inplace=False, key_added="never")
     assert "never" not in adata.uns and set(adata.uns) == before

@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from ..conftest import frames
 from tcri._state import keys as K
 
 DELTAS = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
@@ -173,10 +174,10 @@ def test_the_intersection_changes_the_clonotypic_answer(ragged):
         warnings.simplefilter("ignore")
         matched = tcri.tl.delta_clonotypic_entropy(adata, cov_from=a, cov_to=b,
                                                    null_model=None, inplace=False)["result"]
-    naive_a = tcri.tl.clonotypic_entropy(adata, covariate=a, null_model=None,
-                                         inplace=False)["result"]
-    naive_b = tcri.tl.clonotypic_entropy(adata, covariate=b, null_model=None,
-                                         inplace=False)["result"]
+    naive_a = frames(tcri.tl.clonotypic_entropy(adata, covariate=a, null_model=None,
+                                         inplace=False))[1]
+    naive_b = frames(tcri.tl.clonotypic_entropy(adata, covariate=b, null_model=None,
+                                         inplace=False))[1]
     naive = (naive_b.set_index("phenotype")["value"] - naive_a.set_index("phenotype")["value"])
 
     got = matched.set_index("phenotype")["value"]
@@ -223,7 +224,7 @@ def test_no_direction_probability_column(name, cohort):
     assert not ({"p_gt", "p_lt", "prob_increase"} & set(res["result"].columns))
 
     # ...and it is genuinely one line away for a caller who wants it
-    t = tcri.get.table(adata, name, which="table")
+    t = tcri.get.result(adata, name)["table"]
     graded = t.groupby(ITEM[name], observed=True)["value"].apply(lambda v: (v > 0).mean())
     assert graded.between(0, 1).all()
 

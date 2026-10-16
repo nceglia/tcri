@@ -1,19 +1,20 @@
 """Accessors for cached ``tl`` results — ``tcri.get.*``.
 
-Every ``tl`` metric stores its result under a namespaced ``uns`` key and returns the same
-object. This module is how everything else reads it back without knowing the blob format:
-``pl`` renders from here, and so should any user code that wants the table a plot was drawn
-from.
+Every ``tl`` metric stores its result under a namespaced ``uns`` key. This module is how
+everything else reads it back without knowing the blob format: ``pl`` renders from here, and so
+should any user code that wants the frame a plot was drawn from.
 
-The invariant: :func:`result` reconstructs the slots the ``tl`` function **returned**, provenance
-stripped, so
+Mutual information and the two entropies store their result by level, ``{replicate, item,
+stats}``, each level holding ``draws`` and ``summary``. A call returns the replicate summary;
+:func:`items`, :func:`stats` and :func:`draws` read the rest:
 
-    res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None)
-    cached = tcri.get.result(adata, "mutual_information")
-    pd.testing.assert_frame_equal(cached["result"], res["result"])
+    tcri.tl.phenotypic_entropy(adata, covariate="pre", splitby="response")
+    tcri.get.items(adata, "phenotypic_entropy")    # one row per replicate and clone
+    tcri.get.stats(adata, "phenotypic_entropy")    # the tests
+    tcri.get.draws(adata, "phenotypic_entropy")    # replicate rows, one per draw
 
-holds for every metric (frame by frame: the frames are decoded afresh, so the payloads compare
-equal rather than being the same objects). :func:`params` reads the provenance separately.
+:func:`result` returns the whole stored result, provenance stripped, and :func:`params` the
+provenance.
 """
 from __future__ import annotations
 
@@ -23,20 +24,7 @@ from __future__ import annotations
 from ._state import keys as _K
 from ._state.storage import load_result as _load_result, load_result_params as _load_result_params
 
-__all__ = [
-    "result",
-    "params",
-    "joint_distribution",
-    "mutual_information",
-    "clonotypic_entropy",
-    "phenotypic_entropy",
-    "phenotypic_flux",
-    "delta_clonotypic_entropy",
-    "delta_phenotypic_entropy",
-    "gene_importance",
-    "table",
-    "fits",
-]
+__all__ = ["result", "params", "items", "stats", "draws", "fits"]
 
 #: tool name -> canonical uns key
 _RESULTS = {
@@ -110,10 +98,9 @@ def _require(adata, name, key, fit=None):
 
 
 def result(adata, name: str, *, key=None, fit=None):
-    """The cached result, exactly as the ``tl`` function returned it.
-
-    Strips the provenance keys, which ``load_result`` carries through for dict payloads but not
-    for DataFrame ones — normalizing that asymmetry is most of this function's job.
+    """The stored result, provenance stripped: ``{replicate, item, stats}`` for a metric stored
+    by level, the payload as stored otherwise. With ``inplace=False`` the tool returns this same
+    result instead of storing it.
 
     ``fit`` selects which fit's RESULT BLOB to read, which is a different question from the
     ``fit`` a metric takes: that one selects which fit the number is computed on. They resolve
@@ -130,51 +117,36 @@ def params(adata, name: str, *, key=None, fit=None) -> dict:
     return _load_result_params(adata, _require(adata, name, key, fit))
 
 
-def table(adata, name: str, *, key=None, which: str = "result", fit=None):
-    """A named payload frame from a cached result.
-
-    ``which="result"`` (default) is the reduced, per-group frame the plots consume;
-    ``which="table"`` is the unreduced substrate, one row per (covariate, group, item[, draw]).
-    """
-    payload = _load_result(adata, _require(adata, name, key, fit), tool=_RESULTS.get(name))
-    if not isinstance(payload, dict) or which not in payload:
+def _level(adata, name, level, *, key=None, fit=None):
+    payload = result(adata, name, key=key, fit=fit)
+    if not isinstance(payload, dict) or "replicate" not in payload:
         raise KeyError(
-            f"cached result for {name!r} has no {which!r} frame "
-            f"(present: {sorted(k for k in payload if k not in _PROVENANCE)})"
-            if isinstance(payload, dict) else
-            f"cached result for {name!r} is not a dict payload"
+            f"the stored {name!r} result is not stored by level; read it with "
+            f"tcri.get.result(adata, {name!r})."
         )
-    return payload[which]
+    if payload.get(level) is None:
+        raise KeyError(
+            f"{name!r} has no {level} level: it has one value per replicate and no items."
+        )
+    return payload[level]
 
 
-def joint_distribution(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "joint_distribution", key=key, which=which, fit=fit)
+def items(adata, name: str, *, key=None, fit=None):
+    """The item summary of a stored result: one row per (covariate, group, item), with the
+    reference columns when a reference was computed.
+
+    Raises ``KeyError`` for a metric with no items (mutual information).
+    """
+    return _level(adata, name, "item", key=key, fit=fit)["summary"]
 
 
-def mutual_information(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "mutual_information", key=key, which=which, fit=fit)
+def stats(adata, name: str, *, key=None, fit=None):
+    """The tests of a stored result, one row per contrast, or ``None`` when nothing was
+    compared."""
+    return result(adata, name, key=key, fit=fit).get("stats")
 
 
-def clonotypic_entropy(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "clonotypic_entropy", key=key, which=which, fit=fit)
-
-
-def phenotypic_entropy(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "phenotypic_entropy", key=key, which=which, fit=fit)
-
-
-def phenotypic_flux(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "phenotypic_flux", key=key, which=which, fit=fit)
-
-
-def delta_clonotypic_entropy(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "delta_clonotypic_entropy", key=key, which=which, fit=fit)
-
-
-def delta_phenotypic_entropy(adata, *, key=None, which: str = "result", fit=None):
-    return table(adata, "delta_phenotypic_entropy", key=key, which=which, fit=fit)
-
-
-def gene_importance(adata, *, key=None, which: str = "result", fit=None):
-    """``which`` may also be ``"shift"``: the per-phenotype decomposition of each importance."""
-    return table(adata, "gene_importance", key=key, which=which, fit=fit)
+def draws(adata, name: str, *, items: bool = False, key=None, fit=None):
+    """The per-draw rows of a stored result: the replicate level, or the item level with
+    ``items=True``. With a reference, one row per (row, null, draw)."""
+    return _level(adata, name, "item" if items else "replicate", key=key, fit=fit)["draws"]

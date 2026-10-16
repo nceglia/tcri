@@ -95,32 +95,44 @@ Different estimands, both valid; the docstrings say which question each answers.
 (never by slicing the AnnData) and adds a group axis; clones are assumed disjoint across
 groups. `splitby` produces the contrast between split levels in the `stats` slot: a two-sided
 Mann–Whitney U on per-group values, uncorrected across contrasts, with the replicate unit
-being the group, so items are averaged to one value per group before the test; the contrast
-refuses a frame holding more than one row per group and level. `delta` is the second level's mean
-minus the first's. A contrast whose p is undefined has blank `stars`.
+being the group: mutual information and the entropies test their replicate values, and the
+other metrics average items to one value per group before the test; the contrast refuses a frame
+holding more than one row per group and level. `delta` is the second level's mean minus the
+first's. Every pair of split levels with a group has its row, `comparison` `"split"`; an arm with
+no finite value has `n` 0 and NaN statistics. A contrast whose p is undefined has blank `stars`.
 
-**Return shape.** Every `tl` returns `{table, result, stats}` and stores the same object under
-`uns[key_added or "tcri_<metric>"]` with a `params` block recording every argument, defaults
-included. `table` has one row per (covariate, group, item, draw) and is never reduced;
-`result` reduces over draw only and carries `mean`, `sd`, `hdi_low`, `hdi_high` (a true
+**Return shape.** Every `tl` stores its result under `uns[key_added or "tcri_<metric>"]` with a
+`params` block recording every argument, defaults included; `inplace=False` returns the whole
+result and stores nothing. Mutual information and the two entropies store `{replicate, item,
+stats}` and return the replicate summary. Each level holds `draws`, one row per (covariate,
+replicate[, item], draw), never reduced, and `summary`, which reduces over draw only. The
+replicate level has one row per replicate, NaN when the replicate has no joint at the covariate;
+the item level has one row per replicate and phenotype (clonotypic entropy) or clone (phenotypic
+entropy), and mutual information has no item level. The other tools return and store `{table,
+result, stats}`: `table` one row per (covariate, group, item, draw), `result` reduced over draw
+only. Every summary and `result` carries `value`, `sd`, `hdi_low`, `hdi_high` (a true
 highest-density interval, NaN at `n_samples ≤ 1`); `stats` is `None` without `splitby` and
 otherwise carries one row per contrast, with `quantity` naming the column contrasted. Every
 frame survives an h5ad round trip: flat columns, no vectors in cells, per-draw values as rows
-with a `draw` column. Read back with `tcri.get.result(adata, name)` and
-`tcri.get.params(adata, name)`.
+with a `draw` column. Read back with `tcri.get.result(adata, name)` (the whole result),
+`tcri.get.items`, `tcri.get.stats` and `tcri.get.draws(adata, name, items=False)` (the frames
+of a result stored by level), and `tcri.get.params(adata, name)`. A normalized replicate value
+whose normalizer is 0 raises `ValueError` naming the metric, the replicate and the covariate
+level.
 
 **References.** `tcri.null.phenotype`, `.clonotype`, `.covariate` and `.all` take `n_nulls`
 (default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
 `null.<kind>[n_nulls-1]` (`null.<kind>.<key_added>[i]` when named), each with its own
 permutation, namespace and records; the calls return the fitted models, a list per kind.
-`tcri.null.all` therefore fits 3 x `n_nulls` nulls, and a metric's per-draw `table` is `n_nulls`
-times longer than with one. A null's permutation is drawn from the seed spawned by its kind,
-`key_added` and index, so it does not depend on the fits already on the object. Every scored
-metric takes `null_model`, defaulting to `"auto"`: the reference is computed and `result` gains
-`null_value` and `adjusted = value - null_value` beside every native value column (`null_denom`
-has no adjusted column; a denominator is not a reported quantity). `table` carries them per pair
-of draws, the fit's draw *d* paired with draw *d* of every fit of the reference, `null` numbering
-those fits, and `result` summarizes all the pairs: `adjusted` is their mean, with `adjusted_sd`,
+`tcri.null.all` therefore fits 3 x `n_nulls` nulls, and a metric's per-draw frames are
+`n_nulls` times longer than with one. A null's permutation is drawn from the seed spawned by its
+kind, `key_added` and index, so it does not depend on the fits already on the object. Every scored
+metric takes `null_model`, defaulting to `"auto"`: the reference is computed and every summary
+(`result`) gains `null_value` and `adjusted = value - null_value` beside every native value column
+(`null_denom` has no adjusted column; a denominator is not a reported quantity). The per-draw
+frames (`draws`, `table`) carry them per pair of draws, the fit's draw *d* paired with draw *d*
+of every fit of the reference, `null` numbering those fits, and the summary summarizes all the
+pairs: `adjusted` is their mean, with `adjusted_sd`,
 `adjusted_hdi_low` and `adjusted_hdi_high` beside it. At `n_samples=0` a row has one pair per
 null: `adjusted_sd` is the sd between the nulls and the HDI is NaN. The adjusted value is the
 quantity a metric reports: `stats` is computed on it, and `value` and `null_value` stay stored as
@@ -325,20 +337,20 @@ class tl:
 # ── plotting (pl): twins render what tl stored ───────────────────────────────
 class pl:
     def clonotypic_entropy(
-        adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
-        hue_order: Any = ...,
+        adata: AnnData, *, view: str = ..., quantity: str = ..., key: Optional[str] = ...,
+        order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_entropy(
-        adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
-        hue_order: Any = ...,
+        adata: AnnData, *, view: str = ..., quantity: str = ..., key: Optional[str] = ...,
+        order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def mutual_information(
-        adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
-        hue_order: Any = ...,
+        adata: AnnData, *, view: str = ..., quantity: str = ..., key: Optional[str] = ...,
+        order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...

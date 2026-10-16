@@ -34,6 +34,7 @@ import pytest
 warnings.filterwarnings("ignore")
 
 import tcri
+from ..conftest import frames
 from tcri._state import keys as K
 from tcri.datasets import mi_from_joint_oracle, simulate_tcri
 from tcri.model._model import TCRIModel
@@ -100,12 +101,13 @@ def blocks():
 
 
 def _value(res):
-    """The comparable value column out of the ``{table, result, stats}`` return.
+    """The comparable value column of a tool's return: the replicate summary a metric stored by
+    level returns, or the ``result`` of a ``{table, result, stats}`` payload.
 
-    Every metric returns the same three slots and caches them, so this helper keeps the axis
-    assertions about the AXES rather than about unpacking a per-metric return type.
+    This keeps the axis assertions about the AXES rather than about unpacking a per-metric
+    return type.
     """
-    return res["result"]["value"]
+    return res["value"] if isinstance(res, pd.DataFrame) else res["result"]["value"]
 
 
 def _clones_of(adata, patient):
@@ -156,8 +158,8 @@ def test_groupby_is_live_and_routes_exactly(blocks):
     """
     _model, adata, _truth = blocks
 
-    grouped = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                         normalize_mode="average")["result"]
+    grouped = frames(tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
+                                         normalize_mode="average", inplace=False))[1]
     assert len(grouped) == adata.obs["patient"].nunique()
     assert grouped["value"].nunique() > 1, "every group scored the same; groupby may be inert"
 
@@ -176,9 +178,9 @@ def test_splitby_labels_the_groups(blocks):
     """``splitby`` attaches a group-level label. It must not change the values."""
     _model, adata, _truth = blocks
 
-    plain = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient")["result"]
-    split = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                       splitby="disease_status")["result"]
+    plain = frames(tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient", inplace=False))[1]
+    split = frames(tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
+                                       splitby="disease_status", inplace=False))[1]
 
     assert "disease_status" in split.columns
     assert np.allclose(plain["value"].to_numpy(), split["value"].to_numpy()), (
@@ -236,8 +238,8 @@ def test_n_samples_returns_a_posterior_summary(blocks):
     """``n_samples>0`` switches from a scalar to a mean/sd/HDI summary that brackets itself."""
     _model, adata, _truth = blocks
     point = float(_value(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=0)).iloc[0])
-    res = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50,
-                                     random_state=0)["result"].iloc[0]
+    res = frames(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50,
+                                     random_state=0, inplace=False))[1].iloc[0]
 
     assert {"value", "sd", "hdi_low", "hdi_high"} <= set(res.index)
     assert res["hdi_low"] <= res["value"] <= res["hdi_high"], (
@@ -245,8 +247,8 @@ def test_n_samples_returns_a_posterior_summary(blocks):
     )
     assert res["sd"] > 0, "zero spread across draws; the draw path is not sampling"
     assert np.isfinite(point)
-    assert len(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50,
-                                          random_state=0)["table"]) == 50, (
+    assert len(frames(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=50,
+                                          random_state=0, inplace=False))[0]) == 50, (
         "`table` must keep one row per draw -- it is the substrate `result` reduces"
     )
 
@@ -255,8 +257,8 @@ def test_random_state_makes_draws_reproducible(blocks):
     """Same seed, same summary; different seed, different summary."""
     _model, adata, _truth = blocks
     kw = dict(covariate="cov_0", n_samples=40)
-    val = lambda rs: float(tcri.tl.mutual_information(
-        adata, random_state=rs, **kw)["result"]["value"].iloc[0])
+    val = lambda rs: float(tcri.tl.mutual_information(adata, random_state=rs, **kw)["value"]
+                           .iloc[0])
     assert val(0) == val(0), "same random_state gave a different answer"
     assert val(0) != val(1), "random_state does not reach the draw"
 
@@ -273,8 +275,8 @@ def test_model_ranks_the_blocks_as_the_oracle_does(blocks):
     """
     _model, adata, truth = blocks
 
-    grouped = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                         normalize_mode="average")["result"]
+    grouped = frames(tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
+                                         normalize_mode="average", inplace=False))[1]
     model_order = grouped.sort_values("value")["patient"].tolist()
     oracle_order = sorted(truth, key=lambda p: truth[p]["nmi_average"])
     assert model_order == oracle_order, (
@@ -403,19 +405,20 @@ def test_groupby_honors_the_callers_clone_restriction(blocks):
     _model, adata, _truth = blocks
     subset = _clones_of(adata, "P0")[:2]
 
-    unrestricted = tcri.tl.mutual_information(adata, covariate="cov_0",
-                                              groupby="patient")["result"]
-    restricted = tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
-                                            clones=subset)["result"]
+    unrestricted = frames(tcri.tl.mutual_information(adata, covariate="cov_0",
+                                              groupby="patient", inplace=False))[1]
+    restricted = frames(tcri.tl.mutual_information(adata, covariate="cov_0", groupby="patient",
+                                            clones=subset, inplace=False))[1]
 
     assert not unrestricted.equals(restricted), "clones= is still discarded under groupby"
-    assert set(restricted["patient"]) == {"P0"}, (
-        "restricting to P0's clones should leave only P0; groups with no surviving clone are "
-        "dropped rather than reported as NaN"
-    )
+    kept = restricted.dropna(subset=["value"])
+    assert set(kept["patient"]) == {"P0"}, (
+        "restricting to P0's clones should leave a value for P0 only")
+    assert set(restricted["patient"]) == set(unrestricted["patient"]), (
+        "a group with none of the requested clones keeps its row, as NaN")
     direct = float(_value(tcri.tl.mutual_information(
         adata, covariate="cov_0", clones=subset)).iloc[0])
-    assert float(restricted["value"].iloc[0]) == pytest.approx(direct, rel=1e-12)
+    assert float(kept["value"].iloc[0]) == pytest.approx(direct, rel=1e-12)
 
 
 def test_groupby_warns_when_cells_have_no_group_label(blocks):
@@ -441,13 +444,13 @@ def test_a_single_draw_reports_no_spread(blocks):
     half asserts that the n=1 case did not disable real summaries.
     """
     _model, adata, _truth = blocks
-    one = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=1,
-                                     random_state=0)["result"].iloc[0]
+    one = frames(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=1,
+                                     random_state=0, inplace=False))[1].iloc[0]
     assert np.isfinite(one["value"])
     assert np.isnan(one["sd"]) and np.isnan(one["hdi_low"]) and np.isnan(one["hdi_high"])
 
-    many = tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=20,
-                                      random_state=0)["result"].iloc[0]
+    many = frames(tcri.tl.mutual_information(adata, covariate="cov_0", n_samples=20,
+                                      random_state=0, inplace=False))[1].iloc[0]
     assert many["sd"] > 0 and many["hdi_high"] > many["hdi_low"], (
         "the n=1 special case must not have disabled real summaries"
     )

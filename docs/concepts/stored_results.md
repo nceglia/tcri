@@ -1,16 +1,16 @@
 # Stored results: compute once, plot from the store
 
-Every `tcri.tl` metric, and `tcri.perturb.gene_importance`, computes a result, writes it to
-`adata.uns` and returns the same object. Every `tcri.pl` function reads that stored result and
-never recomputes it. A plot therefore cannot disagree with the frame in your hand:
+Every `tcri.tl` metric, and `tcri.perturb.gene_importance`, computes a result and writes it to
+`adata.uns`. Every `tcri.pl` function reads that stored result and never recomputes it. A plot
+therefore cannot disagree with the frame in your hand:
 
 ```python
 res = tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", null_model=None)
 
-cached = tcri.get.result(adata, "mutual_information")
-pd.testing.assert_frame_equal(cached["result"], res["result"])
+stored = tcri.get.result(adata, "mutual_information")
+pd.testing.assert_frame_equal(stored["replicate"]["summary"], res)
 
-tcri.pl.mutual_information(adata)          # draws res["result"], nothing is recomputed
+tcri.pl.mutual_information(adata)          # draws res, nothing is recomputed
 ```
 
 `null_model=None` is in that call because the metrics default to `null_model="auto"`, which needs
@@ -31,7 +31,7 @@ One decorator, `@tl_result`, now realizes the convention as code, so a metric ca
 it:
 
 ```python
-@tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation,
+@tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
            values=("value", "denom"), denominators=("denom",), default_null="phenotype")
 def mutual_information(adata, *, covariate=None, groupby=None, ..., key_added=None, inplace=True):
     ...
@@ -48,12 +48,30 @@ The key is the tool's name, so the key says what wrote it.
 | `tl.mutual_information(adata, fit="null.phenotype[0]")` | `uns["tcri_null.phenotype[0]_mutual_information"]` |
 | `perturb.gene_importance(model, adata)` | `uns["tcri_gene_importance"]` |
 
-`inplace=False` returns the result without storing it. A metric's payload is a dict of frames:
-`table` is the unreduced substrate, one row per covariate, group and item (and draw, with
-`n_samples > 0`), and `result` is the reduced per-group frame the plots consume. The metrics that
-contrast groups add `stats`; `joint_distribution`, which contrasts nothing, has only the two;
-`gene_importance` adds `shift`, its per-phenotype decomposition. The snapshot below is the
-written record of which slots each tool has.
+Mutual information and the two entropies store their result by level:
+
+```text
+adata.uns["tcri_<metric>"]
+├── replicate
+│   ├── draws      one row per replicate and draw (and null fit)
+│   └── summary    one row per replicate           ← returned by tl.<metric>()
+├── item           (the entropies; mutual information has none)
+│   ├── draws      one row per replicate, item and draw (and null fit)
+│   └── summary    one row per replicate and item
+├── stats          one row per test; None when nothing is compared
+└── params, version, tool, tcri_version
+```
+
+The call returns the replicate summary, the main result. `inplace=False` returns the whole
+result instead, without storing it. Every replicate has its replicate row, NaN when it has no
+cells at the covariate or no clone left by `clones=`.
+
+The other tools return and store a dict of frames: `table` is the unreduced substrate, one row
+per covariate, group and item (and draw, with `n_samples > 0`), and `result` is the reduced
+per-group frame the plots consume. The tools that contrast groups add `stats`;
+`joint_distribution`, which contrasts nothing, has only the two; `gene_importance` adds `shift`,
+its per-phenotype decomposition. The snapshot below is the written record of which slots each
+tool has.
 
 ## What is recorded beside the payload
 
@@ -87,11 +105,12 @@ from plot arguments, which is what makes a plot a view of a specific computation
 
 | Call | Returns |
 |---|---|
-| `get.result(adata, "mutual_information")` | exactly what `tl` returned, provenance stripped |
-| `get.table(adata, "mutual_information")` | the `result` frame |
-| `get.table(adata, "mutual_information", which="table")` | the unreduced substrate |
-| `get.mutual_information(adata)` | the same, one accessor per tool |
-| `get.params(adata, "mutual_information")` | the provenance block |
+| `get.result(adata, "phenotypic_entropy")` | the whole stored result, provenance stripped |
+| `get.items(adata, "phenotypic_entropy")` | the item summary |
+| `get.stats(adata, "phenotypic_entropy")` | the tests, or `None` |
+| `get.draws(adata, "phenotypic_entropy")` | the replicate draws |
+| `get.draws(adata, "phenotypic_entropy", items=True)` | the item draws |
+| `get.params(adata, "phenotypic_entropy")` | the provenance block |
 | `get.fits(adata)` | the named fits this object carries |
 
 Every accessor but `get.fits` takes `key=` to read a result stored under another key and `fit=`
@@ -102,8 +121,11 @@ adata.uns['tcri_mutual_information'] not found. Run tcri.tl.mutual_information(a
 first — tcri.pl.* renders the stored result and never recomputes it.
 ```
 
-`pl` functions take `return_df=True` to hand back the frame they would have drawn, which is the
-stored `result`.
+`get.items` and `get.draws(items=True)` raise for mutual information, which has no items, and
+`get.items` and `get.draws` raise for a result stored as `{table, result, stats}`.
+
+`pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
+summary, or with `view="item"` the item summary, or the stored `result` of the other tools.
 
 ## Named fits, side by side
 
@@ -122,9 +144,10 @@ An ambiguous name raises rather than silently preferring one, and so does a refe
 
 When a metric declares `null_model`, the decorator runs the whole call again on each fit of the
 named reference, with every other argument forwarded verbatim and each null's draws seeded from
-their own seed, and joins them draw by draw: `table` gains a `null` column numbering the fits,
-`table` and `result` gain `null_*` columns and, for the value columns, `adjusted*` columns, and
-`result` carries the adjusted value's spread over all the pairs. Forwarding verbatim is
+their own seed, and joins them draw by draw: every per-draw frame (each level's `draws`, or
+`table`) gains a `null` column numbering the fits, every frame gains `null_*` columns and, for
+the value columns, `adjusted*` columns, and each summary (or `result`) carries the adjusted
+value's spread over all the pairs. Forwarding verbatim is
 the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
 estimand, and a reference computed at defaults would be a different quantity subtracted from a
 different quantity.
@@ -178,6 +201,6 @@ The procedure for bumping a version is in the
    reads them, and decorate the function with `@tl_result(key=..., version=1, schema=...)`.
 2. Give the payload a `TypedDict` in `tcri/_state/schemas.py`; its required keys are checked on
    every call.
-3. Add the canonical key to `tcri/_state/keys.py` and the tool to `tcri.get`, which gives it an
-   accessor and lets `pl` find it.
+3. Add the canonical key to `tcri/_state/keys.py` and the tool to the registry in `tcri.get`,
+   which lets `tcri.get` and `pl` find it by name.
 4. Record the new schema in the snapshot, so the guard covers it from the first release.
