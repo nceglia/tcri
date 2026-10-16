@@ -130,8 +130,7 @@ def _delta_metric(adata, *, kind, cov_from, cov_to, groupby, splitby, n_samples,
 def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
                              weighted=False, normalized=True, n_clones_ref=None,
-                             random_state=None, device=None, null_model="auto", fit=None,
-                             key_added=None, inplace=True):
+                             random_state=None, device=None, fit=None):
     """ΔH[P(c|φ)] per phenotype: ``cov_to`` minus ``cov_from``, in bits.
 
     "Did this phenotype draw on a wider or narrower clone pool?" The item is a phenotype — a
@@ -156,7 +155,7 @@ def delta_clonotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=N
 def delta_phenotypic_entropy(adata, *, cov_from, cov_to, groupby=None, splitby=None,
                              n_samples=0, temperature=1.0, clones=None, exclude_pools=True,
                              weighted=False, normalized=True, random_state=None, device=None,
-                             null_model="auto", fit=None, key_added=None, inplace=True):
+                             fit=None):
     """ΔH[P(φ|c)] per clone: ``cov_to`` minus ``cov_from``, in bits.
 
     "Did this clone become more or less plastic?" The item is a clonotype, so each row is the

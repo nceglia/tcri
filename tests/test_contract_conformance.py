@@ -1,11 +1,14 @@
 """API-contract conformance.
 
-The stub inside ``governance/API_CONTRACT.md`` freezes the public surface. Two things are checked:
+The stub inside ``governance/API_CONTRACT.md`` freezes the public surface. Three things are checked:
 
 1. **Set equality** — the set of public callables the package actually exposes equals
    the set the contract declares. Neither direction may drift.
 2. **Signature equality** — for every name in that set, the live signature matches the
    ``.pyi`` declaration (parameter names, kinds, and which carry defaults).
+3. **Liveness** — every parameter of every declared function is read by the function that
+   declares it. A parameter nothing reads is a promise the signature makes and the code
+   ignores: passing it changes nothing, and checks 1 and 2 stay green.
 
 Check 1 is set equality rather than an allowlist on purpose. An allowlist can only
 police what somebody remembered to add to it, so a callable that was never listed is
@@ -17,6 +20,7 @@ until it is declared in ``governance/API_CONTRACT.md``. That is the intent.
 import ast
 import importlib
 import inspect
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -180,6 +184,92 @@ def test_signature_matches_contract(key):
     assert live == CONTRACT[key], (
         f"signature drift for {key}:\n  contract={CONTRACT[key]}\n  live    ={live}"
     )
+
+
+def _layers(obj):
+    """The public callable and every function it wraps, outermost first."""
+    fn = getattr(obj, "__func__", obj)
+    chain = [fn]
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+        chain.append(fn)
+    return chain
+
+
+def _definition(fn) -> ast.FunctionDef:
+    """The ``def`` that compiled ``fn``, parsed from its own code object.
+
+    ``inspect.getsource`` on a wrapper follows ``__wrapped__`` to the function it wraps; the
+    code object does not, so each layer is read as itself.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn.__code__)))
+    return next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+
+def _declared(node: ast.FunctionDef) -> set[str]:
+    a = node.args
+    named = [*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg]
+    return {p.arg for p in named if p is not None}
+
+
+def _read(node: ast.FunctionDef) -> set[str]:
+    """Names the body of ``node`` loads, nested functions included.
+
+    Only a load of the parameter's own name counts. A store or a ``del`` is not a read, a
+    default value is not part of the body, and ``locals()`` or a forwarded ``**kwargs`` excuses
+    nothing: ``**kwargs`` is a parameter like any other and must itself be read.
+    """
+    return {n.id for stmt in node.body for n in ast.walk(stmt)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+
+def _unread(obj) -> list[str]:
+    """Published parameters of ``obj`` that a function declaring them never reads.
+
+    A decorated function publishes parameters from more than one ``def``: ``tl_result``
+    publishes the wrapped body's own followed by the three it declares on its wrapper. Each
+    parameter is checked against every ``def`` in the ``__wrapped__`` chain that declares it,
+    so a decorator that reads ``groupby`` for its own bookkeeping cannot cover for a body that
+    ignores it, and the parameters the decorator owns are the decorator's to read.
+    """
+    layers = [_definition(fn) for fn in _layers(obj)]
+    unread = []
+    for name, _, _ in _strip_receiver(_live_params(obj)):
+        owners = [node for node in layers if name in _declared(node)]
+        if not owners or any(name not in _read(node) for node in owners):
+            unread.append(name)
+    return unread
+
+
+@pytest.mark.parametrize("key", sorted(CONTRACT))
+def test_every_declared_parameter_is_read(key):
+    """No declared function accepts a parameter that the function declaring it never reads.
+
+    "Read" is weaker than "changes behavior": this catches the parameter nothing mentions,
+    not the one that is mentioned and has no effect. That stronger property needs a behavioral
+    test per knob.
+    """
+    ns, _, name = key.partition(".")
+    unread = _unread(getattr(_resolve(NAMESPACES[ns]), name))
+    assert not unread, (
+        f"{key} declares {unread} but never reads them: a caller who passes one gets the same "
+        f"result as one who does not. Read it, or remove it from the signature and from the "
+        f"contract in governance/API_CONTRACT.md."
+    )
+
+
+def test_the_liveness_check_sees_through_tl_result():
+    """The check reads each ``def`` in the chain as itself. ``tl_result``'s wrapper reads
+    ``splitby`` for the reference's statistics, which does not make it read for a body that
+    ignores it; ``null_model``, ``key_added`` and ``inplace`` are declared and read by the
+    wrapper."""
+    from tcri._state.storage import tl_result
+
+    @tl_result(key="tcri_liveness_probe", default_null="phenotype")
+    def _probe(adata, *, groupby=None, splitby=None, fit=None):
+        return {"n_obs": adata.n_obs, "groupby": groupby, "fit": fit}
+
+    assert _unread(_probe) == ["splitby"]
 
 
 def test_contract_is_not_trivially_small():

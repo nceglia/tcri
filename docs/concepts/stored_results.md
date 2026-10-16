@@ -33,9 +33,12 @@ it:
 ```python
 @tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
            values=("value", "denom"), denominators=("denom",), default_null="phenotype")
-def mutual_information(adata, *, covariate=None, groupby=None, ..., key_added=None, inplace=True):
+def mutual_information(adata, *, covariate=None, groupby=None, ..., fit=None):
     ...
 ```
+
+The function declares the parameters it computes with. The decorator adds `key_added`, `inplace`
+and, for a metric with a reference, `null_model` after them, and reads those three itself.
 
 ## Where a result lands
 
@@ -197,8 +200,9 @@ The procedure for bumping a version is in the
 
 ## Adding a tool that stores its result
 
-1. Declare `key_added=None` and `inplace=True` in the signature, even though the body never
-   reads them, and decorate the function with `@tl_result(key=..., version=1, schema=...)`.
+1. Declare only the parameters the body computes with, and decorate the function with
+   `@tl_result(key=..., version=1, schema=...)`, which adds `key_added` and `inplace` (and
+   `null_model`, given a `default_null`). Declaring one of those three yourself raises.
 2. Give the payload a `TypedDict` in `tcri/_state/schemas.py`; its required keys are checked on
    every call.
 3. Add the canonical key to `tcri/_state/keys.py` and the tool to the registry in `tcri.get`,

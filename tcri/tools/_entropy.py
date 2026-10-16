@@ -168,7 +168,7 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
 def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, exclude_pools=True, weighted=False,
                        normalized=True, n_clones_ref=None, random_state=None, device=None,
-                       null_model="auto", fit=None, key_added=None, inplace=True):
+                       fit=None):
     """H(C|P) per replicate and H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the
     normalizer for cross-group comparability (else per-group #supported clones). See module
     docstring.
@@ -204,8 +204,7 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
            default_null="phenotype")
 def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
                        temperature=1.0, clones=None, exclude_pools=True, weighted=False,
-                       normalized=True, random_state=None, device=None, null_model="auto",
-                       fit=None, key_added=None, inplace=True):
+                       normalized=True, random_state=None, device=None, fit=None):
     """H(P|C) per replicate and H[P(φ|c)] per clone (bits). See module docstring.
 
     Returns the replicate summary, one row per replicate, and stores ``{replicate, item,
