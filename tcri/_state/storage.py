@@ -2,7 +2,8 @@
 
 The contract: every ``tl`` writes ``uns[key]`` as a **dict-of-arrays + a provenance block**
 (``params``, the schema ``version`` int, the writing ``tool`` and the ``tcri_version`` that wrote
-it; the scanpy ``rank_genes_groups`` pattern) and **returns** the natural result.
+it; the scanpy ``rank_genes_groups`` pattern) and **returns** ``None``; with ``inplace=False`` it
+stores nothing and returns the result.
 ``@tl_result`` is that convention as code, so the metrics cannot drift from it.
 
 Why this exists rather than each tool writing its own ``uns`` entry: the metric is computed and
@@ -14,7 +15,7 @@ Usage — the wrapped function declares the parameters it computes with and retu
 them: it adds ``key_added``, ``inplace`` and, for a tool with a reference, ``null_model`` to the
 published signature::
 
-    @tl_result(key=K.MUTUAL_INFORMATION, version=1, schema=schemas.MutualInformation,
+    @tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
                default_null="phenotype")
     def mutual_information(adata, *, covariate, groupby=None, ..., fit=None):
         ...
@@ -25,8 +26,8 @@ published signature::
 
 The decorator reads ``inplace`` / ``key_added`` from the call, optionally checks the result
 against a ``schema`` TypedDict, auto-captures the remaining arguments as ``params``, serializes
-to an ``.h5ad``-safe dict-of-arrays blob, writes it to ``uns[key_added or key]`` when
-``inplace``, and returns the natural result. :func:`decode_blob` / :func:`load_result` invert it
+to an ``.h5ad``-safe dict-of-arrays blob, and writes it to ``uns[key_added or key]``, returning
+``None``; with ``inplace=False`` it writes nothing and returns the result. :func:`decode_blob` / :func:`load_result` invert it
 for the ``tcri.get.*`` accessors.
 
 A body that *resolves* a param the caller left implicit (``groupby=None`` -> the registry's
@@ -410,7 +411,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                                 adata, r, against=arguments.get("fit") if takes_fit else None)
                     runs = [_run_call(_reference_call(arguments, r,
                                                       _reference.index_of(r, adata),
-                                                      inplace=inplace))
+                                                      inplace=inplace, key_added=key_added))
                             for r in references]
                     if _has_levels(result):
                         _reference.attach_levels(result, runs, values=values,
@@ -452,7 +453,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             bound.apply_defaults()
             return _run(dict(bound.arguments), **owned)
 
-        def _reference_call(arguments, reference_of, index, *, inplace):
+        def _reference_call(arguments, reference_of, index, *, inplace, key_added):
             """The caller's own arguments, on one fit of the reference.
 
             The fit (or model) and `null_model` change, and the draws take their own seed,
@@ -464,11 +465,14 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             change the estimand, and a reference computed at defaults is a different quantity
             subtracted from a different quantity. `inplace` is honored as the caller gave it, so
             the reference's own frame is cached under its fit key: plottable by `key=`,
-            available to the identity test, and not computed twice.
+            available to the identity test, and not computed twice. The fit key is suffixed onto
+            the caller's `key_added` when it gives one, so two results under different keys keep
+            separate references.
             """
             call = dict(arguments)
             call["null_model"] = None          # terminates the recursion
             call["inplace"] = inplace
+            call["key_added"] = key_added
             if "random_state" in call:
                 call["random_state"] = _reference.null_seed(call["random_state"], index)
             if reference_arg == "fit":
@@ -489,7 +493,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     reference_of = rebuild(arguments[reference_arg],
                                            arguments[_data_param], reference_of)
                 call[reference_arg] = reference_of
-                call["key_added"] = _keys.fit_key(key, fit_name)
+                call["key_added"] = _keys.fit_key(key_added or key, fit_name)
             return call
 
         # The parameters the decorator owns are declared HERE, on the wrapper, and read here;

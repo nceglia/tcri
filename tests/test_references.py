@@ -571,6 +571,31 @@ def test_an_incomparable_fit_is_refused(ref):
         tcri.tl.mutual_information(adata, covariate=a, null_model="myalt", inplace=False)
 
 
+def test_a_key_added_keeps_its_own_reference(ref):
+    """Two results under different keys keep separate references: each reference run stores
+    under its caller's key, suffixed by the fit, and reads back with ``key=`` and ``fit=``."""
+    model, adata = ref
+    a, b = _cov(adata)[:2]
+    tcri.tl.mutual_information(adata, covariate=a)
+    tcri.tl.mutual_information(adata, covariate=b, key_added="mi_b")
+    members = [f for f in K.fits(adata) if f.startswith("null.phenotype[")]
+    assert members, "the fixture carries no phenotype null"
+    for fit in members:
+        default = tcri.get.draws(adata, "mutual_information", fit=fit)
+        keyed = tcri.get.draws(adata, "mutual_information", key="mi_b", fit=fit)
+        assert set(default["covariate"].astype(str)) == {str(a)}, fit
+        assert set(keyed["covariate"].astype(str)) == {str(b)}, fit
+
+    genes = list(adata.var_names[:2])
+    tcri.perturb.gene_importance(model, adata, genes=genes)
+    tcri.perturb.gene_importance(model, adata, genes=genes[:1], key_added="gi_one")
+    for fit in members:
+        default = tcri.get.result(adata, "gene_importance", fit=fit)["result"]
+        keyed = tcri.get.result(adata, "gene_importance", key="gi_one", fit=fit)["result"]
+        assert set(default["gene"].astype(str)) == set(genes), fit
+        assert set(keyed["gene"].astype(str)) == set(genes[:1]), fit
+
+
 def test_the_two_nulls_stay_distinct(ref):
     """``diag.permutation_null`` is model-free and takes no ``fit``; the two substrate-reading
     diagnostics do. One word, two things, and the signatures are where that is enforced."""

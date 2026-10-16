@@ -144,6 +144,22 @@ def test_with_no_replicate_the_object_is_one_replicate(metric, cohort):
     assert res["stats"] is None
 
 
+@pytest.mark.parametrize("metric, level", [("clonotypic_entropy", "replicate"),
+                                           ("phenotypic_entropy", "replicate"),
+                                           ("clonotypic_entropy", "item")])
+def test_a_reference_of_k_fits_gives_k_rows_per_draw(metric, level, cohort):
+    """Draws computed against a reference of K null fits carry a ``null`` column with K
+    values, and K times the rows of the same call with ``null_model=None``."""
+    _, adata = cohort
+    n_nulls = len(K.members(adata, "null.phenotype"))
+    assert n_nulls > 1, "a reference of one fit cannot tell K rows from one"
+    kw = dict(groupby="patient", splitby="disease_status", n_samples=3, random_state=0)
+    bare = _call(metric, adata, null_model=None, **kw)[level]["draws"]
+    pooled = _call(metric, adata, **kw)[level]["draws"]
+    assert pooled["null"].nunique() == n_nulls
+    assert len(pooled) == n_nulls * len(bare)
+
+
 def test_the_replicate_phenotypic_entropy_of_a_row_normalized_joint_is_the_item_mean(cohort):
     """At ``weighted=False`` every clone has the same share of the joint, so the replicate value
     is the plain mean of the clones' values, on every draw."""

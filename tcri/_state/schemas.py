@@ -40,9 +40,9 @@ null's draw ``d``, and ``result`` summarizes the paired draws: ``adjusted`` is t
 ``adjusted_sd``, ``adjusted_hdi_low`` and ``adjusted_hdi_high`` beside it, and ``null_v`` is the
 null's mean. At ``null_model=None`` none of them exist, on either frame.
 
-**The ``stats`` slot.** Every metric except :class:`JointDistribution` returns it. Only three
-of the ``TypedDict``s below declare it, and a declared key is a required one, so the rest accept
-a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
+**The ``stats`` slot.** Every metric except :class:`JointDistribution` stores it. Six of the
+``TypedDict``s below declare it; :class:`PhenotypicFlux` does not, and a declared key is a
+required one, so it accepts a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
 the column contrasted: ``"adjusted"`` when the result carries a usable adjustment, ``"value"``
 otherwise (no reference, or one that is non-finite everywhere). ``pl`` stars the quantity on its
 axis, so a panel of the value carries no star when the contrast is on the adjusted value.

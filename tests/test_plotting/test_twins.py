@@ -59,6 +59,16 @@ def _reference_points(ax):
     return _np.concatenate(offs) if offs else _np.empty((0, 2))
 
 
+def _mark_ys(ax, *, reference=False):
+    """The y values of the value marks, sorted; ``reference=True`` gives the gray reference
+    marks' instead."""
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    offs = [c.get_offsets()[:, 1] for c in ax.collections
+            if (c.get_label() == REFERENCE_LABEL) == reference]
+    return np.sort(np.concatenate(offs)) if offs else np.empty(0)
+
+
 def _n_violins(ax):
     from matplotlib.collections import PolyCollection
 
@@ -244,6 +254,37 @@ def test_entropy_twins_choose_their_own_x_axis(trained_model):
     n_clones = frames(tcri.get.result(adata, "phenotypic_entropy"))[1]["clonotype"].nunique()
     pe = tcri.pl.phenotypic_entropy(adata, view="item")
     assert len(pe.get_xticklabels()) < n_clones, "one x tick per clone is not a plot"
+
+
+def test_the_clone_item_view_puts_replicates_on_x_and_the_split_in_hue(cohort):
+    """With replicates, phenotypic entropy's item view has one x position per replicate,
+    holding that replicate's clones, and the split as the hue: every dot at a position takes
+    the stored color of its replicate's arm."""
+    from matplotlib.collections import PathCollection
+    from tcri.plotting._base import REFERENCE_LABEL
+
+    _, adata = cohort
+    adata = adata.copy()
+    tcri.tl.phenotypic_entropy(adata, covariate=_cov(adata), groupby="patient",
+                               splitby="disease_status")
+    ax = tcri.pl.phenotypic_entropy(adata, view="item")
+
+    patients = [str(p) for p in adata.obs["patient"].cat.categories]
+    assert ax.get_xlabel() == "patient"
+    assert _ticks(ax) == patients
+
+    arm = adata.obs.groupby("patient", observed=True)["disease_status"].first().astype(str)
+    stored = dict(zip(adata.obs["disease_status"].cat.categories.astype(str),
+                      (c.lower() for c in adata.uns[K.colors("disease_status")])))
+    at = {}
+    for coll in ax.collections:
+        if isinstance(coll, PathCollection) and coll.get_label() != REFERENCE_LABEL:
+            for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
+                at.setdefault(patients[int(round(x))], set()).add(
+                    matplotlib.colors.to_hex(c).lower())
+    assert set(at) == set(patients), f"positions with no clone: {set(patients) - set(at)}"
+    for patient, colors in at.items():
+        assert colors == {stored[arm[patient]]}, f"{patient}: {colors}"
 
 
 def test_the_metric_twins_take_a_view(trained_model):
@@ -464,18 +505,11 @@ def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
     tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
     res = tcri.get.replicates(adata, "phenotypic_entropy")
 
-    from tcri.plotting._base import REFERENCE_LABEL
-
-    def _ys(ax, *, reference):
-        offs = [c.get_offsets()[:, 1] for c in ax.collections
-                if (c.get_label() == REFERENCE_LABEL) == reference]
-        return np.sort(np.concatenate(offs)) if offs else np.empty(0)
-
     # the default panel draws the adjusted value, the column `build_stats` tests
     expected = res.dropna(subset=["adjusted"])
     ax = tcri.pl.phenotypic_entropy(adata)
-    assert np.allclose(_ys(ax, reference=False), np.sort(expected["adjusted"].to_numpy()))
-    assert not len(_ys(ax, reference=True)), "a gray mark was drawn on the adjusted panel"
+    assert np.allclose(_mark_ys(ax), np.sort(expected["adjusted"].to_numpy()))
+    assert not len(_mark_ys(ax, reference=True)), "a gray mark was drawn on the adjusted panel"
     stats = tcri.get.stats(adata, "phenotypic_entropy")
     assert set(stats["quantity"]) == {"adjusted"}
     row = stats.iloc[0]
@@ -485,9 +519,64 @@ def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
     # the value panel draws the value and its reference from the same replicate rows
     expected = res.dropna(subset=["value", "null_value"])
     value_ax = tcri.pl.phenotypic_entropy(adata, quantity="value")
-    assert np.allclose(_ys(value_ax, reference=False), np.sort(expected["value"].to_numpy()))
-    assert np.allclose(_ys(value_ax, reference=True),
+    assert np.allclose(_mark_ys(value_ax), np.sort(expected["value"].to_numpy()))
+    assert np.allclose(_mark_ys(value_ax, reference=True),
                        np.sort(expected["null_value"].to_numpy()))
+
+
+def test_the_replicate_marks_are_the_replicate_values_not_the_item_means(cohort):
+    """Clonotypic entropy's replicate view draws each replicate's H(C|P), the stored replicate
+    summary, which weights each phenotype by its share of the replicate's joint. That is not
+    the plain mean of the replicate's item values, and on this fixture the two differ, so the
+    marks matching the replicate summary rules out marks drawn from the item means.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    tcri.tl.clonotypic_entropy(adata, covariate=_cov(adata), groupby="patient",
+                               splitby="disease_status")
+    expected = tcri.get.replicates(adata, "clonotypic_entropy").dropna(subset=["adjusted"])
+    item_means = (tcri.get.items(adata, "clonotypic_entropy").dropna(subset=["adjusted"])
+                  .groupby("patient", observed=True)["adjusted"].mean())
+
+    ax = tcri.pl.clonotypic_entropy(adata)
+    drawn = _mark_ys(ax)
+    np.testing.assert_allclose(drawn, np.sort(expected["adjusted"].to_numpy()), atol=1e-12)
+    assert not len(_mark_ys(ax, reference=True)), "a gray mark was drawn on the adjusted panel"
+    assert len(item_means) == len(drawn)
+    assert not np.allclose(drawn, np.sort(item_means.to_numpy())), (
+        "the replicate values equal the item means here, so the check above cannot tell them "
+        "apart")
+
+
+@pytest.mark.parametrize("quantity", ["auto", "value"])
+@pytest.mark.parametrize("metric", ["clonotypic_entropy", "phenotypic_entropy"])
+def test_the_item_marks_are_the_item_summary(metric, quantity, cohort):
+    """Every mark of an item view is a row of the stored item summary, and every row is drawn.
+
+    Clonotypic entropy's item view collapses to one value per (replicate, phenotype), which on
+    the item summary is one row each; phenotypic entropy's draws one mark per (replicate,
+    clone) row. ``"auto"`` draws the adjusted value with no gray marks; ``"value"`` draws the
+    value with its reference, gray, from the same rows.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    getattr(tcri.tl, metric)(adata, covariate=_cov(adata), groupby="patient",
+                             splitby="disease_status")
+    items = tcri.get.items(adata, metric)
+    ax = getattr(tcri.pl, metric)(adata, view="item", quantity=quantity)
+
+    if quantity == "auto":
+        expected = items.dropna(subset=["adjusted"])
+        np.testing.assert_allclose(_mark_ys(ax), np.sort(expected["adjusted"].to_numpy()),
+                                   atol=1e-12)
+        assert not len(_mark_ys(ax, reference=True)), (
+            "a gray mark was drawn on the adjusted panel")
+    else:
+        expected = items.dropna(subset=["value", "null_value"])
+        np.testing.assert_allclose(_mark_ys(ax), np.sort(expected["value"].to_numpy()),
+                                   atol=1e-12)
+        np.testing.assert_allclose(_mark_ys(ax, reference=True),
+                                   np.sort(expected["null_value"].to_numpy()), atol=1e-12)
 
 
 def test_nothing_connects_two_x_positions(cohort):

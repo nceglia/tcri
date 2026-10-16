@@ -277,21 +277,22 @@ mi_stats = tcri.get.stats(adata, "mutual_information")
 mi_stats[["level_a", "level_b", "n_a", "n_b", "mean_a", "mean_b", "delta", "p", "stars"]].round(4)
 
 # %% [markdown]
-# **`n_clones_ref` matters here.** This cohort has ragged clone counts by design, and
-# `clonotypic_entropy` normalizes by `log2(C)` where `C` is that group's own supported clone
-# count. Two patients with different `C` are therefore on different scales. Passing
-# `n_clones_ref` pins one denominator for everyone.
+# **`n_clones_ref` matters here.** This cohort has ragged clone counts by design. A patient's
+# clonotypic entropy, the replicate value H(C|P), is normalized by `log2(C)`, where `C` is the
+# number of clones that patient has at the covariate, so two patients with different `C` are on
+# different scales. Passing `n_clones_ref` normalizes every patient by `log2(n_clones_ref)`
+# instead. The table reads the replicate summary both ways, one row per patient.
 
 # %%
 free = tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient",
-                                  random_state=SEED, inplace=False)["item"]["summary"]
+                                  random_state=SEED, inplace=False)["replicate"]["summary"]
 pinned = tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient",
                                     n_clones_ref=int(adata.obs.groupby("patient", observed=True)
                                                      ["clone_id"].nunique().max()),
-                                    random_state=SEED, inplace=False)["item"]["summary"]
-comparison = (free.groupby("patient", observed=True)["value"].mean().rename("own log2(C)")
+                                    random_state=SEED, inplace=False)["replicate"]["summary"]
+comparison = (free.set_index("patient")["value"].rename("own log2(C)")
               .to_frame()
-              .join(pinned.groupby("patient", observed=True)["value"].mean().rename("pinned")))
+              .join(pinned.set_index("patient")["value"].rename("pinned")))
 comparison["difference"] = comparison["pinned"] - comparison["own log2(C)"]
 comparison.round(4).head(8)
 
@@ -357,9 +358,9 @@ tcri.get.draws(adata, "mutual_information").head().round(4)
 fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.5))
 tcri.pl.mutual_information(adata, ax=axes[0, 0])
 axes[0, 0].set_title("mutual_information — post\ndots = patients, bracket from `stats`", fontsize=10)
-tcri.pl.clonotypic_entropy(adata, ax=axes[0, 1])
+tcri.pl.clonotypic_entropy(adata, view="item", ax=axes[0, 1])
 axes[0, 1].set_title("clonotypic_entropy — one value per PHENOTYPE", fontsize=10)
-tcri.pl.phenotypic_entropy(adata, ax=axes[1, 0])
+tcri.pl.phenotypic_entropy(adata, view="item", ax=axes[1, 0])
 axes[1, 0].set_title("phenotypic_entropy — one value per CLONE", fontsize=10)
 tcri.pl.phenotypic_flux(adata, ax=axes[1, 1])
 axes[1, 1].set_title("phenotypic_flux — how far clones moved pre → post", fontsize=10)

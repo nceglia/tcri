@@ -160,7 +160,10 @@ splits and distance it draws are the ones `tl` used, read from `params`. `pl` fu
 no metric arguments. A mark shows one variance component: the coarsest unit that varies within
 an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
 result carries one, against a zero rule, and `quantity="value"` draws the value with its null
-behind it; the star a panel draws is always about the quantity on its axis. Connecting lines are
+behind it; the star a panel draws is always about the quantity on its axis. The twins of mutual
+information and the two entropies take `view=`: `"replicate"` (the default) draws one mark per
+replicate from the replicate summary, with the split on x and its test starred; `"item"` draws
+the item summary; mutual information has no items and raises for `"item"`. Connecting lines are
 drawn only between points sharing an identity across the compared levels. Every twin takes
 `legend=`, and `False` draws no legend, so a row of panels can carry one; a y label longer than
 its axes is wrapped. In the metric twins the x axis is in the category order of the column on it

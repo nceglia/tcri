@@ -88,8 +88,9 @@ def mutual_information(
     step has nothing to leave out.
 
     A replicate with no joint at ``covariate`` has a NaN row. With ``normalized=True``, a
-    replicate whose normalizer is 0 (one clone, or one phenotype) raises ``ValueError`` naming
-    it; ``normalized=False`` reports its bits.
+    replicate whose normalizer is 0 raises ``ValueError`` naming it: one clone or one phenotype at
+    ``normalize_mode="min"``, one clone and one phenotype at ``"average"``. ``normalized=False``
+    reports its bits.
     """
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
@@ -104,10 +105,11 @@ def mutual_information(
             value, denom = _mi_from_joint(J, normalized=normalized, mode=normalize_mode,
                                           return_denom=True)
             if normalized and np.isfinite(denom) and not denom > 0:
+                which = "or" if normalize_mode == "min" else "and"
                 raise ZeroNormalizer(
                     f"its normalizer ({normalize_mode!r} of the clone and phenotype entropies) "
-                    f"is 0: it has one clone or one phenotype. Pass normalized=False for bits, "
-                    f"or leave this replicate out with clones=.")
+                    f"is 0: it has one clone {which} one phenotype. Pass normalized=False for "
+                    f"bits, or leave this replicate out with clones=.")
             out.append(({"value": value, "denom": denom}, None))
         return out
 

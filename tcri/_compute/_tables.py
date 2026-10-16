@@ -407,9 +407,15 @@ def build_result(table, *, value="value", extra_values=()):
 
     def _extra(chunk):
         # the endpoints of a delta: their posterior means, carried so the paired view is
-        # renderable from the delta result alone and therefore matched by construction
-        return {c: float(np.nanmean(chunk[c].to_numpy(dtype=float))) if len(chunk) else np.nan
-                for c in extra_values}
+        # renderable from the delta result alone and therefore matched by construction. A column
+        # with no number in it (a replicate with no joint) has a NaN mean, an expected outcome
+        # rather than a numpy warning.
+        out = {}
+        for c in extra_values:
+            v = chunk[c].to_numpy(dtype=float)
+            v = v[~np.isnan(v)]
+            out[c] = float(v.mean()) if v.size else np.nan
+        return out
 
     if not keys:
         agg = summarize(table[value].to_numpy())
