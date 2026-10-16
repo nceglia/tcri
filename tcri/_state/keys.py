@@ -26,7 +26,6 @@ X_TCRI = "X_tcri"                          # latent posterior mean z
 X_LOGITS = "X_tcri_logits"                 # per-cell classifier logits
 X_LOGPOSTERIOR = "X_tcri_logposterior"     # logits + log prior
 X_PROBABILITIES = "X_tcri_probabilities"   # per-cell phenotype probabilities
-X_UMAP = "X_umap"
 
 # ── obs ──────────────────────────────────────────────────────────────────────
 PHENOTYPE = "tcri_phenotype"               # hard phenotype label
