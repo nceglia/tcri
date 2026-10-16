@@ -262,8 +262,7 @@ class TCRIModel:
     ) -> pd.DataFrame: ...
     def get_p_ct(self) -> Any: ...
     def to_anndata(
-        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., compute_umap: bool = ...,
-        fit: Optional[str] = ...,
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., fit: Optional[str] = ...,
     ) -> AnnData: ...
 
 
