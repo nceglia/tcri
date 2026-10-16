@@ -34,6 +34,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from .conftest import frames
 from tcri._state import keys as K
 from tcri._state import _reference
 
@@ -78,26 +79,34 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
     }
     for name, call in calls.items():
         fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
-        payload = call()
-        for slot in ("result", "table", "stats"):
-            frame = payload.get(slot)
+        assert call() is None, f"{name}: a storing call returned its result"
+        payload = tcri.get.result(adata, name)
+        if "replicate" in payload:
+            levels = [lv for lv in ("replicate", "item") if payload.get(lv) is not None]
+            slots = {f"{lv}.{f}": payload[lv][f] for lv in levels for f in ("draws", "summary")}
+            summaries = [payload[lv]["summary"] for lv in levels]
+        else:
+            slots = {slot: payload.get(slot) for slot in ("result", "table")}
+            summaries = [payload["result"]]
+        slots["stats"] = payload.get("stats")
+        for slot, frame in slots.items():
             if frame is not None:
                 assert not [c for c in frame.columns if str(c).startswith("excess")], (
                     f"{name}: {slot} carries {list(frame.columns)}")
-        result = payload["result"]
-        if not len(result):
-            continue
         pairs = _reference.column_pairs(fn.tcri_values, fn.tcri_denominators)
-        for native, null, adjusted in pairs:
-            assert null in result.columns, f"{name}: no {null}"
-            if adjusted is None:
-                assert f"adjusted_{native}" not in result.columns
+        for result in summaries:
+            if not len(result):
                 continue
-            got = result[adjusted].to_numpy(dtype=float)
-            want = (result[native].to_numpy(dtype=float)
-                    - result[null].to_numpy(dtype=float))
-            np.testing.assert_allclose(got, want, atol=1e-12, equal_nan=True,
-                                       err_msg=f"{name}: {adjusted} != {native} - {null}")
+            for native, null, adjusted in pairs:
+                assert null in result.columns, f"{name}: no {null}"
+                if adjusted is None:
+                    assert f"adjusted_{native}" not in result.columns
+                    continue
+                got = result[adjusted].to_numpy(dtype=float)
+                want = (result[native].to_numpy(dtype=float)
+                        - result[null].to_numpy(dtype=float))
+                np.testing.assert_allclose(got, want, atol=1e-12, equal_nan=True,
+                                           err_msg=f"{name}: {adjusted} != {native} - {null}")
 
 
 def test_null_value_is_the_metric_of_the_null(ref):
@@ -114,12 +123,12 @@ def test_null_value_is_the_metric_of_the_null(ref):
     _, adata = ref
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", n_samples=4)
-    with_ref = tcri.tl.mutual_information(adata, **kw, random_state=7, inplace=False)["result"]
+    with_ref = frames(tcri.tl.mutual_information(adata, **kw, random_state=7, inplace=False))[1]
     members = K.members(adata, "null.phenotype")
     assert len(members) > 1
     own = pd.concat([
-        tcri.tl.mutual_information(adata, **kw, random_state=_reference.null_seed(7, i),
-                                   fit=fit, null_model=None, inplace=False)["table"]
+        frames(tcri.tl.mutual_information(adata, **kw, random_state=_reference.null_seed(7, i),
+                                   fit=fit, null_model=None, inplace=False))[0]
         for i, fit in enumerate(members)])
     of_null = own.groupby("patient", observed=True)[["value", "denom"]].mean().reset_index()
     merged = with_ref.merge(of_null, on="patient", suffixes=("", "_own"))
@@ -136,9 +145,9 @@ def test_the_reference_forwards_every_argument(ref):
     """
     _, adata = ref
     a = _cov(adata)[0]
-    plain = tcri.tl.mutual_information(adata, covariate=a, inplace=False)["result"]
-    odd = tcri.tl.mutual_information(adata, covariate=a, weighted=True,
-                                     normalize_mode="average", inplace=False)["result"]
+    plain = frames(tcri.tl.mutual_information(adata, covariate=a, inplace=False))[1]
+    odd = frames(tcri.tl.mutual_information(adata, covariate=a, weighted=True,
+                                     normalize_mode="average", inplace=False))[1]
     assert not np.isclose(float(plain["null_value"].iloc[0]),
                           float(odd["null_value"].iloc[0]), atol=1e-9), (
         "the reference ignored weighted/normalize_mode; it was computed at defaults")
@@ -157,10 +166,10 @@ def test_the_adjusted_value_of_a_fit_against_itself_is_zero(ref):
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", random_state=3, fit="null.phenotype[0]",
               null_model="null.phenotype[0]", inplace=False)
-    res = tcri.tl.mutual_information(adata, n_samples=0, **kw)["result"]
+    res = frames(tcri.tl.mutual_information(adata, n_samples=0, **kw))[1]
     np.testing.assert_allclose(res["adjusted"].to_numpy(dtype=float), 0.0, atol=1e-12)
 
-    res = tcri.tl.mutual_information(adata, n_samples=30, **kw)["result"]
+    res = frames(tcri.tl.mutual_information(adata, n_samples=30, **kw))[1]
     assert (res["adjusted_hdi_low"] < 0).all() and (res["adjusted_hdi_high"] > 0).all(), (
         res[["adjusted", "adjusted_hdi_low", "adjusted_hdi_high"]])
 
@@ -218,7 +227,7 @@ def test_adjusted_is_paired_per_draw(ref):
     a = _cov(adata)[0]
     res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=20,
                                      random_state=0, inplace=False)
-    table, result = res["table"], res["result"]
+    table, result = frames(res)
     np.testing.assert_allclose(table["adjusted"], table["value"] - table["null_value"],
                                atol=1e-12)
     labels = _labels_of(table)
@@ -259,7 +268,7 @@ def test_every_scored_metric_pairs_its_draws(ref):
     for name, call in calls.items():
         fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
         res = call()
-        table, result = res["table"], res["result"]
+        table, result = frames(res)
         assert len(table) and len(result), name
         for native, null, adjusted in _reference.column_pairs(fn.tcri_values,
                                                                fn.tcri_denominators):
@@ -279,8 +288,8 @@ def test_a_per_draw_difference_between_two_covariate_levels_has_an_interval(ref)
     _, adata = ref
     a, b = _cov(adata)[:2]
     kw = dict(groupby="patient", n_samples=20, random_state=4, inplace=False)
-    at_a = tcri.tl.mutual_information(adata, covariate=a, **kw)["table"]
-    at_b = tcri.tl.mutual_information(adata, covariate=b, **kw)["table"]
+    at_a = frames(tcri.tl.mutual_information(adata, covariate=a, **kw))[0]
+    at_b = frames(tcri.tl.mutual_information(adata, covariate=b, **kw))[0]
     both = at_a.merge(at_b, on=["patient", "draw"], suffixes=("_a", "_b"))
     assert len(both)
     for patient, rows in both.groupby("patient", observed=True):
@@ -295,14 +304,14 @@ def test_the_fit_and_the_null_draw_from_different_seeds(ref):
     _, adata = ref
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", n_samples=8, inplace=False)
-    table = tcri.tl.mutual_information(adata, random_state=11, **kw)["table"]
+    table = frames(tcri.tl.mutual_information(adata, random_state=11, **kw))[0]
 
     for i, fit in enumerate(K.members(adata, "null.phenotype")):
         mine = table[table["null"] == i]
 
         def null_draws(seed):
-            own = tcri.tl.mutual_information(adata, random_state=seed, fit=fit,
-                                             null_model=None, **kw)["table"]
+            own = frames(tcri.tl.mutual_information(adata, random_state=seed, fit=fit,
+                                             null_model=None, **kw))[0]
             return mine[["patient", "draw"]].merge(own, on=["patient", "draw"])["value"]
 
         seed = _reference.null_seed(11, i)
@@ -336,7 +345,7 @@ def test_without_draws_a_row_has_one_pair_per_null(ref):
     n_nulls = len(K.members(adata, "null.phenotype"))
     res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=0,
                                      inplace=False)
-    table, result = res["table"], res["result"]
+    table, result = frames(res)
     assert set(table["draw"]) == {0} and sorted(set(table["null"])) == list(range(n_nulls))
     np.testing.assert_allclose(result["adjusted"], result["value"] - result["null_value"],
                                atol=1e-12)
@@ -348,8 +357,8 @@ def test_without_draws_a_row_has_one_pair_per_null(ref):
     for column in ("adjusted_hdi_low", "adjusted_hdi_high"):
         assert result[column].isna().all(), column
 
-    drawn = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=10,
-                                       random_state=0, inplace=False)["result"]
+    drawn = frames(tcri.tl.mutual_information(adata, covariate=a, groupby="patient", n_samples=10,
+                                       random_state=0, inplace=False))[1]
     for column in ("adjusted_hdi_low", "adjusted_hdi_high"):
         assert drawn[column].notna().all(), column
 
@@ -377,18 +386,19 @@ def test_null_model_none_is_the_old_result(ref):
     _, adata = ref
     a = _cov(adata)[0]
     before = set(adata.uns)
-    bare = tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
     added = set(adata.uns) - before
     assert added == {K.MUTUAL_INFORMATION}, f"null_model=None wrote {added}"
+    bare = tcri.get.result(adata, "mutual_information")
 
-    for slot in ("table", "result"):
-        cols = set(bare[slot].columns)
+    for frame in ("draws", "summary"):
+        cols = set(bare["replicate"][frame].columns)
         assert not {c for c in cols if c.startswith(("null_", "adjusted"))}, cols
     assert bare["stats"] is None or set(bare["stats"]["quantity"]) == {"value"}
 
-    withref = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
-                                         inplace=False)["result"]
-    np.testing.assert_allclose(bare["result"]["value"].to_numpy(dtype=float),
+    withref = frames(tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
+                                         inplace=False))[1]
+    np.testing.assert_allclose(bare["replicate"]["summary"]["value"].to_numpy(dtype=float),
                                withref["value"].to_numpy(dtype=float), atol=1e-12)
 
 
@@ -412,11 +422,12 @@ def test_rule_9_shape_changes_are_the_only_ones(ref):
     # (c) and (d)
     mi = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
                                     splitby="disease_status", null_model=None, inplace=False)
-    assert "denom" in mi["result"].columns
+    assert "denom" in mi["replicate"]["summary"].columns
     assert list(mi["stats"]["quantity"].unique()) == ["value"]
 
     # and the value columns beyond those four are the no-reference set
-    assert set(mi["result"].columns) == {"covariate", "patient", "disease_status", "value",
+    assert set(mi["replicate"]["summary"].columns) == {"covariate", "patient", "disease_status",
+                                                       "value",
                                          "sd", "hdi_low", "hdi_high", "denom"}
     delta = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
                                              null_model=None, inplace=False)
@@ -437,8 +448,8 @@ def test_missing_null_names_the_fix(ref):
     with pytest.raises(KeyError, match=r"tcri\.null\.all\(model, adata\)"):
         tcri.tl.mutual_information(adata, covariate=a, inplace=False)
     # ...and the opt-out is the other half of the message
-    assert tcri.tl.mutual_information(adata, covariate=a, null_model=None,
-                                      inplace=False)["result"] is not None
+    assert frames(tcri.tl.mutual_information(adata, covariate=a, null_model=None,
+                                      inplace=False))[1] is not None
 
 
 def test_the_bare_kind_resolves(ref):
@@ -447,10 +458,10 @@ def test_the_bare_kind_resolves(ref):
     both rather than guessing."""
     model, adata = ref
     a = _cov(adata)[0]
-    bare = tcri.tl.mutual_information(adata, covariate=a, fit="phenotype[0]",
-                                      inplace=False)["result"]
-    full = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
-                                      inplace=False)["result"]
+    bare = frames(tcri.tl.mutual_information(adata, covariate=a, fit="phenotype[0]",
+                                      inplace=False))[1]
+    full = frames(tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
+                                      inplace=False))[1]
     pd.testing.assert_frame_equal(bare, full)
 
     with pytest.raises(KeyError, match=r"null\.phenotype\[1\]"):
@@ -474,10 +485,10 @@ def test_fit_selects_the_substrate(ref):
     """
     _, adata = ref
     a = _cov(adata)[0]
-    main = tcri.tl.mutual_information(adata, covariate=a, null_model=None,
-                                      inplace=False)["result"]
-    null = tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
-                                      null_model=None, inplace=False)["result"]
+    main = frames(tcri.tl.mutual_information(adata, covariate=a, null_model=None,
+                                      inplace=False))[1]
+    null = frames(tcri.tl.mutual_information(adata, covariate=a, fit="null.phenotype[0]",
+                                      null_model=None, inplace=False))[1]
     assert not np.isclose(float(main["value"].iloc[0]), float(null["value"].iloc[0]), atol=1e-6)
     assert float(null["value"].iloc[0]) < float(main["value"].iloc[0]), (
         "the phenotype null carries as much clone-phenotype information as its parent")
@@ -488,12 +499,12 @@ def test_a_result_on_a_null_does_not_overwrite_the_main_key(ref):
     _, adata = ref
     a = _cov(adata)[0]
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
-    main = tcri.get.result(adata, "mutual_information")["result"]["value"].to_numpy().copy()
+    main = frames(tcri.get.result(adata, "mutual_information"))[1]["value"].to_numpy().copy()
 
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", fit="null.phenotype[0]",
                                null_model=None)
     np.testing.assert_array_equal(
-        tcri.get.result(adata, "mutual_information")["result"]["value"].to_numpy(), main)
+        frames(tcri.get.result(adata, "mutual_information"))[1]["value"].to_numpy(), main)
     assert tcri.get.params(adata, "mutual_information")["fit"] is None
     assert tcri.get.params(adata, "mutual_information",
                            fit="null.phenotype[0]")["fit"] == "null.phenotype[0]"
@@ -545,7 +556,7 @@ def test_an_incomparable_fit_is_refused(ref):
         if k not in ("reference", "index", "n_nulls")}
     adata.uns[K.METADATA] = {**adata.uns[K.METADATA], K.FITS: K.fits(adata) + ["myalt"]}
     ok = tcri.tl.mutual_information(adata, covariate=a, null_model="myalt", inplace=False)
-    assert "null_value" in ok["result"].columns
+    assert "null_value" in ok["replicate"]["summary"].columns
 
     record = dict(adata.uns[K.fit_key(K.FIT_SETTINGS, "myalt")])
     record[K.PHENOTYPE_CATEGORIES] = list(record[K.PHENOTYPE_CATEGORIES])[:-1]
@@ -558,6 +569,31 @@ def test_an_incomparable_fit_is_refused(ref):
     adata.uns[K.fit_key(K.FIT_SETTINGS, "myalt")] = record
     with pytest.raises(ValueError, match="n_obs"):
         tcri.tl.mutual_information(adata, covariate=a, null_model="myalt", inplace=False)
+
+
+def test_a_key_added_keeps_its_own_reference(ref):
+    """Two results under different keys keep separate references: each reference run stores
+    under its caller's key, suffixed by the fit, and reads back with ``key=`` and ``fit=``."""
+    model, adata = ref
+    a, b = _cov(adata)[:2]
+    tcri.tl.mutual_information(adata, covariate=a)
+    tcri.tl.mutual_information(adata, covariate=b, key_added="mi_b")
+    members = [f for f in K.fits(adata) if f.startswith("null.phenotype[")]
+    assert members, "the fixture carries no phenotype null"
+    for fit in members:
+        default = tcri.get.draws(adata, "mutual_information", fit=fit)
+        keyed = tcri.get.draws(adata, "mutual_information", key="mi_b", fit=fit)
+        assert set(default["covariate"].astype(str)) == {str(a)}, fit
+        assert set(keyed["covariate"].astype(str)) == {str(b)}, fit
+
+    genes = list(adata.var_names[:2])
+    tcri.perturb.gene_importance(model, adata, genes=genes)
+    tcri.perturb.gene_importance(model, adata, genes=genes[:1], key_added="gi_one")
+    for fit in members:
+        default = tcri.get.result(adata, "gene_importance", fit=fit)["result"]
+        keyed = tcri.get.result(adata, "gene_importance", key="gi_one", fit=fit)["result"]
+        assert set(default["gene"].astype(str)) == set(genes), fit
+        assert set(keyed["gene"].astype(str)) == set(genes[:1]), fit
 
 
 def test_the_two_nulls_stay_distinct(ref):
@@ -575,7 +611,7 @@ def test_the_two_nulls_stay_distinct(ref):
 
 def test_stats_carry_the_adjusted_quantity(ref):
     """One row per contrast, on the adjusted value: ``quantity`` says so and each ``stat`` is a
-    Mann-Whitney on ``result["adjusted"]`` per arm. Without a reference the one row is on the
+    Mann-Whitney on the replicate summary's ``adjusted`` per arm. Without a reference the one row is on the
     value, which is how a reader of a stored frame tells the two cases apart."""
     from scipy.stats import mannwhitneyu
 
@@ -583,7 +619,7 @@ def test_stats_carry_the_adjusted_quantity(ref):
     a = _cov(adata)[0]
     kw = dict(covariate=a, groupby="patient", splitby="disease_status", inplace=False)
     res = tcri.tl.mutual_information(adata, **kw)
-    stats, result = res["stats"], res["result"]
+    stats, result = res["stats"], res["replicate"]["summary"]
     arms = result["disease_status"].astype(str).nunique()
     assert set(stats["quantity"]) == {"adjusted"}
     assert len(stats) == arms * (arms - 1) // 2
@@ -685,12 +721,12 @@ def test_h5ad_round_trip(ref, tmp_path):
     assert set(K.fits(back)) == set(K.fits(adata))
     for member in K.members(adata, "null.phenotype"):
         assert K.fit_key(K.MUTUAL_INFORMATION, member) in back.uns
-    pd.testing.assert_frame_equal(tcri.get.result(back, "mutual_information")["table"],
-                                  tcri.get.result(adata, "mutual_information")["table"],
+    pd.testing.assert_frame_equal(frames(tcri.get.result(back, "mutual_information"))[0],
+                                  frames(tcri.get.result(adata, "mutual_information"))[0],
                                   check_dtype=False, check_categorical=False)
     np.testing.assert_allclose(
-        tcri.get.result(back, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
-        tcri.get.result(adata, "mutual_information")["result"]["adjusted"].to_numpy(dtype=float),
+        frames(tcri.get.result(back, "mutual_information"))[1]["adjusted"].to_numpy(dtype=float),
+        frames(tcri.get.result(adata, "mutual_information"))[1]["adjusted"].to_numpy(dtype=float),
         atol=1e-12)
     assert tcri.get.params(back, "mutual_information")["null_model"] == "null.phenotype"
 
@@ -744,7 +780,8 @@ def test_pl_draws_the_adjusted_quantity_by_default(ref):
 
     _, adata = ref
     a = _cov(adata)[0]
-    res = tcri.tl.mutual_information(adata, covariate=a, groupby="patient")["result"]
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient")
+    res = tcri.get.replicates(adata, "mutual_information")
 
     def gray(ax):
         return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
@@ -795,8 +832,8 @@ def test_the_value_panel_of_a_referenced_result_carries_no_star(ref):
 
     _, adata = ref
     a = _cov(adata)[0]
-    stats = tcri.tl.mutual_information(adata, covariate=a, groupby="patient",
-                                       splitby="disease_status")["stats"]
+    tcri.tl.mutual_information(adata, covariate=a, groupby="patient", splitby="disease_status")
+    stats = tcri.get.stats(adata, "mutual_information")
     rows = stats.loc[stats["quantity"] == "adjusted"]
     assert len(rows) == 1
     label = str(rows["stars"].iloc[0] or "ns")
@@ -865,8 +902,12 @@ def test_an_empty_referenced_result_draws_the_no_data_panel(ref):
                       (K.GENE_IMPORTANCE, "gene_importance")):
         blob = adata.uns[key]
         payload = tcri.get.result(adata, name)
-        payload["result"] = empty
-        payload["table"] = payload["table"].iloc[:0]
+        if "replicate" in payload:
+            payload["replicate"] = {"summary": empty,
+                                    "draws": payload["replicate"]["draws"].iloc[:0]}
+        else:
+            payload["result"] = empty
+            payload["table"] = payload["table"].iloc[:0]
         adata.uns[key] = {**_encode(payload), "params": blob["params"],
                           "version": blob["version"]}
 
@@ -949,8 +990,8 @@ def test_oe_shape_smoke():
                       enable_progress_bar=False, enable_model_summary=False)
 
     levels = list(adata.uns[K.COVARIATE_CATEGORIES])
-    mi = tcri.tl.mutual_information(adata, covariate=levels[-1], groupby="patient",
-                                    inplace=False)["result"]
+    mi = frames(tcri.tl.mutual_information(adata, covariate=levels[-1], groupby="patient",
+                                    inplace=False))[1]
     assert np.isfinite(mi["adjusted"]).all(), mi
     assert float(mi["adjusted"].mean()) > 0.0, (
         f"the fitted model carries no more clone-phenotype information than its phenotype "
@@ -975,11 +1016,11 @@ def test_a_label_column_named_like_a_reference_column_is_still_a_label(ref):
     adata.obs["adjusted_patient"] = adata.obs["patient"]
     adata.obs["null_arm"] = adata.obs["disease_status"]
     a = _cov(adata)[0]
-    bare = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
+    bare = frames(tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
                                       splitby="null_arm", null_model=None,
-                                      inplace=False)["result"]
-    withref = tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
-                                         splitby="null_arm", inplace=False)["result"]
+                                      inplace=False))[1]
+    withref = frames(tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="adjusted_patient",
+                                         splitby="null_arm", inplace=False))[1]
     assert len(withref) == len(bare), (
         f"the reference merge fanned out: {len(withref)} rows against {len(bare)}")
     np.testing.assert_allclose(withref["value"].to_numpy(dtype=float),
@@ -999,7 +1040,7 @@ def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
     for fit in K.members(adata, "null.phenotype"):
         assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
             k for k in adata.uns if "gene_importance" in k)
-        assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
+        assert frames(tcri.get.result(adata, "gene_importance", fit=fit))[1] is not None
 
 
 @pytest.mark.parametrize("source, key_added", [("rebuild", None), ("fit", None), ("fit", "b")])
@@ -1027,14 +1068,14 @@ def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_ad
     for fit in ([recorded] if source == "rebuild" else K.members(adata, group)):
         assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
             k for k in adata.uns if "gene_importance" in k)
-        assert tcri.get.result(adata, "gene_importance", fit=fit)["result"] is not None
+        assert frames(tcri.get.result(adata, "gene_importance", fit=fit))[1] is not None
 
 
 def test_a_non_finite_reference_does_not_delete_the_stats(ref):
     """A reference that is non-finite everywhere is no reference, and the stored ``stats`` says
     so rather than disappearing.
 
-    `restat` receives a payload whose ``stats`` may already be the adjusted frame -- from the
+    `restat_levels` receives a payload whose ``stats`` may already be the adjusted frame -- from the
     decorator's first pass, or from a direct call like this one. With nothing finite in
     ``adjusted`` it rebuilds on the value instead of leaving that frame alone, so the frame
     names the column its p-value is about and a reader never meets an adjusted contrast on a
@@ -1049,8 +1090,8 @@ def test_a_non_finite_reference_does_not_delete_the_stats(ref):
                                          splitby="disease_status", inplace=False)
     before = payload["stats"].copy()
     assert set(before["quantity"]) == {"adjusted"}
-    payload["result"]["adjusted"] = np.nan
-    R.restat(payload, groupby="patient", splitby="disease_status")
+    payload["replicate"]["summary"]["adjusted"] = np.nan
+    R.restat_levels(payload, groupby="patient", splitby="disease_status")
     assert payload["stats"] is not None and len(payload["stats"])
     assert set(payload["stats"]["quantity"]) == {"value"}
     assert len(payload["stats"]) == len(before)
@@ -1061,8 +1102,9 @@ def test_an_all_nan_reference_is_no_reference(ref):
 
     Both stored columns are blanked, ``null_value`` and ``adjusted``, so the default panel has
     no usable adjustment and resolves to the value. Two ways that can go wrong from there. On
-    the replicate path the shared collapse empties the frame and the panel renders with no
-    marks at all; on the box-and-strip path seaborn is handed an all-NaN y and raises. What the
+    the path that collapses items to replicates the shared mask empties the frame and the panel
+    renders with no marks at all; on the box-and-strip path seaborn is handed an all-NaN y and
+    raises. What the
     panel should show is the value, drawn normally, with "no reference" on the label and
     nothing gray named in the legend -- on `render_metric` and on `pl.gene_importance`, which
     is a second implementation of the same rule.
@@ -1078,8 +1120,13 @@ def test_an_all_nan_reference_is_no_reference(ref):
     def blank_the_reference(key, name):
         blob = adata.uns[key]
         payload = tcri.get.result(adata, name)
-        payload["result"]["null_value"] = np.nan
-        payload["result"]["adjusted"] = np.nan
+        if "replicate" in payload:
+            summaries = [lv["summary"] for lv in (payload["replicate"], payload.get("item")) if lv]
+        else:
+            summaries = [payload["result"]]
+        for summary in summaries:
+            summary["null_value"] = np.nan
+            summary["adjusted"] = np.nan
         adata.uns[key] = {**_encode(payload), "params": blob["params"],
                           "version": blob["version"]}
 
@@ -1090,14 +1137,15 @@ def test_an_all_nan_reference_is_no_reference(ref):
         legend = ax.get_legend()
         return [t.get_text() for t in legend.get_texts()] if legend is not None else []
 
-    # the REPLICATE branch, which collapses the quantity with its reference under one mask: an
-    # item axis (clonotype) that has to be averaged to one value per patient first
-    tcri.tl.phenotypic_entropy(adata, covariate=a, groupby="patient")
-    blank_the_reference(K.PHENOTYPIC_ENTROPY, "phenotypic_entropy")
-    ax = tcri.pl.phenotypic_entropy(adata)
-    assert ax.collections, "the value marks were dropped along with the reference"
-    assert not gray(ax)
-    assert "no reference" in ax.get_ylabel()
+    # the replicate view, and the item view on the branch that collapses the quantity with its
+    # reference under one mask: an item axis (phenotype) with the patients within each position
+    tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="patient")
+    blank_the_reference(K.CLONOTYPIC_ENTROPY, "clonotypic_entropy")
+    for view in ("replicate", "item"):
+        ax = tcri.pl.clonotypic_entropy(adata, view=view)
+        assert ax.collections, f"{view}: the value marks were dropped along with the reference"
+        assert not gray(ax), view
+        assert "no reference" in ax.get_ylabel(), view
 
     # the gene twin's box-and-strip path, where the reference is a second seaborn pass
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:4]),
@@ -1125,7 +1173,7 @@ def test_the_reference_dodges_with_the_value(ref):
     a = _cov(adata)[0]
     tcri.tl.clonotypic_entropy(adata, covariate=a, groupby="patient",
                               splitby="disease_status")
-    ax = tcri.pl.clonotypic_entropy(adata, quantity="value")
+    ax = tcri.pl.clonotypic_entropy(adata, quantity="value", view="item")
     value_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
                               if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
     gray_x = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
@@ -1236,8 +1284,8 @@ def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
 
     assert "permuted within" in _refit_hint(back, "null.clonotype[0]", "patient")
     for fit in (None, "null.phenotype[0]", "null.clonotype[0]"):
-        res = tcri.tl.mutual_information(back, covariate=a, groupby="patient", fit=fit,
-                                         null_model=None, inplace=False)["result"]
+        res = frames(tcri.tl.mutual_information(back, covariate=a, groupby="patient", fit=fit,
+                                         null_model=None, inplace=False))[1]
         assert len(res) and np.isfinite(res["value"]).any(), fit
     # ...and a rebuild off the reloaded object reads the same settings
     assert K.fits(back) == K.fits(adata)
@@ -1368,7 +1416,8 @@ def test_the_reference_pools_every_fit(pooled):
 
     _, adata, _ = pooled
     res = _mi(adata, n_samples=10)
-    table, row = res["table"], res["result"].iloc[0]
+    table, summary = frames(res)
+    row = summary.iloc[0]
     assert len(table) == 10 * 3 and sorted(set(table["null"])) == [0, 1, 2]
     np.testing.assert_allclose(table["adjusted"], table["value"] - table["null_value"],
                                atol=1e-12)
@@ -1391,21 +1440,23 @@ def test_one_null_alone_is_its_pairs_in_the_pool(pooled):
     """A null read alone, by name or as its model, draws what it draws inside its reference:
     each null's draws are seeded by its own index, not by its position in a call."""
     _, adata, nulls = pooled
-    pool = _mi(adata, n_samples=6)["table"]
+    pool = _mi(adata, n_samples=6)["replicate"]["draws"]
     by_name = _mi(adata, n_samples=6, null_model="null.phenotype[1]")
     by_model = _mi(adata, n_samples=6, null_model=nulls["phenotype"][1])
-    np.testing.assert_allclose(by_name["table"]["null_value"].to_numpy(),
+    by_name, by_model = by_name["replicate"]["draws"], by_model["replicate"]["draws"]
+    np.testing.assert_allclose(by_name["null_value"].to_numpy(),
                                pool.loc[pool["null"] == 1, "null_value"].to_numpy(), atol=1e-12)
-    pd.testing.assert_frame_equal(by_name["table"], by_model["table"])
-    assert set(by_name["table"]["null"]) == {0}
+    pd.testing.assert_frame_equal(by_name, by_model)
+    assert set(by_name["null"]) == {0}
 
 
 def test_null_model_takes_the_list_tcri_null_returned(pooled):
     """The list of models ``tcri.null.phenotype`` returned is the reference: the same pairs, and
     recorded under the reference's name."""
     _, adata, nulls = pooled
-    pd.testing.assert_frame_equal(_mi(adata, n_samples=4, null_model=nulls["phenotype"])["table"],
-                                  _mi(adata, n_samples=4, null_model="phenotype")["table"])
+    pd.testing.assert_frame_equal(
+        _mi(adata, n_samples=4, null_model=nulls["phenotype"])["replicate"]["draws"],
+        _mi(adata, n_samples=4, null_model="phenotype")["replicate"]["draws"])
     cov = str(adata.uns[K.COVARIATE_CATEGORIES][0])
     tcri.tl.mutual_information(adata, covariate=cov, null_model=nulls["phenotype"])
     assert tcri.get.params(adata, "mutual_information")["null_model"] == "null.phenotype"
@@ -1420,8 +1471,8 @@ def test_the_stored_table_grows_by_n_nulls(pooled):
     cov = str(adata.uns[K.COVARIATE_CATEGORIES][0])
     for n_samples in (0, 5):
         kw = dict(covariate=cov, n_samples=n_samples, random_state=0, inplace=False)
-        bare = tcri.tl.phenotypic_entropy(adata, null_model=None, **kw)["table"]
-        with_ref = tcri.tl.phenotypic_entropy(adata, **kw)["table"]
+        bare = frames(tcri.tl.phenotypic_entropy(adata, null_model=None, **kw))[0]
+        with_ref = frames(tcri.tl.phenotypic_entropy(adata, **kw))[0]
         assert len(bare) == bare["clonotype"].nunique() * max(n_samples, 1)
         assert len(with_ref) == 3 * len(bare), n_samples
 

@@ -72,6 +72,30 @@ reproducing the manuscript's benchmark passes `normalize_mode="average"` explici
 Joint entropy (eq 2, `H(c,φ) = −Σ P log₂ P`) is not exposed; the test reaches it through
 `H(c,φ) = H(c) + H(φ) − I(c;φ)`.
 
+### The replicate values
+
+Mutual information is one value per replicate: the joint is the replicate's at the covariate.
+The two entropies have a replicate value beside their item values, the item values weighted by
+their shares of that joint:
+
+```
+H(P|C) = Σ_c P(c) H[P(φ|c)]       phenotypic entropy of a replicate
+H(C|P) = Σ_φ P(φ) H[P(c|φ)]       clonotypic entropy of a replicate
+```
+
+`P(c)` is `1/C` at `weighted=False` and the clone's cell share at `weighted=True` (see "The
+`weighted` axis"); `P(φ)` is the phenotype's share of the joint. In bits,
+`I(c;φ) = H(φ) − H(P|C) = H(c) − H(C|P)`. A clone or phenotype with zero mass has zero weight
+and does not make the value NaN; an empty joint, a replicate with no cells at the covariate or
+no clone left by `clones=`, is NaN. Normalizers: `log₂(P)` for `H(P|C)`; `log₂ C` for `H(C|P)`,
+C the clones the replicate has at the covariate, or `log₂(n_clones_ref)` when given.
+
+A normalized replicate value whose normalizer is 0 raises `ValueError` naming the metric, the
+replicate and the covariate level: one clone for clonotypic entropy, one phenotype for phenotypic
+entropy, and for mutual information one clone or one phenotype at `normalize_mode="min"`, one
+clone and one phenotype at `"average"`. The item values keep their own rules: a phenotype with
+one supported clone has clonotypic entropy 0.
+
 ### `phenotypic_flux`, one value per clone (eq 7)
 
 ```
@@ -152,13 +176,18 @@ test may equate them. The return shape does not change with `n_samples`; `sd`, `
 |---|---|
 | uniform over k → `log₂ k`, normalized 1 | a wrong base or normalizer |
 | all mass on one outcome → 0 | sign or normalization errors |
-| zero-mass clone or phenotype → NaN | the spurious H = 1 reindexing regression |
+| zero-mass clone or phenotype → NaN item value | the spurious H = 1 reindexing regression |
+| zero-mass clone or phenotype → zero weight in a replicate value | a NaN item turning its replicate NaN |
 | support-only normalization | an epsilon clip creeping back in |
 | independent joint → I = 0 | a broken MI |
 | `I(c;φ) = I(φ;c)`, `I ≥ 0` | transpose or sign errors |
 | permutation joint → normalized I = 1 (`min`) | a wrong denominator |
 | **`I(c;φ) = H(c) − Σ_φ P(φ) H[P(c\|φ)]`** | redefining either family alone |
 | weighting by the marginal instead of the conditional exceeds `log₂ C` and gives I < 0 | the natural mis-transcription of eqs 3 and 4 |
+| `H(P\|C) = Σ_c P(c) H[P(φ\|c)]`, `H(C\|P) = Σ_φ P(φ) H[P(c\|φ)]` | replicate values weighted by anything but the joint's shares |
+| `I(c;φ) = H(φ) − H(P\|C) = H(c) − H(C\|P)` | a replicate value that disagrees with mutual information |
+| row-normalized joint: `H(P\|C)` is the plain mean, normalized `H(C\|P) = 1 − I / log₂ C` | wrong `weighted=False` weights |
+| a normalizer of 0 raises | a replicate value reported as 0 or NaN when its normalizer is 0 |
 
 The decomposition is the keystone: it ties the entropy and MI families together so neither can
 change alone.
@@ -196,8 +225,9 @@ computed at defaults is a different quantity subtracted from a different quantit
 **`adjusted` is computed per paired draw, against every fit of the reference.** The null is the
 value expected under no association. The fit and each null are independent fits, so draw *d* of
 the fit is paired with draw *d* of every one of the reference's `n_nulls` fits and
-`adjusted_{i,d} = value_d - null_value_{i,d}`; `table` carries `null` (which fit), `null_value` and
-`adjusted` on every pair, and `result` gives the adjusted value's mean, `adjusted_sd` and HDI
+`adjusted_{i,d} = value_d - null_value_{i,d}`; the per-draw frames (each level's `draws`, or
+`table`) carry `null` (which fit), `null_value` and `adjusted` on every pair, and the summaries
+(each level's `summary`, or `result`) give the adjusted value's mean, `adjusted_sd` and HDI
 (`adjusted_hdi_low`, `adjusted_hdi_high`) over all the pairs, like any value, and `null_value` as
 the mean over them. Pooling the pairs is what puts the null's fit-to-fit spread into the interval:
 one null's draws do not carry it, and the mean of the nulls' draws would hide it. Each null's
@@ -210,11 +240,12 @@ only when `n_samples > 0`.
 **Both denominators are stored.** A normalized MI divides by a normalizer taken from the same
 joint it normalizes: at `weighted=False` the engine row-normalizes, so `h_c` is exactly
 `log2(C)` and `normalize_mode="min"` selects `h_p`, the fitted phenotype marginal entropy, which
-a null does not share. `result` therefore carries `denom` and `null_denom`, so a reader can
-recover both numbers in bits as `value*denom` and `null_value*null_denom`. At `n_samples=0` that
+a null does not share. Its replicate summary therefore carries `denom` and `null_denom`, so a
+reader can recover both numbers in bits as `value*denom` and `null_value*null_denom`. At `n_samples=0` that
 recovery is exact. At `n_samples>0` it is not: `build_result` reduces each column over draws
 independently, so the product is `E[I/D]·E[D]` rather than `E[I]` -- measured, 0.4429194 against
-a per-draw mean of 0.4429281. Take the bits per draw from `table` when the difference matters.
+a per-draw mean of 0.4429281. Take the bits per draw from the replicate draws
+(`tcri.get.draws`) when the difference matters.
 The null's MI is never computed with the parent's denominator: that would break the one thing
 `null_value` means, which is the metric OF the null.
 
@@ -280,5 +311,13 @@ GOLDEN = {
     "mutual_information": {"raw": 0.288703141426, "min": 0.293031766823, "average": 0.238914701013},
     # flux between row 0 and row 2 of the joint, as P(phi|c) at two levels
     "phenotypic_flux": {"kl": 1.568434327026, "l1": 1.314285714286},
+    # H(P|C) and H(C|P) of the joint as given, and of its rows each normalized to sum to 1
+    "replicate": {
+        "joint": {"phenotypic_entropy": 0.696524994608,
+                  "clonotypic_entropy": {"raw": 1.142857142857, "normalized": 0.721062575510}},
+        "row_normalized": {"phenotypic_entropy": 0.771200291157,
+                           "clonotypic_entropy": {"raw": 1.357209898776,
+                                                  "normalized": 0.856304106980}},
+    },
 }
 ```

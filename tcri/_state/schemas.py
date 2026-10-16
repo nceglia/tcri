@@ -3,7 +3,20 @@
 ``@tl_result(schema=...)`` checks required-key PRESENCE on dict results. The shapes in the
 trailing comments are documentation of the payload layout; nothing parses them.
 
-Every metric returns the same two payload keys:
+**By level.** Mutual information and the two entropies store ``{replicate, item, stats}``:
+
+``replicate``
+    ``{draws, summary}``. ``draws`` has one row per (covariate, group, draw), ``summary`` the same
+    rows summarized over the draws, one per (covariate, group), read with ``tcri.get.replicates``.
+
+``item``
+    ``{draws, summary}`` for the metric's items, one row per (covariate, group, item[, draw]).
+    Mutual information has one value per joint and no ``item``.
+
+``stats``
+    The tests on the replicate summary, or ``None`` when nothing is compared.
+
+The other tools store the layout below, with two payload keys:
 
 ``table``
     The substrate. One row per (covariate, group, item[, draw]). Never reduced. All label
@@ -27,9 +40,9 @@ null's draw ``d``, and ``result`` summarizes the paired draws: ``adjusted`` is t
 ``adjusted_sd``, ``adjusted_hdi_low`` and ``adjusted_hdi_high`` beside it, and ``null_v`` is the
 null's mean. At ``null_model=None`` none of them exist, on either frame.
 
-**The ``stats`` slot.** Every metric except :class:`JointDistribution` returns it. Only three
-of the ``TypedDict``s below declare it, and a declared key is a required one, so the rest accept
-a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
+**The ``stats`` slot.** Every metric except :class:`JointDistribution` stores it. Six of the
+``TypedDict``s below declare it; :class:`PhenotypicFlux` does not, and a declared key is a
+required one, so it accepts a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
 the column contrasted: ``"adjusted"`` when the result carries a usable adjustment, ``"value"``
 otherwise (no reference, or one that is non-finite everywhere). ``pl`` stars the quantity on its
 axis, so a panel of the value carries no star when the contrast is on the adjusted value.
@@ -61,29 +74,33 @@ class JointDistribution(TypedDict):
 
 
 class MutualInformation(TypedDict):
-    """I(c; phi) — the one metric with no item axis, so ``table`` has ``item=None``."""
+    """I(c; phi) — one value per joint, so a replicate level and no item level."""
 
-    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], draw, value, denom
-    result: pd.DataFrame    # one row per group; value + sd/hdi_* (draws) + ci_*/n_groups
-                            # (across groups) + denom, and null_value/null_denom/adjusted +
-                            # adjusted_sd/adjusted_hdi_* with a reference. The contrast lives
-                            # in `stats`.
+    replicate: dict         # {draws, summary}. draws: covariate, [groupby], [splitby], draw,
+                            # value, denom (+ null, null_value, null_denom, adjusted with a
+                            # reference). summary: one row per group; value + sd/hdi_* + denom
+                            # (+ null_value/null_denom/adjusted/adjusted_sd/adjusted_hdi_*).
                             # `denom` is the normalizer this MI was divided by: the null does
                             # not share it, so both are stored and value*denom recovers bits
+    stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class ClonotypicEntropy(TypedDict):
-    """H(c | phi) — one value per PHENOTYPE, not per clone."""
+    """H(c | phi) — per replicate H(C|P), and one value per PHENOTYPE."""
 
-    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], phenotype, draw, value
-    result: pd.DataFrame    # + null_value/adjusted with a reference
+    replicate: dict         # {draws, summary}: covariate, [groupby], [splitby], [draw], value
+                            # (+ the reference columns)
+    item: dict              # {draws, summary}: the same, per phenotype
+    stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class PhenotypicEntropy(TypedDict):
-    """H(phi | c) — one value per clone."""
+    """H(phi | c) — per replicate H(P|C), and one value per clone."""
 
-    table: pd.DataFrame     # cols: covariate, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame    # + null_value/adjusted with a reference
+    replicate: dict         # {draws, summary}: covariate, [groupby], [splitby], [draw], value
+                            # (+ the reference columns)
+    item: dict              # {draws, summary}: the same, per clone (`clonotype`)
+    stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class PhenotypicFlux(TypedDict):

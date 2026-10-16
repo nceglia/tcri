@@ -322,3 +322,20 @@ def cohort():
     _remember_fixture_params("cohort")
     logging.disable(logging.NOTSET)
     return model, adata
+
+
+def frames(payload, level=None):
+    """``(draws, summary)`` of a tool's full result (``inplace=False``) or its stored result.
+
+    A result stored by level gives ``level``: by default the item level when the metric has one,
+    else the replicate level. A result stored as ``{table, result, stats}`` gives its ``table``
+    and ``result``.
+    """
+    if not isinstance(payload, dict):
+        raise TypeError("frames() needs a tool's full result: call it with inplace=False, or "
+                        "read the stored one with tcri.get.result")
+    if "replicate" in payload:
+        if level is None:
+            level = "item" if payload.get("item") is not None else "replicate"
+        return payload[level]["draws"], payload[level]["summary"]
+    return payload["table"], payload["result"]

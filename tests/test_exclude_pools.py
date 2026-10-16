@@ -22,6 +22,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from .conftest import frames
 from tcri._compute._repertoire import _derivation_steps, _pool_labels
 from tcri._compute._tables import _resolve_clones
 from tcri._state import keys as K
@@ -108,7 +109,16 @@ def _run(name, model, adata, **kw):
 
 
 def _frames(result):
-    return {"frame": result} if isinstance(result, pd.DataFrame) else dict(result)
+    """Every frame of a result by slot, a level's frames named ``<level>.<frame>``."""
+    if isinstance(result, pd.DataFrame):
+        return {"frame": result}
+    out = {}
+    for slot, value in result.items():
+        if isinstance(value, dict):
+            out.update({f"{slot}.{name}": frame for name, frame in value.items()})
+        else:
+            out[slot] = value
+    return out
 
 
 def _assert_same(got, want):
@@ -236,10 +246,10 @@ def test_leaving_out_pools_keeps_the_row_order(pooled):
     for by_default, with_pools in (
         (tcri.tl.joint_distribution(adata, inplace=False)["result"],
          tcri.tl.joint_distribution(adata, exclude_pools=False, inplace=False)["result"]),
-        (tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
-                                    inplace=False)["table"],
-         tcri.tl.phenotypic_entropy(adata, covariate=POST, exclude_pools=False,
-                                    null_model=None, inplace=False)["table"]),
+        (frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
+                                    inplace=False))[0],
+         frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, exclude_pools=False,
+                                    null_model=None, inplace=False))[0]),
     ):
         assert len(by_default) < len(with_pools)
         pd.testing.assert_frame_equal(by_default, _drop_pools(with_pools))
@@ -251,9 +261,9 @@ def test_the_reference_counts_the_clones_the_value_counts(pooled):
     _, adata = pooled
     for exclude_pools in (True, False):
         kw = dict(covariate=POST, exclude_pools=exclude_pools, inplace=False)
-        with_ref = tcri.tl.mutual_information(adata, **kw)["result"]
-        of_null = tcri.tl.mutual_information(adata, fit="null.phenotype[0]", null_model=None,
-                                             **kw)["result"]
+        with_ref = frames(tcri.tl.mutual_information(adata, **kw))[1]
+        of_null = frames(tcri.tl.mutual_information(adata, fit="null.phenotype[0]", null_model=None,
+                                             **kw))[1]
         merged = with_ref.merge(of_null[["patient", "value"]], on="patient",
                                 suffixes=("", "_own"))
         assert len(merged) == len(with_ref)
@@ -312,8 +322,8 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
     kw = dict(covariate=POST, groupby="patient", n_perm=20, random_state=0)
     kept = _kept(adata)
     by_default = tcri.diag.permutation_null(adata, **kw)
-    per_clone = tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
-                                           inplace=False)["result"]
+    per_clone = frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
+                                           inplace=False))[1]
 
     def _observed(null, patient):
         return float(null.loc[null["patient"] == patient, "observed"].iloc[0])
@@ -345,7 +355,10 @@ def test_pool_record_round_trips_through_a_saved_session(pooled, tmp_path):
     model, adata = pooled
     a = adata.copy()
     names = ("mutual_information", "phenotypic_flux")
-    stored = {name: _run(name, model, a, inplace=True) for name in names}
+    stored = {}
+    for name in names:
+        _run(name, model, a, inplace=True)
+        stored[name] = tcri.get.result(a, name)
     save_tcri_session(model, a, str(tmp_path / "session"))
     with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
         warnings.simplefilter("ignore")

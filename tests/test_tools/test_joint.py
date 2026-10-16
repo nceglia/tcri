@@ -26,7 +26,8 @@ def test_identity_ct_table_equals_p_ct(trained_model):
     """use_logits=False, n_samples=0, T=1  ==  uns[P_CT] restricted to the covariate."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=1.0)['table']
+    df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=1.0,
+                             inplace=False)['table']
 
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     rows = np.where(np.asarray(adata.uns[K.CT_TO_COV]) == cov_i)[0]
@@ -38,7 +39,8 @@ def test_identity_use_logits_equals_predict_aggregation(trained_model):
     """use_logits=True, n_samples=0, T=1  ==  per-clone mean of predict() (== frozen X_PROBABILITIES)."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    df = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0)['table']
+    df = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0,
+                             inplace=False)['table']
 
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     mask = np.asarray(adata.uns[K.COV_ARRAY]) == cov_i
@@ -54,8 +56,8 @@ def test_point_estimate_is_deterministic(trained_model):
     """n_samples=0 is deterministic and bit-identical across repeated calls."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    a = tcri.joint_distribution(adata, covariate=cov, n_samples=0)['table']
-    b = tcri.joint_distribution(adata, covariate=cov, n_samples=0)['table']
+    a = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['table']
+    b = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['table']
     assert np.array_equal(a.values, b.values)
 
 
@@ -64,9 +66,10 @@ def test_sampling_is_seeded_reproducible(trained_model):
     carries a (clonotype, sample_id) MultiIndex."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    s1 = tcri.joint_distribution(adata, covariate=cov, n_samples=8, random_state=0)['table']
-    s2 = tcri.joint_distribution(adata, covariate=cov, n_samples=8, random_state=0)['table']
-    s3 = tcri.joint_distribution(adata, covariate=cov, n_samples=8, random_state=1)['table']
+    kw = dict(covariate=cov, n_samples=8, inplace=False)
+    s1 = tcri.joint_distribution(adata, random_state=0, **kw)['table']
+    s2 = tcri.joint_distribution(adata, random_state=0, **kw)['table']
+    s3 = tcri.joint_distribution(adata, random_state=1, **kw)['table']
     np.testing.assert_allclose(s1.values, s2.values)
     assert not np.allclose(s1.values, s3.values)
     assert list(s1.index.names) == ["clonotype", "sample_id"]
@@ -79,8 +82,10 @@ def test_sampling_mean_approaches_tempered_base(trained_model):
     draw is Dirichlet(clamp(local_scale·base))."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    base = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0)['table']
-    draws = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=400, random_state=0)['table']
+    base = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0,
+                                 inplace=False)['table']
+    draws = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=400, random_state=0,
+                                  inplace=False)['table']
     mean = draws.groupby(level="clonotype", sort=False).mean().reindex(base.index)
     np.testing.assert_allclose(mean.values, base.values, atol=0.05)
 
@@ -90,8 +95,10 @@ def test_weighted_scales_rows_by_ct_cell_count(trained_model):
     is a per-clone simplex."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    w0 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=False)['table']
-    w1 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=True)['table']
+    w0 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=False,
+                               inplace=False)['table']
+    w1 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=True,
+                               inplace=False)['table']
     np.testing.assert_allclose(w0.values.sum(axis=1), 1.0, atol=1e-6)          # unweighted rows sum to 1
     assert not np.allclose(w0.values, w1.values)
     # weighted row sum == that clone's cell count at this covariate
@@ -108,8 +115,10 @@ def test_shared_draw_invariant_across_covariates(trained_model):
     per-covariate call at the same random_state (draw-count == n_samples, not ×#covariates)."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    allcov = tcri.joint_distribution(adata, covariate=None, n_samples=6, random_state=7)['table']
-    percov = tcri.joint_distribution(adata, covariate=cov, n_samples=6, random_state=7)['table']
+    allcov = tcri.joint_distribution(adata, covariate=None, n_samples=6, random_state=7,
+                                   inplace=False)['table']
+    tcri.joint_distribution(adata, covariate=cov, n_samples=6, random_state=7)
+    percov = tcri.get.result(adata, 'joint_distribution')['table']
     assert "covariate" in allcov.index.names
     sl = allcov.xs(cov, level="covariate")
     np.testing.assert_allclose(sl.values, percov.values, atol=1e-6)
@@ -119,7 +128,7 @@ def test_shared_draw_invariant_across_covariates(trained_model):
 def test_provenance_is_json_serializable(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
-    df = tcri.joint_distribution(adata, covariate=cov, n_samples=4, random_state=0)['table']
+    tcri.joint_distribution(adata, covariate=cov, n_samples=4, random_state=0)
     json.dumps(tcri.get.params(adata, 'joint_distribution'))  # must not raise
     assert tcri.get.params(adata, 'joint_distribution')["use_logits"] is True
     assert tcri.get.params(adata, 'joint_distribution')["n_draws"] == 4
@@ -172,7 +181,8 @@ def test_temperature_tempers_base_on_ct_path(trained_model):
     from scipy.special import softmax
     _, adata = trained_model
     cov = _first_covariate(adata)
-    df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=2.0)['table']
+    df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=2.0,
+                             inplace=False)['table']
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     rows = np.where(np.asarray(adata.uns[K.CT_TO_COV]) == cov_i)[0]
     expected = softmax(np.log(np.asarray(adata.uns[K.P_CT])[rows] + 1e-8) / 2.0, axis=1)
@@ -183,8 +193,10 @@ def test_temperature_changes_use_logits_joint(trained_model):
     """T!=1 tempers the cell-informed joint too, not only the ct path."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    a = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0)['table']
-    b = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=2.0)['table']
+    a = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0,
+                            inplace=False)['table']
+    b = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=2.0,
+                            inplace=False)['table']
     assert not np.allclose(a.values, b.values)
 
 

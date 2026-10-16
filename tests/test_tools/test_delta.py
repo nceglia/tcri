@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 import tcri
+from ..conftest import frames
 from tcri._state import keys as K
 
 DELTAS = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
@@ -86,7 +87,7 @@ def test_delta_is_to_minus_from_within_a_draw(name, cohort):
     _, adata = cohort
     a, b = _covs(adata)
     res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient",
-                                 n_samples=20, random_state=0)
+                                 n_samples=20, random_state=0, inplace=False)
 
     t = res["table"]
     assert {"value", "value_from", "value_to"} <= set(t.columns)
@@ -173,10 +174,10 @@ def test_the_intersection_changes_the_clonotypic_answer(ragged):
         warnings.simplefilter("ignore")
         matched = tcri.tl.delta_clonotypic_entropy(adata, cov_from=a, cov_to=b,
                                                    null_model=None, inplace=False)["result"]
-    naive_a = tcri.tl.clonotypic_entropy(adata, covariate=a, null_model=None,
-                                         inplace=False)["result"]
-    naive_b = tcri.tl.clonotypic_entropy(adata, covariate=b, null_model=None,
-                                         inplace=False)["result"]
+    naive_a = frames(tcri.tl.clonotypic_entropy(adata, covariate=a, null_model=None,
+                                         inplace=False))[1]
+    naive_b = frames(tcri.tl.clonotypic_entropy(adata, covariate=b, null_model=None,
+                                         inplace=False))[1]
     naive = (naive_b.set_index("phenotype")["value"] - naive_a.set_index("phenotype")["value"])
 
     got = matched.set_index("phenotype")["value"]
@@ -218,12 +219,13 @@ def test_no_direction_probability_column(name, cohort):
     """
     _, adata = cohort
     a, b = _covs(adata)
-    res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient",
-                                 n_samples=10, random_state=0)
+    getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient", n_samples=10,
+                           random_state=0)
+    res = tcri.get.result(adata, name)
     assert not ({"p_gt", "p_lt", "prob_increase"} & set(res["result"].columns))
 
     # ...and it is genuinely one line away for a caller who wants it
-    t = tcri.get.table(adata, name, which="table")
+    t = res["table"]
     graded = t.groupby(ITEM[name], observed=True)["value"].apply(lambda v: (v > 0).mean())
     assert graded.between(0, 1).all()
 
@@ -234,7 +236,7 @@ def test_the_contrast_counts_replicates(name, cohort):
     _, adata = cohort
     a, b = _covs(adata)
     res = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient",
-                                 splitby="disease_status")
+                                 splitby="disease_status", inplace=False)
     row = res["stats"].iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3
     assert row["replicate_unit"] == "patient"
@@ -243,11 +245,14 @@ def test_the_contrast_counts_replicates(name, cohort):
 
 @pytest.mark.parametrize("name", DELTAS)
 def test_stored_and_returned_agree(name, cohort):
-    """The store-once invariant, extended to the new tools."""
+    """The store-once invariant on the deltas: a call stores its result and returns ``None``,
+    and ``inplace=False`` returns the result it stores."""
     _, adata = cohort
     a, b = _covs(adata)
-    returned = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient")
+    assert getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient") is None
     cached = tcri.get.result(adata, name)
+    returned = getattr(tcri.tl, name)(adata, cov_from=a, cov_to=b, groupby="patient",
+                                      inplace=False)
     assert set(cached) == set(returned)
     for slot, frame in returned.items():
         if frame is None:

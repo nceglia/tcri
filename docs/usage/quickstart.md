@@ -101,17 +101,23 @@ number, `null_value` is what the same model gives on permuted labels, and
 
 ```python
 # mutual information between clonotype and phenotype at one covariate
-mi = tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
+tcri.tl.mutual_information(adata, covariate="pre", normalize_mode="average")
 
 # how phenotypically diverse each phenotype's clones are
-ce = tcri.tl.clonotypic_entropy(adata, covariate="pre")
+tcri.tl.clonotypic_entropy(adata, covariate="pre")
 
 # per-clone plasticity
-pe = tcri.tl.phenotypic_entropy(adata, covariate="pre")
+tcri.tl.phenotypic_entropy(adata, covariate="pre")
 
 # how a clone's phenotype mix shifts between two covariates
-flux = tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
+tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
+
+Each call stores its result in `adata.uns` and returns `None`; `tcri.get` reads it back.
+Mutual information and the two entropies have one row per replicate, read with
+`tcri.get.replicates(adata, "mutual_information")`. The entropies also have one value per item,
+per phenotype or per clone, read with `tcri.get.items(adata, "phenotypic_entropy")`. Flux is read
+with `tcri.get.result(adata, "phenotypic_flux")`.
 
 ```{important}
 For the classical NMI, pass `normalize_mode="average"` explicitly. The default
@@ -141,12 +147,13 @@ Contrasting a metric across cohorts is **not a separate step**. Pass `splitby` a
 metric produces the contrast itself, with the replicate unit already resolved:
 
 ```python
-res = tcri.tl.mutual_information(
+tcri.tl.mutual_information(
     adata, covariate="pre", groupby="patient", splitby="disease_status"
 )
 
-res["result"]   # one row per patient, carrying its disease_status label
-res["stats"]    # the disease-vs-control contrast: mean_a/mean_b, delta, stat, p, stars
+tcri.get.replicates(adata, "mutual_information")  # one row per patient, with its disease_status
+tcri.get.stats(adata, "mutual_information")       # the disease-vs-control contrast:
+                                                  # mean_a/mean_b, delta, stat, p, stars
 ```
 
 `groupby` is the replicate — one value per patient — and `splitby` is the cohort label,

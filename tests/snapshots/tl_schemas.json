@@ -2,7 +2,37 @@
   "tools": {
     "tcri_clonotypic_entropy": {
       "slots": {
-        "result": {
+        "item.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "covariate",
+              "draw",
+              "null",
+              "null_value",
+              "phenotype",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "draw",
+              "phenotype",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "item.summary": {
           "columns": {
             "maximal": [
               "<groupby>",
@@ -38,6 +68,68 @@
           },
           "type": "DataFrame"
         },
+        "replicate.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "covariate",
+              "draw",
+              "null",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.summary": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
         "stats": {
           "columns": {
             "maximal": [
@@ -46,6 +138,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",
@@ -68,36 +161,6 @@
               "None"
             ],
             "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "covariate",
-              "draw",
-              "null",
-              "null_value",
-              "phenotype",
-              "value"
-            ],
-            "minimal": [
-              "covariate",
-              "draw",
-              "phenotype",
-              "value"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
           },
           "type": "DataFrame"
         }
@@ -161,6 +224,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",
@@ -286,6 +350,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",
@@ -428,6 +493,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "gene",
               "level_a",
@@ -537,7 +603,38 @@
     },
     "tcri_mutual_information": {
       "slots": {
-        "result": {
+        "replicate.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "covariate",
+              "denom",
+              "draw",
+              "null",
+              "null_denom",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "denom",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.summary": {
           "columns": {
             "maximal": [
               "<groupby>",
@@ -582,6 +679,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",
@@ -604,37 +702,6 @@
               "None"
             ],
             "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "covariate",
-              "denom",
-              "draw",
-              "null",
-              "null_denom",
-              "null_value",
-              "value"
-            ],
-            "minimal": [
-              "covariate",
-              "denom",
-              "draw",
-              "value"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
           },
           "type": "DataFrame"
         }
@@ -644,7 +711,37 @@
     },
     "tcri_phenotypic_entropy": {
       "slots": {
-        "result": {
+        "item.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "clonotype",
+              "covariate",
+              "draw",
+              "null",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "item.summary": {
           "columns": {
             "maximal": [
               "<groupby>",
@@ -680,6 +777,68 @@
           },
           "type": "DataFrame"
         },
+        "replicate.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "covariate",
+              "draw",
+              "null",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.summary": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
         "stats": {
           "columns": {
             "maximal": [
@@ -688,6 +847,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",
@@ -710,36 +870,6 @@
               "None"
             ],
             "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "clonotype",
-              "covariate",
-              "draw",
-              "null",
-              "null_value",
-              "value"
-            ],
-            "minimal": [
-              "clonotype",
-              "covariate",
-              "draw",
-              "value"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
           },
           "type": "DataFrame"
         }
@@ -795,6 +925,7 @@
               "ci_high_b",
               "ci_low_a",
               "ci_low_b",
+              "comparison",
               "delta",
               "level_a",
               "level_b",

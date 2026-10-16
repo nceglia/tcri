@@ -75,7 +75,8 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
                     temperature=1.0, clones=None, exclude_pools=True, weighted=False,
                     distance_metric="kl", random_state=None, device=None, fit=None):
     """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl) — computed once, cached, returned.
+    kl). Stores ``{table, result, stats}`` and returns ``None``; with ``inplace=False`` nothing
+    is stored and the result is returned. Read it with ``tcri.get.result``.
 
     Flux is defined as the KL divergence, which is why ``distance_metric`` defaults to
     ``"kl"``; ``"l1"`` is available for when a bounded or symmetric measure is wanted.

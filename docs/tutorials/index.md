@@ -127,24 +127,30 @@ so the numbers are inspectable and not only drawn.
 
 ## 4. `tl` — compute once, cached with provenance
 
-Every `tl` function returns the **same three slots** and stores that object in `uns`:
+Every `tl` call stores its result in `uns` and returns `None`; `tcri.get` reads it back.
+Mutual information and the two entropies store their result **by level**:
 
-| slot | one row per | reduced over |
+| frame | one row per | read with |
 |---|---|---|
-| `table` | (covariate, group, item, draw) | nothing — the substrate |
-| `result` | (covariate, group, item) | `draw` only |
-| `stats` | (split_a, split_b) | items → groups, then contrast |
+| `replicate.summary` | (covariate, replicate) | `tcri.get.replicates` |
+| `replicate.draws` | (covariate, replicate, draw) | `tcri.get.draws` |
+| `item.summary` | (covariate, replicate, item) | `tcri.get.items` |
+| `item.draws` | (covariate, replicate, item, draw) | `tcri.get.draws(..., items=True)` |
+| `stats` | (split_a, split_b) | `tcri.get.stats` |
 
-`result` is built *from* `table`, so the two cannot drift. `stats` appears only when `splitby`
-is set, and its **n counts replicates, never items** — 18 clones from 4 patients give n=4, not
-n=18.
+A summary is built *from* its draws, so the two cannot drift. Mutual information has one value
+per joint and no item level. `stats` appears only when `splitby` is set; it tests the replicate
+values, so its **n counts replicates, never items** — 18 clones from 4 patients give n=4, not
+n=18. The other `tl` functions store `table` and `result`, and `stats` when they contrast
+groups, read with `tcri.get.result`. With `inplace=False` a call stores nothing and returns the
+whole result instead.
 
 ```python
-res = tcri.tl.mutual_information(
+tcri.tl.mutual_information(
     adata, covariate="pre", groupby="patient", splitby="disease_status", n_samples=100
 )
-res["result"]   # one row per patient
-res["stats"]    # the disease vs control contrast
+tcri.get.replicates(adata, "mutual_information")   # one row per patient
+tcri.get.stats(adata, "mutual_information")        # the disease vs control contrast
 ```
 
 ```{important}
@@ -159,7 +165,7 @@ different scales. Passing `n_clones_ref` pins one denominator for everyone.
 plots use it, and so should your own code.
 
 ```python
-tcri.get.result(adata, "mutual_information")   # exactly what tl returned
+tcri.get.result(adata, "mutual_information")   # the whole stored result
 tcri.get.params(adata, "mutual_information")   # every argument it ran with
 ```
 

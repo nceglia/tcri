@@ -246,10 +246,38 @@ def _labels(result, values, reference_columns=()):
 
 
 def attach(payload, references, *, values, denominators=()):
-    """Add the reference and adjusted columns to ``table`` and ``result``, in place.
+    """Add the reference and adjusted columns to a ``{table, result}`` payload, in place.
 
-    ``references`` is the caller's call run on each fit of the reference, in order. Their
-    ``table``s are stacked with ``null`` numbering them, and joined onto this one on the row
+    ``references`` is the caller's call run on each fit of the reference, in order; each run's
+    ``table`` is paired with this one's by :func:`_attach_frames`.
+    """
+    table, result = _attach_frames(payload.get("table"), payload.get("result"),
+                                   [r.get("table") for r in references],
+                                   values=values, denominators=denominators)
+    payload["table"], payload["result"] = table, result
+    return payload
+
+
+def attach_levels(payload, references, *, values, denominators=()):
+    """Add the reference and adjusted columns to every level of a ``{replicate, item, stats}``
+    payload, in place: each level's ``draws`` is paired with the same level's ``draws`` of every
+    run of the reference, and its ``summary`` gains the summaries (:func:`_attach_frames`)."""
+    for level in ("replicate", "item"):
+        own = payload.get(level)
+        if own is None:
+            continue
+        draws, summary = _attach_frames(own.get("draws"), own.get("summary"),
+                                        [(r.get(level) or {}).get("draws") for r in references],
+                                        values=values, denominators=denominators)
+        own["draws"], own["summary"] = draws, summary
+    return payload
+
+
+def _attach_frames(table, result, ref_tables, *, values, denominators=()):
+    """Return ``(table, result)`` with the reference and adjusted columns added.
+
+    ``ref_tables`` are the per-draw frames of the caller's call run on each fit of the reference,
+    in order. They are stacked with ``null`` numbering them, and joined onto ``table`` on the row
     LABELS and the draw, never positionally: a null's rows are the parent's by construction, but
     a join says so and an alignment by position only assumes it. Draw ``d`` of the fit is paired
     with draw ``d`` of every null, and every adjusted column is their difference on that pair.
@@ -267,17 +295,15 @@ def attach(payload, references, *, values, denominators=()):
     """
     from .._compute._tables import build_result   # the lower layer, reached lazily
 
-    result, table = payload.get("result"), payload.get("table")
-    frames = [r.get("table") for r in references]
-    frames = [f.assign(**{NULL_COLUMN: i}) for i, f in enumerate(frames)
+    frames = [f.assign(**{NULL_COLUMN: i}) for i, f in enumerate(ref_tables)
               if f is not None and len(f)]
     if not frames or any(frame is None or not len(frame) for frame in (result, table)):
-        return payload
+        return table, result
     ref_table = pd.concat(frames, ignore_index=True)
 
     present = [v for v in values if v in table.columns and v in ref_table.columns]
     if "value" not in present:
-        return payload
+        return table, result
     pairs = column_pairs(present, denominators)
     per_draw = [c for _, n, a in pairs for c in (n, a) if c]
     labels = [c for c in _labels(table, (*values, "draw"),
@@ -294,7 +320,6 @@ def attach(payload, references, *, values, denominators=()):
         if adjusted is not None:
             merged[adjusted] = (merged[native].to_numpy(dtype=float)
                                 - merged[null].to_numpy(dtype=float))
-    payload["table"] = merged
 
     group = [c for c in labels if c in result.columns]
     summary = build_result(merged[group + ["draw"] + per_draw], value="adjusted",
@@ -308,11 +333,10 @@ def attach(payload, references, *, values, denominators=()):
     summary = summary[group + nulls + differences[:1] + list(ADJUSTED_SUMMARY.values())
                       + differences[1:]]
     if group:
-        payload["result"] = result.merge(summary, on=group, how="left",
-                                         validate="many_to_one")
+        result = result.merge(summary, on=group, how="left", validate="many_to_one")
     else:
-        payload["result"] = result.assign(**summary.iloc[0].to_dict())
-    return payload
+        result = result.assign(**summary.iloc[0].to_dict())
+    return merged, result
 
 
 def restat(payload, *, groupby, splitby, per_gene=False):
@@ -340,6 +364,21 @@ def restat(payload, *, groupby, splitby, per_gene=False):
         rebuilt = build_stats(result, groupby=groupby, splitby=splitby, value=target)
     # Never replace a frame with nothing: the frame already there is the one the result
     # legitimately has.
+    if rebuilt is not None and len(rebuilt):
+        payload["stats"] = rebuilt
+    return payload
+
+
+def restat_levels(payload, *, groupby, splitby):
+    """Recompute a ``{replicate, item, stats}`` payload's ``stats`` on the replicate summary, as
+    :func:`restat` does for a ``{table, result, stats}`` one: on the adjusted value when it has
+    something finite, else on the value."""
+    summary = (payload.get("replicate") or {}).get("summary")
+    if summary is None or not len(summary) or splitby is None:
+        return payload
+    from .._compute._tables import build_stats
+    target = "adjusted" if usable_reference(summary, "adjusted") else "value"
+    rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target)
     if rebuilt is not None and len(rebuilt):
         payload["stats"] = rebuilt
     return payload

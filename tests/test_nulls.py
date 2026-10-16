@@ -32,6 +32,7 @@ import pytest
 import torch
 
 import tcri
+from .conftest import frames
 from tcri._compute._tables import clones_at, fit_clone_labels
 from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
@@ -528,12 +529,12 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
         "the covariate null moved the phenotype call, and it moves neither phenotype nor clone")
 
     # 4) mutual information: only the two label nulls destroy the coupling it measures
-    mi = {k: float(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}[0]",
+    mi = {k: float(frames(tcri.tl.mutual_information(adata, covariate=cov, fit=f"null.{k}[0]",
                                               null_model=None,
-                                              inplace=False)["result"]["value"].iloc[0])
+                                              inplace=False))[1]["value"].iloc[0])
           for k in nulls}
-    parent_mi = float(tcri.tl.mutual_information(adata, covariate=cov, null_model=None,
-                                                 inplace=False)["result"]["value"].iloc[0])
+    parent_mi = float(frames(tcri.tl.mutual_information(adata, covariate=cov, null_model=None,
+                                                 inplace=False))[1]["value"].iloc[0])
     assert mi["phenotype"] < 0.25 * parent_mi and mi["clonotype"] < 0.25 * parent_mi, mi
     assert mi["covariate"] == pytest.approx(parent_mi, rel=0.1), (
         f"the covariate null destroyed clone-phenotype coupling, which is not its axis: {mi}")
@@ -787,7 +788,7 @@ def test_a_null_fitted_after_the_save_names_the_save(tmp_path, cleared):
         warnings.simplefilter("ignore")
         res = tcri.tl.mutual_information(b, covariate="cov_0", null_model="clonotype",
                                          inplace=False)
-    assert np.isfinite(np.asarray(res["result"]["adjusted"], dtype=float)).all()
+    assert np.isfinite(np.asarray(res["replicate"]["summary"]["adjusted"], dtype=float)).all()
 
 
 # ── a refit on the same object ───────────────────────────────────────────────
@@ -921,13 +922,13 @@ def test_a_null_object_this_object_no_longer_records_keeps_its_own_name():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         tcri.perturb.gene_importance(second, a, genes=genes)
-        cached = tcri.get.result(a, "gene_importance", fit="null.phenotype[0]")["result"].copy()
+        cached = frames(tcri.get.result(a, "gene_importance", fit="null.phenotype[0]"))[1].copy()
 
         tcri.perturb.gene_importance(second, a, genes=genes, null_model=stale)
 
     assert tcri.get.params(a, "gene_importance")["null_model"] == stale.name
     pd.testing.assert_frame_equal(
-        tcri.get.result(a, "gene_importance", fit="null.phenotype[0]")["result"], cached)
+        frames(tcri.get.result(a, "gene_importance", fit="null.phenotype[0]"))[1], cached)
 
 
 def test_a_sibling_null_in_the_save_does_not_stand_in_for_one_fitted_after(tmp_path):
@@ -1103,6 +1104,6 @@ def test_fit_takes_one_fit_and_names_the_fits_of_a_reference():
     cov = str(a.obs["covariate"].cat.categories[0])
     one = tcri.tl.mutual_information(a, covariate=cov, fit="phenotype[1]", null_model=None,
                                      inplace=False)
-    assert len(one["result"]) == 1
+    assert len(one["replicate"]["summary"]) == 1
     with pytest.raises(KeyError, match=r"null\.phenotype\[0\]"):
         tcri.tl.mutual_information(a, covariate=cov, fit="phenotype", null_model=None)
