@@ -31,7 +31,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
 
     Consumes the engine's raw blocks directly. Going through
     :func:`~tcri.tools._joint.joint_distribution` would flatten ``[S, n_rows, P]``
-    into a MultiIndex DataFrame only for this function to ``groupby('sample_id')``
+    into a MultiIndex DataFrame only for this function to ``groupby('draw')``
     and unpack it straight back to arrays.
     Ordering matches the DataFrame path exactly (blocks in covariate order, clones in
     block order, then the ``clones=`` filter applied as a stable reorder).

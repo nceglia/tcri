@@ -215,27 +215,30 @@ def test_exclude_pools_equals_explicit_clones(pooled, name):
 
 def test_exclude_pools_equals_explicit_clones_in_gene_importance(pooled):
     """``gene_importance`` has no ``clones=``: its explicit form is the importance over the
-    cells of every non-pool clone, from two ``knockout`` frames. The reference, the rebuilt
-    phenotype null, leaves out the same cells."""
+    cells of every non-pool clone, from two ``knockout`` frames, less the same on each rebuilt
+    phenotype null, which leaves out the same cells."""
     model, adata = pooled
     gene = adata.var_names[1]
     kw = dict(genes=[gene], inplace=False)
     res = tcri.perturb.gene_importance(model, adata, **kw)
     with_pools = tcri.perturb.gene_importance(model, adata, exclude_pools=False, **kw)
-    null = rebuild(model, adata, "null.phenotype[0]")
+    nulls = [rebuild(model, adata, name) for name in K.members(adata, "null.phenotype")]
     kept = adata.obs[CLONES].isin(_kept(adata)).to_numpy()
     for patient in adata.obs["patient"].unique():
         in_patient = (adata.obs["patient"] == patient).to_numpy()
         for got, mask in ((res, in_patient & kept), (with_pools, in_patient)):
-            row = got["result"].query("patient == @patient")
+            rep = got["replicate"]["draws"].query("patient == @patient").set_index("null")
+            item = got["item"]["draws"].query("patient == @patient")
             want_i, want_shift = _manual_importance(model, adata, gene, mask)
-            assert float(row["value"].iloc[0]) == pytest.approx(want_i, abs=1e-5)
-            want_null, _ = _manual_importance(null, adata, gene, mask)
-            assert float(row["null_value"].iloc[0]) == pytest.approx(want_null, abs=1e-5)
-            shift = (got["shift"].query("patient == @patient")
-                     .set_index("phenotype")["shift"].reindex(want_shift.index))
-            np.testing.assert_allclose(shift.to_numpy(), want_shift.to_numpy(), atol=1e-5)
-    assert not np.allclose(res["result"]["value"], with_pools["result"]["value"])
+            for i, null in enumerate(nulls):
+                null_i, null_shift = _manual_importance(null, adata, gene, mask)
+                assert float(rep.loc[i, "adjusted"]) == pytest.approx(want_i - null_i, abs=1e-5)
+                shift = (item[item["null"] == i].set_index("phenotype")["adjusted"]
+                         .reindex(want_shift.index))
+                np.testing.assert_allclose(shift.to_numpy(),
+                                           (want_shift - null_shift).to_numpy(), atol=1e-5)
+    assert not np.allclose(res["replicate"]["summary"]["adjusted"],
+                           with_pools["replicate"]["summary"]["adjusted"])
 
 
 def test_leaving_out_pools_keeps_the_row_order(pooled):
@@ -244,8 +247,8 @@ def test_leaving_out_pools_keeps_the_row_order(pooled):
     patient's per-clone table. The values of the rows that stay do not depend on the pools."""
     _, adata = pooled
     for by_default, with_pools in (
-        (tcri.tl.joint_distribution(adata, inplace=False)["result"],
-         tcri.tl.joint_distribution(adata, exclude_pools=False, inplace=False)["result"]),
+        (tcri.tl.joint_distribution(adata, inplace=False)["summary"],
+         tcri.tl.joint_distribution(adata, exclude_pools=False, inplace=False)["summary"]),
         (frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
                                     inplace=False))[0],
          frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, exclude_pools=False,
@@ -297,14 +300,15 @@ def test_without_tcri_metadata_the_model_names_the_registered_column(pooled):
     """An object ``to_anndata`` has not written records no registered column, so reading the
     object alone leaves nothing out, and nothing raises. ``gene_importance`` holds the model and
     reads the column the model registered, so it leaves out the same cells as on the written
-    object."""
+    object. Such an object records no reference either, so the null models are passed in."""
     model, adata = pooled
     bare = adata.copy()
     del bare.uns[K.METADATA], bare.uns[K.CLONOTYPE_CATEGORIES]
     assert _resolve_clones(bare, None, True) is None
     assert _resolve_clones(bare, None, True, column=CLONES) == _kept(adata)
 
-    kw = dict(genes=[adata.var_names[1]], groupby="patient", null_model=None, inplace=False)
+    nulls = [rebuild(model, adata, name) for name in K.members(adata, "null.phenotype")]
+    kw = dict(genes=[adata.var_names[1]], groupby="patient", null_model=nulls, inplace=False)
     by_default = tcri.perturb.gene_importance(model, bare, **kw)
     _assert_same(by_default, tcri.perturb.gene_importance(model, adata, **kw))
     assert not _same(by_default,

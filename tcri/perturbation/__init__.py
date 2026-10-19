@@ -8,8 +8,9 @@ kernel, mirroring the split the package already has between ``predict()`` (per c
 ``knockout``
     Per-cell probabilities with a gene, or a gene program, silenced. The primitive.
 ``gene_importance``
-    One gene at a time, reduced to a per-group importance with a contrast and a cache, read
-    back by ``tcri.get.result(adata, "gene_importance")`` and drawn by ``pl.gene_importance``.
+    One gene at a time, reduced to a per-group importance and its per-phenotype shift, with a
+    contrast and a cache, read back by ``tcri.get.replicates`` and ``tcri.get.items`` and drawn
+    by ``pl.gene_importance``.
 
 The counterfactual question ("what would this cell be called without gene j?") is answered
 by a perturbation of the fitted model, not by a causal model of the cell; the functions are

@@ -3,7 +3,8 @@
 ``@tl_result(schema=...)`` checks required-key PRESENCE on dict results. The shapes in the
 trailing comments are documentation of the payload layout; nothing parses them.
 
-**By level.** Mutual information and the two entropies store ``{replicate, item, stats}``:
+**By level.** Mutual information, the two entropies and ``perturb.gene_importance`` store
+``{replicate, item, stats}``:
 
 ``replicate``
     ``{draws, summary}``. ``draws`` has one row per (covariate, group, draw), ``summary`` the same
@@ -16,7 +17,8 @@ trailing comments are documentation of the payload layout; nothing parses them.
 ``stats``
     The tests on the replicate summary, or ``None`` when nothing is compared.
 
-The other tools store the layout below, with two payload keys:
+``joint_distribution`` stores ``{summary, draws}``: the clone × phenotype matrix it is, not a
+scored quantity. The other tools store the layout below, with two payload keys:
 
 ``table``
     The substrate. One row per (covariate, group, item[, draw]). Never reduced. All label
@@ -69,8 +71,10 @@ __all__ = [
 class JointDistribution(TypedDict):
     """The clone x phenotype table every other metric reduces."""
 
-    table: pd.DataFrame     # index (covariate, clonotype[, draw]); columns = phenotypes
-    result: pd.DataFrame    # same, reduced over draws when n_samples > 0
+    summary: pd.DataFrame   # index ([covariate,] clonotype); columns = phenotypes; the
+                            #   posterior mean over draws
+    draws: pd.DataFrame     # index ([covariate,] clonotype[, draw]); the draws at
+                            #   n_samples > 0, the summary at n_samples = 0
 
 
 class MutualInformation(TypedDict):
@@ -145,19 +149,16 @@ class DeltaPhenotypicEntropy(TypedDict):
 class GeneImportance(TypedDict):
     """``perturb.gene_importance`` — how far silencing a gene moves the mean phenotype call.
 
-    The item is a gene. ``table``/``result``/``stats`` have the metric shape so the shared
-    reducers apply unchanged; the signed per-phenotype decomposition of each importance lives
-    in ``shift``, averaged over draws, because putting the phenotype axis inside ``table``
-    would make ``result`` per phenotype rather than per gene.
+    The gene is a label on every row. The replicate level holds the importance, and the item
+    level the per-phenotype shift whose L1 norm the importance is.
     """
 
-    table: pd.DataFrame     # cols: gene, [covariate], [groupby], [splitby], draw, value
-    result: pd.DataFrame    # one row per (gene[, covariate][, group]); value + sd/hdi_*,
-                            #   + null_value/adjusted with a reference
+    replicate: dict         # {draws, summary}: gene, [covariate], [groupby], [splitby], [draw],
+                            #   value (+ null, null_value, adjusted with a reference); summary
+                            #   value + sd/hdi_* (+ null_value/adjusted/adjusted_sd/adjusted_hdi_*)
+    item: dict              # {draws, summary}: the same, per phenotype; value is the shift
     stats: object           # per-gene contrast over groups when splitby is set, else None;
                             #   one row per (gene, contrast); `quantity` names the column
-    shift: pd.DataFrame     # cols: gene, phenotype, [covariate], [groupby], [splitby],
-                            #       baseline, perturbed, shift
 
 
 def validate(schema, result, *, name: str = "result") -> None:

@@ -207,7 +207,7 @@ def test_clones_restriction_is_live(blocks):
     assert both not in (a, b), "restricting to both blocks equals one of them alone"
 
     jd = tcri.tl.joint_distribution(adata, covariate="cov_0", clones=p0,
-                                    inplace=False)["result"]
+                                    inplace=False)["summary"]
     assert set(jd.index) <= set(p0), "joint_distribution returned clones outside `clones=`"
 
 
@@ -328,13 +328,13 @@ def test_joint_distribution_still_returns_every_covariate(blocks):
     every covariate level in one object."""
     _model, adata, _truth = blocks
 
-    jd = tcri.tl.joint_distribution(adata, covariate=None, inplace=False)["result"]
+    jd = tcri.tl.joint_distribution(adata, covariate=None, inplace=False)["summary"]
     assert jd.index.nlevels == 2 and jd.index.names[0] == "covariate"
     assert set(jd.index.get_level_values("covariate")) == set(
         adata.uns["tcri_covariate_categories"]
     )
 
-    one = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["result"]
+    one = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["summary"]
     assert one.index.nlevels == 1
     assert len(one) < len(jd), "restricting to one covariate did not reduce the table"
 
@@ -376,7 +376,7 @@ def test_metrics_take_an_anndata_only(blocks):
         assert "adata_or_jd" not in inspect.signature(fn).parameters
         assert "adata" in inspect.signature(fn).parameters
 
-    table = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["result"]
+    table = tcri.tl.joint_distribution(adata, covariate="cov_0", inplace=False)["summary"]
     with pytest.raises(AttributeError):
         tcri.tl.mutual_information(table, covariate="cov_0")
 
@@ -391,14 +391,15 @@ def test_the_joint_is_cached_like_every_other_metric(blocks):
     kw = dict(covariate="cov_0", n_samples=4, random_state=0)
     assert tcri.tl.joint_distribution(adata, **kw) is None
     cached = tcri.get.result(adata, "joint_distribution")
-    assert set(cached) == {"table", "result"}
+    assert set(cached) == {"summary", "draws"}
     # wide on purpose: a joint is a matrix whose rows sum to 1
-    assert np.allclose(cached["result"].sum(axis=1).to_numpy(), 1.0)
-    assert len(cached["table"]) == 4 * len(cached["result"]), "table keeps one row per draw"
+    assert np.allclose(cached["summary"].sum(axis=1).to_numpy(), 1.0)
+    assert len(cached["draws"]) == 4 * len(cached["summary"]), "draws keeps one row per draw"
 
     res = tcri.tl.joint_distribution(adata, **kw, inplace=False)
     assert set(res) == set(cached)
-    pd.testing.assert_frame_equal(cached["result"], res["result"])
+    pd.testing.assert_frame_equal(cached["summary"], res["summary"])
+    pd.testing.assert_frame_equal(cached["draws"], res["draws"])
 
     params = tcri.get.params(adata, "joint_distribution")
     assert params["covariate"] == "cov_0" and params["n_samples"] == 4

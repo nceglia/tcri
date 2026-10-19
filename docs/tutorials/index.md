@@ -141,9 +141,10 @@ Mutual information and the two entropies store their result **by level**:
 A summary is built *from* its draws, so the two cannot drift. Mutual information has one value
 per joint and no item level. `stats` appears only when `splitby` is set; it tests the replicate
 values, so its **n counts replicates, never items** — 18 clones from 4 patients give n=4, not
-n=18. The other `tl` functions store `table` and `result`, and `stats` when they contrast
-groups, read with `tcri.get.result`. With `inplace=False` a call stores nothing and returns the
-whole result instead.
+n=18. `joint_distribution` stores its posterior-mean `summary` and its `draws`, read with
+`tcri.get.result` and `tcri.get.draws`. Flux and the deltas store `table` and `result`, and
+`stats` when they contrast groups, read with `tcri.get.result`. With `inplace=False` a call
+stores nothing and returns the whole result instead.
 
 ```python
 tcri.tl.mutual_information(
@@ -225,7 +226,7 @@ same `groupby`/`splitby` machinery and the same cache as every metric.
 ```python
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")
 tcri.pl.gene_importance(adata)                 # the top genes; one dot per patient, starred per gene
-tcri.pl.gene_importance(adata, kind="shift")   # gene x phenotype: which way each gene moves the call
+tcri.pl.gene_importance(adata, view="item")    # gene x phenotype: which way each gene moves the call
 ```
 
 Two things to know before reading the ranking:
@@ -234,6 +235,9 @@ Two things to know before reading the ranking:
   covariate prior exactly as `predict()` does, so a gene can score low simply because the
   cells expressing it sit in clones with confident priors. `use_gate=False` scores the
   expression pathway alone, invariant to the clone structure.
+- **It is adjusted.** Each gene's importance is stored less the same importance on the
+  phenotype null, and only that adjusted value is kept, so `tcri.null.phenotype` (or
+  `tcri.null.all`) comes first.
 - **The contrast is per gene**, over patients: `stats` has one row per gene, uncorrected
   across genes.
 
