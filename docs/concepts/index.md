@@ -300,8 +300,8 @@ Two ways to read the clone→phenotype distributions:
   into the metrics.
 
 {func}`joint_distribution <tcri.tools._joint.joint_distribution>` exposes both. Passing
-`n_samples > 0` stores a stack of posterior draws, one row per draw in its `table`, instead of a
-single point estimate, and
+`n_samples > 0` stores a stack of posterior draws, one row per clone and draw in its `draws`,
+beside the posterior-mean `summary`, and
 every metric accepts the same argument to report a posterior mean and HDI.
 
 ## Temperatures

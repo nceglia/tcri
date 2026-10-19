@@ -61,7 +61,9 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
     column that is not a denominator. A denominator has a reference -- both are needed to
     recover the bit values -- and no adjusted column, because a difference of two normalizers
     is not a quantity anyone reports. And no frame carries the retired word: ``result``,
-    ``table`` and ``stats`` have no ``excess*`` column.
+    ``table`` and ``stats`` have no ``excess*`` column. A tool that stores the adjusted value only
+    (the perturbation) carries ``adjusted`` and neither of its inputs; its identity is pinned
+    per pair in ``tests/test_perturbation.py``.
     """
     model, adata = ref
     a, b = _cov(adata)[:2]
@@ -93,6 +95,11 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
             if frame is not None:
                 assert not [c for c in frame.columns if str(c).startswith("excess")], (
                     f"{name}: {slot} carries {list(frame.columns)}")
+        if fn.tcri_adjusted_only:
+            for result in summaries:
+                assert "adjusted" in result.columns, name
+                assert not {"value", "null_value"} & set(result.columns), name
+            continue
         pairs = _reference.column_pairs(fn.tcri_values, fn.tcri_denominators)
         for result in summaries:
             if not len(result):
@@ -270,8 +277,12 @@ def test_every_scored_metric_pairs_its_draws(ref):
         res = call()
         table, result = frames(res)
         assert len(table) and len(result), name
-        for native, null, adjusted in _reference.column_pairs(fn.tcri_values,
-                                                               fn.tcri_denominators):
+        if fn.tcri_adjusted_only:
+            assert {"null", "adjusted"} <= set(table.columns), name
+            assert not {"value", "null_value"} & set(table.columns), name
+        for native, null, adjusted in (() if fn.tcri_adjusted_only else
+                                       _reference.column_pairs(fn.tcri_values,
+                                                               fn.tcri_denominators)):
             assert null in table.columns, f"{name}: no per-draw {null}"
             if adjusted is not None:
                 np.testing.assert_allclose(table[adjusted], table[native] - table[null],
@@ -573,7 +584,9 @@ def test_an_incomparable_fit_is_refused(ref):
 
 def test_a_key_added_keeps_its_own_reference(ref):
     """Two results under different keys keep separate references: each reference run stores
-    under its caller's key, suffixed by the fit, and reads back with ``key=`` and ``fit=``."""
+    under its caller's key, suffixed by the fit, and reads back with ``key=`` and ``fit=``.
+    The perturbation stores the adjusted value only, so its reference runs store nothing, under
+    either key."""
     model, adata = ref
     a, b = _cov(adata)[:2]
     tcri.tl.mutual_information(adata, covariate=a)
@@ -589,11 +602,12 @@ def test_a_key_added_keeps_its_own_reference(ref):
     genes = list(adata.var_names[:2])
     tcri.perturb.gene_importance(model, adata, genes=genes)
     tcri.perturb.gene_importance(model, adata, genes=genes[:1], key_added="gi_one")
+    assert set(tcri.get.replicates(adata, "gene_importance")["gene"].astype(str)) == set(genes)
+    keyed = tcri.get.replicates(adata, "gene_importance", key="gi_one")
+    assert set(keyed["gene"].astype(str)) == set(genes[:1])
     for fit in members:
-        default = tcri.get.result(adata, "gene_importance", fit=fit)["result"]
-        keyed = tcri.get.result(adata, "gene_importance", key="gi_one", fit=fit)["result"]
-        assert set(default["gene"].astype(str)) == set(genes), fit
-        assert set(keyed["gene"].astype(str)) == set(genes[:1]), fit
+        assert K.fit_key(K.GENE_IMPORTANCE, fit) not in adata.uns, fit
+        assert K.fit_key("gi_one", fit) not in adata.uns, fit
 
 
 def test_the_two_nulls_stay_distinct(ref):
@@ -851,12 +865,11 @@ def test_the_quantity_argument_is_checked_before_the_data(ref):
     returns it rather than raising about a column nothing was going to draw."""
     model, adata = ref
     a, b = _cov(adata)[:2]
-    for key in (K.MUTUAL_INFORMATION, K.DELTA_PHENOTYPIC_ENTROPY, K.GENE_IMPORTANCE):
+    for key in (K.MUTUAL_INFORMATION, K.DELTA_PHENOTYPIC_ENTROPY):
         adata.uns.pop(key, None)
     twins = {
         "mutual_information": lambda **kw: tcri.pl.mutual_information(adata, **kw),
         "delta_phenotypic_entropy": lambda **kw: tcri.pl.delta_phenotypic_entropy(adata, **kw),
-        "gene_importance": lambda **kw: tcri.pl.gene_importance(adata, **kw),
     }
     for name, twin in twins.items():
         with pytest.raises(KeyError, match="not found"):
@@ -868,8 +881,6 @@ def test_the_quantity_argument_is_checked_before_the_data(ref):
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
     tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
                                      null_model=None)
-    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]),
-                                 null_model=None)
     for name, twin in twins.items():
         frame = twin(quantity="adjusted", return_df=True)
         assert isinstance(frame, pd.DataFrame) and "adjusted" not in frame.columns, name
@@ -915,45 +926,41 @@ def test_an_empty_referenced_result_draws_the_no_data_panel(ref):
         ax = tcri.pl.mutual_information(adata, quantity=quantity)
         assert [t.get_text() for t in ax.texts] == ["no data for mutual_information"], quantity
         assert ax.get_ylabel() == "mutual information (bits)", quantity
-        ax = tcri.pl.gene_importance(adata, quantity=quantity)
-        assert [t.get_text() for t in ax.texts] == ["no data for gene_importance"], quantity
-        assert not ax.get_ylabel().startswith("adjusted"), quantity
-        assert "no reference" not in ax.get_ylabel(), quantity
+    ax = tcri.pl.gene_importance(adata)
+    assert [t.get_text() for t in ax.texts] == ["no data for gene_importance"]
+    assert "no reference" not in ax.get_ylabel()
 
 
-def test_the_shift_heatmap_refuses_the_adjusted_value(ref):
-    """``kind="shift"`` decomposes the importance across phenotypes and the reference has no
-    such decomposition stored, so an adjusted shift would have to be invented."""
+def test_the_shift_heatmap_draws_the_adjusted_shift(ref):
+    """The item view draws the one quantity stored, the adjusted shift, and says so."""
     import matplotlib
     matplotlib.use("Agg")
 
     model, adata = ref
-    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:5]))
-    with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
-    assert tcri.pl.gene_importance(adata, kind="shift") is not None
+    genes = list(adata.var_names[:5])
+    tcri.perturb.gene_importance(model, adata, genes=genes)
+    ax = tcri.pl.gene_importance(adata, view="item")
+    items = tcri.get.items(adata, "gene_importance")
+    first = ax.get_yticklabels()[0].get_text()
+    want = (items[items["gene"] == first].groupby("phenotype", observed=True)["adjusted"].mean()
+            .reindex(list(adata.uns[K.PHENOTYPE_CATEGORIES])))
+    np.testing.assert_allclose(np.asarray(ax.images[0].get_array())[0], want.to_numpy(),
+                               atol=1e-12)
+    assert ax.figure.axes[-1].get_ylabel().startswith("adjusted shift")
 
 
 def test_both_gene_panels_rank_alike(ref):
-    """One resolved gene list, handed to both views, so a half-threaded quantity cannot make the
-    two panels of one figure rank a different set of genes."""
+    """One resolved gene list, handed to both views, so the two panels of one figure show the
+    same genes."""
     import matplotlib
     matplotlib.use("Agg")
 
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:8]))
-    # at BOTH quantities: which genes are shown and which quantity is drawn are separate
-    # decisions, and the heatmap can only draw one of the two quantities. Tying its gene set to
-    # what it draws would make the two panels of one figure disagree by default.
-    for kw in ({}, {"quantity": "value"}):
-        rank = tcri.pl.gene_importance(adata, n_top=5, **kw)
-        shift = tcri.pl.gene_importance(adata, kind="shift", n_top=5, **kw)
-        assert [t.get_text() for t in rank.get_xticklabels()] == \
-               [t.get_text() for t in shift.get_yticklabels()], kw
-    # ...and the corrected set is not the bare one, which is the whole reason for the default
-    assert [t.get_text() for t in tcri.pl.gene_importance(adata, n_top=5).get_xticklabels()] != \
-           [t.get_text() for t in
-            tcri.pl.gene_importance(adata, n_top=5, quantity="value").get_xticklabels()]
+    rank = tcri.pl.gene_importance(adata, n_top=5)
+    shift = tcri.pl.gene_importance(adata, view="item", n_top=5)
+    assert [t.get_text() for t in rank.get_xticklabels()] == \
+           [t.get_text() for t in shift.get_yticklabels()]
 
 
 # ── the shape of a real run ──────────────────────────────────────────────────
@@ -1027,28 +1034,27 @@ def test_a_label_column_named_like_a_reference_column_is_still_a_label(ref):
                                bare["value"].to_numpy(dtype=float), atol=1e-12)
 
 
-def test_the_reference_blob_is_keyed_by_the_fit_name(ref):
-    """`gene_importance`'s reference is keyed by the FIT, not by the null's parameter namespace.
+def test_the_perturbation_records_its_reference_by_fit_name_and_stores_no_run(ref):
+    """`gene_importance` records its reference by the FIT, not by the null's parameter
+    namespace, and stores nothing for the null runs.
 
     A rebuilt null's `name` is `<parent>.null.phenotype` — its place in the process-global
-    parameter store, not its name on this AnnData. Keying the blob by that puts the reference
-    somewhere `tcri.get(fit=...)` does not look, while `params["null_model"]` names the fit.
+    parameter store, not its name on this AnnData; `params["null_model"]` names the fit.
     """
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]))
     assert tcri.get.params(adata, "gene_importance")["null_model"] == "null.phenotype"
     for fit in K.members(adata, "null.phenotype"):
-        assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
+        assert K.fit_key(K.GENE_IMPORTANCE, fit) not in adata.uns, sorted(
             k for k in adata.uns if "gene_importance" in k)
-        assert frames(tcri.get.result(adata, "gene_importance", fit=fit))[1] is not None
 
 
 @pytest.mark.parametrize("source, key_added", [("rebuild", None), ("fit", None), ("fit", "b")])
-def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_added):
+def test_a_null_passed_as_an_object_is_recorded_by_its_fit_name(ref, source, key_added):
     """Passing the null itself as ``null_model`` -- rebuilt, or as ``tcri.null.*`` returned it --
-    records the reference by its name, the same as the default does, and keys each fit's run by
-    that fit's name, so ``tcri.get(fit=...)`` finds it. The list ``tcri.null.*`` returns is the
-    whole reference; one rebuilt null is that fit alone."""
+    records the reference by its name, the same as the default does, and stores nothing for
+    its runs. The list ``tcri.null.*`` returns is the whole reference; one rebuilt null is that
+    fit alone."""
     import warnings
 
     from tcri.model._model import adopt
@@ -1066,9 +1072,8 @@ def test_a_null_passed_as_an_object_is_keyed_by_its_fit_name(ref, source, key_ad
     recorded = tcri.get.params(adata, "gene_importance")["null_model"]
     assert recorded == (f"{group}[0]" if source == "rebuild" else group)
     for fit in ([recorded] if source == "rebuild" else K.members(adata, group)):
-        assert K.fit_key(K.GENE_IMPORTANCE, fit) in adata.uns, sorted(
+        assert K.fit_key(K.GENE_IMPORTANCE, fit) not in adata.uns, sorted(
             k for k in adata.uns if "gene_importance" in k)
-        assert frames(tcri.get.result(adata, "gene_importance", fit=fit))[1] is not None
 
 
 def test_a_non_finite_reference_does_not_delete_the_stats(ref):
@@ -1106,8 +1111,8 @@ def test_an_all_nan_reference_is_no_reference(ref):
     renders with no marks at all; on the box-and-strip path seaborn is handed an all-NaN y and
     raises. What the
     panel should show is the value, drawn normally, with "no reference" on the label and
-    nothing gray named in the legend -- on `render_metric` and on `pl.gene_importance`, which
-    is a second implementation of the same rule.
+    nothing gray named in the legend -- on `render_metric`. `pl.gene_importance` draws the
+    adjusted value only, so with nothing finite in it the panel says so rather than raising.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1147,15 +1152,14 @@ def test_an_all_nan_reference_is_no_reference(ref):
         assert not gray(ax), view
         assert "no reference" in ax.get_ylabel(), view
 
-    # the gene twin's box-and-strip path, where the reference is a second seaborn pass
+    # the gene twin, which stores and draws the adjusted value only
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:4]),
                                  groupby="patient")
     blank_the_reference(K.GENE_IMPORTANCE, "gene_importance")
     ax = tcri.pl.gene_importance(adata, n_top=4)
-    assert ax.collections, "the value marks were dropped along with the reference"
+    assert [t.get_text() for t in ax.texts] == ["no finite gene_importance"]
     assert not gray(ax)
     assert REFERENCE_LEGEND not in entries(ax)
-    assert "no reference" in ax.get_ylabel()
 
 
 def test_the_reference_dodges_with_the_value(ref):
@@ -1187,37 +1191,6 @@ def test_the_reference_dodges_with_the_value(ref):
     assert gray_offsets.mean() > 0.5 * value_offsets.mean(), (
         f"the reference did not dodge: mean |offset| {gray_offsets.mean():.3f} against the "
         f"value marks' {value_offsets.mean():.3f}")
-
-
-def test_the_perturbation_reference_dodges_too(ref):
-    """The same assertion for `pl.gene_importance`, because it is a SECOND implementation.
-
-    The twin and `render_metric` are parallel code paths, so a property held on one can be lost
-    on the other: a single gray box against two colored ones pools both arms, and a gene whose
-    null differs between arms then reads as if it did not. Asserting the property on both paths
-    is what stops the pair drifting.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    from tcri.plotting._base import REFERENCE_LABEL
-
-    model, adata = ref
-    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:6]),
-                                 groupby="patient", splitby="disease_status")
-    ax = tcri.pl.gene_importance(adata, n_top=4, quantity="value")
-
-    gray = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
-                           if c.get_label() == REFERENCE_LABEL and len(c.get_offsets())])
-    value = np.concatenate([c.get_offsets()[:, 0] for c in ax.collections
-                            if c.get_label() != REFERENCE_LABEL and len(c.get_offsets())])
-    assert len(gray), "no reference was drawn"
-    assert np.abs(gray - np.round(gray)).mean() > 0.5 * np.abs(value - np.round(value)).mean(), (
-        "the perturbation reference pooled both arms into one box at the category center")
-
-    # one gray box per arm per gene, matching the value marks
-    gray_boxes = sum(1 for p in ax.patches if p.get_label() == REFERENCE_LABEL)
-    value_boxes = sum(1 for p in ax.patches if p.get_label() != REFERENCE_LABEL)
-    assert gray_boxes == value_boxes, f"{gray_boxes} gray boxes against {value_boxes} value"
 
 
 def test_the_draw_path_draws_the_adjusted_draws_and_the_reference(ref):
@@ -1334,18 +1307,9 @@ def test_the_gray_marks_are_named_in_the_legend(ref):
     assert REFERENCE_LEGEND not in entries(tcri.pl.mutual_information(adata))
 
 
-def test_the_gene_ranking_is_corrected_by_default(ref):
-    """`pl.gene_importance` draws the ADJUSTED importance at its default.
-
-    The bare ranking is not merely incomplete, it is dominated by something the question is not
-    about: silencing a gene is an intervention whose size scales with the gene's counts, so the
-    bare ranking tracks expression and its null tracks it just as closely. The adjusted
-    importance is what removes that shared component.
-
-    `"auto"` still means the bare value when there is no reference, and it means the bare value
-    for `kind="shift"` whatever else is present -- otherwise the default call would raise
-    against its own default.
-    """
+def test_the_gene_ranking_is_corrected(ref):
+    """`pl.gene_importance` draws the ADJUSTED importance, the one quantity stored, on both
+    views."""
     import matplotlib
     matplotlib.use("Agg")
 
@@ -1353,26 +1317,11 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     genes = list(adata.var_names[:8])
     tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient")
 
-    auto = tcri.pl.gene_importance(adata, n_top=5)
-    assert auto.get_ylabel().startswith("adjusted"), auto.get_ylabel()
-    bare = tcri.pl.gene_importance(adata, n_top=5, quantity="value")
-    assert not bare.get_ylabel().startswith("adjusted")
-
-    # the two rankings are allowed to differ, and that difference is the point
-    auto_genes = [t.get_text() for t in auto.get_xticklabels()]
-    bare_genes = [t.get_text() for t in bare.get_xticklabels()]
-    assert set(auto_genes) <= set(genes) and set(bare_genes) <= set(genes)
-
-    # the heatmap still works at the default rather than raising against it
-    assert tcri.pl.gene_importance(adata, kind="shift", n_top=5) is not None
-    with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
-
-    # ...and with no reference, "auto" is the bare value
-    tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient",
-                                 null_model=None)
-    plain = tcri.pl.gene_importance(adata, n_top=5)
-    assert not plain.get_ylabel().startswith("adjusted")
+    ax = tcri.pl.gene_importance(adata, n_top=5)
+    assert ax.get_ylabel().startswith("adjusted"), ax.get_ylabel()
+    assert {t.get_text() for t in ax.get_xticklabels()} <= set(genes)
+    heat = tcri.pl.gene_importance(adata, view="item", n_top=5)
+    assert heat.figure.axes[-1].get_ylabel().startswith("adjusted"), heat.figure.axes[-1]
 
 
 # ── a reference of several fits ──────────────────────────────────────────────

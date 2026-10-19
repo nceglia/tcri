@@ -304,8 +304,8 @@ comparison.round(4).head(8)
 # the other metrics, plus the joint they all reduce
 tcri.tl.joint_distribution(adata, covariate="post", n_samples=20, random_state=SEED)
 jd = tcri.get.result(adata, "joint_distribution")
-print(f"joint: {jd['result'].shape} (clone x phenotype), rows sum to 1: "
-      f"{np.allclose(jd['result'].sum(axis=1), 1.0)}")
+print(f"joint: {jd['summary'].shape} (clone x phenotype), rows sum to 1: "
+      f"{np.allclose(jd['summary'].sum(axis=1), 1.0)}")
 
 tcri.tl.clonotypic_entropy(adata, covariate="post", groupby="patient", splitby="disease_status",
                            n_samples=60, random_state=SEED)

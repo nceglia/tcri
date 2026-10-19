@@ -280,8 +280,8 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     """`index.to_numpy()` on a MultiIndex yields an object array of TUPLES, and h5py has no
     writer for a tuple.
 
-    `joint_distribution(n_samples>0)` puts a (clonotype, sample_id) MultiIndex on its
-    `table`, so an encoder that passes the index straight through leaves the whole cached
+    `joint_distribution(n_samples>0)` puts a (clonotype, draw) MultiIndex on its
+    `draws`, so an encoder that passes the index straight through leaves the whole cached
     result unwritable to .h5ad. It fails as `TypeError: Can't implicitly convert non-string
     objects to strings` named against the enclosing group -- a long way from the index that
     caused it -- and only when someone saves a session, which is why the write is exercised
@@ -294,22 +294,22 @@ def test_a_multiindex_result_survives_h5ad(tmp_path):
     from tcri._state.storage import decode_blob, tl_result
 
     idx = pd.MultiIndex.from_product([["clone/1", "clone 2"], [0, 1]],
-                                     names=["clonotype", "sample_id"])
+                                     names=["clonotype", "draw"])
     frame = pd.DataFrame({"a": np.arange(4.0), "b": np.arange(4.0)[::-1]}, index=idx)
 
     @tl_result(key="tcri_multi_probe", version=1)
     def probe(adata):
-        return {"table": frame}
+        return {"draws": frame}
 
     adata = ad.AnnData(X=np.zeros((2, 2), dtype="float32"))
     probe(adata)
 
     path = tmp_path / "multi.h5ad"
     adata.write_h5ad(path)                      # the step h5py refuses on a tuple index
-    back = decode_blob(ad.read_h5ad(path).uns["tcri_multi_probe"])["table"]
+    back = decode_blob(ad.read_h5ad(path).uns["tcri_multi_probe"])["draws"]
 
     assert isinstance(back.index, pd.MultiIndex)
-    assert list(back.index.names) == ["clonotype", "sample_id"]
+    assert list(back.index.names) == ["clonotype", "draw"]
     pd.testing.assert_frame_equal(back, frame, check_dtype=False)
 
 

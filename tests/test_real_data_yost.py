@@ -159,7 +159,7 @@ def test_p_ct_stays_a_probability_table_on_real_data(fitted):
     import tcri
 
     _m, a = fitted
-    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0, inplace=False)["result"]
+    jd = tcri.tl.joint_distribution(a, covariate=None, n_samples=0, inplace=False)["summary"]
 
     # each (covariate, clone) row is a distribution over phenotypes. Check normalization
     # BEFORE collapsing: summing over covariates gives a row total of 1 per covariate the

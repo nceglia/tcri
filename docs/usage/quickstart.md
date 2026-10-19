@@ -171,7 +171,7 @@ gene program, the same frame as `predict()`.
 ```python
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")
 tcri.pl.gene_importance(adata)                 # the top genes, one dot per patient
-tcri.pl.gene_importance(adata, kind="shift")   # which phenotype each gene moves the call toward
+tcri.pl.gene_importance(adata, view="item")    # which phenotype each gene moves the call toward
 
 probs = tcri.perturb.knockout(model, adata, genes=["GZMB", "PRF1"])
 ```

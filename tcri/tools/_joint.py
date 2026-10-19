@@ -144,7 +144,7 @@ def _engine_blocks(
     return blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats
 
 
-@tl_result(key=K.JOINT_DISTRIBUTION, version=1, schema=schemas.JointDistribution)
+@tl_result(key=K.JOINT_DISTRIBUTION, version=2, schema=schemas.JointDistribution)
 def joint_distribution(
     adata,
     *,
@@ -168,7 +168,7 @@ def joint_distribution(
         pass (adds a leading ``covariate`` index level).
     n_samples : int
         ``0`` → deterministic posterior-mean table; ``N`` → ``N`` clamped-Dirichlet
-        draws (adds a ``sample_id`` index level). Only place ``local_scale`` enters.
+        draws (adds a ``draw`` index level). Only place ``local_scale`` enters.
     use_logits : bool
         ``True`` → fold per-cell classifier logits with ``log(base)`` (gate-aware) and
         aggregate per clone, matching :meth:`~tcri.model._model.TCRIModel.predict`;
@@ -200,10 +200,12 @@ def joint_distribution(
     Returns
     -------
     dict or None
-        ``None``; with ``inplace=False`` nothing is stored and ``{table, result}`` is returned,
-        read otherwise with ``tcri.get.result``. Each is a frame with the phenotype categories
-        as columns. Index = clonotype (``+ sample_id`` for ``n_samples>0``, ``+ covariate``
-        leading level for ``covariate=None``); ``result`` is the mean over draws.
+        ``None``; with ``inplace=False`` nothing is stored and ``{summary, draws}`` is returned.
+        Each is a frame with the phenotype categories as columns, indexed by clonotype, with a
+        leading ``covariate`` level for ``covariate=None``. ``summary`` is the posterior mean
+        over draws, read with ``tcri.get.result(adata, "joint_distribution")["summary"]``;
+        ``draws`` adds a ``draw`` level for ``n_samples>0`` and equals ``summary`` at
+        ``n_samples=0``, read with ``tcri.get.draws(adata, "joint_distribution")``.
     """
     blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
         adata,
@@ -228,7 +230,7 @@ def joint_distribution(
             idx_clone = np.repeat(clone_ids, S)
             idx_samp = np.tile(np.arange(S), len(clone_ids))
             cols = [idx_clone, idx_samp]
-            names = ["clonotype", "sample_id"]
+            names = ["clonotype", "draw"]
         else:
             arr = J[0]                                            # [n_rows, P]
             cols = [clone_ids]
@@ -250,7 +252,7 @@ def joint_distribution(
     elif counted is not None:
         if isinstance(df.index, pd.MultiIndex):
             # filter to the listed clones (absent dropped, not all-zero) then order by the
-            # requested list — stable within the sample_id/covariate levels, so this matches
+            # requested list — stable within the draw/covariate levels, so this matches
             # the single-index reindex in the branch below.
             keep = df.index.get_level_values("clonotype").isin(counted)
             df = df[keep]
@@ -264,17 +266,17 @@ def joint_distribution(
     # would make the common case worse to read. The long convention applies where each item
     # reduces to ONE number; this does not.
     #
-    # `result` is the posterior mean over draws (identical to `table` at n_samples=0), so the
+    # `summary` is the posterior mean over draws (identical to `draws` at n_samples=0), so the
     # caller always has one table to reason about regardless of whether they sampled.
     if sampling:
-        result = df.groupby(level=[n for n in df.index.names if n != "sample_id"],
-                            observed=True, sort=False).mean()
+        summary = df.groupby(level=[n for n in df.index.names if n != "draw"],
+                             observed=True, sort=False).mean()
     else:
-        result = df
+        summary = df
 
     # `params` is captured by the decorator from the call signature, rather than stashed in
     # df.attrs -- attrs does not survive most pandas operations, nor a write_h5ad at all.
     # n_draws is what ACTUALLY happened, which the call arguments cannot say on their own --
     # the same distinction as epochs_actual vs max_epochs in the training record. Recorded as an
     # effective value so the provenance answers "how many draws is this table built from".
-    return with_resolved_params({"table": df, "result": result}, n_draws=int(n_draws))
+    return with_resolved_params({"summary": summary, "draws": df}, n_draws=int(n_draws))

@@ -8,8 +8,9 @@ For a gene ``j`` and a set of cells ``C``::
     I_j        = Σ_p | shift_j,p |                 in [0, 2]
 
 One pass over the data: the baseline and the ``p_ct`` draws are computed once per batch and
-shared by every gene; each gene costs one encoder forward per batch. The per-draw values are
-the ``table`` the shared reducers summarize; the signed decomposition is the ``shift`` slot.
+shared by every gene; each gene costs one encoder forward per batch. Both are computed per draw
+and stored as their adjusted values: ``I_j`` is the replicate level, one row per gene and group,
+and ``shift_j,p`` the item level, one row per gene, group and phenotype.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
 from ._kernel import (batches, combine, group_sums, head_logits, log_prior_for,
                       prior_draws, resolve_genes)
-from ._tables import cell_groups, importance_table, shift_table, stats_per_gene
+from ._tables import cell_groups, importance_frames, in_gene_order, stats_per_gene
 
 __all__ = ["gene_importance"]
 
@@ -76,12 +77,25 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
 
 
 @tl_result(key=K.GENE_IMPORTANCE, version=4, schema=schemas.GeneImportance, data_param="adata",
-           default_null="phenotype", reference_arg="model", per_gene_stats=True)
+           default_null="phenotype", reference_arg="model", per_gene_stats=True,
+           adjusted_only=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
                     random_state=None) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
-    distribution moves when the gene is silenced. Stored, and read with ``tcri.get.result``.
+    distribution moves when the gene is silenced, and that move per phenotype, the shift, each
+    adjusted by the same quantity on a permutation null.
+
+    Stores ``{replicate: {draws, summary}, item: {draws, summary}, stats}`` under
+    ``uns[key_added or "tcri_gene_importance"]``. The replicate level holds the adjusted
+    importance, one row per gene and group, read with ``tcri.get.replicates``; the item level
+    holds the adjusted shift, one row per gene, group and phenotype, read with
+    ``tcri.get.items``; ``tcri.get.draws`` reads either level per draw. A group with no cell at
+    ``covariate`` has its rows, NaN.
+
+    Only the adjusted value is stored: ``adjusted = value − null_value`` per paired draw, the
+    fit's importance less the same importance computed on a phenotype null, where phenotype
+    labels are permuted within cells of the same batch, covariate and replicate.
 
     Parameters
     ----------
@@ -106,9 +120,12 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         ``pool_rare_clones`` kept. ``False`` keeps them. A column with no pooling step has
         nothing to leave out.
     n_samples
-        ``0``: the plug-in at the posterior mean of ``p_ct``. ``N > 0``: ``N`` Dirichlet draws
-        of ``p_ct`` from the guide, shared by every gene, entering only through the gate; the
-        importance is computed per draw and summarized (mean, sd, HDI).
+        ``0``: the plug-in at the posterior mean of ``p_ct``, paired with every null of the
+        reference. ``N > 0``: ``N`` Dirichlet draws of ``p_ct`` from the guide, shared by every
+        gene, entering only through the gate; draw ``d`` is paired with null ``d mod n_nulls``
+        only, so each null draws its share of the ``N``, and the adjusted values are summarized
+        over the ``N`` pairs (mean, sd, HDI). ``N`` must be at least the reference's number of
+        fits, and a multiple of it gives each null an equal share.
     use_gate
         ``True``: the model's own rule, as ``predict()``, so the importance is about the calls
         users see. ``False``: the head alone, invariant to the gate and the clone structure.
@@ -116,18 +133,31 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         Cells per encoder pass; the seed for the Dirichlet draws.
     null_model
         The permutation reference. ``"auto"`` is the phenotype null, rebuilt from the store and
-        this object and run on the same genes, cells and rule; ``None`` reports the bare
-        importance; a fit name selects another; a fitted ``TCRIModel`` is used directly and
-        skips the rebuild. There is no ``fit=``: this is a query on a MODEL rather than on a
-        stored substrate, so a different fit is reached by handing it a different model.
+        this object and run on the same genes, cells and rule; a fit name selects another; a
+        fitted ``TCRIModel`` is used directly and skips the rebuild. Nothing is stored for the
+        null runs. The adjusted shift is a per-phenotype difference: its absolute values summed
+        over phenotypes are not the adjusted importance. There is no ``fit=``: this is a query on
+        a MODEL rather than on a stored substrate, so a different fit is reached by handing it a
+        different model.
 
     Returns
     -------
     dict or None
-        ``None``; with ``inplace=False`` nothing is stored and the result is returned:
-        ``table`` (one row per gene, group, draw), ``result`` (per gene and group, with
-        ``sd``/``hdi_*`` over draws), ``stats`` (per-gene contrast, or ``None``) and
-        ``shift`` (per gene, phenotype and group: ``baseline``, ``perturbed``, ``shift``).
+        ``None``; with ``inplace=False`` nothing is stored and the whole result is returned.
+        ``replicate.draws`` has one row per gene, group and pair (``null``, ``draw``) with the
+        adjusted importance in ``adjusted``; ``item.draws`` one row per gene, group, phenotype
+        and pair with the adjusted shift, where the shift is ``baseline − silenced``, so a
+        positive shift is mass the phenotype loses when the gene is silenced. Each draws frame
+        has ``max(n_samples, n_nulls)`` rows per row of its summary, which gives ``adjusted``,
+        ``adjusted_sd`` and the HDI ``adjusted_hdi_low``/``adjusted_hdi_high`` (NaN at
+        ``n_samples=0``). ``stats`` is the per-gene contrast of the adjusted importance over
+        groups, or ``None``.
+
+    Raises
+    ------
+    ValueError
+        With ``null_model=None``, or when ``0 < n_samples`` is below the reference's number of
+        fits.
     """
     adata = model._validate_anndata(adata)
     module = model.module
@@ -164,22 +194,20 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
     denom = counts.clamp(min=1.0).numpy()[None, :, None]
     baseline = base.numpy() / denom                       # [S', n_groups, P]
     perturbed = pert.numpy() / denom[None]                # [G, S', n_groups, P]
-    importance = np.abs(baseline[None] - perturbed).sum(-1)   # [G, S', n_groups]
+    shift = baseline[None] - perturbed                    # [G, S', n_groups, P]
+    shift[:, :, ~present, :] = np.nan
 
     phenotypes = model.adata.obs[reg["phenotype_col"]].astype("category").cat.categories.tolist()
-    labels_kw = dict(names=names, labels=labels, present=present, covariate=covariate,
-                     groupby=gkey, splitby=splitby, split=split)
-    table = importance_table(importance, **labels_kw)
-    result = build_result(table)
-    # build_result sorts its keys; the caller's gene order is the contract ("one importance
-    # each, in this order"), so restore it with a stable sort that keeps the group order
-    rank = {g: i for i, g in enumerate(names)}
-    order = np.argsort(result["gene"].map(rank).to_numpy(), kind="stable")
-    result = result.iloc[order].reset_index(drop=True)
-    stats = stats_per_gene(result, groupby=gkey, splitby=splitby)
-    shift = shift_table(baseline, perturbed, phenotypes=phenotypes, **labels_kw)
+    rep_draws, item_draws = importance_frames(shift, names=names, phenotypes=phenotypes,
+                                              labels=labels, covariate=covariate, groupby=gkey,
+                                              splitby=splitby, split=split)
+    rep_summary = in_gene_order(build_result(rep_draws), names)
+    item_summary = in_gene_order(build_result(item_draws), names, phenotypes)
+    stats = stats_per_gene(rep_summary, groupby=gkey, splitby=splitby)
 
-    payload = {"table": table, "result": result, "stats": stats, "shift": shift}
+    payload = {"replicate": {"draws": rep_draws, "summary": rep_summary},
+               "item": {"draws": item_draws, "summary": item_summary},
+               "stats": stats}
     gp = module.gate_prob
     effective = {"gate_prob": (float(gp) if gp is not None else None), "n_draws": n_draws}
     if resolved:

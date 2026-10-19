@@ -106,13 +106,16 @@ no finite value has `n` 0 and NaN statistics. A contrast whose p is undefined ha
 **Return shape.** Every `tl`, and `perturb.gene_importance`, stores its result under `uns[key_added
 or "tcri_<metric>"]` with a `params` block recording every argument, defaults included, and returns
 `None`; `inplace=False` stores nothing and returns the whole result. Nothing is read from a returned
-object: `tcri.get` is the only reader of a stored result. Mutual information and the two entropies
-store `{replicate, item, stats}`. Each level holds `draws`, one row per (covariate, replicate[,
-item], draw), never reduced, and `summary`, which reduces over draw only. The replicate level has
-one row per replicate, NaN when the replicate has no joint at the covariate; the item level has one
-row per replicate and phenotype (clonotypic entropy) or clone (phenotypic entropy), and mutual
-information has no item level. The other tools store `{table, result, stats}`: `table` one row per
-(covariate, group, item, draw), `result` reduced over draw only. Every summary and `result` carries
+object: `tcri.get` is the only reader of a stored result. Mutual information, the two entropies
+and `perturb.gene_importance` store `{replicate, item, stats}`. Each level holds `draws`, one row
+per (covariate, replicate[, item], draw), never reduced, and `summary`, which reduces over draw
+only. The replicate level has one row per replicate, NaN when the replicate has no joint at the
+covariate; the item level has one row per replicate and phenotype (clonotypic entropy) or clone
+(phenotypic entropy), and mutual information has no item level. `joint_distribution` stores
+`{summary, draws}`: the posterior-mean clone × phenotype table and its draws, indexed by
+`[covariate,] clonotype[, draw]`, read with `tcri.get.result` and `tcri.get.draws`. The other tools
+store `{table, result, stats}`: `table` one row per (covariate, group, item, draw), `result`
+reduced over draw only. Every level's summary and every `result` carries
 `value`, `sd`, `hdi_low`, `hdi_high` (a true highest-density interval, NaN at `n_samples ≤ 1`);
 `stats` is `None` without `splitby` and otherwise carries one row per contrast, with `quantity`
 naming the column contrasted. Every frame survives an h5ad round trip: flat columns, no vectors in
@@ -208,20 +211,25 @@ intervene on the expression matrix, read the phenotype call back through the per
 `predict()` uses (`use_gate=True`, the default) or through the head alone (`use_gate=False`).
 The pass is deterministic at `n_samples=0`; no encoder sample is ever drawn. `knockout`
 returns the `predict()` frame and stores nothing unless `key_added` names an `obsm` slot;
-`gene_importance` stores `{table, result, stats, shift}` and returns `None` (the whole result at
-`inplace=False`), where `shift` is the
-signed per-phenotype decomposition of each importance, and its `stats` contrast is per gene. It
+`gene_importance` stores `{replicate, item, stats}` and returns `None` (the whole result at
+`inplace=False`). The gene is a label on every row: the replicate level is the importance, one
+row per gene and group, and the item level its signed shift, one row per gene, group and
+phenotype; a group with no cell at `covariate` has NaN rows. Only the adjusted value is stored:
+each level's `draws` holds `adjusted` per pair (`null`, `draw`) and its `summary` holds
+`adjusted`, `adjusted_sd` and the adjusted HDI; nothing is stored for the null runs. At
+`n_samples > 0` draw `d` is paired with null `d mod n_nulls` and each null draws only its share;
+at `n_samples = 0` the one value is paired with every null. `null_model=None` raises, and so does
+`0 < n_samples < n_nulls`. Its `stats` contrast is per gene, on the adjusted importance. It
 takes `null_model` like every scored metric and no `fit`: it is a query on a model, so a
 different fit is reached by handing it a different model, and `"auto"` rebuilds the phenotype
 null from the parameter store and this object.
 `adata` is required there because the result is stored into it. Definitions in
-`METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `kind="rank"` is the top
+`METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `view="replicate"` is the top
 `n_top` genes under the mark rule, with each gene's own contrast starred above it when a
-split was used; `kind="shift"` is the gene × phenotype `shift`, averaged over groups, on a
-diverging scale centered on zero. Every twin takes `quantity`: the default is the adjusted value
-against a zero rule, drawn under the mark rule like the value, and `quantity="value"` is the
-value with its reference drawn behind it; `kind="shift"` draws only the value, because the reference has no per-phenotype
-decomposition stored.
+split was used; `view="item"` is the gene × phenotype shift from the item summary, averaged over
+groups, on a diverging scale centered on zero. It takes no `quantity`: both views draw the
+adjusted value, the one stored, against zero, and both show the genes ranked by the adjusted
+importance.
 
 ## The stub
 
@@ -401,8 +409,7 @@ class pl:
         figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
-        adata: AnnData, *, kind: str = ..., quantity: str = ..., n_top: int = ...,
-        key: Optional[str] = ...,
+        adata: AnnData, *, view: str = ..., n_top: int = ..., key: Optional[str] = ...,
         order: Any = ..., hue_order: Any = ..., palette: Any = ..., legend: bool = ...,
         ax: Any = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
         return_df: bool = ...,
