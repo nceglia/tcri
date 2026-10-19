@@ -369,16 +369,21 @@ def restat(payload, *, groupby, splitby, per_gene=False):
     return payload
 
 
-def restat_levels(payload, *, groupby, splitby):
+def restat_levels(payload, *, groupby, splitby, per_gene=False):
     """Recompute a ``{replicate, item, stats}`` payload's ``stats`` on the replicate summary, as
     :func:`restat` does for a ``{table, result, stats}`` one: on the adjusted value when it has
-    something finite, else on the value."""
+    something finite, else on the value. ``per_gene`` tests each gene of
+    ``perturb.gene_importance`` on its own."""
     summary = (payload.get("replicate") or {}).get("summary")
     if summary is None or not len(summary) or splitby is None:
         return payload
-    from .._compute._tables import build_stats
     target = "adjusted" if usable_reference(summary, "adjusted") else "value"
-    rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target)
+    if per_gene:
+        from ..perturbation._tables import stats_per_gene
+        rebuilt = stats_per_gene(summary, groupby=groupby, splitby=splitby, value=target)
+    else:
+        from .._compute._tables import build_stats
+        rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target)
     if rebuilt is not None and len(rebuilt):
         payload["stats"] = rebuilt
     return payload

@@ -225,7 +225,7 @@ same `groupby`/`splitby` machinery and the same cache as every metric.
 ```python
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")
 tcri.pl.gene_importance(adata)                 # the top genes; one dot per patient, starred per gene
-tcri.pl.gene_importance(adata, kind="shift")   # gene x phenotype: which way each gene moves the call
+tcri.pl.gene_importance(adata, view="item")    # gene x phenotype: which way each gene moves the call
 ```
 
 Two things to know before reading the ranking:

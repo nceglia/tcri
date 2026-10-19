@@ -126,6 +126,13 @@ def _fit(adata, *, seed=0, max_epochs=60):
     return model
 
 
+def _importance(model, adata):
+    """The head-alone importance per gene, read off the replicate summary of the full result."""
+    res = tcri.perturb.gene_importance(model, adata, use_gate=False, null_model=None,
+                                       inplace=False)
+    return res["replicate"]["summary"]["value"].to_numpy()
+
+
 @pytest.mark.slow
 def test_informative_genes_outrank_matched_noise_genes_on_average():
     """Over three seeds, the mean AUROC of importance for informative-vs-noise genes is above
@@ -144,8 +151,7 @@ def test_informative_genes_outrank_matched_noise_genes_on_average():
         # `null_model=None` throughout this file: it scores the importance against a
         # CLOSED-FORM oracle, so a permutation reference would answer a different question and
         # triple the fitting cost of an already-slow test.
-        imp = tcri.perturb.gene_importance(model, b, use_gate=False, null_model=None,
-                                           inplace=False)["result"]["value"].to_numpy()
+        imp = _importance(model, b)
         aurocs.append(roc_auc_score(is_info, imp))
         noise_in_top.append(int((~is_info[np.argsort(-imp)[:10]]).sum()))
     report = f"AUROC per seed {np.round(aurocs, 3).tolist()}, noise genes in top ten {noise_in_top}"
@@ -160,10 +166,8 @@ def test_importance_is_flat_when_expression_carries_no_phenotype():
     substantially larger. Difficulty moved, not the truth."""
     flat = simulate_tcri(fuzziness=1.0, seed=12, **_SIM)
     sharp = simulate_tcri(fuzziness=0.0, seed=12, **_SIM)
-    i_flat = tcri.perturb.gene_importance(_fit(flat), flat, use_gate=False, null_model=None,
-                                          inplace=False)["result"]["value"].to_numpy()
-    i_sharp = tcri.perturb.gene_importance(_fit(sharp), sharp, use_gate=False, null_model=None,
-                                           inplace=False)["result"]["value"].to_numpy()
+    i_flat = _importance(_fit(flat), flat)
+    i_sharp = _importance(_fit(sharp), sharp)
     assert i_sharp.max() > 3 * i_flat.max(), (
         f"no separation between informative and uninformative expression: "
         f"max importance sharp={i_sharp.max():.4f} flat={i_flat.max():.4f}"

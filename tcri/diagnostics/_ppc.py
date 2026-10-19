@@ -39,7 +39,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", tempe
         # inplace=False: a diagnostic must not overwrite the joint the user computed
         Jm = joint_distribution(adata, covariate=m, use_logits=True, n_samples=0, fit=fit,
                                 temperature=temperature, clones=clones,
-                                exclude_pools=exclude_pools, inplace=False)["result"]
+                                exclude_pools=exclude_pools, inplace=False)["summary"]
         cmask = adata.obs[cov_col].astype(str) == str(m)
         sub = adata.obs.loc[cmask, [clone_col, pheno_col]]
         for c in Jm.index:

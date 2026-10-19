@@ -149,10 +149,19 @@ group, the replicate unit of the `splitby` contrast, which is **per gene**). `sh
 to zero over phenotypes; a positive entry means silencing the gene removed mass from that
 phenotype. A gene whose column is already zero has `I_j = 0` exactly. At `n_samples > 0` the
 prior `p_ct` is drawn from the guide's Dirichlet posterior once, shared by every gene, and
-enters only through the gate; `I_j` is computed per draw and summarized as in "Posterior
-summaries". With `use_gate=False` there is nothing to draw, and `n_samples` is ignored with a
-warning. The reduction is over cells, so `covariate=None` is allowed and clones need not be
-disjoint across groups.
+enters only through the gate; `I_j` and `shift_j,p` are computed per draw and summarized as in
+"Posterior summaries". With `use_gate=False` there is nothing to draw, and `n_samples` is
+ignored with a warning. The reduction is over cells, so `covariate=None` is allowed and clones
+need not be disjoint across groups.
+
+`I_j` is the replicate level of the stored result, one row per gene and group, and `shift_j,p`
+its item level, one row per gene, group and phenotype; `I_j = Σ_p |shift_j,p|` on every draw.
+A group with no cell in `C` keeps its rows, NaN. The shift is stored per draw, on the fit and
+on each fit of the reference ("References"), so the item level carries `null_value` and
+`adjusted = value − null_value` on every paired draw, as the replicate level does. The adjusted
+shift is a per-phenotype difference, not a decomposition of the adjusted importance: `Σ_p
+|adjusted shift_j,p|` over a gene's item rows is not its adjusted importance, because the L1 norm
+of a difference is not the difference of the L1 norms.
 
 ## The `weighted` axis
 

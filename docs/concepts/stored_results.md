@@ -58,14 +58,14 @@ The key is the tool's name, so the key says what wrote it.
 | `tl.mutual_information(adata, fit="null.phenotype[0]")` | `uns["tcri_null.phenotype[0]_mutual_information"]` |
 | `perturb.gene_importance(model, adata)` | `uns["tcri_gene_importance"]` |
 
-Mutual information and the two entropies store their result by level:
+Mutual information, the two entropies and `gene_importance` store their result by level:
 
 ```text
 adata.uns["tcri_<metric>"]
 ├── replicate
 │   ├── draws      one row per replicate and draw (and null fit)
 │   └── summary    one row per replicate           ← get.replicates
-├── item           (the entropies; mutual information has none)
+├── item           (the entropies and gene_importance; mutual information has none)
 │   ├── draws      one row per replicate, item and draw (and null fit)
 │   └── summary    one row per replicate and item
 ├── stats          one row per test; None when nothing is compared
@@ -77,10 +77,10 @@ replicate row, NaN when it has no cells at the covariate or no clone left by `cl
 
 The other tools store a dict of frames: `table` is the unreduced substrate, one row
 per covariate, group and item (and draw, with `n_samples > 0`), and `result` is the reduced
-per-group frame the plots consume. The tools that contrast groups add `stats`;
-`joint_distribution`, which contrasts nothing, has only the two; `gene_importance` adds `shift`,
-its per-phenotype decomposition. The snapshot below is the written record of which slots each
-tool has.
+per-group frame the plots consume. The tools that contrast groups add `stats`.
+`joint_distribution` stores `{summary, draws}`: its posterior-mean clone × phenotype table and
+its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`. The
+snapshot below is the written record of which slots each tool has.
 
 ## What is recorded beside the payload
 

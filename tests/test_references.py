@@ -590,8 +590,8 @@ def test_a_key_added_keeps_its_own_reference(ref):
     tcri.perturb.gene_importance(model, adata, genes=genes)
     tcri.perturb.gene_importance(model, adata, genes=genes[:1], key_added="gi_one")
     for fit in members:
-        default = tcri.get.result(adata, "gene_importance", fit=fit)["result"]
-        keyed = tcri.get.result(adata, "gene_importance", key="gi_one", fit=fit)["result"]
+        default = tcri.get.replicates(adata, "gene_importance", fit=fit)
+        keyed = tcri.get.replicates(adata, "gene_importance", key="gi_one", fit=fit)
         assert set(default["gene"].astype(str)) == set(genes), fit
         assert set(keyed["gene"].astype(str)) == set(genes[:1]), fit
 
@@ -921,17 +921,26 @@ def test_an_empty_referenced_result_draws_the_no_data_panel(ref):
         assert "no reference" not in ax.get_ylabel(), quantity
 
 
-def test_the_shift_heatmap_refuses_the_adjusted_value(ref):
-    """``kind="shift"`` decomposes the importance across phenotypes and the reference has no
-    such decomposition stored, so an adjusted shift would have to be invented."""
+def test_the_shift_heatmap_draws_the_adjusted_shift(ref):
+    """The item view follows ``quantity`` like every item view: the adjusted shift at the default
+    and at ``quantity="adjusted"``, and an explicit ``"adjusted"`` raises when the result has no
+    reference."""
     import matplotlib
     matplotlib.use("Agg")
 
     model, adata = ref
-    tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:5]))
-    with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
-    assert tcri.pl.gene_importance(adata, kind="shift") is not None
+    genes = list(adata.var_names[:5])
+    tcri.perturb.gene_importance(model, adata, genes=genes)
+    auto = tcri.pl.gene_importance(adata, view="item").images[0].get_array()
+    adjusted = tcri.pl.gene_importance(adata, view="item", quantity="adjusted")
+    np.testing.assert_array_equal(adjusted.images[0].get_array(), auto)
+    assert adjusted.figure.axes[-1].get_ylabel().startswith("adjusted shift")
+    value = tcri.pl.gene_importance(adata, view="item", quantity="value").images[0].get_array()
+    assert not np.allclose(value, auto)
+
+    tcri.perturb.gene_importance(model, adata, genes=genes, null_model=None)
+    with pytest.raises(ValueError, match="no 'adjusted' column"):
+        tcri.pl.gene_importance(adata, view="item", quantity="adjusted")
 
 
 def test_both_gene_panels_rank_alike(ref):
@@ -943,11 +952,10 @@ def test_both_gene_panels_rank_alike(ref):
     model, adata = ref
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:8]))
     # at BOTH quantities: which genes are shown and which quantity is drawn are separate
-    # decisions, and the heatmap can only draw one of the two quantities. Tying its gene set to
-    # what it draws would make the two panels of one figure disagree by default.
+    # decisions, so the two views of one figure show the same genes whatever each draws.
     for kw in ({}, {"quantity": "value"}):
         rank = tcri.pl.gene_importance(adata, n_top=5, **kw)
-        shift = tcri.pl.gene_importance(adata, kind="shift", n_top=5, **kw)
+        shift = tcri.pl.gene_importance(adata, view="item", n_top=5, **kw)
         assert [t.get_text() for t in rank.get_xticklabels()] == \
                [t.get_text() for t in shift.get_yticklabels()], kw
     # ...and the corrected set is not the bare one, which is the whole reason for the default
@@ -1342,9 +1350,8 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     bare ranking tracks expression and its null tracks it just as closely. The adjusted
     importance is what removes that shared component.
 
-    `"auto"` still means the bare value when there is no reference, and it means the bare value
-    for `kind="shift"` whatever else is present -- otherwise the default call would raise
-    against its own default.
+    `"auto"` still means the bare value when there is no reference. The item view follows the
+    same rule: the adjusted shift at the default.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1363,10 +1370,9 @@ def test_the_gene_ranking_is_corrected_by_default(ref):
     bare_genes = [t.get_text() for t in bare.get_xticklabels()]
     assert set(auto_genes) <= set(genes) and set(bare_genes) <= set(genes)
 
-    # the heatmap still works at the default rather than raising against it
-    assert tcri.pl.gene_importance(adata, kind="shift", n_top=5) is not None
-    with pytest.raises(ValueError, match="kind='rank'"):
-        tcri.pl.gene_importance(adata, kind="shift", quantity="adjusted")
+    # the heatmap draws the adjusted shift at the default
+    heat = tcri.pl.gene_importance(adata, view="item", n_top=5)
+    assert heat.figure.axes[-1].get_ylabel().startswith("adjusted"), heat.figure.axes[-1]
 
     # ...and with no reference, "auto" is the bare value
     tcri.perturb.gene_importance(model, adata, genes=genes, groupby="patient",

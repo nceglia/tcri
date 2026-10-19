@@ -1,17 +1,18 @@
 """``pl.gene_importance`` -- cache renderer for the in-silico perturbation.
 
-Two views of one cached result, selected by ``kind``:
+Two views of one cached result, selected by ``view``:
 
-``"rank"`` (default)
+``"replicate"`` (default)
     The top genes by importance, one x position per gene, the mark following the package's
     one rule: replicates when they vary (one dot per patient, boxed; the split as hue, with
     that gene's contrast starred above it), draws when only they vary (a violin per gene),
     a point with its HDI otherwise.
 
-``"shift"``
-    Which way each top gene moves the call: a gene × phenotype heatmap of ``shift``
-    (``baseline − silenced``, averaged over groups), diverging and centered on zero, so a red
-    cell is mass the phenotype LOSES when the gene is silenced and a blue cell is mass it gains.
+``"item"``
+    Which way each top gene moves the call: a gene × phenotype heatmap of the item summary's
+    shift (``baseline − silenced``, averaged over groups), diverging and centered on zero, so a
+    red cell is mass the phenotype LOSES when the gene is silenced and a blue cell is mass it
+    gains.
 
 Like every twin it takes no metric arguments: the genes, groups, split and draws are the ones
 ``perturb.gene_importance`` used, read from the cache.
@@ -23,7 +24,7 @@ import warnings
 import numpy as np
 
 from .._state import _reference
-from ._base import (_axes, _boxstrip, _colors_for, _empty, _finish, _points,
+from ._base import (_axes, _boxstrip, _empty, _finish, _points,
                     _reference_legend, _reference_means, _violins, _zero_rule, check_quantity,
                     filter_quantity, resolve_quantity)
 
@@ -82,7 +83,8 @@ def _star_labels(ax, stats, genes, *, groupby, quantity):
 
 def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, legend, ax, figsize,
           save, show):
-    result, table, stats = payload["result"], payload.get("table"), payload.get("stats")
+    level, stats = payload["replicate"], payload.get("stats")
+    result, table = level["summary"], level["draws"]
     groupby, splitby = params.get("groupby"), params.get("splitby")
     fig, ax = _axes(ax, figsize)
     if result is None or not len(result) or "value" not in result.columns:
@@ -133,20 +135,17 @@ def _rank(adata, payload, params, *, genes, quantity, hue_order, palette, legend
     return _finish(fig, ax, save=save, show=show, legend=legend)
 
 
-def _shift(adata, payload, params, *, genes, ax, figsize, save, show):
-    import matplotlib.pyplot as plt
-
+def _heatmap(adata, result, *, genes, quantity, ax, figsize, save, show):
     from .._state import keys as K
 
-    shift = payload.get("shift")
     fig, ax = _axes(ax, figsize)
-    if shift is None or not len(shift):
-        return _finish(fig, _empty(ax, "no shift table for gene_importance", ""),
+    if result is None or not len(result):
+        return _finish(fig, _empty(ax, "no shift for gene_importance", ""),
                        save=save, show=show)
-    phenotypes = list(adata.uns.get(K.PHENOTYPE_CATEGORIES, shift["phenotype"].unique()))
+    phenotypes = list(adata.uns.get(K.PHENOTYPE_CATEGORIES, result["phenotype"].unique()))
     # mean over groups (and the covariate label, when present): one cell per gene x phenotype
-    mat = (shift[shift["gene"].isin(genes)]
-           .groupby(["gene", "phenotype"], observed=True)["shift"].mean()
+    mat = (result[result["gene"].isin(genes)]
+           .groupby(["gene", "phenotype"], observed=True)[quantity].mean()
            .unstack("phenotype").reindex(index=genes, columns=phenotypes))
     values = mat.to_numpy(dtype=float)
     limit = float(np.nanmax(np.abs(values))) if np.isfinite(values).any() else 1.0
@@ -159,74 +158,63 @@ def _shift(adata, payload, params, *, genes, ax, figsize, save, show):
     ax.set_xlabel("phenotype")
     ax.set_ylabel("gene")
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label("shift (baseline − silenced)")
+    cbar.set_label(_reference.label_for(result, quantity, "shift (baseline − silenced)"))
     return _finish(fig, ax, save=save, show=show)
 
 
-def gene_importance(adata, *, kind="rank", quantity="auto", n_top=25, key=None, order=None,
-                    hue_order=None, palette=None, legend=True, ax=None, figsize=(8, 4),
-                    save=None, show=None, return_df=False):
-    """The cached ``perturb.gene_importance``: a ranking (``kind="rank"``) or the signed
-    gene × phenotype shift (``kind="shift"``) of the ``n_top`` most important genes.
+def gene_importance(adata, *, view="replicate", quantity="auto", n_top=25, key=None,
+                    order=None, hue_order=None, palette=None, legend=True, ax=None,
+                    figsize=(8, 4), save=None, show=None, return_df=False):
+    """The cached ``perturb.gene_importance``: a ranking of the ``n_top`` most important genes
+    (``view="replicate"``) or their gene × phenotype shift (``view="item"``).
 
     ``order`` restricts and orders the genes shown; ``hue_order`` orders the split levels;
-    ``legend=False`` draws no legend; ``return_df`` hands back the cached ``result`` frame
-    instead of drawing.
+    ``legend=False`` draws no legend; ``return_df`` hands back the summary the view draws, the
+    replicate summary or the item summary, instead of drawing.
 
-    ``quantity`` defaults to ``"auto"``: the adjusted importance whenever the cached result
-    carries a reference, and the bare value otherwise, as on every twin. The correction matters
-    most here. Silencing a gene is an intervention whose size scales with the gene's counts, and
-    the encoder responds to that whatever the gene says about phenotype; the adjusted importance
-    subtracts the same gene's importance under the permutation null, leaving the part of the
-    ranking that a gene's abundance does not account for.
+    ``quantity`` defaults to ``"auto"``: the adjusted value whenever the cached result carries a
+    reference, and the bare value otherwise, as on every twin, on both views. The correction
+    matters most here. Silencing a gene is an intervention whose size scales with the gene's
+    counts, and the encoder responds to that whatever the gene says about phenotype; the
+    adjusted importance subtracts the same gene's importance under the permutation null, leaving
+    the part of the ranking that a gene's abundance does not account for. On the item view the
+    adjusted shift is the shift minus the null's shift, per phenotype; its absolute values summed
+    over phenotypes are not the adjusted importance, so the heatmap is not a decomposition of
+    the ranking's adjusted value.
 
-    ``quantity="value"`` draws the bare ranking, and is worth looking at once: the gap between
+    ``quantity="value"`` draws the bare value, and is worth looking at once: the gap between
     the two panels IS the abundance confound, and it is a property of this estimand rather than
     of a fit. Which genes are shown and which quantity is drawn are separate decisions: the gene
     set is ranked by the adjusted importance whenever the result carries one, unless
-    ``quantity="value"`` is asked for, so ``kind="rank"`` and ``kind="shift"`` describe the
-    same genes.
-
-    ``"adjusted"`` is refused for ``kind="shift"``: the heatmap is the per-phenotype
-    decomposition of the importance, and the reference has no such decomposition stored, so an
-    adjusted shift would have to be invented from a sum that does not decompose the same way.
+    ``quantity="value"`` is asked for, so the two views describe the same genes.
     """
     from .. import get as _get
 
-    if kind not in ("rank", "shift"):
-        raise ValueError(f"kind must be 'rank' or 'shift', got {kind!r}")
-    check_quantity(quantity, value_only=(kind == "shift"), message=(
-        f"kind='shift' has no {quantity!r}: the heatmap decomposes the importance across "
-        f"phenotypes, and the reference is stored as one number per gene and group, not as "
-        f"a shift. Use kind='rank', quantity={quantity!r} for the adjusted importance, or "
-        f"kind='shift', quantity='value' for the decomposition."))
+    check_quantity(quantity)
+    if view not in ("replicate", "item"):
+        raise ValueError(f"view must be 'replicate' or 'item', got {view!r}")
     payload = _get.result(adata, "gene_importance", key=key)
     params = _get.params(adata, "gene_importance", key=key)
-    result = payload["result"]
+    ranked = payload["replicate"]["summary"]
+    drawn = ranked if view == "replicate" else payload["item"]["summary"]
     # Which genes are SHOWN and which quantity is PLOTTED are separate decisions, and keeping
-    # them separate is what lets the two panels of one figure stay about the same genes: the
-    # heatmap has only one quantity it can draw, so tying its gene set to that quantity would
-    # make `kind="rank"` and `kind="shift"` disagree by default.
-    #
-    # The rule, in one sentence: the gene set is ranked by the ADJUSTED importance whenever the
-    # result carries a usable one, unless the caller explicitly asked for `quantity="value"`.
-    # Decided from the caller's argument BEFORE it is resolved: on the heatmap "auto" and
-    # "value" both resolve to the value, and only the unresolved argument tells them apart.
+    # them separate is what lets the two views of one figure stay about the same genes: the gene
+    # set is ranked by the ADJUSTED importance whenever the result carries a usable one, unless
+    # the caller explicitly asked for `quantity="value"`. Decided from the caller's argument
+    # BEFORE it is resolved, on the replicate summary for both views.
     rank_by = "value" if quantity == "value" else (
-        "adjusted" if _reference.usable_reference(result, "adjusted") else "value")
+        "adjusted" if _reference.usable_reference(ranked, "adjusted") else "value")
     if return_df:
-        return result
-    # Resolved ONCE and handed to both views, so a half-threaded quantity cannot make the two
-    # panels of one figure rank a different set of genes. Past `return_df`, and only for a
-    # frame with rows: an empty result draws its empty panel whatever the quantity.
-    if result is not None and len(result):
-        quantity = resolve_quantity(result, quantity, name="gene_importance",
-                                    value_only=(kind == "shift"))
-    genes = _top_genes(result, n_top, order, rank_by) if (
-        result is not None and len(result)) else []
-    if kind == "rank":
+        return drawn
+    # Resolved on the frame the view draws, past `return_df`, and only for a frame with rows:
+    # an empty result draws its empty panel whatever the quantity.
+    if drawn is not None and len(drawn):
+        quantity = resolve_quantity(drawn, quantity, name="gene_importance")
+    genes = _top_genes(ranked, n_top, order, rank_by) if (
+        ranked is not None and len(ranked)) else []
+    if view == "replicate":
         return _rank(adata, payload, params, genes=genes, quantity=quantity,
                      hue_order=hue_order, palette=palette, legend=legend, ax=ax,
                      figsize=figsize, save=save, show=show)
-    return _shift(adata, payload, params, genes=genes, ax=ax, figsize=figsize,
-                  save=save, show=show)
+    return _heatmap(adata, drawn, genes=genes, quantity=quantity, ax=ax, figsize=figsize,
+                    save=save, show=show)

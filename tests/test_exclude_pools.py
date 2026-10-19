@@ -227,15 +227,16 @@ def test_exclude_pools_equals_explicit_clones_in_gene_importance(pooled):
     for patient in adata.obs["patient"].unique():
         in_patient = (adata.obs["patient"] == patient).to_numpy()
         for got, mask in ((res, in_patient & kept), (with_pools, in_patient)):
-            row = got["result"].query("patient == @patient")
+            row = got["replicate"]["summary"].query("patient == @patient")
             want_i, want_shift = _manual_importance(model, adata, gene, mask)
             assert float(row["value"].iloc[0]) == pytest.approx(want_i, abs=1e-5)
             want_null, _ = _manual_importance(null, adata, gene, mask)
             assert float(row["null_value"].iloc[0]) == pytest.approx(want_null, abs=1e-5)
-            shift = (got["shift"].query("patient == @patient")
-                     .set_index("phenotype")["shift"].reindex(want_shift.index))
+            shift = (got["item"]["summary"].query("patient == @patient")
+                     .set_index("phenotype")["value"].reindex(want_shift.index))
             np.testing.assert_allclose(shift.to_numpy(), want_shift.to_numpy(), atol=1e-5)
-    assert not np.allclose(res["result"]["value"], with_pools["result"]["value"])
+    assert not np.allclose(res["replicate"]["summary"]["value"],
+                           with_pools["replicate"]["summary"]["value"])
 
 
 def test_leaving_out_pools_keeps_the_row_order(pooled):
@@ -244,8 +245,8 @@ def test_leaving_out_pools_keeps_the_row_order(pooled):
     patient's per-clone table. The values of the rows that stay do not depend on the pools."""
     _, adata = pooled
     for by_default, with_pools in (
-        (tcri.tl.joint_distribution(adata, inplace=False)["result"],
-         tcri.tl.joint_distribution(adata, exclude_pools=False, inplace=False)["result"]),
+        (tcri.tl.joint_distribution(adata, inplace=False)["summary"],
+         tcri.tl.joint_distribution(adata, exclude_pools=False, inplace=False)["summary"]),
         (frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
                                     inplace=False))[0],
          frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, exclude_pools=False,

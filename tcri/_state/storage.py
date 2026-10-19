@@ -106,7 +106,7 @@ def _encode_index(index):
     writer for a tuple -- it fails with "Can't implicitly convert non-string objects to
     strings", named against the enclosing group rather than the index, which is a long way
     from the cause. ``joint_distribution(n_samples>0)`` produces exactly that: a
-    (clonotype, sample_id) MultiIndex on its `table`. Flattening it level by level keeps the
+    (clonotype, draw) MultiIndex on its `draws`. Flattening it level by level keeps the
     result writable to .h5ad, which is what this module exists to guarantee.
     """
     if isinstance(index, pd.MultiIndex):
@@ -417,7 +417,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                         _reference.attach_levels(result, runs, values=values,
                                                  denominators=denominators)
                         _reference.restat_levels(result, groupby=arguments.get("groupby"),
-                                                 splitby=arguments.get("splitby"))
+                                                 splitby=arguments.get("splitby"),
+                                                 per_gene=per_gene_stats)
                     else:
                         _reference.attach(result, runs, values=values, denominators=denominators)
                         _reference.restat(result, groupby=arguments.get("groupby"),

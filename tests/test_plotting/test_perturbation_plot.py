@@ -1,5 +1,5 @@
-"""``pl.gene_importance`` as a cache renderer: the same rules as every twin, plus the two
-views it owns.
+"""``pl.gene_importance`` as a cache renderer: the same rules as every twin, on its two
+views.
 
 Every model call goes through the ``cohort`` fixture (see ``tests/test_perturbation.py`` for
 why: the Pyro parameter store is process-global).
@@ -15,7 +15,6 @@ import pandas as pd
 import pytest
 
 import tcri
-from ..conftest import frames
 from tcri._state import keys as K
 from tests.test_plotting.test_twins import METRIC_ARGS, _n_points, _n_violins
 
@@ -32,7 +31,7 @@ def _without_replicate(adata):
 def test_pl_takes_no_perturbation_arguments():
     params = set(inspect.signature(tcri.pl.gene_importance).parameters)
     assert not (params & PERTURB_ARGS), f"pl.gene_importance can compute: {params & PERTURB_ARGS}"
-    assert {"key", "kind", "n_top"} <= params
+    assert {"key", "view", "n_top"} <= params and "kind" not in params
 
 
 def test_pl_says_which_call_to_run(cohort):
@@ -54,23 +53,25 @@ def test_pl_never_recomputes(cohort, monkeypatch):
     monkeypatch.setattr(tcri.perturb, "gene_importance", _boom)
     monkeypatch.setattr("tcri.perturbation.gene_importance", _boom, raising=False)
     assert tcri.pl.gene_importance(a) is not None
-    assert tcri.pl.gene_importance(a, kind="shift") is not None
+    assert tcri.pl.gene_importance(a, view="item") is not None
 
 
-def test_pl_return_df_is_the_cached_result(cohort):
+def test_pl_return_df_is_the_summary_the_view_draws(cohort):
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2])
     pd.testing.assert_frame_equal(tcri.pl.gene_importance(a, return_df=True),
-                                  frames(tcri.get.result(a, "gene_importance"))[1])
+                                  tcri.get.replicates(a, "gene_importance"))
+    pd.testing.assert_frame_equal(tcri.pl.gene_importance(a, view="item", return_df=True),
+                                  tcri.get.items(a, "gene_importance"))
 
 
-def test_kind_is_validated(cohort):
+def test_view_is_validated(cohort):
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a, genes=[0])
-    with pytest.raises(ValueError, match="kind must be"):
-        tcri.pl.gene_importance(a, kind="nonsense")
+    with pytest.raises(ValueError, match="view must be"):
+        tcri.pl.gene_importance(a, view="nonsense")
 
 
 def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
@@ -85,11 +86,11 @@ def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a)
-    res = tcri.get.result(a, "gene_importance")
+    result = tcri.get.replicates(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, n_top=5)
 
     def ranked(col):
-        return (res["result"].groupby("gene", observed=True)[col].mean()
+        return (result.groupby("gene", observed=True)[col].mean()
                 .sort_values(ascending=False).index.tolist()[:5])
 
     assert [t.get_text() for t in ax.get_xticklabels()] == ranked("adjusted")
@@ -168,31 +169,38 @@ def test_rank_view_without_groups_draws_points_then_violins(cohort):
     assert _n_violins(adjusted) == 4, "the adjusted draws were not drawn as violins"
 
 
-def test_shift_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
+def test_item_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
+    """The item view draws the item summary averaged over groups, the adjusted shift at the
+    default and the shift at ``quantity="value"``, for the genes the replicate view ranks."""
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a)
-    res = tcri.get.result(a, "gene_importance")
-    ax = tcri.pl.gene_importance(a, kind="shift", n_top=7)
-
-    assert len(ax.images) == 1
-    im = ax.images[0]
+    result = tcri.get.replicates(a, "gene_importance")
+    items = tcri.get.items(a, "gene_importance")
     phenotypes = list(a.uns[K.PHENOTYPE_CATEGORIES])
-    assert im.get_array().shape == (7, len(phenotypes))
-    assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centered on zero"
-    assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
-
-    genes = [t.get_text() for t in ax.get_yticklabels()]
-    # the adjusted ranking, which is what both panels use at the default (see
+    # the adjusted ranking, which is what both views use at the default (see
     # tests/test_references.py::test_both_gene_panels_rank_alike)
-    ranked = (res["result"].groupby("gene", observed=True)["adjusted"].mean()
+    ranked = (result.groupby("gene", observed=True)["adjusted"].mean()
               .sort_values(ascending=False).index.tolist()[:7])
-    assert genes == ranked
-    want = (res["shift"][res["shift"]["gene"] == genes[0]]
-            .groupby("phenotype", observed=True)["shift"].mean().reindex(phenotypes))
-    np.testing.assert_allclose(np.asarray(im.get_array())[0], want.to_numpy(), atol=1e-12)
-    # each row is a zero-sum shift: what one phenotype loses another gains
-    assert np.abs(np.asarray(im.get_array()).sum(axis=1)).max() < 1e-5
+
+    for quantity, column in (("auto", "adjusted"), ("value", "value")):
+        ax = tcri.pl.gene_importance(a, view="item", n_top=7, quantity=quantity)
+        assert len(ax.images) == 1
+        im = ax.images[0]
+        assert im.get_array().shape == (7, len(phenotypes))
+        assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centered on zero"
+        assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
+
+        genes = [t.get_text() for t in ax.get_yticklabels()]
+        if quantity == "auto":
+            assert genes == ranked
+        want = (items[items["gene"] == genes[0]]
+                .groupby("phenotype", observed=True)[column].mean().reindex(phenotypes))
+        np.testing.assert_allclose(np.asarray(im.get_array())[0], want.to_numpy(), atol=1e-12)
+        # each row is a zero-sum shift: what one phenotype loses another gains
+        assert np.abs(np.asarray(im.get_array()).sum(axis=1)).max() < 1e-5
+        label = ax.figure.axes[-1].get_ylabel()
+        assert label.startswith("adjusted ") == (column == "adjusted"), label
 
 
 def test_order_restricts_and_orders_the_genes(cohort):
@@ -201,5 +209,5 @@ def test_order_restricts_and_orders_the_genes(cohort):
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3, 4])
     ax = tcri.pl.gene_importance(a, order=["gene_3", "gene_0", "not_a_gene"])
     assert [t.get_text() for t in ax.get_xticklabels()] == ["gene_3", "gene_0"]
-    heat = tcri.pl.gene_importance(a, kind="shift", order=["gene_3", "gene_0"])
+    heat = tcri.pl.gene_importance(a, view="item", order=["gene_3", "gene_0"])
     assert [t.get_text() for t in heat.get_yticklabels()] == ["gene_3", "gene_0"]
