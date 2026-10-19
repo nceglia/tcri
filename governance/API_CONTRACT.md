@@ -76,7 +76,8 @@ the model, the AnnData and the Pyro parameter store together; the store is proce
 fitted model per process is the supported pattern.
 
 **`n_samples`.** `0` is the deterministic plug-in at the posterior mean: no draw, reproducible
-on repeat calls. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
+on repeat calls; `diag.joint_distribution_ppc` rejects it, since a single point estimate is not
+a posterior predictive check. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
 the guide's clamped concentration, seeded by `random_state` through a torch generator. One draw
 serves every covariate, group and clone in a call (draw-once), so a self-delta is exactly zero.
 The plug-in and the posterior mean are different estimators; see `METRICS_CONTRACT.md`.
@@ -192,9 +193,15 @@ and draw), `summary` (per clone, no `p`) and `calibration` (per covariate, doubl
 and draw: the KS distance of `p` from uniform).
 
 The four checks that compute (`joint_distribution_ppc`, `phenotype_calibration`,
-`reconstruction_ppc`, `permutation_null`) take `plot=True, ax=None, save=None`. `plot` draws the
-check's figure from the values it just computed, `ax` is one Axes per panel, and the return value
-is the same whether or not it plots. Nothing is cached: a redraw reruns the check.
+`reconstruction_ppc`, `permutation_null`) return a dict of named DataFrames, one per level of
+detail, and put no numbers in `attrs`: `phenotype_calibration` returns `bins` and a one-row
+`summary` (`ece`, `n_cells`); `reconstruction_ppc` and `permutation_null` return `summary`. They
+take `plot=True` and `save=None`. `plot` draws the check's figure from the values it just
+computed, and the return value is the same whether or not it plots; `save` with `plot=False`
+raises. Nothing is cached: a redraw reruns the check. The three with a panel count known before
+the call also take `ax=None`, one Axes per panel; the PPC's panel count depends on the data, so it
+always draws its own figure. `reconstruction_ppc` and `joint_distribution_ppc` both call their
+replicate count `n_replicates`.
 
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
@@ -436,22 +443,22 @@ class diag:
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: Any = ...,
         n_samples: int = ..., n_replicates: int = ..., clones: Any = ...,
         exclude_pools: bool = ..., random_state: Any = ..., fit: Optional[str] = ...,
-        plot: bool = ..., ax: Any = ..., save: Any = ...,
+        plot: bool = ..., save: Any = ...,
     ) -> dict: ...
     def phenotype_calibration(
         adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ..., plot: bool = ...,
         ax: Any = ..., save: Any = ...,
-    ) -> pd.DataFrame: ...
+    ) -> dict: ...
     def reconstruction_ppc(
-        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ..., random_state: Any = ...,
-        plot: bool = ..., ax: Any = ..., save: Any = ...,
-    ) -> pd.DataFrame: ...
+        model: Any, adata: Optional[AnnData] = ..., *, n_replicates: int = ...,
+        random_state: Any = ..., plot: bool = ..., ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
         groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
         normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ..., plot: bool = ...,
         ax: Any = ..., save: Any = ...,
-    ) -> pd.DataFrame: ...
+    ) -> dict: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
 

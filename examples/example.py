@@ -200,10 +200,12 @@ plt.show()
 # on, clone by clone? Each posterior draw simulates replicate labels for every cell from the
 # fit's own label likelihood; a clone's `p` is where its observed labels fall among those
 # replicates. When the fit is right, `p` is uniform across clones, so the figure is a QQ plot
-# of `p` against uniform for each clone-size bin: curves on the diagonal mean the fit
-# reproduces its data, curves below it mean the observed labels sit farther from the fit than
-# its replicates do. Every diagnostic draws its figure with `plot=True` (the default) and
-# returns the same values either way.
+# of `p` against uniform for each clone-size bin, one faint curve per posterior draw over the
+# gray range a correct fit's curve stays inside. Curves on the diagonal mean the fit
+# reproduces its data; curves below it mean the observed labels sit farther from the fit than
+# its replicates do; curves above it mean they sit closer, as when `label_error_rate` is higher
+# than the labels' real noise. Every diagnostic draws its figure with `plot=True` (the
+# default) and returns the same values either way.
 
 # %%
 ppc = tcri.diag.joint_distribution_ppc(adata, random_state=SEED)
@@ -212,28 +214,30 @@ ppc["calibration"].query("size_bin == 'all'").groupby("covariate")["ks"].median(
 
 # %% [markdown]
 # **`phenotype_calibration`** — when the classifier says 0.8, is it right 80% of the time?
-# `ECE` is the expected calibration error; lower is better.
+# `ece`, in its one-row `summary`, is the expected calibration error; lower is better. Each
+# check returns a dict of named frames, one per level of detail.
 
 # %%
 calib = tcri.diag.phenotype_calibration(adata, n_bins=8)
 plt.show()
+calib["summary"]
 
 # %% [markdown]
 # **`reconstruction_ppc`** — does the decoder generate counts like the real ones? Each dot is
-# one simulation's statistic over the observed one; 1 is a match.
+# one replicate's statistic over the observed one; 1 is a match.
 # **`permutation_null`** — how large is the metric under shuffled labels? This is the
 # reference any MI should be read against, and it is *model-free*: it scores the empirical
 # crosstab and draws no posterior samples.
 
 # %%
-recon = tcri.diag.reconstruction_ppc(model, adata, n_sims=25, random_state=SEED)
+recon = tcri.diag.reconstruction_ppc(model, adata, n_replicates=25, random_state=SEED)
 plt.show()
 
 null = tcri.diag.permutation_null(adata, metric="mutual_information", covariate="post",
                                   n_perm=200, random_state=SEED)
 plt.show()
 print("permutation null — `observed` is the real labels, `null_mean` is shuffled:")
-print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
+print(null["summary"][["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
       .round(4).to_string(index=False))
 
 # %% [markdown]

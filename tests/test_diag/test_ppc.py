@@ -97,29 +97,40 @@ def test_a_misfit_is_visible():
     assert res["draws"]["p"].mean() < 0.4
 
 
+def _cell_label_probs(logits, phi_of_cell, gate, eps):
+    """softmax(g * l + (1 - g) * log phi) @ C, or softmax(l + log phi) @ C without a gate, in
+    numpy: the model's ``phenotype_label`` likelihood, written independently of the package."""
+    ell = (logits + np.log(phi_of_cell) if gate is None
+           else gate * logits + (1 - gate) * np.log(phi_of_cell))
+    q = np.exp(ell - ell.max(1, keepdims=True))
+    q /= q.sum(1, keepdims=True)
+    P = q.shape[1]
+    C = np.full((P, P), eps / (P - 1))
+    np.fill_diagonal(C, 1 - eps)
+    return q @ C
+
+
 def _per_cell_model(eps, gate, seed=0, n_clones=300, P=3):
-    """Labels drawn cell by cell from softmax(g * l + (1 - g) * log phi) @ C at a known phi,
-    with a posterior concentrated on that phi."""
+    """Labels drawn cell by cell from the label likelihood at a known phi, with a posterior
+    concentrated on that phi. ``gate=None`` is the additive combine."""
     rng = np.random.default_rng(seed)
     n_cells = rng.choice((1, 2, 4, 8, 16), n_clones)
     phi = rng.dirichlet(np.full(P, 1.5), n_clones)
     clone = np.repeat(np.arange(n_clones), n_cells)
     logits = rng.normal(scale=1.5, size=(len(clone), P))
-    ell = gate * logits + (1 - gate) * np.log(phi[clone])
-    q = np.exp(ell - ell.max(1, keepdims=True))
-    q /= q.sum(1, keepdims=True)
-    C = np.full((P, P), eps / (P - 1))
-    np.fill_diagonal(C, 1 - eps)
-    labels = np.array([rng.choice(P, p=row) for row in q @ C])
-    return _substrate(n_cells, 1e6 * phi, labels, logits=logits, gate=gate, eps=eps)
+    probs = _cell_label_probs(logits, phi[clone], gate, eps)
+    labels = np.array([rng.choice(P, p=row) for row in probs])
+    return _substrate(n_cells, 1e6 * phi, labels, logits=logits,
+                      gate=float("nan") if gate is None else gate, eps=eps)
 
 
-def test_the_replicate_is_the_per_cell_likelihood_with_label_noise():
-    """With a gate, informative logits and ε = 0.4, labels drawn from the model's own per-cell
-    likelihood give uniform ``p``. Storing ε = 0 makes the replicates too clean, and the check
-    sees it: the observed labels sit farther from the fit than the replicates do, and the
-    "all" bin rejects uniformity in every draw."""
-    a = _per_cell_model(eps=0.4, gate=0.5)
+@pytest.mark.parametrize("gate", [0.5, None], ids=["gated", "additive"])
+def test_the_replicate_is_the_per_cell_likelihood_with_label_noise(gate):
+    """With informative logits and ε = 0.4, labels drawn from the model's own per-cell
+    likelihood give uniform ``p``, gated and additive. Storing ε = 0 makes the replicates too
+    clean, and the check sees it: the observed labels sit farther from the fit than the
+    replicates do, and the "all" bin rejects uniformity in every draw."""
+    a = _per_cell_model(eps=0.4, gate=gate)
     right = tcri.diag.joint_distribution_ppc(a, n_samples=5, n_replicates=200, random_state=0,
                                              plot=False)
     assert _share_rejected(right["calibration"]) <= 0.1
@@ -131,6 +142,37 @@ def test_the_replicate_is_the_per_cell_likelihood_with_label_noise():
     allbin = wrong["calibration"].query("size_bin == 'all'")
     assert (allbin["ks"] > KS_1PCT / np.sqrt(allbin["n_clones"])).all()
     assert wrong["draws"]["p"].mean() < right["draws"]["p"].mean() - 0.05
+
+
+@pytest.mark.parametrize("gate", [0.5, None], ids=["gated", "additive"])
+def test_mean_replicate_frequencies_are_the_models_expected_frequencies(gate):
+    """With ε > 0 and nonzero logits, the replicate labels' mean frequencies per clone are the
+    clone's expected label frequencies under the model, computed here in numpy from the
+    likelihood: the per-cell probabilities and the sampler are both checked."""
+    import torch
+
+    from tcri._compute._joint import _cell_probs
+    from tcri.diagnostics._ppc import _confusion, _replicate_counts
+
+    rng = np.random.default_rng(0)
+    P, eps, n_rep = 4, 0.3, 4000
+    n_cells = np.array([1, 3, 7, 20])
+    clone = np.repeat(np.arange(len(n_cells)), n_cells)
+    phi = rng.dirichlet(np.ones(P), len(n_cells))
+    logits = rng.normal(scale=2.0, size=(len(clone), P))
+    expected = np.stack([_cell_label_probs(logits, phi[clone], gate, eps)[clone == k].mean(0)
+                         for k in range(len(n_cells))])
+
+    bases = torch.as_tensor(phi, dtype=torch.float64).unsqueeze(0)
+    ell = torch.as_tensor(logits, dtype=torch.float64).unsqueeze(0)
+    qC = (_cell_probs(bases, torch.as_tensor(clone), ell, gate)[0]
+          @ torch.as_tensor(_confusion(eps, P)))
+    gen = torch.Generator().manual_seed(0)
+    counts = _replicate_counts(qC.cumsum(-1), torch.as_tensor(clone), len(n_cells), n_rep, gen)
+    freq = (counts / torch.as_tensor(n_cells, dtype=torch.float64)[None, :, None]).mean(0).numpy()
+
+    se = np.sqrt(expected * (1 - expected) / (n_cells[:, None] * n_rep))
+    assert (np.abs(freq - expected) < 5 * se + 1e-12).all(), np.abs(freq - expected) / se
 
 
 def test_same_seed_same_frames_and_the_draws_are_tls(trained_model, monkeypatch):
@@ -232,3 +274,26 @@ def test_a_clonotype_null_is_checked_on_its_own_groups(trained_model):
     merged = res["summary"].merge(sizes, on=["covariate", "clonotype"])
     assert len(merged) == len(res["summary"])
     np.testing.assert_array_equal(merged["n_cells"], merged["n"])
+
+
+@pytest.mark.parametrize("p", [(0.3, 0.3, 0.999, 0.999, 0.999), "random"])
+def test_the_figure_curve_leaves_the_band_exactly_when_ks_exceeds_it(p):
+    """Each draw's step curve in the QQ panels is ``p``'s empirical quantile function, whose
+    largest distance from the diagonal is the KS distance ``calibration`` reports. So a curve
+    leaving the band is the same event as ``ks`` exceeding the band's critical value. The fixed
+    case has KS 0.599 above the 95% value 0.563 at five clones; a linearly interpolated
+    quantile curve of it stays within 0.499."""
+    from tcri.diagnostics._plot import _quantile_steps
+    from tcri.diagnostics._ppc import _ks_uniform
+
+    samples = ([np.asarray(p)] if p != "random"
+               else [np.random.default_rng(s).uniform(size=n) for s, n in
+                     enumerate((1, 2, 5, 17, 60, 300))])
+    for values in samples:
+        u, y = _quantile_steps(values)
+        assert u[0] == 0 and u[-1] == 1
+        assert np.max(np.abs(y - u)) == pytest.approx(_ks_uniform(values), abs=1e-12)
+    if p != "random":
+        from scipy.stats import kstwo
+
+        assert _ks_uniform(p) > kstwo.ppf(0.95, 5)

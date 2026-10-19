@@ -323,7 +323,7 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
     obs = adata.obs
     kw = dict(covariate=POST, groupby="patient", n_perm=20, random_state=0, plot=False)
     kept = _kept(adata)
-    by_default = tcri.diag.permutation_null(adata, **kw)
+    by_default = tcri.diag.permutation_null(adata, **kw)["summary"]
     per_clone = frames(tcri.tl.phenotypic_entropy(adata, covariate=POST, null_model=None,
                                            inplace=False))[1]
 
@@ -341,7 +341,7 @@ def test_permutation_null_clones_restricts_like_the_metrics(pooled):
         assert _observed(by_default, patient) == pytest.approx(_empirical_mi(cells), abs=1e-12)
 
     some = kept[::2]
-    subset = tcri.diag.permutation_null(adata, clones=some, **kw)
+    subset = tcri.diag.permutation_null(adata, clones=some, **kw)["summary"]
     for patient in subset["patient"]:
         at = obs[(obs["timepoint"] == POST) & (obs["patient"] == patient)]
         cells = at[at[CLONES].isin(some)]

@@ -507,14 +507,14 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
     # 1) expression is untouched by every permutation, so reconstruction cannot move
     for kind, (null,) in nulls.items():
         with contextlib.redirect_stdout(io.StringIO()):
-            ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0,
+            ppc = tcri.diag.reconstruction_ppc(null, adata, n_replicates=2, random_state=0,
                                                plot=False)
-        assert ppc is not None and len(ppc), kind
+        assert len(ppc["summary"]), kind
 
     # 2) the substrate readers take fit=, and read that fit's own probabilities
     for kind in nulls:
         cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}[0]", plot=False)
-        assert cal is not None and len(cal), kind
+        assert len(cal["bins"]) and len(cal["summary"]) == 1, kind
     assert not np.allclose(
         adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype[0]")],
         adata.obsm[K.X_PROBABILITIES]), "calibration read the main fit's probabilities"

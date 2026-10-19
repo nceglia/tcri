@@ -1,5 +1,6 @@
-"""``tcri.diag`` posterior-predictive checks. Each computes, returns what it computed, and with
-``plot=True`` draws its figure from those values; nothing is cached. ``model`` is required only
+"""``tcri.diag`` posterior-predictive checks. Each computes and returns a dict of named
+DataFrames, one per level of detail, and with ``plot=True`` draws its figure from those values;
+nothing is cached. ``model`` is required only
 for ``reconstruction_ppc`` (the live ZINB decoder); the rest are adata-only.
 """
 from __future__ import annotations
@@ -21,6 +22,13 @@ def _count_arg(name, value):
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or int(value) < 1:
         raise ValueError(f"{name} must be an integer >= 1, got {value!r}")
     return int(value)
+
+
+def _check_save(plot, save):
+    """``save`` writes the figure, so it needs one to write."""
+    if save is not None and not plot:
+        raise ValueError("save= writes the figure, and plot=False draws none; pass plot=True "
+                         "or drop save=.")
 
 
 def _size_bins(n_cells):
@@ -71,6 +79,21 @@ def _confusion(eps, P):
     return C
 
 
+def _replicate_counts(cdf, clone_of_cell, n_clones, n_rep, gen):
+    """``n_rep`` replicate label sets, one label per cell drawn from its row of ``cdf`` (the
+    cumulative label probabilities, ``[n_cells, P]``), counted per clone: ``[n_rep, n_clones, P]``.
+    """
+    import torch
+
+    P = cdf.shape[-1]
+    u = torch.rand((n_rep, cdf.shape[0], 1), generator=gen, dtype=torch.float64)
+    codes = (cdf.unsqueeze(0) < u).sum(-1).clamp_max(P - 1)                 # [n_rep, n_cells]
+    flat = clone_of_cell.unsqueeze(0) * P + codes
+    counts = torch.zeros((n_rep, n_clones * P), dtype=torch.float64)
+    counts.scatter_add_(1, flat, torch.ones_like(flat, dtype=torch.float64))
+    return counts.view(n_rep, n_clones, P)
+
+
 def _fit_labels(adata, fit, phenos):
     """Each cell's phenotype code as the fit was trained on it.
 
@@ -100,7 +123,7 @@ def _fit_labels(adata, fit, phenos):
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_samples=100,
                            n_replicates=100, clones=None, exclude_pools=True,
-                           random_state=None, fit=None, plot=True, ax=None, save=None):
+                           random_state=None, fit=None, plot=True, save=None):
     """Posterior predictive check of the clone x phenotype fit: does the fit reproduce the
     phenotype labels it was trained on, clone by clone?
 
@@ -117,9 +140,10 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     This is the sampled-posterior p: replicate and discrepancy use one posterior draw, and
     ``p`` is never averaged over draws. When the data come from the model, each draw's ``p`` is
     uniform across clones, so the readout is that distribution, overall and by clone size,
-    rather than a flag per clone. A QQ curve on the diagonal means the fit reproduces its data;
-    a curve below it means observed labels sit farther from the fit than its replicates do.
-    The posterior is the fit's variational one and the classifier is a point estimate, so
+    rather than a flag per clone. A QQ curve on the diagonal means the fit reproduces its data.
+    A curve below it means the observed labels sit farther from the fit than its replicates do.
+    A curve above it means they sit closer than its replicates do, as when ``label_error_rate``
+    is higher than the labels' real noise. The posterior is the fit's variational one and the classifier is a point estimate, so
     uniformity is approximate even for a well-specified fit.
 
     Each fit is checked against its own training data: a phenotype null against its permuted
@@ -155,12 +179,14 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     fit : str | None
         Which fit to check; ``None`` is the main one.
     plot : bool
-        Draw the QQ figure: per covariate, the quantiles of ``p`` against uniform for each
-        clone-size bin, the median over draws with a 2.5-97.5% band.
-    ax : matplotlib.axes.Axes | sequence of Axes | None
-        One Axes per covariate panel; ``None`` makes the figure.
+        Draw the QQ figure, a row per covariate and a column per clone-size bin plus one for all
+        clones: each draw's quantile function of ``p`` as a faint step curve over the exact 95%
+        Kolmogorov-Smirnov range for the panel's clone count. A draw's curve leaves the range
+        exactly when its KS distance exceeds the 95% critical value. A size bin of fewer than 5
+        clones is merged into its smaller neighbor in the figure; ``calibration`` keeps every
+        bin. The panel count depends on the data, so the check always draws its own figure.
     save : str | path | None
-        Where to save the figure.
+        Where to save the figure. Needs ``plot=True``.
 
     Returns
     -------
@@ -176,8 +202,8 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     Raises
     ------
     ValueError
-        ``n_samples`` or ``n_replicates`` below 1, an unknown ``covariate``, or a label-free
-        fit, which has no label likelihood to check.
+        ``n_samples`` or ``n_replicates`` below 1, an unknown ``covariate``, a label-free fit,
+        which has no label likelihood to check, or ``save`` with ``plot=False``.
     RuntimeError
         The fit's logits or label error rate are missing: rerun ``model.to_anndata``.
     """
@@ -188,6 +214,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     from .._compute._tables import _clone_codes, _resolve_clones
     from ..tools._joint import _substrate
 
+    _check_save(plot, save)
     S = _count_arg("n_samples", n_samples)
     R = _count_arg("n_replicates", n_replicates)
     dist_rows = phenotype_distance_rows(distance_metric)
@@ -264,12 +291,8 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
             total = np.zeros(n_clones)
             for r0 in range(0, R, chunk):
                 rc = min(chunk, R - r0)
-                u = torch.rand((rc, n, 1), generator=gen, dtype=torch.float64)
-                codes = (cdf.unsqueeze(0) < u).sum(-1).clamp_max(P - 1)          # [rc, n]
-                flat = k_t.unsqueeze(0) * P + codes
-                counts = torch.zeros((rc, n_clones * P), dtype=torch.float64)
-                counts.scatter_add_(1, flat, torch.ones_like(flat, dtype=torch.float64))
-                f_rep = (counts.view(rc, n_clones, P) / n_k_t[None, :, None]).numpy()
+                counts = _replicate_counts(cdf, k_t, n_clones, rc, gen)
+                f_rep = (counts / n_k_t[None, :, None]).numpy()
                 # observed and replicates in ONE call: a replicate equal to the observed labels
                 # then gets a bit-identical distance, so ties are exact rather than rounding
                 d = dist_rows(np.concatenate([f_obs[None], f_rep]), r[None])
@@ -303,7 +326,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     if plot:
         from ._plot import ppc_figure
 
-        ppc_figure(result, ax=ax, save=save)
+        ppc_figure(result, save=save)
     return result
 
 
@@ -324,8 +347,8 @@ def _calibration(draws):
 
 
 def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, save=None):
-    """Reliability of predict() probabilities: bin by predicted max-prob, compare mean
-    predicted prob to empirical accuracy per bin; scalar ECE in ``df.attrs['ECE']``. adata-only.
+    """Reliability of predict() probabilities: bin cells by predicted max-prob and compare the
+    mean predicted prob to the empirical accuracy per bin. adata-only.
 
     ``fit`` selects whose probabilities are read; the TRUE labels are always the registered
     ones, so a phenotype null scores at chance here and a clonotype null scores like its
@@ -334,7 +357,14 @@ def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, sav
     ``plot=True`` draws the reliability diagram: mean predicted probability against observed
     accuracy per non-empty bin, marker area by the bin's cell count, the diagonal as reference,
     and the ECE in the title. ``ax`` is the one Axes to draw on (``None`` makes the figure);
-    ``save`` is a path to write it to. The returned frame is the same either way."""
+    ``save`` is a path to write it to and needs ``plot=True``. The return is the same either
+    way.
+
+    Returns a dict: ``"bins"``, one row per bin with ``bin``, ``mean_pred``, ``emp_freq`` and
+    ``count`` (NaN means for an empty bin); ``"summary"``, one row with ``ece``, the expected
+    calibration error (bin accuracy gaps weighted by bin size), and ``n_cells``.
+    """
+    _check_save(plot, save)
     fit = K.resolve_fit(adata, fit)
     probs = np.asarray(adata.obsm[K.fit_key(K.X_PROBABILITIES, fit)], dtype=float)
     phenos = list(adata.uns[K.PHENOTYPE_CATEGORIES])
@@ -357,53 +387,70 @@ def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, sav
         mp, acc = float(conf[m].mean()), float(correct[m].mean())
         rows.append({"bin": b, "mean_pred": mp, "emp_freq": acc, "count": n})
         ece += (n / N) * abs(acc - mp)
-    df = pd.DataFrame(rows)
-    df.attrs["ECE"] = float(ece)
+    result = {"bins": pd.DataFrame(rows),
+              "summary": pd.DataFrame([{"ece": float(ece), "n_cells": int(len(conf))}])}
     if plot:
         from ._plot import calibration_figure
 
-        calibration_figure(df, ax=ax, save=save)
-    return df
+        calibration_figure(result, ax=ax, save=save)
+    return result
 
 
-def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0, plot=True, ax=None,
-                       save=None):
+def reconstruction_ppc(model, adata=None, *, n_replicates=100, random_state=None, plot=True,
+                       ax=None, save=None):
     """ZINB reconstruction PPC: simulate counts from the fitted decoder and compare library
     size / dropout / mean / variance vs observed. ``model`` REQUIRED (live decoder).
 
-    ``n_sims`` posterior-predictive replicates are drawn per cell and each statistic is
-    averaged over them, which is what makes this a posterior-predictive check rather than a
-    single-draw comparison.
+    ``n_replicates`` posterior-predictive replicate count matrices are drawn and each statistic
+    is averaged over them, which is what makes this a posterior-predictive check rather than a
+    single-draw comparison. ``random_state`` seeds them, inside a fork of the torch random state,
+    so the caller's global state is the same afterwards; ``None`` draws unseeded from it.
 
     The encoder/decoder run once per batch and only the sampling is repeated, so cost is
-    roughly linear in ``n_sims`` on the cheap part. Statistics accumulate per draw rather than
-    materializing every replicate, so memory does not scale with ``n_sims * n_cells * n_genes``.
+    roughly linear in ``n_replicates`` on the cheap part. Statistics accumulate per replicate
+    rather than materializing every one, so memory does not scale with
+    ``n_replicates * n_cells * n_genes``.
 
     ``plot=True`` draws simulated / observed for each statistic on a log axis centered on 1, one
-    dot per replicate and the mean as a bar; a statistic observed as 0 has no ratio and is left
-    out of the figure. ``ax`` is the one Axes to draw on (``None`` makes the figure); ``save`` is a
-    path to write it to. The returned frame is the same either way.
+    dot per replicate and the mean as a bar; a statistic observed as 0 has no ratio, and its
+    column says so. ``ax`` is the one Axes to draw on (``None`` makes the figure); ``save`` is a
+    path to write it to and needs ``plot=True``. The return is the same either way.
+
+    Returns a dict: ``"summary"``, one row per statistic with ``observed``, ``simulated`` (the
+    mean over replicates) and ``discrepancy`` (their absolute difference).
     """
     import torch
-    import pyro.distributions as dist
-    from scvi import REGISTRY_KEYS
 
-    n_sims = int(n_sims)
-    if n_sims < 1:
-        raise ValueError(f"n_sims must be >= 1, got {n_sims}")
+    _check_save(plot, save)
+    n_replicates = _count_arg("n_replicates", n_replicates)
 
     module = model.module
     module.eval()
     adata = model._validate_anndata(adata)
     device = next(module.parameters()).device
-    torch.manual_seed(int(random_state))
+    if random_state is None:
+        return _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save)
+    # Seeded inside a fork, so the caller's global torch random state is the same afterwards.
+    accel = device.type in ("cuda", "mps")
+    with torch.random.fork_rng(devices=[device.index or 0] if accel else [],
+                               device_type=device.type if accel else None):
+        torch.manual_seed(int(random_state))
+        return _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save)
+
+
+def _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save):
+    """The body of :func:`reconstruction_ppc`, run with the torch random state seeded."""
+    import torch
+    import pyro.distributions as dist
+    from scvi import REGISTRY_KEYS
+
     loader = model._make_data_loader(adata=adata, batch_size=256)
 
     obs_lib, obs_all = [], []
-    sim_lib = [[] for _ in range(n_sims)]          # per draw: library size per cell
-    sim_zero = np.zeros(n_sims)                    # per draw: count of zero entries
-    sim_sum = np.zeros(n_sims)                     # per draw: sum of counts
-    sim_sq = np.zeros(n_sims)                      # per draw: sum of squared counts
+    sim_lib = [[] for _ in range(n_replicates)]          # per draw: library size per cell
+    sim_zero = np.zeros(n_replicates)                    # per draw: count of zero entries
+    sim_sum = np.zeros(n_replicates)                     # per draw: sum of counts
+    sim_sq = np.zeros(n_replicates)                      # per draw: sum of squared counts
     n_entries = 0
 
     with torch.no_grad():
@@ -426,7 +473,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0, plot=Tr
             obs_all.append(x.cpu().numpy())
             n_entries += x.numel()
 
-            for s in range(n_sims):
+            for s in range(n_replicates):
                 sim = xd.sample()
                 sim_lib[s].append(sim.sum(1).cpu().numpy())
                 sim_zero[s] += float((sim == 0).sum())
@@ -455,6 +502,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0, plot=Tr
         {"statistic": k, "observed": o, "simulated": s, "discrepancy": abs(o - s)}
         for k, (o, s) in stats.items()
     ])
+    result = {"summary": df}
     if plot:
         from ._plot import reconstruction_figure
 
@@ -466,7 +514,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=0, plot=Tr
             "var_expression": sim_var,
         }
         reconstruction_figure(df, per_sim, ax=ax, save=save)
-    return df
+    return result
 
 
 def permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None,
@@ -498,13 +546,17 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     Note this is deliberately model-free: it uses the EMPIRICAL clone x phenotype crosstab,
     not the model's ``p_ct``, so it shares no Dirichlet draw stack with ``tl.*``.
 
-    ``plot=True`` draws one panel per returned row: a histogram of the permuted values with the
-    observed value marked. ``ax`` is one Axes per row, or ``None`` to make the figure; ``save``
-    is a path to write it to. The returned frame is the same either way.
+    ``plot=True`` draws one panel per row of ``summary``: a histogram of the permuted values with
+    the observed value marked. ``ax`` is one Axes per row, or ``None`` to make the figure;
+    ``save`` is a path to write it to and needs ``plot=True``. The return is the same either way.
+
+    Returns a dict: ``"summary"``, one row per covariate (and group, with ``groupby``) with
+    ``observed``, ``null_mean``, ``null_sd``, ``z`` and ``p``.
     """
     from .._compute._tables import _resolve_clones
     from ..tools._mutual_information import _mi_from_joint
 
+    _check_save(plot, save)
     if metric != "mutual_information":
         raise ValueError("permutation_null currently supports metric='mutual_information'.")
     rng = np.random.default_rng(random_state)
@@ -582,4 +634,4 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
         from ._plot import permutation_null_figure
 
         permutation_null_figure(df, nulls, groupby=groupby, ax=ax, save=save)
-    return df
+    return {"summary": df}
