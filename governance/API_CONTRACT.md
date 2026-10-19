@@ -183,8 +183,8 @@ Dirichlet samples. It is a model-free check on the data, not a reference for a m
 `joint_distribution_ppc` is a sampled-posterior predictive check of the labels. Each of
 `n_samples` posterior draws of `p_ct` (the draws `tl.joint_distribution` makes for the same
 `random_state`) rebuilds every cell's label likelihood, its classifier logits gated with its
-group's draw and passed through the label-noise matrix of `label_error_rate`, and `n_replicates`
-replicate label sets are drawn cell by cell. A clone's `p` at a draw is the rank of its observed
+group's draw and passed through the label-noise matrix of `label_error_rate`, and `n_sims`
+simulated label sets are drawn cell by cell. A clone's `p` at a draw is the rank of its observed
 distance among its replicate distances, ties broken at random, so under a correct fit each draw's
 `p` is uniform across clones; `p` is never averaged over draws. Each fit is checked against its
 own training data: a phenotype null against its permuted labels, a clonotype or covariate null
@@ -201,7 +201,7 @@ computed, and the return value is the same whether or not it plots; `save` with 
 raises. Nothing is cached: a redraw reruns the check. The three with a panel count known before
 the call also take `ax=None`, one Axes per panel; the PPC's panel count depends on the data, so it
 always draws its own figure. `reconstruction_ppc` and `joint_distribution_ppc` both call their
-replicate count `n_replicates`.
+count of simulated datasets `n_sims`.
 
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
@@ -441,7 +441,7 @@ class get:
 class diag:
     def joint_distribution_ppc(
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: Any = ...,
-        n_samples: int = ..., n_replicates: int = ..., clones: Any = ...,
+        n_samples: int = ..., n_sims: int = ..., clones: Any = ...,
         exclude_pools: bool = ..., random_state: Any = ..., fit: Optional[str] = ...,
         plot: bool = ..., save: Any = ...,
     ) -> dict: ...
@@ -450,7 +450,7 @@ class diag:
         ax: Any = ..., save: Any = ...,
     ) -> dict: ...
     def reconstruction_ppc(
-        model: Any, adata: Optional[AnnData] = ..., *, n_replicates: int = ...,
+        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ...,
         random_state: Any = ..., plot: bool = ..., ax: Any = ..., save: Any = ...,
     ) -> dict: ...
     def permutation_null(

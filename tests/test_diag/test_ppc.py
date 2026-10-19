@@ -73,7 +73,7 @@ def test_p_is_uniform_when_the_data_come_from_the_model():
     included: the randomized tie break is what keeps a 1-cell clone's discrete ``p`` uniform.
     About 1% of (bin, draw) rows reject at the 1% level by chance; a broken tie rule or
     likelihood rejects in every draw of a bin."""
-    res = tcri.diag.joint_distribution_ppc(_exact(), n_samples=20, n_replicates=100,
+    res = tcri.diag.joint_distribution_ppc(_exact(), n_samples=20, n_sims=100,
                                            random_state=0, plot=False)
     cal = res["calibration"]
     assert cal.query("size_bin == '1'")["n_clones"].iloc[0] > 100
@@ -90,7 +90,7 @@ def test_a_misfit_is_visible():
     rows = np.random.default_rng(1).permutation(a.uns[K.CONC_CT].shape[0])
     a.uns[K.CONC_CT] = a.uns[K.CONC_CT][rows]
     a.uns[K.P_CT] = a.uns[K.P_CT][rows]
-    res = tcri.diag.joint_distribution_ppc(a, n_samples=10, n_replicates=100, random_state=0,
+    res = tcri.diag.joint_distribution_ppc(a, n_samples=10, n_sims=100, random_state=0,
                                            plot=False)
     allbin = res["calibration"].query("size_bin == 'all'")
     assert (allbin["ks"] > KS_1PCT / np.sqrt(allbin["n_clones"])).all()
@@ -131,13 +131,13 @@ def test_the_replicate_is_the_per_cell_likelihood_with_label_noise(gate):
     clean, and the check sees it: the observed labels sit farther from the fit than the
     replicates do, and the "all" bin rejects uniformity in every draw."""
     a = _per_cell_model(eps=0.4, gate=gate)
-    right = tcri.diag.joint_distribution_ppc(a, n_samples=5, n_replicates=200, random_state=0,
+    right = tcri.diag.joint_distribution_ppc(a, n_samples=5, n_sims=200, random_state=0,
                                              plot=False)
     assert _share_rejected(right["calibration"]) <= 0.1
     assert abs(right["draws"]["p"].mean() - 0.5) < 0.04
 
     a.uns[K.LABEL_ERROR_RATE] = 0.0
-    wrong = tcri.diag.joint_distribution_ppc(a, n_samples=5, n_replicates=200, random_state=0,
+    wrong = tcri.diag.joint_distribution_ppc(a, n_samples=5, n_sims=200, random_state=0,
                                              plot=False)
     allbin = wrong["calibration"].query("size_bin == 'all'")
     assert (allbin["ks"] > KS_1PCT / np.sqrt(allbin["n_clones"])).all()
@@ -190,7 +190,7 @@ def test_same_seed_same_frames_and_the_draws_are_tls(trained_model, monkeypatch)
         return out
 
     monkeypatch.setattr(_joint, "_posterior_bases", record)
-    kw = dict(n_samples=4, n_replicates=10, random_state=3, plot=False)
+    kw = dict(n_samples=4, n_sims=10, random_state=3, plot=False)
     one = tcri.diag.joint_distribution_ppc(adata, **kw)
     two = tcri.diag.joint_distribution_ppc(adata, **kw)
     for name in ("draws", "summary", "calibration"):
@@ -204,7 +204,7 @@ def test_same_seed_same_frames_and_the_draws_are_tls(trained_model, monkeypatch)
 
 def test_frames_and_their_columns(trained_model):
     _, adata = trained_model
-    res = tcri.diag.joint_distribution_ppc(adata, n_samples=3, n_replicates=5, random_state=0,
+    res = tcri.diag.joint_distribution_ppc(adata, n_samples=3, n_sims=5, random_state=0,
                                            plot=False)
     assert list(res) == ["draws", "summary", "calibration"]
     assert list(res["draws"].columns) == ["covariate", "clonotype", "draw", "n_cells",
@@ -216,12 +216,12 @@ def test_frames_and_their_columns(trained_model):
     d = res["draws"]
     assert len(d) == len(res["summary"]) * 3
     assert ((d["p"] > 0) & (d["p"] < 1)).all()
-    one = tcri.diag.joint_distribution_ppc(adata, covariate="T2", n_samples=3, n_replicates=5,
+    one = tcri.diag.joint_distribution_ppc(adata, covariate="T2", n_samples=3, n_sims=5,
                                            random_state=0, plot=False)
     assert set(one["draws"]["covariate"]) == {"T2"}
 
 
-@pytest.mark.parametrize("arg", ["n_samples", "n_replicates"])
+@pytest.mark.parametrize("arg", ["n_samples", "n_sims"])
 @pytest.mark.parametrize("bad", [0, -1, 1.5, True])
 def test_counts_must_be_integers_of_at_least_one(trained_model, arg, bad):
     _, adata = trained_model
@@ -238,10 +238,10 @@ def test_a_fit_without_its_label_error_rate_raises(trained_model):
     a = adata.copy()
     del a.uns[K.LABEL_ERROR_RATE]
     with pytest.raises(RuntimeError, match="to_anndata"):
-        tcri.diag.joint_distribution_ppc(a, n_samples=1, n_replicates=1, plot=False)
+        tcri.diag.joint_distribution_ppc(a, n_samples=1, n_sims=1, plot=False)
     a.uns[K.LABEL_ERROR_RATE] = float("nan")
     with pytest.raises(ValueError, match="label-free"):
-        tcri.diag.joint_distribution_ppc(a, n_samples=1, n_replicates=1, plot=False)
+        tcri.diag.joint_distribution_ppc(a, n_samples=1, n_sims=1, plot=False)
 
 
 def test_a_phenotype_null_is_checked_against_its_permuted_labels(trained_model):
@@ -264,7 +264,7 @@ def test_a_clonotype_null_is_checked_on_its_own_groups(trained_model):
 
     _, adata = trained_model
     fit = "null.clonotype[0]"
-    res = tcri.diag.joint_distribution_ppc(adata, fit=fit, n_samples=2, n_replicates=5,
+    res = tcri.diag.joint_distribution_ppc(adata, fit=fit, n_samples=2, n_sims=5,
                                            random_state=0, plot=False)
     cov_cats = list(adata.uns[K.COVARIATE_CATEGORIES])
     cov = np.asarray(cov_cats, dtype=object)[np.asarray(adata.uns[K.fit_key(K.COV_ARRAY, fit)])]

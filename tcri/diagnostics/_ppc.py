@@ -122,20 +122,20 @@ def _fit_labels(adata, fit, phenos):
 
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_samples=100,
-                           n_replicates=100, clones=None, exclude_pools=True,
+                           n_sims=100, clones=None, exclude_pools=True,
                            random_state=None, fit=None, plot=True, save=None):
     """Posterior predictive check of the clone x phenotype fit: does the fit reproduce the
     phenotype labels it was trained on, clone by clone?
 
     For each of ``n_samples`` posterior draws, every cell's phenotype probabilities are rebuilt
     from the fit (its classifier logits gated with its clone's drawn distribution, then passed
-    through the label-noise matrix), and ``n_replicates`` replicate label sets are drawn from
+    through the label-noise matrix), and ``n_sims`` simulated label sets are drawn from
     them, cell by cell. Each clone's observed label frequencies and each replicate's are compared
     to the clone's expected frequencies under that draw with ``distance_metric``. The clone's
     ``p`` at that draw is where its observed distance falls among its replicate distances, with
     ties broken at random::
 
-        p = (#{D_rep > D_obs} + U * (#{D_rep = D_obs} + 1)) / (n_replicates + 1)
+        p = (#{D_rep > D_obs} + U * (#{D_rep = D_obs} + 1)) / (n_sims + 1)
 
     This is the sampled-posterior p: replicate and discrepancy use one posterior draw, and
     ``p`` is never averaged over draws. When the data come from the model, each draw's ``p`` is
@@ -150,7 +150,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     labels, a clonotype or covariate null against its own groups. A null that fits its own data
     passes like the main fit does.
 
-    Cost scales with cells x ``n_samples`` x ``n_replicates`` x phenotypes. Nothing is cached;
+    Cost scales with cells x ``n_samples`` x ``n_sims`` x phenotypes. Nothing is cached;
     every call recomputes.
 
     Parameters
@@ -163,8 +163,8 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
         ``"l1"`` (default), ``"kl"``/``"dkl"``, or ``f(p, q) -> float``.
     n_samples : int
         Posterior draws, each a full set of per-clone ``p``. Integer >= 1.
-    n_replicates : int
-        Replicate label sets per draw. ``p`` moves in steps of ``1 / (n_replicates + 1)``.
+    n_sims : int
+        Simulated label sets per draw. ``p`` moves in steps of ``1 / (n_sims + 1)``.
         Integer >= 1.
     clones : list | None
         The fit's clones to check; ``None`` checks every one.
@@ -202,7 +202,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     Raises
     ------
     ValueError
-        ``n_samples`` or ``n_replicates`` below 1, an unknown ``covariate``, a label-free fit,
+        ``n_samples`` or ``n_sims`` below 1, an unknown ``covariate``, a label-free fit,
         which has no label likelihood to check, or ``save`` with ``plot=False``.
     RuntimeError
         The fit's logits or label error rate are missing: rerun ``model.to_anndata``.
@@ -216,7 +216,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
 
     _check_save(plot, save)
     S = _count_arg("n_samples", n_samples)
-    R = _count_arg("n_replicates", n_replicates)
+    R = _count_arg("n_sims", n_sims)
     dist_rows = phenotype_distance_rows(distance_metric)
     fit = K.resolve_fit(adata, fit)
     phenos = [str(x) for x in adata.uns[K.PHENOTYPE_CATEGORIES]]
@@ -396,20 +396,20 @@ def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, sav
     return result
 
 
-def reconstruction_ppc(model, adata=None, *, n_replicates=100, random_state=None, plot=True,
+def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot=True,
                        ax=None, save=None):
     """ZINB reconstruction PPC: simulate counts from the fitted decoder and compare library
     size / dropout / mean / variance vs observed. ``model`` REQUIRED (live decoder).
 
-    ``n_replicates`` posterior-predictive replicate count matrices are drawn and each statistic
+    ``n_sims`` simulated count matrices are drawn and each statistic
     is averaged over them, which is what makes this a posterior-predictive check rather than a
     single-draw comparison. ``random_state`` seeds them, inside a fork of the torch random state,
     so the caller's global state is the same afterwards; ``None`` draws unseeded from it.
 
     The encoder/decoder run once per batch and only the sampling is repeated, so cost is
-    roughly linear in ``n_replicates`` on the cheap part. Statistics accumulate per replicate
+    roughly linear in ``n_sims`` on the cheap part. Statistics accumulate per simulation
     rather than materializing every one, so memory does not scale with
-    ``n_replicates * n_cells * n_genes``.
+    ``n_sims * n_cells * n_genes``.
 
     ``plot=True`` draws simulated / observed for each statistic on a log axis centered on 1, one
     dot per replicate and the mean as a bar; a statistic observed as 0 has no ratio, and its
@@ -422,23 +422,24 @@ def reconstruction_ppc(model, adata=None, *, n_replicates=100, random_state=None
     import torch
 
     _check_save(plot, save)
-    n_replicates = _count_arg("n_replicates", n_replicates)
+    n_sims = _count_arg("n_sims", n_sims)
 
     module = model.module
     module.eval()
     adata = model._validate_anndata(adata)
     device = next(module.parameters()).device
     if random_state is None:
-        return _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save)
+        return _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
     # Seeded inside a fork, so the caller's global torch random state is the same afterwards.
-    accel = device.type in ("cuda", "mps")
-    with torch.random.fork_rng(devices=[device.index or 0] if accel else [],
-                               device_type=device.type if accel else None):
+    # The CPU state is always forked; a CUDA device's is forked too. device_type is always a
+    # real type: torch 2.4 builds a device from it, so None raises there.
+    cuda = device.type == "cuda"
+    with torch.random.fork_rng(devices=[device.index or 0] if cuda else [], device_type="cuda"):
         torch.manual_seed(int(random_state))
-        return _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save)
+        return _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
 
 
-def _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, save):
+def _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save):
     """The body of :func:`reconstruction_ppc`, run with the torch random state seeded."""
     import torch
     import pyro.distributions as dist
@@ -447,10 +448,10 @@ def _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, sa
     loader = model._make_data_loader(adata=adata, batch_size=256)
 
     obs_lib, obs_all = [], []
-    sim_lib = [[] for _ in range(n_replicates)]          # per draw: library size per cell
-    sim_zero = np.zeros(n_replicates)                    # per draw: count of zero entries
-    sim_sum = np.zeros(n_replicates)                     # per draw: sum of counts
-    sim_sq = np.zeros(n_replicates)                      # per draw: sum of squared counts
+    sim_lib = [[] for _ in range(n_sims)]          # per draw: library size per cell
+    sim_zero = np.zeros(n_sims)                    # per draw: count of zero entries
+    sim_sum = np.zeros(n_sims)                     # per draw: sum of counts
+    sim_sq = np.zeros(n_sims)                      # per draw: sum of squared counts
     n_entries = 0
 
     with torch.no_grad():
@@ -473,7 +474,7 @@ def _reconstruction_ppc(model, module, adata, device, n_replicates, plot, ax, sa
             obs_all.append(x.cpu().numpy())
             n_entries += x.numel()
 
-            for s in range(n_replicates):
+            for s in range(n_sims):
                 sim = xd.sample()
                 sim_lib[s].append(sim.sum(1).cpu().numpy())
                 sim_zero[s] += float((sim == 0).sum())

@@ -230,7 +230,7 @@ calib["summary"]
 # crosstab and draws no posterior samples.
 
 # %%
-recon = tcri.diag.reconstruction_ppc(model, adata, n_replicates=25, random_state=SEED)
+recon = tcri.diag.reconstruction_ppc(model, adata, n_sims=25, random_state=SEED)
 plt.show()
 
 null = tcri.diag.permutation_null(adata, metric="mutual_information", covariate="post",

@@ -54,7 +54,7 @@ TOOLS = {
     "delta_phenotypic_entropy": (tcri.tl.delta_phenotypic_entropy,
                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
     "joint_distribution_ppc": (tcri.diag.joint_distribution_ppc,
-                               {"n_samples": 3, "n_replicates": 10, "random_state": 0,
+                               {"n_samples": 3, "n_sims": 10, "random_state": 0,
                                 "plot": False}),
     "permutation_null": (tcri.diag.permutation_null,
                          {"covariate": POST, "groupby": "patient", "n_perm": 20,

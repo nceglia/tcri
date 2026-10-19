@@ -16,7 +16,7 @@ import tcri
 def test_joint_distribution_ppc(trained_model):
     _, adata = trained_model
     res = tcri.diag.joint_distribution_ppc(adata, distance_metric="l1", n_samples=2,
-                                           n_replicates=5, random_state=0, plot=False)
+                                           n_sims=5, random_state=0, plot=False)
     assert set(res) == {"draws", "summary", "calibration"}
     assert all(isinstance(frame, pd.DataFrame) for frame in res.values())
 
@@ -34,7 +34,7 @@ def test_phenotype_calibration(trained_model):
 
 def test_reconstruction_ppc(trained_model):
     model, adata = trained_model
-    res = tcri.diag.reconstruction_ppc(model, adata, n_replicates=1, random_state=0,
+    res = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0,
                                       plot=False)
     assert list(res) == ["summary"]
     df = res["summary"]
@@ -176,12 +176,12 @@ def test_loss_marks_the_selected_epoch_after_two_train_calls():
     plt.close(fig)
 
 
-def test_reconstruction_ppc_n_replicates_is_wired(trained_model):
-    """``n_replicates`` must change the result, not merely be accepted.
+def test_reconstruction_ppc_n_sims_is_wired(trained_model):
+    """``n_sims`` must change the result, not merely be accepted.
 
-    ``reconstruction_ppc(..., n_replicates=)`` is part of the diagnostics surface pinned in
+    ``reconstruction_ppc(..., n_sims=)`` is part of the diagnostics surface pinned in
     ``governance/API_CONTRACT.md``. A body that draws one replicate per cell whatever the
-    caller passes returns bit-identical frames for ``n_replicates=1`` and ``n_replicates=8``: a user
+    caller passes returns bit-identical frames for ``n_sims=1`` and ``n_sims=8``: a user
     tightening the check gets no more precision and no warning that the knob is inert.
 
     Averaging more posterior-predictive draws must move the simulated statistics while leaving
@@ -190,20 +190,20 @@ def test_reconstruction_ppc_n_replicates_is_wired(trained_model):
     """
     model, adata = trained_model
 
-    one = tcri.diag.reconstruction_ppc(model, adata, n_replicates=1, random_state=0,
+    one = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0,
                                       plot=False)["summary"]
-    many = tcri.diag.reconstruction_ppc(model, adata, n_replicates=8, random_state=0,
+    many = tcri.diag.reconstruction_ppc(model, adata, n_sims=8, random_state=0,
                                        plot=False)["summary"]
 
     assert list(one["statistic"]) == list(many["statistic"])
     # observed data does not depend on the number of draws
     assert np.allclose(one["observed"].to_numpy(), many["observed"].to_numpy())
     assert not np.allclose(one["simulated"].to_numpy(), many["simulated"].to_numpy()), (
-        "n_replicates does not change the simulated statistics, so it is still inert"
+        "n_sims does not change the simulated statistics, so it is still inert"
     )
 
-    with pytest.raises(ValueError, match="n_replicates must be an integer >= 1"):
-        tcri.diag.reconstruction_ppc(model, adata, n_replicates=0, plot=False)
+    with pytest.raises(ValueError, match="n_sims must be an integer >= 1"):
+        tcri.diag.reconstruction_ppc(model, adata, n_sims=0, plot=False)
 
 
 def _perfectly_coupled_adata(n_clones=6, per_clone=30):
@@ -320,11 +320,11 @@ def _checks(model, adata):
     n_cov = len(adata.uns["tcri_covariate_categories"])
     return {
         "joint_distribution_ppc": (lambda **kw: tcri.diag.joint_distribution_ppc(
-            adata, n_samples=3, n_replicates=10, random_state=0, **kw), None),
+            adata, n_samples=3, n_sims=10, random_state=0, **kw), None),
         "phenotype_calibration": (lambda **kw: tcri.diag.phenotype_calibration(
             adata, n_bins=5, **kw), 1),
         "reconstruction_ppc": (lambda **kw: tcri.diag.reconstruction_ppc(
-            model, adata, n_replicates=2, random_state=0, **kw), 1),
+            model, adata, n_sims=2, random_state=0, **kw), 1),
         "permutation_null": (lambda **kw: tcri.diag.permutation_null(
             adata, groupby="patient", n_perm=20, random_state=0, **kw),
             n_cov * adata.obs["patient"].nunique()),
@@ -426,7 +426,7 @@ def test_reconstruction_ppc_is_unseeded_by_default(trained_model):
     model, adata = trained_model
     assert inspect.signature(tcri.diag.reconstruction_ppc).parameters["random_state"].default \
         is None
-    kw = dict(n_replicates=2, plot=False)
+    kw = dict(n_sims=2, plot=False)
     a = tcri.diag.reconstruction_ppc(model, adata, **kw)["summary"]
     b = tcri.diag.reconstruction_ppc(model, adata, **kw)["summary"]
     assert not np.allclose(a["simulated"], b["simulated"])

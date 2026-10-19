@@ -507,7 +507,7 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
     # 1) expression is untouched by every permutation, so reconstruction cannot move
     for kind, (null,) in nulls.items():
         with contextlib.redirect_stdout(io.StringIO()):
-            ppc = tcri.diag.reconstruction_ppc(null, adata, n_replicates=2, random_state=0,
+            ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0,
                                                plot=False)
         assert len(ppc["summary"]), kind
 
