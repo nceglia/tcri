@@ -94,8 +94,8 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
     ``covariate`` has its rows, NaN.
 
     Only the adjusted value is stored: ``adjusted = value − null_value`` per paired draw, the
-    fit's importance less the same importance computed on a phenotype null, where every cell's
-    phenotype label is permuted.
+    fit's importance less the same importance computed on a phenotype null, where phenotype
+    labels are permuted within cells of the same batch, covariate and replicate.
 
     Parameters
     ----------
