@@ -9,6 +9,7 @@ LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale
 CONC_CT = "tcri_conc_ct"                   # guide concentration lambda'_m, shape (n_ct, P)
 GATE_PROB = "tcri_gate_prob"               # classifier/prior gate, scalar or None
 CLASSIFIER_TEMPERATURE = "tcri_classifier_temperature"  # classifier temperature
+LABEL_ERROR_RATE = "tcri_label_error_rate"  # ε of the noisy-label readout; NaN when label-free
 
 CT_TO_COV = "tcri_ct_to_cov"               # ct -> covariate index
 CT_TO_C = "tcri_ct_to_c"                   # ct -> clonotype index

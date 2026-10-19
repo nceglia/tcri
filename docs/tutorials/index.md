@@ -112,13 +112,15 @@ report the bare number instead.
 
 ## 3. Diagnostics — before trusting any metric
 
-`tcri.diag` asks whether the *fit* is worth interpreting. Every function returns a DataFrame,
-so the numbers are inspectable and not only drawn.
+`tcri.diag` asks whether the *fit* is worth interpreting. Each check returns a dict of named
+DataFrames, one per level of detail, so the numbers are inspectable, and with `plot=True` (the
+default) draws its figure from them. The return value is the same either way, and nothing is
+cached: a redraw reruns the check.
 
 | function | question |
 |---|---|
-| {func}`joint_distribution_ppc <tcri.diagnostics.joint_distribution_ppc>` | does the model's clone×phenotype table resemble the observed crosstab? Per-clone L1 distance, 0 perfect, 2 maximal |
-| {func}`phenotype_calibration <tcri.diagnostics.phenotype_calibration>` | when the classifier says 0.8, is it right 80% of the time? `ECE` is expected calibration error, lower better |
+| {func}`joint_distribution_ppc <tcri.diagnostics.joint_distribution_ppc>` | does the fit reproduce the phenotype labels it was trained on? A clone's `p` is where its observed labels fall among labels the fit simulates; under a correct fit `p` is uniform across clones, read as a QQ plot per clone-size bin. Below the diagonal, observed labels sit farther from the fit than its replicates; above it, closer, as when `label_error_rate` exceeds the labels' real noise |
+| {func}`phenotype_calibration <tcri.diagnostics.phenotype_calibration>` | when the classifier says 0.8, is it right 80% of the time? `ece` in its `summary` is expected calibration error, lower better |
 | {func}`reconstruction_ppc <tcri.diagnostics.reconstruction_ppc>` | does the decoder generate counts like the real ones? |
 | {func}`permutation_null <tcri.diagnostics.permutation_null>` | how large is the metric under shuffled labels? |
 

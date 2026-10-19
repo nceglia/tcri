@@ -315,7 +315,7 @@ def test_null_writes_its_substrate_and_provenance(fitted):
     assert K.resolve_fit(adata, "phenotype[0]") == fit
 
     for key in (K.P_CT, K.CONC_CT, K.LOCAL_SCALE, K.GATE_PROB, K.CLASSIFIER_TEMPERATURE,
-                K.CT_TO_COV, K.CT_TO_C, K.CT_ARRAY, K.COV_ARRAY, K.PERMUTATION, K.BUFFERS,
+                K.LABEL_ERROR_RATE, K.CT_TO_COV, K.CT_TO_C, K.CT_ARRAY, K.COV_ARRAY, K.PERMUTATION, K.BUFFERS,
                 K.FIT_SETTINGS):
         assert K.fit_key(key, fit) in adata.uns, f"{key} missing for {fit}"
     for key in (K.X_TCRI, K.X_LOGITS, K.X_LOGPOSTERIOR, K.X_PROBABILITIES):
@@ -507,13 +507,14 @@ def test_a_null_is_a_fit_for_every_reader(fitted):
     # 1) expression is untouched by every permutation, so reconstruction cannot move
     for kind, (null,) in nulls.items():
         with contextlib.redirect_stdout(io.StringIO()):
-            ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0)
-        assert ppc is not None and len(ppc), kind
+            ppc = tcri.diag.reconstruction_ppc(null, adata, n_sims=2, random_state=0,
+                                               plot=False)
+        assert len(ppc["summary"]), kind
 
     # 2) the substrate readers take fit=, and read that fit's own probabilities
     for kind in nulls:
-        cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}[0]")
-        assert cal is not None and len(cal), kind
+        cal = tcri.diag.phenotype_calibration(adata, fit=f"null.{kind}[0]", plot=False)
+        assert len(cal["bins"]) and len(cal["summary"]) == 1, kind
     assert not np.allclose(
         adata.obsm[K.fit_key(K.X_PROBABILITIES, "null.phenotype[0]")],
         adata.obsm[K.X_PROBABILITIES]), "calibration read the main fit's probabilities"

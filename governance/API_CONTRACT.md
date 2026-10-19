@@ -68,15 +68,16 @@ naming the column and the number of cells; a group that keeps no clone warns.
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
-per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob` and
-`classifier_temperature`. Every `tl` metric reads that substrate and takes no model; `diag`
-functions that need the live networks take a model as well, and every `perturb` function takes
-the model first. Session I/O (`ut`) restores the
-model, the AnnData and the Pyro parameter store together; the store is process-global, so one
+per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob`,
+`classifier_temperature` and `label_error_rate` (NaN for a label-free fit). Every `tl` metric
+reads that substrate and takes no model; `diag` functions that need the live networks take a
+model as well, and every `perturb` function takes the model first. Session I/O (`ut`) restores
+the model, the AnnData and the Pyro parameter store together; the store is process-global, so one
 fitted model per process is the supported pattern.
 
 **`n_samples`.** `0` is the deterministic plug-in at the posterior mean: no draw, reproducible
-on repeat calls. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
+on repeat calls; `diag.joint_distribution_ppc` rejects it, since a single point estimate is not
+a posterior predictive check. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
 the guide's clamped concentration, seeded by `random_state` through a torch generator. One draw
 serves every covariate, group and clone in a call (draw-once), so a self-delta is exactly zero.
 The plug-in and the posterior mean are different estimators; see `METRICS_CONTRACT.md`.
@@ -181,6 +182,29 @@ derivation record, which are shared between every fit of an object, so it has no
 takes none; it permutes labels within each covariate on the empirical crosstab and draws no
 Dirichlet samples. It is a model-free check on the data, not a reference for a model-based number
 — `tcri.null` is that.
+
+`joint_distribution_ppc` is a sampled-posterior predictive check of the labels. Each of
+`n_samples` posterior draws of `p_ct` (the draws `tl.joint_distribution` makes for the same
+`random_state`) rebuilds every cell's label likelihood, its classifier logits gated with its
+group's draw and passed through the label-noise matrix of `label_error_rate`, and `n_sims`
+simulated label sets are drawn cell by cell. A clone's `p` at a draw is the rank of its observed
+distance among its replicate distances, ties broken at random, so under a correct fit each draw's
+`p` is uniform across clones; `p` is never averaged over draws. Each fit is checked against its
+own training data: a phenotype null against its permuted labels, a clonotype or covariate null
+against its own groups. A label-free fit raises. It returns `draws` (one row per covariate, clone
+and draw), `summary` (per clone, no `p`) and `calibration` (per covariate, doubling clone-size bin
+and draw: the KS distance of `p` from uniform).
+
+The four checks that compute (`joint_distribution_ppc`, `phenotype_calibration`,
+`reconstruction_ppc`, `permutation_null`) return a dict of named DataFrames, one per level of
+detail, and put no numbers in `attrs`: `phenotype_calibration` returns `bins` and a one-row
+`summary` (`ece`, `n_cells`); `reconstruction_ppc` and `permutation_null` return `summary`. They
+take `plot=True` and `save=None`. `plot` draws the check's figure from the values it just
+computed, and the return value is the same whether or not it plots; `save` with `plot=False`
+raises. Nothing is cached: a redraw reruns the check. The three with a panel count known before
+the call also take `ax=None`, one Axes per panel; the PPC's panel count depends on the data, so it
+always draws its own figure. `reconstruction_ppc` and `joint_distribution_ppc` both call their
+count of simulated datasets `n_sims`.
 
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
@@ -423,21 +447,25 @@ class get:
 # ── diagnostics (diag) ───────────────────────────────────────────────────────
 class diag:
     def joint_distribution_ppc(
-        adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: str = ...,
-        temperature: float = ..., clones: Any = ..., exclude_pools: bool = ...,
-        fit: Optional[str] = ...,
-    ) -> pd.DataFrame: ...
+        adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: Any = ...,
+        n_samples: int = ..., n_sims: int = ..., clones: Any = ...,
+        exclude_pools: bool = ..., random_state: Any = ..., fit: Optional[str] = ...,
+        plot: bool = ..., save: Any = ...,
+    ) -> dict: ...
     def phenotype_calibration(
-        adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ...,
-    ) -> pd.DataFrame: ...
+        adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ..., plot: bool = ...,
+        ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def reconstruction_ppc(
-        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ..., random_state: Any = ...,
-    ) -> pd.DataFrame: ...
+        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ...,
+        random_state: Any = ..., plot: bool = ..., ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
         groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
-        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ...,
-    ) -> pd.DataFrame: ...
+        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ..., plot: bool = ...,
+        ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
 

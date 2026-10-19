@@ -224,6 +224,7 @@ function can read them:
 | `.uns` | `tcri_local_scale` | Dirichlet concentration scale for posterior sampling | scalar |
 | `.uns` | `tcri_gate_prob` | classifier/prior gate weight (`NaN` if gating is off) | scalar |
 | `.uns` | `tcri_classifier_temperature` | temperature applied to classifier logits | scalar |
+| `.uns` | `tcri_label_error_rate` | ε of the noisy-label readout (`NaN` for a label-free fit) | scalar |
 | `.uns` | `tcri_{phenotype,clonotype,covariate}_categories` | category label lists (index ↔ name) | — |
 | `.uns` | `tcri_metadata` | column-name mapping | dict |
 | `.obsm` | `X_tcri` | latent means $z$ | `(n_cells, n_latent)` |
