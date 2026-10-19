@@ -431,15 +431,14 @@
               "draw",
               "gene",
               "null",
-              "null_value",
-              "phenotype",
-              "value"
+              "phenotype"
             ],
             "minimal": [
+              "adjusted",
               "draw",
               "gene",
-              "phenotype",
-              "value"
+              "null",
+              "phenotype"
             ]
           },
           "index": {
@@ -462,20 +461,15 @@
               "adjusted_hdi_low",
               "adjusted_sd",
               "gene",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "phenotype",
-              "sd",
-              "value"
+              "phenotype"
             ],
             "minimal": [
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "gene",
-              "hdi_high",
-              "hdi_low",
-              "phenotype",
-              "sd",
-              "value"
+              "phenotype"
             ]
           },
           "index": {
@@ -496,14 +490,13 @@
               "adjusted",
               "draw",
               "gene",
-              "null",
-              "null_value",
-              "value"
+              "null"
             ],
             "minimal": [
+              "adjusted",
               "draw",
               "gene",
-              "value"
+              "null"
             ]
           },
           "index": {
@@ -525,19 +518,14 @@
               "adjusted_hdi_high",
               "adjusted_hdi_low",
               "adjusted_sd",
-              "gene",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "sd",
-              "value"
+              "gene"
             ],
             "minimal": [
-              "gene",
-              "hdi_high",
-              "hdi_low",
-              "sd",
-              "value"
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "gene"
             ]
           },
           "index": {

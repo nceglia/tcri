@@ -31,7 +31,7 @@ def _without_replicate(adata):
 def test_pl_takes_no_perturbation_arguments():
     params = set(inspect.signature(tcri.pl.gene_importance).parameters)
     assert not (params & PERTURB_ARGS), f"pl.gene_importance can compute: {params & PERTURB_ARGS}"
-    assert {"key", "view", "n_top"} <= params and "kind" not in params
+    assert {"key", "view", "n_top"} <= params and not {"kind", "quantity"} & params
 
 
 def test_pl_says_which_call_to_run(cohort):
@@ -75,27 +75,18 @@ def test_view_is_validated(cohort):
 
 
 def test_rank_view_shows_the_top_genes_as_replicate_dots(cohort):
-    """The x axis is the ``n_top`` most important genes in descending order, and every dot is a
-    patient -- the replicate unit -- never a draw or a cell.
-
-    Ranked by the ADJUSTED importance at the default: the bare importance scales with a gene's
-    counts, so the bare ranking answers a different question. `quantity="value"` gives the bare
-    ranking back, and the two are asserted to be built the same way off whichever column was
-    asked for.
-    """
+    """The x axis is the ``n_top`` genes with the largest adjusted importance, in descending
+    order, and every dot is a patient -- the replicate unit -- never a draw or a cell."""
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a)
     result = tcri.get.replicates(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, n_top=5)
 
-    def ranked(col):
-        return (result.groupby("gene", observed=True)[col].mean()
-                .sort_values(ascending=False).index.tolist()[:5])
-
-    assert [t.get_text() for t in ax.get_xticklabels()] == ranked("adjusted")
-    bare = tcri.pl.gene_importance(a, n_top=5, quantity="value")
-    assert [t.get_text() for t in bare.get_xticklabels()] == ranked("value")
+    ranked = (result.groupby("gene", observed=True)["adjusted"].mean()
+              .sort_values(ascending=False).index.tolist()[:5])
+    assert [t.get_text() for t in ax.get_xticklabels()] == ranked
+    assert ax.get_ylabel().startswith("adjusted"), ax.get_ylabel()
     assert ax.get_xlabel() == "gene"
     n_patients = a.obs["patient"].nunique()
     assert _n_points(ax) == 5 * n_patients, "the dots are not one per patient per gene"
@@ -111,16 +102,11 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     res = tcri.get.result(a, "gene_importance")
     ax = tcri.pl.gene_importance(a, n_top=6)
     genes = [t.get_text() for t in ax.get_xticklabels()]
-    # `stats` carries one row per gene, on the adjusted importance. The default panel draws
-    # that quantity, so its stars are those rows'; the value panel has no row about the
-    # quantity on its axis, so it draws none rather than a star about a different column.
+    # `stats` carries one row per gene, on the adjusted importance the panel draws
     stats = res["stats"]
     assert set(stats["quantity"]) == {"adjusted"}
     stars = stats.set_index("gene")["stars"]
     assert [t.get_text() for t in ax.texts] == [stars[g] for g in genes if stars[g]]
-
-    value_ax = tcri.pl.gene_importance(a, n_top=6, quantity="value")
-    assert not value_ax.texts, "the adjusted importance's star was drawn over the value's marks"
 
     # THREE split levels are a limitation of a one-star-per-gene panel, not an error: three
     # contrasts per gene and one position to draw them in. Warn and draw nothing, rather than
@@ -140,7 +126,7 @@ def test_rank_view_stars_each_genes_own_contrast(cohort):
     assert any("more than two levels" in str(w.message) for w in caught), [
         str(w.message) for w in caught]
     assert ax.get_legend() is not None, "the split levels need a legend"
-    # the zero rule of the default panel spans the axis by design and carries BRACKET_LABEL,
+    # the zero rule of the panel spans the axis by design and carries BRACKET_LABEL,
     # which is what that label exists to distinguish from a claim about two genes
     from tcri.plotting._base import BRACKET_LABEL
     assert not [l for l in ax.lines
@@ -160,47 +146,40 @@ def test_rank_view_without_groups_draws_points_then_violins(cohort):
     assert _n_points(pts) == 4 and _n_violins(pts) == 0
 
     tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], n_samples=6, random_state=0)
-    # with only draws varying, each gene is a violin of its draws: the value with the null's
-    # mean behind it, and the adjusted value over the paired draws
-    vio = tcri.pl.gene_importance(a, quantity="value")
+    # with only draws varying, each gene is a violin of its paired draws' adjusted values
+    vio = tcri.pl.gene_importance(a)
     assert _n_violins(vio) == 4, "with only draws varying, each gene is a violin of its draws"
-    assert _n_points(vio, reference=True) == 4, "the null was not drawn behind each gene"
-    adjusted = tcri.pl.gene_importance(a)
-    assert _n_violins(adjusted) == 4, "the adjusted draws were not drawn as violins"
 
 
 def test_item_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
-    """The item view draws the item summary averaged over groups, the adjusted shift at the
-    default and the shift at ``quantity="value"``, for the genes the replicate view ranks."""
+    """The item view draws the item summary's adjusted shift averaged over groups, for the
+    genes the replicate view ranks."""
     model, adata = cohort
     a = adata.copy()
     tcri.perturb.gene_importance(model, a)
     result = tcri.get.replicates(a, "gene_importance")
     items = tcri.get.items(a, "gene_importance")
     phenotypes = list(a.uns[K.PHENOTYPE_CATEGORIES])
-    # the adjusted ranking, which is what both views use at the default (see
+    # the same genes as the replicate view (see
     # tests/test_references.py::test_both_gene_panels_rank_alike)
     ranked = (result.groupby("gene", observed=True)["adjusted"].mean()
               .sort_values(ascending=False).index.tolist()[:7])
 
-    for quantity, column in (("auto", "adjusted"), ("value", "value")):
-        ax = tcri.pl.gene_importance(a, view="item", n_top=7, quantity=quantity)
-        assert len(ax.images) == 1
-        im = ax.images[0]
-        assert im.get_array().shape == (7, len(phenotypes))
-        assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centered on zero"
-        assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
+    ax = tcri.pl.gene_importance(a, view="item", n_top=7)
+    assert len(ax.images) == 1
+    im = ax.images[0]
+    assert im.get_array().shape == (7, len(phenotypes))
+    assert im.norm.vmin == -im.norm.vmax, "the diverging scale is not centered on zero"
+    assert [t.get_text() for t in ax.get_xticklabels()] == [str(p) for p in phenotypes]
 
-        genes = [t.get_text() for t in ax.get_yticklabels()]
-        if quantity == "auto":
-            assert genes == ranked
-        want = (items[items["gene"] == genes[0]]
-                .groupby("phenotype", observed=True)[column].mean().reindex(phenotypes))
-        np.testing.assert_allclose(np.asarray(im.get_array())[0], want.to_numpy(), atol=1e-12)
-        # each row is a zero-sum shift: what one phenotype loses another gains
-        assert np.abs(np.asarray(im.get_array()).sum(axis=1)).max() < 1e-5
-        label = ax.figure.axes[-1].get_ylabel()
-        assert label.startswith("adjusted ") == (column == "adjusted"), label
+    genes = [t.get_text() for t in ax.get_yticklabels()]
+    assert genes == ranked
+    want = (items[items["gene"] == genes[0]]
+            .groupby("phenotype", observed=True)["adjusted"].mean().reindex(phenotypes))
+    np.testing.assert_allclose(np.asarray(im.get_array())[0], want.to_numpy(), atol=1e-12)
+    # each row is a zero-sum shift: what one phenotype loses another gains
+    assert np.abs(np.asarray(im.get_array()).sum(axis=1)).max() < 1e-5
+    assert ax.figure.axes[-1].get_ylabel().startswith("adjusted shift")
 
 
 def test_order_restricts_and_orders_the_genes(cohort):

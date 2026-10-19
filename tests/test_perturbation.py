@@ -4,10 +4,11 @@ The perturbation is a query on a fitted model, so it has no reference joint and 
 value (``METRICS_CONTRACT.md``, "The perturbation"). What can be pinned is structure:
 ``knockout`` of nothing is ``predict()``; ``knockout`` of a gene is ``predict()`` on the
 zeroed matrix; an unexpressed gene has importance exactly zero; importance is bounded and is
-the L1 norm of a shift that sums to zero, per draw, on the fit and on the null; groups reduce
-cells by row and bind the prior by global id; draws come from the guide's Dirichlet and are
-seeded; the contrast is per gene over groups. The fixtures fit for a few epochs -- the numbers
-here are identities, not accuracies.
+the L1 norm of a shift that sums to zero, per draw, on the fit and on every null run; the stored
+adjusted value is the fit's value minus its paired null's, draw ``d`` paired with null ``d mod
+n_nulls``; groups reduce cells by row and bind the prior by global id; draws come from the guide's
+Dirichlet and are seeded; the contrast is per gene over groups. The fixtures fit for a few epochs
+-- the numbers here are identities, not accuracies.
 
 Each test names the mutation it catches: a flipped sign on ``shift``, a prior bound by loader
 position instead of global id, a dropped draw path, a zeroed neighboring column in either
@@ -51,9 +52,23 @@ def _summary(res, level="replicate"):
     return res[level]["summary"]
 
 
-def _fit_rows(draws):
-    """The fit's own draws: ``value`` is the same in every block of a reference's nulls."""
-    return draws[draws["null"] == 0] if "null" in draws.columns else draws
+def _gi(model, adata, **kw):
+    """The full result of a ``gene_importance`` call, stored nowhere."""
+    return tcri.perturb.gene_importance(model, adata, inplace=False, **kw)
+
+
+def _null_names(adata):
+    """The fits of the phenotype reference, in the order ``null_model="auto"`` pairs them."""
+    return list(K.resolve_group(adata, "phenotype")[1])
+
+
+@pytest.fixture(scope="module")
+def nulls(cohort):
+    """The phenotype reference's fits, rebuilt as models, in pairing order."""
+    from tcri.null._rebuild import rebuild
+
+    model, adata = cohort
+    return [rebuild(model, adata, name) for name in _null_names(adata)]
 
 
 def _manual_importance(model, adata, gene, *, mask=None):
@@ -64,6 +79,45 @@ def _manual_importance(model, adata, gene, *, mask=None):
         base, pert = base.loc[mask], pert.loc[mask]
     shift = base.mean(axis=0) - pert.mean(axis=0)
     return float(shift.abs().sum()), shift
+
+
+def _manual_adjusted(model, nulls, adata, gene, *, mask=None):
+    """Per null, in pairing order, the adjusted importance and adjusted shift at
+    ``n_samples=0``: the model's minus that null's, each from ``knockout`` frames."""
+    i_fit, s_fit = _manual_importance(model, adata, gene, mask=mask)
+    out = []
+    for null in nulls:
+        i_null, s_null = _manual_importance(null, adata, gene, mask=mask)
+        out.append((i_fit - i_null, s_fit - s_null))
+    return out
+
+
+def _paired(res, level, **labels):
+    """The stored per-pair adjusted values of one row, indexed by ``null``, at one draw."""
+    draws = res[level]["draws"]
+    for col, value in labels.items():
+        draws = draws[draws[col] == value]
+    return draws.set_index("null")
+
+
+class _Spy:
+    """Records each call's arguments and return value, and returns it unchanged."""
+
+    def __init__(self, fn):
+        self.fn, self.calls = fn, []
+
+    def __call__(self, *args, **kwargs):
+        out = self.fn(*args, **kwargs)
+        self.calls.append((args, kwargs, out))
+        return out
+
+
+def _spy(monkeypatch, name):
+    from tcri.perturbation import _importance
+
+    spy = _Spy(getattr(_importance, name))
+    monkeypatch.setattr(_importance, name, spy)
+    return spy
 
 
 # ── knockout is predict() on the intervened matrix ───────────────────────────
@@ -104,169 +158,258 @@ def test_gate_off_is_the_head_alone(cohort, monkeypatch):
     got = tcri.perturb.knockout(model, adata, genes=[], use_gate=False)
     np.testing.assert_allclose(got.to_numpy(), want, atol=1e-5)
 
-    head = _summary(tcri.perturb.gene_importance(model, adata, genes=[0, 1], use_gate=False,
-                                                 inplace=False))
-    gated = _summary(tcri.perturb.gene_importance(model, adata, genes=[0, 1], inplace=False))
-    assert not np.allclose(head["value"], gated["value"]), "the gate changed nothing"
+    head = _summary(_gi(model, adata, genes=[0, 1], use_gate=False))
+    gated = _summary(_gi(model, adata, genes=[0, 1]))
+    assert not np.allclose(head["adjusted"], gated["adjusted"]), "the gate changed nothing"
 
     original = module.gate_prob
     monkeypatch.setattr(module, "gate_prob", 0.9 if original != 0.9 else 0.1)
-    moved = _summary(tcri.perturb.gene_importance(model, adata, genes=[0, 1], use_gate=False,
-                                                  inplace=False))
-    np.testing.assert_allclose(moved["value"], head["value"], atol=1e-7)
+    moved = _summary(_gi(model, adata, genes=[0, 1], use_gate=False))
+    np.testing.assert_allclose(moved["adjusted"], head["adjusted"], atol=1e-7)
 
 
 # ── the importance identities ────────────────────────────────────────────────
 
 def test_unexpressed_gene_has_exactly_zero_importance(cohort):
     """Catches any baseline/perturbed asymmetry: zeroing a column that is already zero changes
-    nothing, so the importance is 0.0 with no floor to arrange."""
+    nothing, on the fit and on every null, so the adjusted importance is 0.0 with no floor to
+    arrange."""
     model, adata = cohort
-    a = _zeroed(adata, 0)
-    res = tcri.perturb.gene_importance(model, a, genes=[0], inplace=False)
-    assert (_summary(res)["value"].abs() < 1e-12).all(), _summary(res)
-    assert (_summary(res, "item")["value"].abs() < 1e-12).all()
+    res = _gi(model, _zeroed(adata, 0), genes=[0])
+    for level in ("replicate", "item"):
+        assert (res[level]["draws"]["adjusted"].abs() < 1e-12).all(), level
 
 
-def test_importance_is_bounded_and_is_the_l1_of_a_zero_sum_shift(cohort):
-    """Catches a non-simplex probability leaking through, and ties the two levels: per draw, the
-    replicate ``value`` is ``Σ_p |shift|`` over that gene and group's item rows, and the shift
-    sums to zero over phenotypes."""
+def test_importance_is_bounded_and_is_the_l1_of_a_zero_sum_shift(cohort, monkeypatch):
+    """Catches a non-simplex probability leaking through, and ties the two levels, on the fit's
+    run and on every null run: per draw the importance is in [0, 2] and is ``Σ_p |shift|`` over
+    that gene and group's item rows, and the shift sums to zero over phenotypes."""
     model, adata = cohort
-    res = tcri.perturb.gene_importance(model, adata, n_samples=3, random_state=0,
-                                       inplace=False)
-    result = _summary(res)
-    assert ((result["value"] >= 0) & (result["value"] <= 2)).all()
-
-    rep, item = _fit_rows(res["replicate"]["draws"]), _fit_rows(res["item"]["draws"])
+    frames = _spy(monkeypatch, "importance_frames")
+    _gi(model, adata, n_samples=4, random_state=0)
+    assert len(frames.calls) == 1 + len(_null_names(adata))
     keys = ["gene", "patient", "draw"]
-    by = item.groupby(keys, observed=True, sort=False)["value"]
-    assert (by.sum().abs() < 1e-5).all(), "shift does not sum to zero"
-    l1 = by.apply(lambda s: float(np.abs(s).sum())).rename("l1").reset_index()
-    merged = rep.merge(l1, on=keys, validate="one_to_one")
-    assert len(merged) == len(rep) == adata.n_vars * 6 * 3
-    np.testing.assert_allclose(merged["value"], merged["l1"], atol=1e-12)
+    for _, _, (rep, item) in frames.calls:
+        assert ((rep["value"] >= 0) & (rep["value"] <= 2)).all()
+        by = item.groupby(keys, observed=True, sort=False)["value"]
+        assert (by.sum().abs() < 1e-5).all(), "shift does not sum to zero"
+        l1 = by.apply(lambda s: float(np.abs(s).sum())).rename("l1").reset_index()
+        merged = rep.merge(l1, on=keys, validate="one_to_one")
+        assert len(merged) == len(rep)
+        np.testing.assert_allclose(merged["value"], merged["l1"], atol=1e-12)
 
 
 def test_the_shift_draws_reduce_to_the_draw_averaged_shift(cohort, monkeypatch):
     """Catches item rows labeled with the wrong gene, group or phenotype: averaged over draws,
-    the per-draw shift is ``mean_draw(baseline) − mean_draw(perturbed)`` from the accumulated
-    sums of the same call, and the item summary holds that mean."""
-    from tcri.perturbation import _importance
-
+    the fit's per-draw shift is ``mean_draw(baseline) − mean_draw(perturbed)`` from the sums
+    accumulated in the same call."""
     model, adata = cohort
-    captured = {}
-    accumulate = _importance._accumulate
-
-    def spy(*args, **kwargs):
-        captured["out"] = accumulate(*args, **kwargs)
-        return captured["out"]
-
-    monkeypatch.setattr(_importance, "_accumulate", spy)
+    accumulate = _spy(monkeypatch, "_accumulate")
+    frames = _spy(monkeypatch, "importance_frames")
     genes = list(adata.var_names[:4])
-    res = tcri.perturb.gene_importance(model, adata, genes=genes, n_samples=5, random_state=2,
-                                       null_model=None, inplace=False)
-    base, pert, counts = (t.numpy() for t in captured["out"])
+    _gi(model, adata, genes=genes, n_samples=4, random_state=2)
+    base, pert, counts = (t.numpy() for t in accumulate.calls[0][2])
     denom = np.clip(counts, 1.0, None)[None, :, None]
-    want = (base / denom).mean(axis=0)[None] - (pert / denom[None]).mean(axis=1)   # [G, groups, P]
+    want = (base / denom).mean(axis=0)[None] - (pert / denom[None]).mean(axis=1)  # [G, groups, P]
 
     phenotypes = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     patients = list(adata.obs["patient"].dropna().unique())
-    got = (res["item"]["draws"].groupby(["gene", "patient", "phenotype"], observed=True)["value"]
-           .mean())
+    item = frames.calls[0][2][1]
+    got = item.groupby(["gene", "patient", "phenotype"], observed=True)["value"].mean()
     for g, gene in enumerate(genes):
         for k, patient in enumerate(patients):
             row = got.loc[(gene, patient)].reindex(phenotypes).to_numpy()
             np.testing.assert_allclose(row, want[g, k], atol=1e-12)
-    summary = _summary(res, "item").set_index(["gene", "patient", "phenotype"])["value"]
-    np.testing.assert_allclose(summary.loc[got.index].to_numpy(), got.to_numpy(), atol=1e-12)
 
 
-def test_the_reference_shift_sums_to_zero_and_adjusts_per_draw(cohort):
-    """Per (null, draw), the shift and the null's shift each sum to zero over phenotypes, and
-    the item ``adjusted`` is ``value − null_value`` on every pair. The adjusted shift does not
-    sum, in absolute value, to the adjusted importance: the L1 of a difference is not the
-    difference of the L1s."""
+def test_the_adjusted_value_is_the_fit_minus_its_paired_null(cohort, monkeypatch):
+    """Per pair, on both levels: ``adjusted`` is the fit's value at draw ``d`` minus the value of
+    null ``i = d mod n_nulls`` at its own draw ``(d − i) / n_nulls``. The adjusted shift sums to
+    zero over phenotypes, and its absolute values do not sum to the adjusted importance: the L1
+    of a difference is not the difference of the L1s."""
     model, adata = cohort
-    res = tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:4]),
-                                       n_samples=3, random_state=0, inplace=False)
-    item, rep = res["item"]["draws"], res["replicate"]["draws"]
-    assert item["null"].nunique() == 2
-    by = item.groupby(["gene", "patient", "null", "draw"], observed=True)
-    assert (by["value"].sum().abs() < 1e-5).all()
-    assert (by["null_value"].sum().abs() < 1e-5).all()
-    np.testing.assert_allclose(item["adjusted"], item["value"] - item["null_value"], atol=0)
+    frames = _spy(monkeypatch, "importance_frames")
+    res = _gi(model, adata, genes=list(adata.var_names[:3]), n_samples=4, random_state=0)
+    n_nulls = len(_null_names(adata))
+    for level, slot, labels in (("replicate", 0, ["gene", "patient"]),
+                                ("item", 1, ["gene", "patient", "phenotype"])):
+        fit = frames.calls[0][2][slot]
+        runs = []
+        for i in range(n_nulls):
+            run = frames.calls[1 + i][2][slot].copy()
+            runs.append(run.assign(null=i, draw=i + run["draw"] * n_nulls))
+        want = (fit.merge(pd.concat(runs), on=labels + ["draw"], suffixes=("", "_null"),
+                          validate="one_to_one")
+                .assign(want=lambda f: f["value"] - f["value_null"]))
+        stored = res[level]["draws"].merge(want[labels + ["null", "draw", "want"]],
+                                           on=labels + ["null", "draw"], validate="one_to_one")
+        assert len(stored) == len(res[level]["draws"]) == len(fit)
+        np.testing.assert_allclose(stored["adjusted"], stored["want"], atol=1e-12)
 
-    l1 = by["adjusted"].apply(lambda s: float(np.abs(s).sum())).rename("l1").reset_index()
+    item, rep = res["item"]["draws"], res["replicate"]["draws"]
+    by = item.groupby(["gene", "patient", "null", "draw"], observed=True)["adjusted"]
+    assert (by.sum().abs() < 1e-5).all()
+    l1 = by.apply(lambda s: float(np.abs(s).sum())).rename("l1").reset_index()
     merged = rep.merge(l1, on=["gene", "patient", "null", "draw"], validate="one_to_one")
     assert not np.allclose(merged["adjusted"], merged["l1"])
 
-    summary = _summary(res, "item")
-    assert {"null_value", "adjusted", "adjusted_sd", "adjusted_hdi_low",
-            "adjusted_hdi_high"} <= set(summary.columns)
-    assert not {"baseline", "perturbed", "shift"} & set(summary.columns)
+
+# ── the pairing ──────────────────────────────────────────────────────────────
+
+def test_rotation_pairs_each_draw_with_one_null(cohort, monkeypatch):
+    """At ``n_samples > 0`` fit draw ``d`` is paired with null ``d mod n_nulls`` only, and each
+    null draws only its share: ``n_samples / n_nulls`` for a multiple, the first nulls one more
+    otherwise."""
+    model, adata = cohort
+    n_nulls = len(_null_names(adata))
+    for n_samples in (2 * n_nulls, 2 * n_nulls + 1):
+        prior = _spy(monkeypatch, "prior_draws")
+        res = _gi(model, adata, genes=[0, 1], n_samples=n_samples, random_state=1)
+        shares = [len(range(i, n_samples, n_nulls)) for i in range(n_nulls)]
+        assert [kw["n_samples"] for _, kw, _ in prior.calls] == [n_samples, *shares]
+        for level in ("replicate", "item"):
+            draws = res[level]["draws"]
+            assert (draws["null"] == draws["draw"] % n_nulls).all(), level
+            for i in range(n_nulls):
+                taken = set(draws.loc[draws["null"] == i, "draw"])
+                assert taken == set(range(i, n_samples, n_nulls)), (level, i)
+        monkeypatch.undo()
+
+
+def test_the_plug_in_is_paired_with_every_null(cohort):
+    """At ``n_samples=0`` the one fit draw is paired with each null, so a row's adjusted value is
+    the mean over the nulls and ``adjusted_sd`` the spread between them, with no HDI."""
+    model, adata = cohort
+    n_nulls = len(_null_names(adata))
+    res = _gi(model, adata, genes=[0, 1])
+    for level in ("replicate", "item"):
+        draws, summary = res[level]["draws"], res[level]["summary"]
+        assert set(draws["null"]) == set(range(n_nulls)) and set(draws["draw"]) == {0}
+        labels = [c for c in summary.columns if not c.startswith("adjusted")]
+        by = draws.groupby(labels, observed=True, sort=False)["adjusted"]
+        want = pd.DataFrame({"mean": by.mean(), "sd": by.std(ddof=1)}).reset_index()
+        merged = summary.merge(want, on=labels, validate="one_to_one")
+        np.testing.assert_allclose(merged["adjusted"], merged["mean"], atol=1e-12)
+        np.testing.assert_allclose(merged["adjusted_sd"], merged["sd"], atol=1e-12)
+        assert summary["adjusted_hdi_low"].isna().all() and summary["adjusted_hdi_high"].isna().all()
+
+
+def test_fewer_draws_than_nulls_raises_before_anything_is_computed(cohort, monkeypatch):
+    model, adata = cohort
+    n_nulls = len(_null_names(adata))
+    assert n_nulls > 1, "the fixture needs two nulls for this check"
+    accumulate = _spy(monkeypatch, "_accumulate")
+    with pytest.raises(ValueError, match=f"fewer than the reference's {n_nulls} fits"):
+        _gi(model, adata, genes=[0], n_samples=n_nulls - 1, random_state=0)
+    assert not accumulate.calls
+
+
+def test_no_reference_raises(cohort):
+    """The adjusted value is the only one stored, so a call with nothing to adjust against
+    raises rather than storing a bare importance."""
+    model, adata = cohort
+    with pytest.raises(ValueError, match="needs a reference"):
+        _gi(model, adata, genes=[0], null_model=None)
+    with pytest.raises(ValueError, match="needs a reference"):
+        tcri.perturb.gene_importance(model, adata.copy(), genes=[0], null_model=None)
+
+
+@pytest.mark.parametrize("n_samples", [0, 2, 4])
+def test_only_the_adjusted_value_is_stored(cohort, n_samples):
+    """Each draws frame has genes × replicates (× phenotypes) × max(n_samples, n_nulls) rows,
+    one per pair, and carries the labels, the pair and ``adjusted``; each summary carries
+    ``adjusted`` and its spread. The bare value and the null's value are not stored."""
+    model, adata = cohort
+    n_nulls = len(_null_names(adata))
+    n_pheno = len(adata.uns[K.PHENOTYPE_CATEGORIES])
+    pairs = max(n_samples, n_nulls)
+    res = _gi(model, adata, genes=[0, 1, 2], n_samples=n_samples, random_state=0)
+    for level, per, labels in (("replicate", 1, {"gene", "patient"}),
+                               ("item", n_pheno, {"gene", "patient", "phenotype"})):
+        draws, summary = res[level]["draws"], res[level]["summary"]
+        assert len(draws) == 3 * 6 * per * pairs, level
+        assert len(summary) == 3 * 6 * per, level
+        assert set(draws.columns) == labels | {"null", "draw", "adjusted"}, level
+        assert set(summary.columns) == labels | {"adjusted", "adjusted_sd", "adjusted_hdi_low",
+                                                 "adjusted_hdi_high"}, level
+
+
+def test_nothing_is_stored_for_the_null_runs(cohort):
+    model, adata = cohort
+    a = adata.copy()
+    for key in [k for k in a.uns if "gene_importance" in k or k.startswith("gi_")]:
+        del a.uns[key]
+    before = set(a.uns)
+    tcri.perturb.gene_importance(model, a, genes=[0], n_samples=2, random_state=0)
+    tcri.perturb.gene_importance(model, a, genes=[0], key_added="gi_keyed")
+    assert set(a.uns) - before == {K.GENE_IMPORTANCE, "gi_keyed"}
 
 
 def test_a_group_with_no_cell_at_the_covariate_has_nan_rows(cohort):
-    """The rows are fixed by the genes, the groups and the phenotypes: a patient with no cell at
-    ``covariate`` keeps one NaN row per gene, and one per gene and phenotype, on both levels and
-    on every draw, while the other patients' values are those of the full object."""
+    """The rows are fixed by the genes, the groups, the phenotypes and the pairs: a group with
+    no cell at ``covariate`` keeps NaN rows on both levels, while the other groups' values are
+    those of the same cells grouped by patient."""
     model, adata = cohort
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
-    a = adata[~((adata.obs["patient"] == "P2") & (adata.obs["covariate"] == cov)).to_numpy()].copy()
-    kw = dict(genes=[0, 1], covariate=cov, n_samples=2, random_state=0, null_model=None,
-              inplace=False)
-    res = tcri.perturb.gene_importance(model, a, **kw)
-    full = tcri.perturb.gene_importance(model, adata, **kw)
+    # P2's cells at `cov` form a group of their own, so the group P2 has none at `cov`
+    a = adata.copy()
+    a.obs["site"] = a.obs["patient"].astype(object)
+    a.obs.loc[((a.obs["patient"] == "P2") & (a.obs["covariate"] == cov)).to_numpy(),
+              "site"] = "P2 at cov"
+    kw = dict(genes=[0, 1], covariate=cov, n_samples=2, random_state=0)
+    res = _gi(model, a, groupby="site", **kw)
+    full = _gi(model, adata, groupby="patient", **kw)
     n_pheno = len(adata.uns[K.PHENOTYPE_CATEGORIES])
+    pairs = max(2, len(_null_names(adata)))
     for level, per in (("replicate", 1), ("item", n_pheno)):
         draws, summary = res[level]["draws"], res[level]["summary"]
-        assert len(summary) == 2 * 6 * per and len(draws) == 2 * len(summary)
-        empty = summary["patient"] == "P2"
-        assert empty.sum() == 2 * per and summary.loc[empty, "value"].isna().all()
-        assert draws.loc[draws["patient"] == "P2", "value"].isna().all()
-        assert np.isfinite(summary.loc[~empty, "value"]).all()
-        other = full[level]["summary"]
-        np.testing.assert_allclose(summary.loc[~empty, "value"].to_numpy(),
-                                   other.loc[other["patient"] != "P2", "value"].to_numpy(),
-                                   atol=1e-6)
+        assert len(summary) == 2 * 7 * per and len(draws) == pairs * len(summary)
+        empty = summary["site"] == "P2"
+        assert empty.sum() == 2 * per and summary.loc[empty, "adjusted"].isna().all()
+        assert draws.loc[draws["site"] == "P2", "adjusted"].isna().all()
+        assert np.isfinite(summary.loc[~empty, "adjusted"]).all()
+        labels = [c for c in ("gene", "phenotype") if c in summary.columns]
+        got = (summary.loc[~empty].replace({"site": {"P2 at cov": "P2"}})
+               .rename(columns={"site": "patient"}))
+        merged = got.merge(full[level]["summary"], on=labels + ["patient"],
+                           suffixes=("", "_full"), validate="one_to_one")
+        assert len(merged) == len(got)
+        np.testing.assert_allclose(merged["adjusted"], merged["adjusted_full"], atol=1e-6)
 
 
-def test_groups_reduce_cells_and_shift_carries_its_sign(cohort):
-    """Catches a wrong mask, the clone machinery creeping in, and a sign flip of ``shift``:
-    the per-patient importance and shift must equal what two ``knockout`` frames give by hand,
-    ``baseline − perturbed``."""
+def test_groups_reduce_cells_and_shift_carries_its_sign(cohort, nulls):
+    """Catches a wrong mask, the clone machinery creeping in, and a sign flip of the shift:
+    per patient and null, the adjusted importance and shift equal what ``knockout`` frames of
+    the model and of that null give by hand, ``baseline − perturbed``."""
     model, adata = cohort
     gene = adata.var_names[5]
-    res = tcri.perturb.gene_importance(model, adata, genes=[gene], inplace=False)
+    res = _gi(model, adata, genes=[gene])
     for patient in adata.obs["patient"].cat.categories:
         mask = (adata.obs["patient"] == patient).to_numpy()
-        want_i, want_shift = _manual_importance(model, adata, gene, mask=mask)
-        row = _summary(res).query("patient == @patient")
-        assert len(row) == 1
-        assert float(row["value"].iloc[0]) == pytest.approx(want_i, abs=1e-5)
-        got = (_summary(res, "item").query("patient == @patient")
-               .set_index("phenotype")["value"].reindex(want_shift.index))
-        np.testing.assert_allclose(got.to_numpy(), want_shift.to_numpy(), atol=1e-5)
+        rep = _paired(res, "replicate", patient=patient)
+        item = _paired(res, "item", patient=patient)
+        for i, (want_i, want_shift) in enumerate(_manual_adjusted(model, nulls, adata, gene,
+                                                                  mask=mask)):
+            assert float(rep.loc[i, "adjusted"]) == pytest.approx(want_i, abs=1e-5)
+            got = item.loc[i].set_index("phenotype")["adjusted"].reindex(want_shift.index)
+            np.testing.assert_allclose(got.to_numpy(), want_shift.to_numpy(), atol=1e-5)
 
 
-def test_covariate_restricts_the_cells(cohort):
+def test_covariate_restricts_the_cells(cohort, nulls):
     """``covariate`` selects the cells, not the prior: the prior stays each cell's own."""
     model, adata = cohort
     gene = adata.var_names[2]
     cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
-    res = tcri.perturb.gene_importance(model, adata, genes=[gene], covariate=cov,
-                                       inplace=False)
+    res = _gi(model, adata, genes=[gene], covariate=cov)
     assert (_summary(res)["covariate"] == cov).all()
     assert (_summary(res, "item")["covariate"] == cov).all()
     for patient in adata.obs["patient"].cat.categories:
         mask = ((adata.obs["patient"] == patient) & (adata.obs["covariate"] == cov)).to_numpy()
-        want_i, _ = _manual_importance(model, adata, gene, mask=mask)
-        got = float(_summary(res).query("patient == @patient")["value"].iloc[0])
-        assert got == pytest.approx(want_i, abs=1e-5)
+        rep = _paired(res, "replicate", patient=patient)
+        for i, (want_i, _) in enumerate(_manual_adjusted(model, nulls, adata, gene, mask=mask)):
+            assert float(rep.loc[i, "adjusted"]) == pytest.approx(want_i, abs=1e-5)
     with pytest.raises(ValueError, match="not found among"):
-        tcri.perturb.gene_importance(model, adata, genes=[gene], covariate="no_such_level",
-                                     inplace=False)
+        _gi(model, adata, genes=[gene], covariate="no_such_level")
 
 
 def test_cell_order_invariant(cohort):
@@ -275,12 +418,12 @@ def test_cell_order_invariant(cohort):
     model, adata = cohort
     rev = adata[::-1].copy()
     genes = list(adata.var_names[:4])
-    a = _summary(tcri.perturb.gene_importance(model, adata, genes=genes, inplace=False))
-    b = _summary(tcri.perturb.gene_importance(model, rev, genes=genes, inplace=False))
+    a = _summary(_gi(model, adata, genes=genes))
+    b = _summary(_gi(model, rev, genes=genes))
     a = a.sort_values(["gene", "patient"]).reset_index(drop=True)
     b = b.sort_values(["gene", "patient"]).reset_index(drop=True)
     assert list(a["gene"]) == list(b["gene"]) and list(a["patient"]) == list(b["patient"])
-    np.testing.assert_allclose(a["value"], b["value"], atol=1e-6)
+    np.testing.assert_allclose(a["adjusted"], b["adjusted"], atol=1e-6)
 
     ka = tcri.perturb.knockout(model, adata, genes=genes[:1])
     kb = tcri.perturb.knockout(model, rev, genes=genes[:1]).reindex(ka.index)
@@ -291,55 +434,56 @@ def test_batch_size_invariant(cohort):
     """Catches accumulation errors across batches."""
     model, adata = cohort
     genes = list(adata.var_names[:3])
-    small = _summary(tcri.perturb.gene_importance(model, adata, genes=genes, batch_size=64,
-                                                  inplace=False))
-    large = _summary(tcri.perturb.gene_importance(model, adata, genes=genes, batch_size=4096,
-                                                  inplace=False))
-    np.testing.assert_allclose(small["value"], large["value"], atol=1e-5)
+    small = _summary(_gi(model, adata, genes=genes, batch_size=64))
+    large = _summary(_gi(model, adata, genes=genes, batch_size=4096))
+    np.testing.assert_allclose(small["adjusted"], large["adjusted"], atol=1e-5)
 
 
 # ── draws ────────────────────────────────────────────────────────────────────
 
 def test_draws_are_dirichlet_and_seeded(cohort, monkeypatch):
     """``n_samples=0`` is deterministic; ``>0`` is seeded, differs across seeds, has a spread,
-    and collapses onto the plug-in when the guide's concentration is made enormous -- which is
-    what shows the draws come from ``get_conc_ct`` and not from anywhere else."""
+    and collapses onto the plug-in when the guide's concentration is made enormous on the fit
+    and on its nulls -- which is what shows the draws come from ``get_conc_ct`` and not from
+    anywhere else."""
     model, adata = cohort
     genes = list(adata.var_names[:3])
-    kw = dict(genes=genes, inplace=False)
+    kw = dict(genes=genes)
 
-    a = _summary(tcri.perturb.gene_importance(model, adata, **kw))
-    b = _summary(tcri.perturb.gene_importance(model, adata, **kw))
-    np.testing.assert_array_equal(a["value"], b["value"])
-    assert a["sd"].isna().all(), "no draws, so no spread to report"
+    a = _summary(_gi(model, adata, **kw))
+    b = _summary(_gi(model, adata, **kw))
+    np.testing.assert_array_equal(a["adjusted"], b["adjusted"])
+    assert a["adjusted_hdi_low"].isna().all(), "no draws, so no interval to report"
 
-    s0 = tcri.perturb.gene_importance(model, adata, n_samples=8, random_state=0, **kw)
-    s0b = tcri.perturb.gene_importance(model, adata, n_samples=8, random_state=0, **kw)
-    s1 = tcri.perturb.gene_importance(model, adata, n_samples=8, random_state=1, **kw)
+    s0 = _gi(model, adata, n_samples=8, random_state=0, **kw)
+    s0b = _gi(model, adata, n_samples=8, random_state=0, **kw)
+    s1 = _gi(model, adata, n_samples=8, random_state=1, **kw)
     for level in ("replicate", "item"):
         assert s0[level]["draws"]["draw"].nunique() == 8
         r0, r0b, r1 = (_summary(s, level) for s in (s0, s0b, s1))
-        np.testing.assert_array_equal(r0["value"], r0b["value"])
-        assert not np.array_equal(r0["value"], r1["value"])
-        assert np.isfinite(r0["sd"]).all() and (r0["sd"] > 0).any()
-        assert (r0["hdi_low"] <= r0["value"] + 1e-12).all()
-        assert (r0["hdi_high"] >= r0["value"] - 1e-12).all()
+        np.testing.assert_array_equal(r0["adjusted"], r0b["adjusted"])
+        assert not np.array_equal(r0["adjusted"], r1["adjusted"])
+        assert np.isfinite(r0["adjusted_sd"]).all() and (r0["adjusted_sd"] > 0).any()
+        assert (r0["adjusted_hdi_low"] <= r0["adjusted"] + 1e-12).all()
+        assert (r0["adjusted_hdi_high"] >= r0["adjusted"] - 1e-12).all()
 
-    original = model.module.get_conc_ct
-    monkeypatch.setattr(model.module, "get_conc_ct", lambda: original() * 1e8)
-    tight = tcri.perturb.gene_importance(model, adata, n_samples=8, random_state=0, **kw)
-    np.testing.assert_allclose(_summary(tight)["value"], a["value"], atol=5e-4)
+    module = type(model.module)
+    original = module.get_conc_ct
+    monkeypatch.setattr(module, "get_conc_ct", lambda self: original(self) * 1e8)
+    tight = _gi(model, adata, n_samples=8, random_state=0, **kw)
+    np.testing.assert_allclose(_summary(tight)["adjusted"], a["adjusted"], atol=5e-4)
 
 
 def test_use_gate_false_ignores_n_samples_with_a_warning(cohort):
     """The head alone has no posterior to draw from; a zero-width interval would state a
-    certainty never measured."""
+    certainty never measured. With nothing drawn, the one draw is paired with every null."""
     model, adata = cohort
+    n_nulls = len(_null_names(adata))
     with pytest.warns(UserWarning, match="n_samples has no effect"):
-        res = tcri.perturb.gene_importance(model, adata, genes=[0], use_gate=False,
-                                           n_samples=4, inplace=False)
-    assert res["replicate"]["draws"]["draw"].nunique() == 1
-    assert _summary(res)["sd"].isna().all() and _summary(res, "item")["sd"].isna().all()
+        res = _gi(model, adata, genes=[0], use_gate=False, n_samples=2 * n_nulls)
+    draws = res["replicate"]["draws"]
+    assert draws["draw"].nunique() == 1 and set(draws["null"]) == set(range(n_nulls))
+    assert _summary(res)["adjusted_hdi_low"].isna().all()
 
 
 # ── groups, contrasts, storage ───────────────────────────────────────────────
@@ -347,15 +491,9 @@ def test_use_gate_false_ignores_n_samples_with_a_warning(cohort):
 def test_splitby_contrast_is_per_gene_over_groups(cohort):
     """Catches pseudoreplication: ``stats`` has one row per gene, its ``n`` is the number of
     patients per arm, and ``stat``/``p`` are a Mann-Whitney over the per-patient adjusted
-    values of that gene.
-
-    One quantity per frame. The ``quantity`` column names the column each row contrasted, and
-    a panel keeps only the rows whose name matches the column on its axis, so the star it draws
-    is always about the marks beneath it. With no reference there is no adjusted column, and the
-    frame names ``"value"`` at the same size.
-    """
+    values of that gene, the one quantity stored."""
     model, adata = cohort
-    res = tcri.perturb.gene_importance(model, adata, splitby="disease_status", inplace=False)
+    res = _gi(model, adata, splitby="disease_status")
     stats, result = res["stats"], _summary(res)
     assert stats is not None
     assert set(stats["quantity"]) == {"adjusted"}
@@ -373,14 +511,10 @@ def test_splitby_contrast_is_per_gene_over_groups(cohort):
         assert float(row["stat"]) == pytest.approx(float(U))
         assert float(row["p"]) == pytest.approx(float(p))
 
-    bare = tcri.perturb.gene_importance(model, adata, splitby="disease_status",
-                                        null_model=None, inplace=False)["stats"]
-    assert set(bare["quantity"]) == {"value"} and len(bare) == adata.n_vars
-
-    assert tcri.perturb.gene_importance(model, adata, genes=[0], inplace=False)["stats"] is None
+    assert _gi(model, adata, genes=[0])["stats"] is None
 
 
-def test_no_replicate_registered_gives_one_group(cohort):
+def test_no_replicate_registered_gives_one_group(cohort, nulls):
     """Without a registered replicate and without ``groupby`` the reduction is over every
     cell: one row per gene, no group column, ``groupby`` recorded as ``None``."""
     model, adata = cohort
@@ -391,32 +525,35 @@ def test_no_replicate_registered_gives_one_group(cohort):
     assert "patient" not in result.columns
     assert "patient" not in tcri.get.items(adata, "gene_importance").columns
     assert tcri.get.params(adata, "gene_importance")["groupby"] is None
-    want, _ = _manual_importance(model, adata, adata.var_names[1])
-    assert float(result["value"].iloc[1]) == pytest.approx(want, abs=1e-5)
+    want = np.mean([i for i, _ in _manual_adjusted(model, nulls, adata, adata.var_names[1])])
+    assert float(result["adjusted"].iloc[1]) == pytest.approx(want, abs=1e-5)
 
 
-def test_missing_group_labels_are_excluded_with_a_warning(cohort):
+def test_missing_group_labels_are_excluded_with_a_warning(cohort, nulls):
     """A group column with gaps (not the batch column, which scvi itself refuses)."""
     model, adata = cohort
     a = adata.copy()
     a.obs["site"] = a.obs["patient"].astype(object)
     a.obs.loc[a.obs["site"] == "P5", "site"] = np.nan
     with pytest.warns(UserWarning, match="have no group label"):
-        res = tcri.perturb.gene_importance(model, a, genes=[0], groupby="site", inplace=False)
+        res = _gi(model, a, genes=[0], groupby="site")
     assert set(_summary(res)["site"]) == {"P0", "P1", "P2", "P3", "P4"}
     assert set(_summary(res, "item")["site"]) == {"P0", "P1", "P2", "P3", "P4"}
-    want, _ = _manual_importance(model, a, a.var_names[0], mask=(a.obs["site"] == "P0").to_numpy())
-    assert float(_summary(res).query("site == 'P0'")["value"].iloc[0]) == pytest.approx(want, abs=1e-5)
+    mask = (a.obs["site"] == "P0").to_numpy()
+    want = np.mean([i for i, _ in _manual_adjusted(model, nulls, a, a.var_names[0], mask=mask)])
+    got = float(_summary(res).query("site == 'P0'")["adjusted"].iloc[0])
+    assert got == pytest.approx(want, abs=1e-5)
 
 
 def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
-    """The payload round-trips through ``tcri.get`` and a real ``.h5ad`` write; the
-    provenance records the settings and never the model."""
+    """The payload round-trips through ``tcri.get`` and a real ``.h5ad`` write, and
+    ``inplace=False`` returns the stored result; the provenance records the settings and never
+    the model."""
     model, adata = cohort
     adata = adata.copy()
-    kw = dict(genes=[0, 1], n_samples=3, random_state=0, splitby="disease_status")
+    kw = dict(genes=[0, 1], n_samples=4, random_state=0, splitby="disease_status")
     assert tcri.perturb.gene_importance(model, adata, **kw) is None
-    res = tcri.perturb.gene_importance(model, adata.copy(), **kw, inplace=False)
+    res = _gi(model, adata.copy(), **kw)
     back = tcri.get.result(adata, "gene_importance")
     for level in ("replicate", "item"):
         for frame in ("draws", "summary"):
@@ -428,7 +565,7 @@ def test_result_is_cached_readable_and_h5ad_safe(cohort, tmp_path):
 
     params = tcri.get.params(adata, "gene_importance")
     assert "model" not in params and "adata" not in params
-    assert params["use_gate"] is True and params["n_samples"] == 3 and params["n_draws"] == 3
+    assert params["use_gate"] is True and params["n_samples"] == 4 and params["n_draws"] == 4
     assert params["groupby"] == "patient" and params["gate_prob"] == model.module.gate_prob
 
     adata.write_h5ad(tmp_path / "x.h5ad")

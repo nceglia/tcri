@@ -58,7 +58,8 @@ def _calls(adata):
         "phenotypic_flux": ({**delta, "null_model": None}, {**delta, **wide}),
         "delta_clonotypic_entropy": ({**delta, "null_model": None}, {**delta, **wide}),
         "delta_phenotypic_entropy": ({**delta, "null_model": None}, {**delta, **wide}),
-        "gene_importance": ({**genes, "null_model": None}, {**genes, **wide}),
+        # gene_importance stores the adjusted value only, so it always runs with its reference
+        "gene_importance": (genes, {**genes, **wide}),
     }
 
 

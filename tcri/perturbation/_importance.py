@@ -8,9 +8,9 @@ For a gene ``j`` and a set of cells ``C``::
     I_j        = Σ_p | shift_j,p |                 in [0, 2]
 
 One pass over the data: the baseline and the ``p_ct`` draws are computed once per batch and
-shared by every gene; each gene costs one encoder forward per batch. Both are computed per draw:
-``I_j`` is the replicate level, one row per gene and group, and ``shift_j,p`` the item level, one
-row per gene, group and phenotype.
+shared by every gene; each gene costs one encoder forward per batch. Both are computed per draw
+and stored as their adjusted values: ``I_j`` is the replicate level, one row per gene and group,
+and ``shift_j,p`` the item level, one row per gene, group and phenotype.
 """
 from __future__ import annotations
 
@@ -77,18 +77,25 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
 
 
 @tl_result(key=K.GENE_IMPORTANCE, version=4, schema=schemas.GeneImportance, data_param="adata",
-           default_null="phenotype", reference_arg="model", per_gene_stats=True)
+           default_null="phenotype", reference_arg="model", per_gene_stats=True,
+           adjusted_only=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
                     random_state=None) -> dict:
     """Importance of each gene to the phenotype call: the L1 distance the mean phenotype
-    distribution moves when the gene is silenced, and that move per phenotype, the shift.
+    distribution moves when the gene is silenced, and that move per phenotype, the shift, each
+    adjusted by the same quantity on a permutation null.
 
     Stores ``{replicate: {draws, summary}, item: {draws, summary}, stats}`` under
-    ``uns[key_added or "tcri_gene_importance"]``. The replicate level holds the importance, one
-    row per gene and group, read with ``tcri.get.replicates``; the item level holds the shift,
-    one row per gene, group and phenotype, read with ``tcri.get.items``; ``tcri.get.draws`` reads
-    either level per draw. A group with no cell at ``covariate`` has its rows, NaN.
+    ``uns[key_added or "tcri_gene_importance"]``. The replicate level holds the adjusted
+    importance, one row per gene and group, read with ``tcri.get.replicates``; the item level
+    holds the adjusted shift, one row per gene, group and phenotype, read with
+    ``tcri.get.items``; ``tcri.get.draws`` reads either level per draw. A group with no cell at
+    ``covariate`` has its rows, NaN.
+
+    Only the adjusted value is stored: ``adjusted = value − null_value`` per paired draw, the
+    fit's importance less the same importance computed on a phenotype null, where every cell's
+    phenotype label is permuted.
 
     Parameters
     ----------
@@ -113,9 +120,12 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         ``pool_rare_clones`` kept. ``False`` keeps them. A column with no pooling step has
         nothing to leave out.
     n_samples
-        ``0``: the plug-in at the posterior mean of ``p_ct``. ``N > 0``: ``N`` Dirichlet draws
-        of ``p_ct`` from the guide, shared by every gene, entering only through the gate; the
-        importance and the shift are computed per draw and summarized (mean, sd, HDI).
+        ``0``: the plug-in at the posterior mean of ``p_ct``, paired with every null of the
+        reference. ``N > 0``: ``N`` Dirichlet draws of ``p_ct`` from the guide, shared by every
+        gene, entering only through the gate; draw ``d`` is paired with null ``d mod n_nulls``
+        only, so each null draws its share of the ``N``, and the adjusted values are summarized
+        over the ``N`` pairs (mean, sd, HDI). ``N`` must be at least the reference's number of
+        fits, and a multiple of it gives each null an equal share.
     use_gate
         ``True``: the model's own rule, as ``predict()``, so the importance is about the calls
         users see. ``False``: the head alone, invariant to the gate and the clone structure.
@@ -123,23 +133,31 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         Cells per encoder pass; the seed for the Dirichlet draws.
     null_model
         The permutation reference. ``"auto"`` is the phenotype null, rebuilt from the store and
-        this object and run on the same genes, cells and rule; ``None`` reports the bare
-        importance and shift; a fit name selects another; a fitted ``TCRIModel`` is used
-        directly and skips the rebuild. Each level gains ``null_value`` and ``adjusted`` per
-        draw. The adjusted shift is a per-phenotype difference: its absolute values summed over
-        phenotypes are not the adjusted importance. There is no ``fit=``: this is a query on a
-        MODEL rather than on a stored substrate, so a different fit is reached by handing it a
+        this object and run on the same genes, cells and rule; a fit name selects another; a
+        fitted ``TCRIModel`` is used directly and skips the rebuild. Nothing is stored for the
+        null runs. The adjusted shift is a per-phenotype difference: its absolute values summed
+        over phenotypes are not the adjusted importance. There is no ``fit=``: this is a query on
+        a MODEL rather than on a stored substrate, so a different fit is reached by handing it a
         different model.
 
     Returns
     -------
     dict or None
         ``None``; with ``inplace=False`` nothing is stored and the whole result is returned.
-        ``replicate.draws`` has one row per gene, group and draw with the importance in
-        ``value``; ``item.draws`` one row per gene, group, phenotype and draw with the shift,
-        ``baseline − silenced``, in ``value``, so a positive shift is mass the phenotype loses
-        when the gene is silenced. Each ``summary`` reduces its draws (mean, ``sd``,
-        ``hdi_*``). ``stats`` is the per-gene contrast over groups, or ``None``.
+        ``replicate.draws`` has one row per gene, group and pair (``null``, ``draw``) with the
+        adjusted importance in ``adjusted``; ``item.draws`` one row per gene, group, phenotype
+        and pair with the adjusted shift, where the shift is ``baseline − silenced``, so a
+        positive shift is mass the phenotype loses when the gene is silenced. Each draws frame
+        has ``max(n_samples, n_nulls)`` rows per row of its summary, which gives ``adjusted``,
+        ``adjusted_sd`` and the HDI ``adjusted_hdi_low``/``adjusted_hdi_high`` (NaN at
+        ``n_samples=0``). ``stats`` is the per-gene contrast of the adjusted importance over
+        groups, or ``None``.
+
+    Raises
+    ------
+    ValueError
+        With ``null_model=None``, or when ``0 < n_samples`` is below the reference's number of
+        fits.
     """
     adata = model._validate_anndata(adata)
     module = model.module

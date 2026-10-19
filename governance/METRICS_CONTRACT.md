@@ -156,12 +156,22 @@ need not be disjoint across groups.
 
 `I_j` is the replicate level of the stored result, one row per gene and group, and `shift_j,p`
 its item level, one row per gene, group and phenotype; `I_j = Σ_p |shift_j,p|` on every draw.
-A group with no cell in `C` keeps its rows, NaN. The shift is stored per draw, on the fit and
-on each fit of the reference ("References"), so the item level carries `null_value` and
-`adjusted = value − null_value` on every paired draw, as the replicate level does. The adjusted
+A group with no cell in `C` keeps its rows, NaN. Both are computed per draw on the fit and on the
+fits of the reference ("References"), and **only the adjusted values are stored**: on each level,
+`adjusted = value − null_value` per paired draw, with its summary (`adjusted`, `adjusted_sd`,
+`adjusted_hdi_low`, `adjusted_hdi_high`); `value`, `null_value` and the null runs' own results are
+not stored, and `null_model=None` raises. `stats` tests the adjusted importance. The adjusted
 shift is a per-phenotype difference, not a decomposition of the adjusted importance: `Σ_p
 |adjusted shift_j,p|` over a gene's item rows is not its adjusted importance, because the L1 norm
 of a difference is not the difference of the L1 norms.
+
+**Pairing for gene importance (rotated).** With `K` fits in the reference: at `n_samples = 0` the
+fit's one value is paired with each of the `K` nulls, so a row has `K` pairs, `adjusted` is their
+mean, `adjusted_sd` the spread between the nulls and the HDI is NaN. At `n_samples > 0` fit draw
+`d` is paired with null `d mod K` only, and null `i` draws only the `|{d < n_samples : d mod K =
+i}|` draws it is paired with, `n_samples / K` each when `n_samples` is a multiple of `K`, which
+gives each null an equal share; `0 < n_samples < K` raises `ValueError`. Each draws frame has
+`max(n_samples, K)` rows per summary row. The other metrics pair every draw with every null.
 
 ## The `weighted` axis
 
@@ -234,7 +244,8 @@ computed at defaults is a different quantity subtracted from a different quantit
 **`adjusted` is computed per paired draw, against every fit of the reference.** The null is the
 value expected under no association. The fit and each null are independent fits, so draw *d* of
 the fit is paired with draw *d* of every one of the reference's `n_nulls` fits and
-`adjusted_{i,d} = value_d - null_value_{i,d}`; the per-draw frames (each level's `draws`, or
+`adjusted_{i,d} = value_d - null_value_{i,d}` (gene importance pairs by rotation instead, see
+its section); the per-draw frames (each level's `draws`, or
 `table`) carry `null` (which fit), `null_value` and `adjusted` on every pair, and the summaries
 (each level's `summary`, or `result`) give the adjusted value's mean, `adjusted_sd` and HDI
 (`adjusted_hdi_low`, `adjusted_hdi_high`) over all the pairs, like any value, and `null_value` as

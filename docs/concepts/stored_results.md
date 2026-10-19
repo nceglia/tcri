@@ -132,9 +132,11 @@ adata.uns['tcri_mutual_information'] not found. Run tcri.tl.mutual_information(a
 first — tcri.pl.* renders the stored result and never recomputes it.
 ```
 
-`get.items` and `get.draws(items=True)` raise for mutual information, which has no items, and
-`get.replicates`, `get.items` and `get.draws` raise for a result stored as `table` and `result`
-(flux, the deltas, the joint and gene importance), which `get.result` reads.
+`get.items` and `get.draws(items=True)` raise for mutual information and the joint, which have no
+items. `get.replicates` raises for the joint, whose summary `get.result(adata,
+"joint_distribution")["summary"]` reads and whose draws `get.draws` reads. `get.replicates`,
+`get.items` and `get.draws` raise for a result stored as `table` and `result` (flux and the
+deltas), which `get.result` reads.
 
 `pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
 summary, or with `view="item"` the item summary, or the stored `result` of the other tools.

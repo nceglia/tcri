@@ -17,11 +17,14 @@ Two properties of this fixture bound what the importance can be asked for:
 * gene-level truth is not identifiable -- a handful of dense factors drive every gene, so a
   reader may lean on any subset of a redundant set and still call the phenotype.
 
-The assertions are therefore floors rather than a claim that the ranking recovers the programs
-gene for gene: informative genes outrank appended phenotype-independent noise genes on average
-over seeds, and an expression matrix carrying no phenotype gives a flat importance. A ranking
-that ignores the phenotype fails them; one that merely disagrees with the oracle on a redundant
-gene set does not.
+The importance scored is the adjusted one, the only value ``gene_importance`` stores, against
+two phenotype nulls fitted in each test. The assertions are floors rather than a claim that the
+ranking recovers the programs gene for gene: informative genes outrank appended
+phenotype-independent noise genes drawn at the real genes' count scale, on average over seeds,
+and an expression matrix carrying no phenotype gives a flat importance. A ranking that ignores
+the phenotype fails them; one that merely disagrees with the oracle on a redundant gene set does
+not. The fixture also carries noise genes at three times the real genes' highest counts, so the
+floors hold with them in the gene set; nothing is asserted about where they rank.
 """
 from __future__ import annotations
 
@@ -51,19 +54,32 @@ def _true_discriminativeness(adata):
     return (m.max(axis=0) - m.min(axis=0)) / m.mean(axis=0)  # [G]
 
 
-def _with_noise_genes(adata, n_noise, seed):
-    """Append ``n_noise`` Poisson genes whose rate is drawn from the real genes' means and
-    does not depend on phenotype: the one gene set whose importance has an unambiguous
-    truth, whatever the redundancy among the real genes."""
+#: Which genes a fixture's columns are: the simulator's, matched noise, high-count noise.
+INFORMATIVE, MATCHED, HIGH = 0, 1, 2
+
+
+def _with_noise_genes(adata, n_noise, seed, *, n_high=10, high_scale=3.0):
+    """Append ``n_noise`` Poisson genes whose rate is drawn from the real genes' means, and
+    ``n_high`` whose rate is ``high_scale`` times a draw from the real genes' top decile; none
+    depends on phenotype. The matched genes are the one set whose importance has an unambiguous
+    truth at the real genes' count scale, whatever the redundancy among the real genes.
+
+    Returns the object and each column's kind (:data:`INFORMATIVE`, :data:`MATCHED`,
+    :data:`HIGH`)."""
     rng = np.random.default_rng(seed)
     X = np.asarray(adata.X, dtype=np.float32)
-    lam = rng.choice(X.mean(axis=0), size=n_noise, replace=True)
-    noise = rng.poisson(lam[None, :], size=(adata.n_obs, n_noise)).astype(np.float32)
-    var = pd.DataFrame(index=list(adata.var_names) + [f"noise_{k}" for k in range(n_noise)])
+    means = X.mean(axis=0)
+    lam = np.r_[rng.choice(means, size=n_noise, replace=True),
+                high_scale * rng.uniform(np.quantile(means, 0.9), means.max(), size=n_high)]
+    noise = rng.poisson(lam[None, :], size=(adata.n_obs, lam.size)).astype(np.float32)
+    var = pd.DataFrame(index=list(adata.var_names) + [f"noise_{k}" for k in range(n_noise)]
+                       + [f"high_{k}" for k in range(n_high)])
     out = ad.AnnData(X=np.concatenate([X, noise], axis=1), obs=adata.obs.copy(), var=var,
                      uns=dict(adata.uns))
     out.layers["counts"] = out.X.copy()
-    return out, np.r_[np.ones(adata.n_vars, bool), np.zeros(n_noise, bool)]
+    kind = np.r_[np.full(adata.n_vars, INFORMATIVE), np.full(n_noise, MATCHED),
+                 np.full(n_high, HIGH)]
+    return out, kind
 
 
 # ── the oracle itself ────────────────────────────────────────────────────────
@@ -127,42 +143,41 @@ def _fit(adata, *, seed=0, max_epochs=60):
 
 
 def _importance(model, adata):
-    """The head-alone importance per gene, read off the replicate summary of the full result."""
-    res = tcri.perturb.gene_importance(model, adata, use_gate=False, null_model=None,
-                                       inplace=False)
-    return res["replicate"]["summary"]["value"].to_numpy()
+    """The head-alone adjusted importance per gene, against two phenotype nulls fitted here."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        tcri.null.phenotype(model, adata, n_nulls=2)
+    res = tcri.perturb.gene_importance(model, adata, use_gate=False, inplace=False)
+    return res["replicate"]["summary"]["adjusted"].to_numpy()
 
 
 @pytest.mark.slow
 def test_informative_genes_outrank_matched_noise_genes_on_average():
-    """Over three seeds, the mean AUROC of importance for informative-vs-noise genes is above
-    chance, and the ten most important genes are mostly informative.
+    """Over three seeds, the mean AUROC of the adjusted importance for informative-vs-matched
+    noise genes is above chance, and few matched noise genes reach the ten most important.
 
-    The noise genes are the one set with an unambiguous truth on this fixture: they are drawn
-    at the real genes' count scale and carry no phenotype, so an importance that ranked them
-    level with the informative genes would be reporting intervention size and nothing else.
-    The floors are loose by design -- the assertion messages report the realized values.
+    The matched noise genes are the one set with an unambiguous truth on this fixture: they are
+    drawn at the real genes' count scale and carry no phenotype, so an importance that ranked
+    them level with the informative genes would be reporting intervention size and nothing
+    else. The floors are loose by design -- the assertion messages report the realized values.
     """
     aurocs, noise_in_top = [], []
     for seed in (11, 12, 13):
         a = simulate_tcri(fuzziness=0.0, seed=seed, **_SIM)
-        b, is_info = _with_noise_genes(a, 20, seed)
-        model = _fit(b)
-        # `null_model=None` throughout this file: it scores the importance against a
-        # CLOSED-FORM oracle, so a permutation reference would answer a different question and
-        # triple the fitting cost of an already-slow test.
-        imp = _importance(model, b)
-        aurocs.append(roc_auc_score(is_info, imp))
-        noise_in_top.append(int((~is_info[np.argsort(-imp)[:10]]).sum()))
-    report = f"AUROC per seed {np.round(aurocs, 3).tolist()}, noise genes in top ten {noise_in_top}"
+        b, kind = _with_noise_genes(a, 20, seed)
+        imp = _importance(_fit(b), b)
+        scored = kind != HIGH
+        aurocs.append(roc_auc_score(kind[scored] == INFORMATIVE, imp[scored]))
+        noise_in_top.append(int((kind[np.argsort(-imp)[:10]] == MATCHED).sum()))
+    report = (f"AUROC per seed {np.round(aurocs, 3).tolist()}, matched noise genes in top ten "
+              f"{noise_in_top}")
     assert float(np.mean(aurocs)) > 0.55, f"importance does not favor informative genes -- {report}"
     assert max(noise_in_top) <= 3, f"the top of the ranking is noise -- {report}"
 
 
 @pytest.mark.slow
 def test_importance_is_flat_when_expression_carries_no_phenotype():
-    """At ``fuzziness=1`` no gene can inform the phenotype, so the head-alone importance
-    must be small; at ``fuzziness=0`` on the same seed the largest importance must be
+    """At ``fuzziness=1`` no gene can inform the phenotype, so the head-alone adjusted
+    importance must be small; at ``fuzziness=0`` on the same seed the largest must be
     substantially larger. Difficulty moved, not the truth."""
     flat = simulate_tcri(fuzziness=1.0, seed=12, **_SIM)
     sharp = simulate_tcri(fuzziness=0.0, seed=12, **_SIM)

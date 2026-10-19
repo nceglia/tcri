@@ -190,8 +190,12 @@ returns the `predict()` frame and stores nothing unless `key_added` names an `ob
 `gene_importance` stores `{replicate, item, stats}` and returns `None` (the whole result at
 `inplace=False`). The gene is a label on every row: the replicate level is the importance, one
 row per gene and group, and the item level its signed shift, one row per gene, group and
-phenotype, both per draw with `null_value` and `adjusted` beside them; a group with no cell at
-`covariate` has NaN rows. Its `stats` contrast is per gene. It
+phenotype; a group with no cell at `covariate` has NaN rows. Only the adjusted value is stored:
+each level's `draws` holds `adjusted` per pair (`null`, `draw`) and its `summary` holds
+`adjusted`, `adjusted_sd` and the adjusted HDI; nothing is stored for the null runs. At
+`n_samples > 0` draw `d` is paired with null `d mod n_nulls` and each null draws only its share;
+at `n_samples = 0` the one value is paired with every null. `null_model=None` raises, and so does
+`0 < n_samples < n_nulls`. Its `stats` contrast is per gene, on the adjusted importance. It
 takes `null_model` like every scored metric and no `fit`: it is a query on a model, so a
 different fit is reached by handing it a different model, and `"auto"` rebuilds the phenotype
 null from the parameter store and this object.
@@ -199,11 +203,9 @@ null from the parameter store and this object.
 `METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `view="replicate"` is the top
 `n_top` genes under the mark rule, with each gene's own contrast starred above it when a
 split was used; `view="item"` is the gene × phenotype shift from the item summary, averaged over
-groups, on a diverging scale centered on zero. Every twin takes `quantity`: the default is the
-adjusted value against a zero rule, drawn under the mark rule like the value, and
-`quantity="value"` is the value with its reference drawn behind it; on `view="item"` the default
-is the adjusted shift. Both views show the genes ranked by the adjusted importance unless
-`quantity="value"` is asked for.
+groups, on a diverging scale centered on zero. It takes no `quantity`: both views draw the
+adjusted value, the one stored, against zero, and both show the genes ranked by the adjusted
+importance.
 
 ## The stub
 
@@ -383,8 +385,7 @@ class pl:
         figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
-        adata: AnnData, *, view: str = ..., quantity: str = ..., n_top: int = ...,
-        key: Optional[str] = ...,
+        adata: AnnData, *, view: str = ..., n_top: int = ..., key: Optional[str] = ...,
         order: Any = ..., hue_order: Any = ..., palette: Any = ..., legend: bool = ...,
         ax: Any = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
         return_df: bool = ...,

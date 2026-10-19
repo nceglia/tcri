@@ -299,7 +299,7 @@ def _with_owned(sig: inspect.Signature, owned) -> inspect.Signature:
 
 def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
               values=("value",), denominators=(), default_null=None, reference_arg="fit",
-              per_gene_stats=False):
+              per_gene_stats=False, adjusted_only=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return ``None``.
 
     With ``inplace=False`` nothing is stored and the whole result is returned. A stored result is
@@ -342,6 +342,14 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     cannot drift. ``reference_arg`` is the parameter the reference run substitutes: ``"fit"``
     for a metric that reads a substrate, or the name of the model parameter for a query on a
     fitted model, which needs the null's networks rather than its arrays.
+
+    ``adjusted_only`` stores the adjusted value alone, for a tool whose bare value is not worth
+    keeping (``perturb.gene_importance``): ``null_model=None`` raises, every level keeps
+    ``adjusted`` and its summary and drops the native and null columns, ``stats`` tests the
+    adjusted value, and the reference runs store nothing of their own. Its pairing is rotated
+    at ``n_samples > 0``: fit draw ``d`` is paired with null ``d mod n_nulls`` only, and each null
+    run draws only its share (:func:`._reference.rotation_shares`); at ``n_samples = 0`` the one
+    fit draw is paired with every null.
     """
     def deco(fn):
         sig = inspect.signature(fn)
@@ -363,6 +371,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         takes_fit = "fit" in names
 
         def run(args, kwargs, *, null_model, key_added, inplace):
+            if adjusted_only and null_model is None:
+                raise ValueError(
+                    f"{fn.__name__} stores the adjusted value only, so it needs a reference: "
+                    f"null_model=None leaves nothing to adjust against. Build the references "
+                    f"once with tcri.null.all(model, adata), or tcri.null.{default_null}"
+                    f"(model, adata) for this one, and pass null_model='auto' or a reference.")
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             result = _run(dict(bound.arguments), null_model=null_model, key_added=key_added,
@@ -383,6 +397,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             # doing it here safe.
             if takes_fit and arguments.get("fit") is not None:
                 arguments["fit"] = _keys.resolve_fit(adata, arguments["fit"])
+            references = None
+            if adjusted_only and null_model is not None:
+                # resolved and checked before the call computes anything
+                references = _resolve(adata, arguments, null_model)
+                _reference.rotation_shares(arguments.get("n_samples"), len(references or ()))
             result = fn(**arguments)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
@@ -396,29 +415,32 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 _check_schema(schema, result, fn.__name__)
 
             # ── the reference ────────────────────────────────────────────────
-            references = None
             if takes_null and isinstance(result, dict):
-                references = _reference.resolve_reference(
-                    adata, null_model=null_model,
-                    fit=arguments.get("fit") if takes_fit else None,
-                    default_null=default_null, metric=fn.__name__,
-                )
+                if references is None:
+                    references = _resolve(adata, arguments, null_model)
                 if references is not None:
                     if reference_arg == "fit":
                         references = [_reference.fit_of(r, adata) for r in references]
                         for r in references:
                             _reference.check_joinable(
                                 adata, r, against=arguments.get("fit") if takes_fit else None)
-                    runs = [_run_call(_reference_call(arguments, r,
-                                                      _reference.index_of(r, adata),
-                                                      inplace=inplace, key_added=key_added))
-                            for r in references]
+                    if adjusted_only:
+                        runs = _rotated_runs(arguments, references, resolved,
+                                             key_added=key_added)
+                    else:
+                        runs = [_run_call(_reference_call(arguments, r,
+                                                          _reference.index_of(r, adata),
+                                                          inplace=inplace, key_added=key_added))
+                                for r in references]
                     if _has_levels(result):
                         _reference.attach_levels(result, runs, values=values,
                                                  denominators=denominators)
                         _reference.restat_levels(result, groupby=arguments.get("groupby"),
                                                  splitby=arguments.get("splitby"),
-                                                 per_gene=per_gene_stats)
+                                                 per_gene=per_gene_stats,
+                                                 target="adjusted" if adjusted_only else None)
+                        if adjusted_only:
+                            _reference.keep_adjusted(result, values=values)
                     else:
                         _reference.attach(result, runs, values=values, denominators=denominators)
                         _reference.restat(result, groupby=arguments.get("groupby"),
@@ -443,6 +465,35 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 dest = key_added or key
                 adata.uns[_keys.fit_key(dest, arguments.get("fit") if takes_fit else None)] = blob
             return result
+
+        def _resolve(adata, arguments, null_model):
+            return _reference.resolve_reference(
+                adata, null_model=null_model,
+                fit=arguments.get("fit") if takes_fit else None,
+                default_null=default_null, metric=fn.__name__, bare=not adjusted_only,
+            )
+
+        def _rotated_runs(arguments, references, resolved, *, key_added):
+            """The caller's call on each fit of the reference, under rotated pairing.
+
+            With draws taken (the body's resolved `n_draws`, else `n_samples`), each null run
+            draws only its share and its draws are renumbered to the fit draws they pair with;
+            without, each run is the one plug-in draw, paired with the fit's. Nothing is stored.
+            """
+            adata = arguments[_data_param]
+            taken = (resolved or {}).get("n_draws", arguments.get("n_samples"))
+            shares = _reference.rotation_shares(taken, len(references)) if taken else None
+            runs = []
+            for position, r in enumerate(references):
+                call = _reference_call(arguments, r, _reference.index_of(r, adata),
+                                       inplace=False, key_added=key_added)
+                if shares:
+                    call["n_samples"] = shares[position]
+                run = _run_call(call)
+                if shares:
+                    _reference.rotate_draws(run, position, len(references))
+                runs.append(run)
+            return runs
 
         def _run_call(call):
             """Run a call mapping, the decorator's own parameters included, through `_run`."""
@@ -517,6 +568,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         wrapper.tcri_default_null = default_null
         wrapper.tcri_values = tuple(values)
         wrapper.tcri_denominators = tuple(denominators)
+        wrapper.tcri_adjusted_only = bool(adjusted_only)
         wrapper.tcri_key = key
         wrapper.tcri_schema_version = int(version)
         wrapper.tcri_schema = schema
