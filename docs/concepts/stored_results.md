@@ -105,6 +105,13 @@ summaries, `adjusted_sd` and the adjusted HDI, and no `value` (the reference, be
 its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`. The
 snapshot below is the written record of which slots each tool has.
 
+The repertoire summaries of `tcri.pp` store their result the same way, under
+`uns["tcri_<function>"]` or `key_added`, and return `None`; `inplace=False` returns it instead.
+`pp.repertoire_summary` stores its table, one row per group (and covariate level).
+`pp.clone_persistence` stores one frame, one row per group and pair of covariate levels.
+`pp.clonotype_sharing` stores `{pairs, groups, clonotypes}`: one row per pair of groups, one per
+group, and one per shared clonotype. Their `pl` functions of the same name draw them.
+
 ## What is recorded beside the payload
 
 Four provenance keys sit in the stored blob next to the payload:
@@ -157,7 +164,9 @@ first — tcri.pl.* renders the stored result and never recomputes it.
 
 `get.items` and `get.draws(items=True)` raise for mutual information and the joint, which have no
 items. `get.replicates` raises for the joint, whose summary `get.result(adata,
-"joint_distribution")["summary"]` reads and whose draws `get.draws` reads.
+"joint_distribution")["summary"]` reads and whose draws `get.draws` reads. They raise for the
+repertoire summaries too, which have no levels: read those with
+`get.result(adata, "clonotype_sharing")`, and the frame or frames come back.
 
 `pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
 summary, or with `view="item"` the item summary.

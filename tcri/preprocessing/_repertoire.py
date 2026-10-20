@@ -1,8 +1,11 @@
 """Summaries of a clonotype column, read before fitting.
 
-Each function reads ``adata.obs`` and the clonotype derivation record in ``adata.uns`` and returns
-a table. None of them filters cells, writes to ``adata`` or needs scirpy, and none returns a
-verdict or a threshold. Cells without a clonotype are left out and not counted.
+Each function reads ``adata.obs`` and the clonotype derivation record in ``adata.uns`` and stores
+its result the way the ``tl`` tools do: under ``adata.uns[key_added or "tcri_<function>"]``,
+returning ``None``, read back with :func:`tcri.get.result` and drawn by the ``tcri.pl`` function
+of the same name. With ``inplace=False`` nothing is stored and the result is returned. None of
+them filters cells or needs scirpy, and none returns a verdict or a threshold. Cells without a
+clonotype are left out and not counted.
 """
 from __future__ import annotations
 
@@ -16,6 +19,10 @@ from .._compute._repertoire import (
     _pool_labels,
     _size_counts,
 )
+from .._compute._tables import validate_splitby
+from .._state import keys as K
+from .._state import schemas
+from .._state.storage import tl_result
 
 __all__ = ["repertoire_summary", "clone_persistence", "clonotype_sharing"]
 
@@ -32,15 +39,15 @@ _REDUCTIONS = {
 #: The value columns of :func:`repertoire_summary`, in order. ``n_phenotypes_observed`` is kept
 #: only with a phenotype column, and the two pool columns only on a pooled column.
 _SUMMARY_COLUMNS = ["n_cells", "n_clones", "n_singleton_clones", "singleton_fraction",
-                    "largest_clone_cells", "largest_clone_share", "n_phenotypes_observed",
-                    "n_pools", "cells_in_pools"]
+                    "largest_clone_cells", "largest_clone_share", "clonality",
+                    "n_phenotypes_observed", "n_pools", "cells_in_pools"]
 
-#: The value columns of :func:`clonotype_sharing`'s table per group, in order.
-_SHARING_COLUMNS = ["n_clonotypes", "shared_clonotypes", "shared_fraction", "n_cells",
-                    "cells_in_shared_clonotypes", "source_column", "registered_shared_clonotypes"]
+#: The value columns of :func:`clonotype_sharing`'s ``groups`` frame, in order.
+_SHARING_COLUMNS = ["n_clonotypes", "shared_clonotypes", "shared_fraction"]
 
-#: The group of the row of :func:`clonotype_sharing` that counts all groups together.
-_ALL = "All"
+#: The columns of :func:`clone_persistence`'s frame after the group and split columns.
+_PERSISTENCE_COLUMNS = ["covariate_a", "covariate_b", "n_clones_a", "n_clones_b",
+                        "shared_clones", "shared_fraction_a", "shared_fraction_b"]
 
 
 def _check_columns(obs: pd.DataFrame, **columns) -> None:
@@ -66,9 +73,70 @@ def _check_group_name(groupby, columns) -> None:
         )
 
 
-def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None,
+def _check_split(obs, groupby, splitby, columns) -> None:
+    """Raise ``ValueError`` unless ``splitby`` can label the groups of a summary.
+
+    The checks are those of the ``tl`` metrics: ``splitby`` needs ``groupby``, must be a column of
+    ``obs``, and must be constant within each group. A summary names its split column after
+    ``splitby``, so it also raises when ``splitby`` is ``groupby`` or one of the other ``columns``.
+    """
+    if splitby is None:
+        return
+    if groupby is None:
+        raise ValueError(
+            f"splitby={splitby!r} needs groupby: a split labels the groups of the summary, and "
+            f"without groupby the whole dataset is one group. Pass groupby=, usually the "
+            f"individual."
+        )
+    validate_splitby(obs, groupby, splitby)
+    if splitby == groupby or splitby in columns:
+        raise ValueError(
+            f"splitby={splitby!r} would name the split column of the summary, which already has "
+            f"a column of that name. Split by a copy of the column under another name."
+        )
+
+
+def _split_labels(obs, groupby, splitby, groups) -> list:
+    """The split label of each group in ``groups``, given as strings: a string, or ``""`` where
+    a group's cells carry none. Strings, like the group labels, so the stored table writes to
+    ``.h5ad``.
+
+    :func:`_check_split` has already checked that each group carries one label at most.
+    """
+    labeled = obs[obs[groupby].notna() & obs[splitby].notna()]
+    first = labeled.groupby(labeled[groupby].astype(str), sort=False)[splitby].first()
+    return [str(first[group]) if group in first.index else "" for group in groups]
+
+
+def _clonality(sizes: np.ndarray) -> float:
+    """``1 - H / log2(N)`` over clone sizes: H the base-2 Shannon entropy of the size
+    distribution, N the number of clones. NaN with fewer than two clones."""
+    if len(sizes) < 2:
+        return np.nan
+    share = sizes / sizes.sum()
+    return float(1.0 + (share * np.log2(share)).sum() / np.log2(len(sizes)))
+
+
+def _source_column(adata, clonotype_key, what) -> str:
+    """The column ``clonotype_key`` was derived from, or ``clonotype_key`` itself when no tcri
+    step derived it. Raises ``ValueError`` when that column is not in ``adata.obs``; ``what``
+    names the quantity measured there, for the message."""
+    source = _clonotype_source(adata, clonotype_key)
+    if source is None:
+        return clonotype_key
+    if source not in adata.obs.columns:
+        raise ValueError(
+            f"clonotype_key={clonotype_key!r} was derived from {source!r}, which is not a column "
+            f"of adata.obs. {what} is measured on the column a derived clonotype column was made "
+            f"from."
+        )
+    return source
+
+
+@tl_result(key=K.REPERTOIRE_SUMMARY, version=1)
+def repertoire_summary(adata, *, clonotype_key, groupby=None, splitby=None, covariate_key=None,
                        phenotype_key=None) -> pd.DataFrame:
-    """Cells, clones and clone sizes per group, read before fitting.
+    """Cells, clones, clone sizes and clonality per group, read before fitting.
 
     One row per group of ``groupby``, or per (group, covariate level) pair when
     ``covariate_key`` is given; ``groupby=None`` makes the whole dataset one group. A row exists
@@ -79,10 +147,20 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     Cells without a clonotype (NaN or None, an empty or whitespace-only string, or the string
     ``"nan"``) are left out and not counted; setup refuses them. A cell with no group, or no
     covariate level, is in no row. The function reads ``adata.obs`` and the clonotype derivation
-    record in ``adata.uns``; it filters nothing and writes nothing to ``adata``.
+    record in ``adata.uns``, and filters nothing.
 
     On a pooled column, one whose derivation record lists the pools it was written with, pools
     are counted in their own columns and not as clones. Their cells are part of ``n_cells``.
+
+    Clonality is always measured on the original clonotype column, with every clone, singletons
+    included. On a column tcri derived, the derivation record leads back to that column: a pool
+    merges a group's rare clones into one label, which would count as one large clone, and
+    leaving the pools out would drop the singletons. Either way the repertoire would look more
+    clonal than it is.
+
+    The table is stored in ``adata.uns[key_added or "tcri_repertoire_summary"]`` and read back
+    with ``tcri.get.result(adata, "repertoire_summary")``; :func:`tcri.pl.repertoire_summary`
+    draws it.
 
     Parameters
     ----------
@@ -94,18 +172,30 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     groupby
         The column naming each cell's group, usually the individual. ``None`` makes the whole
         dataset one group.
+    splitby
+        A column constant within each group, such as the response, that labels the groups; it
+        needs ``groupby``. The table carries it after the group column, as a string, and
+        :func:`tcri.pl.repertoire_summary` colors the groups by it.
     covariate_key
         A column whose levels split each group into one row per level.
     phenotype_key
         A phenotype column; adds ``n_phenotypes_observed``.
+    key_added
+        The ``uns`` key to store the table under; ``None`` stores it under
+        ``"tcri_repertoire_summary"``.
+    inplace
+        ``True`` stores the table and returns ``None``; ``False`` stores nothing and returns it.
 
     Returns
     -------
-    pd.DataFrame
-        One row per group, or per (group, covariate level) pair, in the category order of each
-        column as ``astype("category")`` orders it. Its columns:
+    pd.DataFrame or None
+        ``None``, or with ``inplace=False`` the table: one row per group, or per (group,
+        covariate level) pair, in the category order of each column as ``astype("category")``
+        orders it. Its columns:
 
         - the group, in a column named after ``groupby`` (with ``groupby`` only);
+        - the group's split label, as a string, in a column named after ``splitby`` (with
+          ``splitby`` only; ``""`` for a group whose cells carry none);
         - ``covariate``: the level of ``covariate_key`` (with ``covariate_key`` only);
         - ``n_cells``: the cells with a clonotype;
         - ``n_clones``: the distinct clonotypes among them, pools not counted;
@@ -113,6 +203,10 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
         - ``singleton_fraction``: ``n_singleton_clones / n_clones``, NaN in a row with no clone;
         - ``largest_clone_cells``: the cells of the largest clone, 0 in a row with no clone;
         - ``largest_clone_share``: ``largest_clone_cells / n_cells``;
+        - ``clonality``: ``1 - H / log2(N)`` on the original clonotype column, where H is the
+          base-2 Shannon entropy of the row's clone sizes and N its number of clones; NaN with
+          fewer than two clones. On a pooled column N counts every original clone, so it can
+          differ from ``n_clones``;
         - ``n_phenotypes_observed``: the distinct phenotypes among the cells (with
           ``phenotype_key`` only);
         - ``n_pools`` and ``cells_in_pools``: the pools and their cells (on a pooled column
@@ -123,8 +217,10 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     Raises
     ------
     ValueError
-        When a column is not in ``adata.obs``, or when ``groupby`` has the name of one of the
-        summary's other columns.
+        When a column is not in ``adata.obs``; when ``groupby`` has the name of one of the
+        summary's other columns; when ``splitby`` is given without ``groupby``, is not constant
+        within each group, or has the name of another column; or when the column the derivation
+        record leads back to is not in ``adata.obs``.
 
     Notes
     -----
@@ -145,9 +241,12 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
       matches into one cluster.
     """
     obs = adata.obs
-    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby,
+    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby, splitby=splitby,
                    covariate_key=covariate_key, phenotype_key=phenotype_key)
-    _check_group_name(groupby, _SUMMARY_COLUMNS + ([] if covariate_key is None else ["covariate"]))
+    others = _SUMMARY_COLUMNS + ([] if covariate_key is None else ["covariate"])
+    _check_group_name(groupby, others)
+    _check_split(obs, groupby, splitby, others)
+    source = _source_column(adata, clonotype_key, "Clonality")
     # each row label: its name in the summary -> (its column in the units, its column in obs)
     labels = {}
     if groupby is not None:
@@ -191,6 +290,23 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     summary["singleton_fraction"] = summary["n_singleton_clones"] / n_clones.where(n_clones > 0)
     summary["largest_clone_share"] = summary["largest_clone_cells"] / n_cells.where(n_cells > 0)
 
+    # clonality on the original column, over the cells the rows count
+    counted = obs[~_missing_clonotypes(obs[clonotype_key]).to_numpy()]
+    original = _size_counts(counted, source,
+                            source if covariate_key is None else covariate_key, groupby)
+    if labels:
+        unit_columns = [unit_column for unit_column, _ in labels.values()]
+        clonality = (original.groupby(unit_columns, sort=False)["n_cells"]
+                     .apply(lambda sizes: _clonality(sizes.to_numpy(float)))
+                     .rename("clonality").reset_index()
+                     .rename(columns={unit_column: label
+                                      for label, (unit_column, _) in labels.items()}))
+        for label in labels:
+            clonality[label] = clonality[label].astype(str)
+        summary = summary.merge(clonality, on=list(labels), how="left")
+    else:
+        summary["clonality"] = _clonality(original["n_cells"].to_numpy(float))
+
     if phenotype_key is not None:
         # the cells the units count: a clonotype, and a group and a level wherever they apply
         kept = ~_missing_clonotypes(obs[clonotype_key]).to_numpy()
@@ -210,7 +326,12 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, covariate_key=None
     absent = set() if pools else {"n_pools", "cells_in_pools"}
     columns = [column for column in _SUMMARY_COLUMNS
                if column in summary.columns and column not in absent]
-    return summary[[*labels, *columns]]
+    split = []
+    if splitby is not None:
+        summary[splitby] = _split_labels(obs, groupby, splitby, summary[groupby])
+        split = [splitby]
+    rows = list(labels)
+    return summary[[*rows[:1], *split, *rows[1:], *columns]]
 
 
 def _frame(columns: list) -> pd.DataFrame:
@@ -257,168 +378,129 @@ def _clone_cells(obs, clonotype_key, covariate_key, groupby, pools):
     return clones, levels, cells
 
 
-def _endpoints(obs, covariate_key, cov_from, cov_to) -> list[str]:
-    """``[cov_from, cov_to]`` as strings, once each, after checking both are levels.
+@tl_result(key=K.CLONE_PERSISTENCE, version=1)
+def clone_persistence(adata, *, clonotype_key, covariate_key, groupby=None,
+                      splitby=None) -> pd.DataFrame:
+    """How many clones each group carries between the levels of a covariate.
 
-    A level is a category of ``obs[covariate_key].astype("category")``, compared as a string.
-    """
-    declared = list(dict.fromkeys(map(str, obs[covariate_key].astype("category").cat.categories)))
-    for argument, value in (("cov_from", cov_from), ("cov_to", cov_to)):
-        if str(value) not in declared:
-            shown = declared[:10] + (["..."] if len(declared) > 10 else [])
-            raise ValueError(
-                f"{argument}={value!r} is not a level of adata.obs[{covariate_key!r}], whose "
-                f"levels are {shown}."
-            )
-    return list(dict.fromkeys([str(cov_from), str(cov_to)]))
+    A summary to read before fitting: for each group, such as the patient, and each pair of
+    covariate levels at which it has clones, the clones at each level and the clones seen at
+    both. A clone is one clonotype within one group, so with ``groupby`` a clonotype that two
+    groups carry counts as one clone in each. It takes any number of levels: a design such as
+    tissue × timepoint is one combined covariate column. Clones are counted, never cells.
 
-
-def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov_to=None,
-                      groupby=None, per_clone=False) -> pd.DataFrame:
-    """Which clones are seen at more than one level of a covariate, per group.
-
-    A summary to read before fitting: how the clones of each group carry across the levels of
-    a covariate such as the timepoint. A clone is one clonotype within one group, so with
-    ``groupby`` a clonotype that two groups carry counts as one clone in each.
-
-    With ``cov_from`` and ``cov_to``, it counts the clones of each group seen at both levels,
-    the persistent clones, and those seen at one of the two only. On the clonotype column
-    registered at setup, and with the ``groupby`` the metrics use, the persistent clones are the
-    item rows of a change (``tl.phenotypic_flux``, and the entropies with ``cov_from`` and
-    ``cov_to``) at their default ``exclude_pools=True``, and the clones flux is computed on; each
-    endpoint of an entropy or mutual information change counts every clone at its level. A group
-    without a persistent clone has no item rows (one NaN item row per phenotype for clonotypic
-    entropy) and a NaN flux. The metrics read ``groupby=None`` as
-    the replicate registered at setup, while here it means the whole dataset. Without
-    ``cov_from`` and ``cov_to``, it counts the clones seen at one level and at more than one.
+    On the clonotype column registered at setup, and with the ``groupby`` the metrics use,
+    ``shared_clones`` of a pair of levels is the number of persistent clones of a change between
+    those levels: the item rows of ``tl.phenotypic_flux`` and of the entropies with ``cov_from``
+    and ``cov_to``, at their default ``exclude_pools=True``. Each endpoint of an entropy or mutual
+    information change counts every clone at its level. A group without a shared clone has no
+    item rows (one NaN item row per phenotype for clonotypic entropy) and a NaN flux. The metrics
+    read ``groupby=None`` as the replicate registered at setup, while here it means the whole
+    dataset.
 
     On a pooled column, one whose derivation record lists the pools it was written with, a pool
     is not a clone: its cells are left out of every count, as are cells without a clonotype, so
-    a pool is never persistent.
+    a pool is never shared between levels.
 
     Clones seen at one level only are expected, since each sample holds only part of a
     repertoire.
+
+    The frame is stored in ``adata.uns[key_added or "tcri_clone_persistence"]`` and read back
+    with ``tcri.get.result(adata, "clone_persistence")``; :func:`tcri.pl.clone_persistence`
+    draws it.
 
     Parameters
     ----------
     adata
         The cells to summarize. ``adata.obs`` and the clonotype derivation record in
-        ``adata.uns`` are read, and nothing is written.
+        ``adata.uns`` are read.
     clonotype_key
         The clonotype column. Cells without a clonotype (NaN or None, an empty or
         whitespace-only string, or ``"nan"``) are left out and not counted.
     covariate_key
         The covariate column, such as the timepoint.
-    cov_from
-        The level to contrast from, matched as a string. Give it with ``cov_to``, or give
-        neither.
-    cov_to
-        The level to contrast with ``cov_from``, matched as a string.
     groupby
         The column naming each cell's group, such as the patient. ``None`` summarizes the
-        whole dataset in one row, where a clonotype that two groups carry is one clone.
-    per_clone
-        Return one row per clone instead of one row per group.
+        whole dataset as one group, where a clonotype that two groups carry is one clone.
+    splitby
+        A column constant within each group, such as the response, that labels the groups; it
+        needs ``groupby``. The frame carries it after the group column, as a string.
+    key_added
+        The ``uns`` key to store the frame under; ``None`` stores it under
+        ``"tcri_clone_persistence"``.
+    inplace
+        ``True`` stores the frame and returns ``None``; ``False`` stores nothing and returns it.
 
     Returns
     -------
-    pd.DataFrame
-        One row per group with at least one counted cell, in the column's category order, with
-        the group, as a string, in a column named ``groupby``. With ``groupby=None``, one row
-        and no group column.
+    pd.DataFrame or None
+        ``None``, or with ``inplace=False`` the frame. One row per group and pair of distinct
+        levels at which the group has clones, each pair once: by group, then the first level,
+        then the second, each in category order, the first level before the second. Columns:
 
-        With ``cov_from`` and ``cov_to``, only cells at those two levels are counted:
-
-        - ``clones_from_only``, ``clones_to_only``: clones seen at one of the two levels only.
-        - ``persistent_clones``: clones seen at both.
-        - ``cells_from_only``, ``cells_to_only``: the cells of the clones seen at one level only.
-        - ``cells_in_persistent_clones``: the cells of the persistent clones at the two levels.
-        - ``has_persistent_clones``: whether the group has at least one persistent clone.
-
-        Without them, cells at every level are counted:
-
-        - ``n_levels``: the number of levels at which the group has cells.
-        - ``clones_at_one_level``, ``clones_at_multiple_levels``: clones seen at exactly one
-          level, and at more than one.
-        - ``cells_at_one_level``, ``cells_at_multiple_levels``: the cells of those clones.
-
-        With ``per_clone=True``, one row per clone instead, ordered by group and then
-        clonotype: the group, as a string, in a column named ``groupby`` (when given), the
-        clonotype, as a string, in ``clonotype``, and one column per covariate level holding
-        the clone's cells at that level. Level columns are named by the level as a string, in
-        category order. With ``cov_from`` and ``cov_to`` the level columns are those two and
-        the rows are the clones seen at either, so the persistent clones are the rows with
-        cells in both columns. Without them, every level with a counted cell has a column and
-        every clone a row.
+        - the group, as a string, in a column named ``groupby`` (with ``groupby`` only), and
+          its split label in a column named ``splitby`` (with ``splitby`` only; ``""`` for a
+          group whose cells carry none);
+        - ``covariate_a``, ``covariate_b``: the two levels, as strings;
+        - ``n_clones_a``, ``n_clones_b``: the group's clones at each level;
+        - ``shared_clones``: the clones seen at both;
+        - ``shared_fraction_a``, ``shared_fraction_b``: ``shared_clones`` as a share of each
+          level's clones.
 
     Raises
     ------
     ValueError
-        When a column is not in ``adata.obs``, when only one of ``cov_from`` and ``cov_to`` is
-        given, when either is not a level of ``covariate_key``, or when two output columns
-        would share a name.
+        When a column is not in ``adata.obs``, when ``splitby`` is given without ``groupby``
+        or is not constant within each group, or when ``groupby`` or ``splitby`` has the name
+        of another column of the frame.
     """
     obs = adata.obs
     _check_columns(obs, clonotype_key=clonotype_key, covariate_key=covariate_key,
-                   groupby=groupby)
-    if (cov_from is None) != (cov_to is None):
-        raise ValueError(
-            "cov_from and cov_to are given together or not at all: pass both to contrast two "
-            "levels, or neither to summarize every level."
-        )
+                   groupby=groupby, splitby=splitby)
+    _check_group_name(groupby, _PERSISTENCE_COLUMNS)
+    _check_split(obs, groupby, splitby, _PERSISTENCE_COLUMNS)
     pools = _pool_labels(adata, clonotype_key)
     clones, levels, cells = _clone_cells(obs, clonotype_key, covariate_key, groupby, pools)
-    contrast = cov_from is not None
-    if contrast:
-        ends = _endpoints(obs, covariate_key, cov_from, cov_to)
-        cells = np.column_stack(
-            [cells[:, levels.index(end)] if end in levels else np.zeros(len(clones), np.int64)
-             for end in ends])
-        levels = ends
-
-    if per_clone:
-        # every clone has cells at some level; in a contrast, only those seen at either end
-        rows = cells.sum(axis=1) > 0
-        keys = [("clonotype", clones["clonotype"].map(str).to_numpy()[rows])]
-        if groupby is not None:
-            keys.insert(0, (groupby, clones["group"].map(str).to_numpy()[rows]))
-        return _frame(keys + [(level, cells[rows, j]) for j, level in enumerate(levels)])
-
     seen = cells > 0
-    if contrast:
-        at_from, at_to = seen[:, 0], seen[:, -1]
-        persistent, from_only, to_only = at_from & at_to, at_from & ~at_to, at_to & ~at_from
-        counts = {
-            "clones_from_only": from_only.astype(np.int64),
-            "clones_to_only": to_only.astype(np.int64),
-            "persistent_clones": persistent.astype(np.int64),
-            "cells_from_only": np.where(from_only, cells[:, 0], 0),
-            "cells_to_only": np.where(to_only, cells[:, -1], 0),
-            "cells_in_persistent_clones": np.where(persistent, cells.sum(axis=1), 0),
-        }
-    else:
-        n_seen, total = seen.sum(axis=1), cells.sum(axis=1)
-        counts = {
-            "clones_at_one_level": (n_seen == 1).astype(np.int64),
-            "clones_at_multiple_levels": (n_seen > 1).astype(np.int64),
-            "cells_at_one_level": np.where(n_seen == 1, total, 0),
-            "cells_at_multiple_levels": np.where(n_seen > 1, total, 0),
-        }
-
-    # the whole dataset is one group of code 0, kept as one row even when no cell is counted
-    group = np.zeros(len(clones), np.int64) if groupby is None else clones["group"].to_numpy()
-    totals = pd.DataFrame(counts).groupby(group, sort=False).sum()
-    if groupby is None:
-        totals = totals.reindex([0], fill_value=0)
-    columns = [] if groupby is None else [(groupby, totals.index.map(str).to_numpy())]
-    if not contrast:
-        n_levels = pd.DataFrame(seen).groupby(group, sort=False).any().sum(axis=1)
-        columns.append(("n_levels", n_levels.reindex(totals.index, fill_value=0)
-                        .to_numpy(dtype=np.int64)))
-    columns += [(name, totals[name].to_numpy(dtype=np.int64)) for name in counts]
-    if contrast:
-        columns.append(("has_persistent_clones", totals["persistent_clones"].to_numpy() > 0))
+    group = (np.zeros(len(clones), dtype=object) if groupby is None
+             else clones["group"].map(str).to_numpy())
+    rows = []
+    for name in pd.unique(group):
+        at = seen[group == name].astype(np.int64)
+        n = at.sum(axis=0)
+        both = at.T @ at
+        present = np.flatnonzero(n > 0)
+        rows += [(name, levels[a], levels[b], n[a], n[b], both[a, b])
+                 for i, a in enumerate(present) for b in present[i + 1:]]
+    pairs = pd.DataFrame(rows, columns=["group", "covariate_a", "covariate_b", "n_clones_a",
+                                        "n_clones_b", "shared_clones"])
+    counts = {column: pairs[column].to_numpy(dtype=np.int64)
+              for column in ("n_clones_a", "n_clones_b", "shared_clones")}
+    columns = []
+    if groupby is not None:
+        groups = pairs["group"].tolist()
+        columns = [(groupby, groups), *_split_column(obs, groupby, splitby, groups)]
+    columns += [("covariate_a", pairs["covariate_a"].tolist()),
+                ("covariate_b", pairs["covariate_b"].tolist()),
+                *counts.items(),
+                ("shared_fraction_a", _share(counts["shared_clones"], counts["n_clones_a"])),
+                ("shared_fraction_b", _share(counts["shared_clones"], counts["n_clones_b"]))]
     return _frame(columns)
+
+
+def _share(part, whole) -> np.ndarray:
+    """``part / whole`` as floats, NaN where ``whole`` is 0."""
+    whole = np.asarray(whole, dtype=float)
+    return np.divide(np.asarray(part, dtype=float), whole, out=np.full(len(whole), np.nan),
+                     where=whole > 0)
+
+
+def _split_column(obs, groupby, splitby, groups) -> list:
+    """``[(splitby, labels)]``, the split label of each of ``groups``, or ``[]`` without
+    ``splitby``."""
+    if splitby is None:
+        return []
+    return [(splitby, _split_labels(obs, groupby, splitby, groups))]
 
 
 def _shared_per_group(labels: np.ndarray, groups: np.ndarray, n_groups: int):
@@ -438,18 +520,24 @@ def _shared_per_group(labels: np.ndarray, groups: np.ndarray, n_groups: int):
     return shared, n_labels, n_shared
 
 
-def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
+@tl_result(key=K.CLONOTYPE_SHARING, version=1, schema=schemas.ClonotypeSharing)
+def clonotype_sharing(adata, *, clonotype_key, groupby, splitby=None) -> dict:
     """How the clonotypes of ``clonotype_key`` are shared across the groups of ``groupby``.
 
     A clone is a set of cells within one individual, and a clonotype is its name, usually its
     receptor sequence. Two individuals can carry the same clonotype but never the same clone: a
     clonotype carried by two individuals is two clones, one per individual. A clonotype is shared
-    when it is present in more than one group. For each group, the table counts its clonotypes,
-    the ones it shares with another group, and the cells that carry them.
+    when it is present in more than one group.
 
     Most clonotypes are found in one individual only, so low sharing between individuals is
     expected biology, not a problem with the data. Some clonotypes recur in several individuals,
     which is expected biology as well.
+
+    What sharing means follows from ``groupby``. Grouped by the individual, a shared clonotype is
+    one found in more than one person. Grouped by a column that splits an individual, such as
+    the sample or the timepoint, a clonotype one person carries at two timepoints is shared too,
+    so the counts mix sharing between people with persistence within a person
+    (:func:`clone_persistence` counts the latter on its own).
 
     When :func:`tcri.pp.pool_rare_clones` wrote ``clonotype_key``, the derivation record in
     ``adata.uns["tcri_clonotype_derivations"]`` leads back to the column pooling read, and
@@ -457,13 +545,14 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     individual, so no id spans two groups, and sharing between individuals shows only on the
     clonotypes those ids were made from. ``TCRIModel.setup_anndata`` registers the column it is
     given under its own name, so a registered pooled column leads back the same way.
-    ``source_column`` names the column used. ``registered_shared_clonotypes`` counts the ids of
-    ``clonotype_key`` itself that are present in more than one group. A metric with a
-    ``groupby`` needs every registered id inside one group, so on the column registered at setup,
-    a registered shared clonotype makes a metric grouped by the same column raise.
 
     A cell is counted when it has a group and a clonotype, in ``clonotype_key`` and in the source
-    column; every other cell is left out.
+    column; every other cell is left out. Sharing is counted in clonotypes, and the
+    ``clonotypes`` frame gives each shared clonotype's repertoire fraction in each group.
+
+    The result is stored in ``adata.uns[key_added or "tcri_clonotype_sharing"]`` and read back
+    with ``tcri.get.result(adata, "clonotype_sharing")``; :func:`tcri.pl.clonotype_sharing`
+    draws it.
 
     Parameters
     ----------
@@ -475,66 +564,61 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
     groupby
         The column naming each cell's group, usually the individual. Required: sharing is
         defined between groups.
-    per_clonotype
-        ``False`` gives one row per group; ``True`` gives one row per shared clonotype.
+    splitby
+        A column constant within each group, such as the response, that labels the groups. The
+        frames carry it as a string: after the group column in ``groups``, and once for each
+        side in ``pairs``.
+    key_added
+        The ``uns`` key to store the result under; ``None`` stores it under
+        ``"tcri_clonotype_sharing"``.
+    inplace
+        ``True`` stores the result and returns ``None``; ``False`` stores nothing and returns it.
 
     Returns
     -------
-    pd.DataFrame
-        By default, one row per group with a counted cell, in the order of
-        ``obs[groupby].astype("category")``, then a row for all groups together. Columns:
+    dict or None
+        ``None``, or with ``inplace=False`` the result, ``{pairs, groups, clonotypes}``. Group
+        labels and clonotypes are strings, and groups come in the order of
+        ``obs[groupby].astype("category")``, only those with a counted cell.
 
-        - the group, in a column named after ``groupby``, with ``All`` in the row for all
-          groups.
-        - ``n_clonotypes``: the distinct clonotypes in the group.
-        - ``shared_clonotypes``: those of them also present in another group.
-        - ``shared_fraction``: ``shared_clonotypes / n_clonotypes``.
-        - ``n_cells``: the cells counted in the group.
-        - ``cells_in_shared_clonotypes``: the cells of the group that carry a shared clonotype.
-        - ``source_column``: the column sharing was measured on.
-        - ``registered_shared_clonotypes``: the ids of ``clonotype_key`` present in the group and
-          in another group.
+        ``pairs`` has one row per pair of distinct groups, each pair once, by the first group and
+        then the second, the first before the second:
 
-        The ``All`` row counts each distinct clonotype once, however many groups carry it; its
-        cell counts are the sums of the group rows.
+        - ``<groupby>_a``, ``<groupby>_b``: the two groups, named after ``groupby``, and their
+          split labels in ``<splitby>_a`` and ``<splitby>_b`` (with ``splitby`` only);
+        - ``n_clonotypes_a``, ``n_clonotypes_b``: the distinct clonotypes of each group;
+        - ``shared_clonotypes``: those both groups carry;
+        - ``shared_fraction_a``, ``shared_fraction_b``: ``shared_clonotypes`` as a share of each
+          group's clonotypes.
 
-        With ``per_clonotype=True``, one row per shared clonotype of the source column, in the
-        order of ``astype("category")`` on that column. Columns: ``clonotype``, ``n_groups``,
-        ``groups`` (the group labels, in the order of the group rows, joined with ``"|"``),
-        ``n_cells``, and ``cells_per_group`` (the cells in each of those groups, in the same
-        order, joined with ``"|"``).
+        ``groups`` has one row per group: the group in a column named after ``groupby``, its
+        split label in a column named after ``splitby`` (with ``splitby`` only),
+        ``n_clonotypes``, ``shared_clonotypes``, those also present in any other group, and
+        ``shared_fraction``, ``shared_clonotypes / n_clonotypes``. A clonotype carried by three
+        groups counts once here, so this fraction is not a sum over ``pairs``.
 
-        Group labels and clonotypes are strings.
+        ``clonotypes`` has one row per shared clonotype of the source column, in the order of
+        ``astype("category")`` on that column: ``clonotype``, ``n_groups``, ``groups`` (the group
+        labels, in group order, joined with ``"|"``), and ``repertoire_fraction``, in the same
+        order and joined the same way: the share of each group's counted cells that carry the
+        clonotype, each written in Python's ``str`` form.
 
     Raises
     ------
     ValueError
-        When ``clonotype_key``, ``groupby`` or the column the derivation record leads back to
-        is not a column of ``adata.obs``, when a group is named ``All``, or, for the table per
-        group, when ``groupby`` has the name of one of its other columns.
+        When ``clonotype_key``, ``groupby``, ``splitby`` or the column the derivation record
+        leads back to is not a column of ``adata.obs``, when ``splitby`` is not constant within
+        each group, or when ``groupby`` or ``splitby`` has the name of another column.
     """
     obs = adata.obs
-    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby)
-    if not per_clonotype:
-        _check_group_name(groupby, _SHARING_COLUMNS)
-    source = _clonotype_source(adata, clonotype_key)
-    if source is None:
-        source = clonotype_key
-    elif source not in obs.columns:
-        raise ValueError(
-            f"clonotype_key={clonotype_key!r} was derived from {source!r}, which is not a column "
-            f"of adata.obs. Sharing is measured on the column a derived clonotype column was made "
-            f"from."
-        )
+    _check_columns(obs, clonotype_key=clonotype_key, groupby=groupby, splitby=splitby)
+    _check_group_name(groupby, _SHARING_COLUMNS)
+    _check_split(obs, groupby, splitby, _SHARING_COLUMNS)
+    source = _source_column(adata, clonotype_key, "Sharing")
 
     groups = obs[groupby].astype("category")
     group_codes = groups.cat.codes.to_numpy().astype(np.int64)
     group_names = np.asarray(groups.cat.categories.astype(str), dtype=object)
-    if _ALL in set(group_names[np.unique(group_codes[group_codes >= 0])]):
-        raise ValueError(
-            f"groupby={groupby!r} has a group named {_ALL!r}, the label of the row for all "
-            f"groups. Rename that group to summarize this column."
-        )
     keep = ((group_codes >= 0)
             & ~_missing_clonotypes(obs[source]).to_numpy()
             & ~_missing_clonotypes(obs[clonotype_key]).to_numpy())
@@ -545,37 +629,72 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, per_clonotype=False):
 
     shared, n_clonotypes, n_shared = _shared_per_group(labels, cell_groups, n_groups)
     in_shared = np.isin(labels, list(shared))
+    # the groups with a counted cell, in category order
+    present = np.flatnonzero(np.bincount(cell_groups, minlength=n_groups))
+    names = group_names[present].tolist()
+    split = _split_column(obs, groupby, splitby, names)
+    per_group = _frame([(groupby, names), *split,
+                        ("n_clonotypes", n_clonotypes[present]),
+                        ("shared_clonotypes", n_shared[present]),
+                        ("shared_fraction", _share(n_shared[present], n_clonotypes[present]))])
+    return {"pairs": _group_pairs(shared, present, group_names, n_clonotypes,
+                                  groupby=groupby, split=dict(split)),
+            "groups": per_group,
+            "clonotypes": _shared_clonotypes(shared, clonotypes, labels, cell_groups,
+                                             in_shared, group_names)}
 
-    if per_clonotype:
-        names = np.asarray(clonotypes.cat.categories.astype(str), dtype=object)
-        pairs, pair_cells = np.unique(labels[in_shared] * n_groups + cell_groups[in_shared],
-                                      return_counts=True)
-        cells_in_pair = dict(zip(pairs.tolist(), pair_cells.tolist()))
-        rows = []
-        for code in sorted(shared):
-            members = sorted(shared[code])
-            cells = [cells_in_pair[code * n_groups + member] for member in members]
-            rows.append((names[code], len(members), "|".join(group_names[members]), sum(cells),
-                         "|".join(map(str, cells))))
-        table = pd.DataFrame(rows, columns=["clonotype", "n_groups", "groups", "n_cells",
-                                            "cells_per_group"])
-        return table.astype({"n_groups": "int64", "n_cells": "int64"})
 
-    registered = obs[clonotype_key].astype("category").cat.codes.to_numpy().astype(np.int64)[keep]
-    _, _, n_registered_shared = _shared_per_group(registered, cell_groups, n_groups)
-    n_cells = np.append(np.bincount(cell_groups, minlength=n_groups), len(cell_groups))
-    cells_in_shared = np.append(np.bincount(cell_groups[in_shared], minlength=n_groups),
-                                in_shared.sum())
-    # The groups with a counted cell, in category order, then the last entry: all groups.
-    rows = np.append(np.flatnonzero(n_cells[:-1]), n_groups)
-    table = pd.DataFrame({
-        groupby: [*group_names[rows[:-1]], _ALL],
-        "n_clonotypes": n_clonotypes[rows],
-        "shared_clonotypes": n_shared[rows],
-        "n_cells": n_cells[rows],
-        "cells_in_shared_clonotypes": cells_in_shared[rows],
-        "source_column": source,
-        "registered_shared_clonotypes": n_registered_shared[rows],
-    })
-    table.insert(3, "shared_fraction", table["shared_clonotypes"] / table["n_clonotypes"])
-    return table
+def _shared_clonotypes(shared, clonotypes, labels, cell_groups, in_shared, group_names):
+    """The ``clonotypes`` frame of :func:`clonotype_sharing`: one row per shared clonotype, with
+    the groups that carry it and its repertoire fraction in each.
+
+    ``shared`` maps each shared clonotype code to the codes of its groups; ``labels`` and
+    ``cell_groups`` are the codes of the counted cells, and ``in_shared`` marks those carrying a
+    shared clonotype.
+    """
+    n_groups = len(group_names)
+    names = np.asarray(clonotypes.cat.categories.astype(str), dtype=object)
+    counted = np.bincount(cell_groups, minlength=n_groups)
+    pairs, pair_cells = np.unique(labels[in_shared] * n_groups + cell_groups[in_shared],
+                                  return_counts=True)
+    cells_in_pair = dict(zip(pairs.tolist(), pair_cells.tolist()))
+    rows = []
+    for code in sorted(shared):
+        members = sorted(shared[code])
+        fractions = [cells_in_pair[code * n_groups + member] / counted[member]
+                     for member in members]
+        rows.append((names[code], len(members), "|".join(group_names[members]),
+                     "|".join(str(float(f)) for f in fractions)))
+    table = pd.DataFrame(rows, columns=["clonotype", "n_groups", "groups",
+                                        "repertoire_fraction"])
+    return table.astype({"n_groups": "int64"})
+
+
+def _group_pairs(shared, present, group_names, n_clonotypes, *, groupby, split):
+    """The ``pairs`` frame of :func:`clonotype_sharing`.
+
+    ``shared`` maps each shared clonotype code to the codes of the groups that carry it,
+    ``present`` holds the codes of the groups with a counted cell, in order, ``n_clonotypes`` the
+    clonotype count of every group code, and ``split`` maps ``splitby`` to the split label of
+    each group in ``present`` (empty without ``splitby``).
+    """
+    both = np.zeros((len(group_names), len(group_names)), dtype=np.int64)
+    for members in shared.values():
+        members = list(members)
+        both[np.ix_(members, members)] += 1
+    first = np.asarray([a for i, a in enumerate(present) for _ in present[i + 1:]],
+                       dtype=np.int64)
+    second = np.asarray([b for i, _ in enumerate(present) for b in present[i + 1:]],
+                        dtype=np.int64)
+    n_a, n_b, n_both = n_clonotypes[first], n_clonotypes[second], both[first, second]
+    columns = [(f"{groupby}_a", group_names[first].tolist()),
+               (f"{groupby}_b", group_names[second].tolist())]
+    for splitby, labels in split.items():
+        label_of = dict(zip(present.tolist(), labels))
+        columns += [(f"{splitby}_a", [label_of[a] for a in first]),
+                    (f"{splitby}_b", [label_of[b] for b in second])]
+    columns += [("n_clonotypes_a", n_a), ("n_clonotypes_b", n_b),
+                ("shared_clonotypes", n_both),
+                ("shared_fraction_a", _share(n_both, n_a)),
+                ("shared_fraction_b", _share(n_both, n_b))]
+    return _frame(columns)

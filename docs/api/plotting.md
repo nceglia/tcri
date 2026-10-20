@@ -1,8 +1,8 @@
 # Plotting (`tcri.pl`)
 
-Visualization twins that mirror the `tcri.tl` metrics by name — each renders the tidy
-result of its `tl` counterpart (no metric math lives here) — plus the shared color
-helpers. Exposed as ``tcri.pl``.
+Visualization twins that mirror the `tcri.tl` metrics and the `tcri.pp` repertoire summaries
+by name — each renders the stored result of its counterpart (no metric math lives here) — plus
+the shared color helpers. Exposed as ``tcri.pl``.
 
 ## One quantity, and `quantity`
 
@@ -95,6 +95,21 @@ The twin of {func}`tcri.perturbation.gene_importance`: a ranking of the most imp
 
 ```{eval-rst}
 .. automodule:: tcri.plotting._perturbation
+   :members:
+```
+
+## Repertoire summaries
+
+The twins of {func}`tcri.pp.repertoire_summary`, {func}`tcri.pp.clonotype_sharing` and
+{func}`tcri.pp.clone_persistence`. Each draws what its summary stored: run the summary first.
+
+```python
+tcri.pp.clonotype_sharing(adata, clonotype_key="trb_pooled", groupby="patient")
+tcri.pl.clonotype_sharing(adata)
+```
+
+```{eval-rst}
+.. automodule:: tcri.plotting._repertoire
    :members:
 ```
 

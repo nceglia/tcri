@@ -16,7 +16,9 @@ level, ``{replicate, item, stats}``, each level holding ``draws`` and ``summary`
 
 :func:`result` returns the whole stored result, provenance stripped, and :func:`params` the
 provenance. ``joint_distribution`` stores ``{summary, draws}``: its summary is read with
-:func:`result` and its draws with :func:`draws`.
+:func:`result` and its draws with :func:`draws`. The repertoire summaries of ``tcri.pp`` are
+stored the same way and read with :func:`result`: ``repertoire_summary`` and
+``clone_persistence`` store a frame, ``clonotype_sharing`` stores ``{pairs, groups, clonotypes}``.
 """
 from __future__ import annotations
 
@@ -36,12 +38,18 @@ _RESULTS = {
     "phenotypic_entropy": _K.PHENOTYPIC_ENTROPY,
     "phenotypic_flux": _K.PHENOTYPIC_FLUX,
     "gene_importance": _K.GENE_IMPORTANCE,
+    "repertoire_summary": _K.REPERTOIRE_SUMMARY,
+    "clonotype_sharing": _K.CLONOTYPE_SHARING,
+    "clone_persistence": _K.CLONE_PERSISTENCE,
 }
 
 #: The call that fills a key, for results that are not ``tcri.tl.<name>(adata, ...)``.
 #: ``perturb`` queries take the fitted model first.
 _CALLS = {
     "gene_importance": "tcri.perturb.gene_importance(model, adata, ...)",
+    "repertoire_summary": "tcri.pp.repertoire_summary(adata, ...)",
+    "clonotype_sharing": "tcri.pp.clonotype_sharing(adata, ...)",
+    "clone_persistence": "tcri.pp.clone_persistence(adata, ...)",
 }
 
 #: Written beside every result; stripped by :func:`result`, which returns the stored result, the

@@ -430,8 +430,8 @@ tcri.get.stats(adata, "mutual_information", key="mi_change")[STATS].round(4)
 # **Per item, a change covers the persistent clones**, the clones a patient has at both
 # timepoints. Phenotypic entropy has one item row per persistent clone; clonotypic entropy has
 # one per phenotype, recomputed on the persistent clones so both sides share one clone set and
-# one normalizer. Mutual information has no items. `pp.clone_persistence` counts the persistent
-# clones of each patient.
+# one normalizer. Mutual information has no items. `pp.clone_persistence` counts, per patient,
+# the clones seen at both timepoints.
 #
 # `phenotypic_flux` is a change by construction and is stored the same way: per persistent
 # clone, the distance its phenotype distribution moved (the item rows), and per patient those
@@ -457,12 +457,13 @@ def item_rows(name):
     return pd.Series(n.to_numpy(), index=n.index.astype(str))
 
 
-# the item rows of the entropy's change and of flux are the persistent clones
-persistence = tcri.pp.clone_persistence(adata, clonotype_key="clone_id",
-                                        covariate_key="timepoint", cov_from="pre",
-                                        cov_to="post", groupby="patient")
-persistence = persistence.set_index("patient")[["clones_from_only", "clones_to_only",
-                                                "persistent_clones"]]
+# the item rows of the entropy's change and of flux are the clones each patient has at both
+# timepoints, which pp.clone_persistence counts per pair of timepoints
+pairs = tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint",
+                                  groupby="patient", inplace=False)
+pre_post = pairs[pairs[["covariate_a", "covariate_b"]].isin(["pre", "post"]).all(axis=1)]
+persistence = pre_post.set_index("patient")[["covariate_a", "n_clones_a", "covariate_b",
+                                             "n_clones_b", "shared_clones"]]
 persistence["entropy items"] = item_rows("phenotypic_entropy")
 persistence["flux items"] = item_rows("phenotypic_flux")
 persistence.head(8)

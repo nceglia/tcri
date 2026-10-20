@@ -869,9 +869,9 @@ def test_a_change_axis_says_it_is_a_change(metric, cohort):
 
 def test_the_flux_item_view_draws_each_persistent_clone(trained_model):
     """``pl.phenotypic_flux(view="item")`` draws one mark per persistent clone within each
-    replicate: the clones ``pp.clone_persistence`` finds at both levels, each at its replicate's
-    x position with its stored item value. A clone seen at one level only has no item row and
-    no mark.
+    replicate: as many as ``pp.clone_persistence`` counts shared between the two levels, each at
+    its replicate's x position with its stored item value. A clone seen at one level only has no
+    item row and no mark.
     """
     from tcri.plotting._base import REFERENCE_LABEL
 
@@ -879,22 +879,21 @@ def test_the_flux_item_view_draws_each_persistent_clone(trained_model):
     adata = adata.copy()
     cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
     # the fixture's clonotype and covariate columns
-    persistence = tcri.pp.clone_persistence(adata, clonotype_key="unique_clone_id",
-                                            covariate_key="timepoint", cov_from=cov_from,
-                                            cov_to=cov_to, groupby="patient")
-    persistence = persistence.set_index("patient")
-    assert ((persistence["clones_from_only"] + persistence["clones_to_only"]) > 0).all(), (
+    pairs = tcri.pp.clone_persistence(adata, clonotype_key="unique_clone_id",
+                                      covariate_key="timepoint", groupby="patient",
+                                      inplace=False)
+    persistence = pairs[(pairs["covariate_a"] == str(cov_from))
+                        & (pairs["covariate_b"] == str(cov_to))].set_index("patient")
+    one_level = (persistence["n_clones_a"] + persistence["n_clones_b"]
+                 - 2 * persistence["shared_clones"])
+    assert (one_level > 0).all(), (
         "the fixture has a patient whose every clone persists, so nothing is left out there")
-    per_clone = tcri.pp.clone_persistence(adata, clonotype_key="unique_clone_id",
-                                          covariate_key="timepoint", cov_from=cov_from,
-                                          cov_to=cov_to, groupby="patient", per_clone=True)
-    persistent = per_clone.loc[(per_clone[str(cov_from)] > 0) & (per_clone[str(cov_to)] > 0)]
 
     tcri.tl.phenotypic_flux(adata, cov_from=cov_from, cov_to=cov_to, groupby="patient")
     items = tcri.get.items(adata, "phenotypic_flux")
-    for patient, clones in persistent.groupby("patient")["clonotype"]:
-        assert set(items.loc[items["patient"].astype(str) == patient, "clonotype"]) == set(
-            clones), f"{patient}: the item rows are not the persistent clones"
+    reported = items.groupby(items["patient"].astype(str))["clonotype"].nunique()
+    assert reported.to_dict() == persistence["shared_clones"].to_dict(), (
+        "the item rows are not the persistent clones")
 
     ax = tcri.pl.phenotypic_flux(adata, view="item")
     assert ax.get_xlabel() == "patient"
@@ -906,7 +905,7 @@ def test_the_flux_item_view_draws_each_persistent_clone(trained_model):
         for x, y in coll.get_offsets():
             drawn.setdefault(patients[int(round(x))], []).append(float(y))
     assert {p: len(ys) for p, ys in drawn.items()} == (
-        persistence["persistent_clones"].to_dict()), "not one mark per persistent clone"
+        persistence["shared_clones"].to_dict()), "not one mark per persistent clone"
     for patient, ys in drawn.items():
         want = items.loc[items["patient"].astype(str) == patient, "adjusted"].to_numpy()
         np.testing.assert_allclose(np.sort(ys), np.sort(want), atol=1e-12, err_msg=patient)

@@ -1,5 +1,134 @@
 {
   "tools": {
+    "tcri_clone_persistence": {
+      "slots": {
+        "frame": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "covariate_a",
+              "covariate_b",
+              "n_clones_a",
+              "n_clones_b",
+              "shared_clones",
+              "shared_fraction_a",
+              "shared_fraction_b"
+            ],
+            "minimal": [
+              "covariate_a",
+              "covariate_b",
+              "n_clones_a",
+              "n_clones_b",
+              "shared_clones",
+              "shared_fraction_a",
+              "shared_fraction_b"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.pp.clone_persistence"
+    },
+    "tcri_clonotype_sharing": {
+      "slots": {
+        "clonotypes": {
+          "columns": {
+            "maximal": [
+              "clonotype",
+              "groups",
+              "n_groups",
+              "repertoire_fraction"
+            ],
+            "minimal": [
+              "clonotype",
+              "groups",
+              "n_groups",
+              "repertoire_fraction"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "groups": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "n_clonotypes",
+              "shared_clonotypes",
+              "shared_fraction"
+            ],
+            "minimal": [
+              "<groupby>",
+              "n_clonotypes",
+              "shared_clonotypes",
+              "shared_fraction"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "pairs": {
+          "columns": {
+            "maximal": [
+              "<groupby>_a",
+              "<groupby>_b",
+              "disease_status_a",
+              "disease_status_b",
+              "n_clonotypes_a",
+              "n_clonotypes_b",
+              "shared_clonotypes",
+              "shared_fraction_a",
+              "shared_fraction_b"
+            ],
+            "minimal": [
+              "<groupby>_a",
+              "<groupby>_b",
+              "n_clonotypes_a",
+              "n_clonotypes_b",
+              "shared_clonotypes",
+              "shared_fraction_a",
+              "shared_fraction_b"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.pp.clonotype_sharing"
+    },
     "tcri_clonotypic_entropy": {
       "slots": {
         "item.draws": {
@@ -1354,6 +1483,46 @@
       },
       "version": 4,
       "writer": "tcri.tl.phenotypic_flux"
+    },
+    "tcri_repertoire_summary": {
+      "slots": {
+        "frame": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "clonality",
+              "covariate",
+              "largest_clone_cells",
+              "largest_clone_share",
+              "n_cells",
+              "n_clones",
+              "n_singleton_clones",
+              "singleton_fraction"
+            ],
+            "minimal": [
+              "clonality",
+              "largest_clone_cells",
+              "largest_clone_share",
+              "n_cells",
+              "n_clones",
+              "n_singleton_clones",
+              "singleton_fraction"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 1,
+      "writer": "tcri.pp.repertoire_summary"
     }
   }
 }

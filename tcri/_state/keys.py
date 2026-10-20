@@ -57,6 +57,12 @@ PHENOTYPIC_FLUX = "tcri_phenotypic_flux"
 #: The in-silico perturbation (``tcri.perturb.gene_importance``): a query on the fitted model,
 #: stored by level like the metrics, ``{replicate, item, stats}``, with the adjusted value only.
 GENE_IMPORTANCE = "tcri_gene_importance"
+#: The repertoire summaries (``tcri.pp``), stored by the same decorator: ``repertoire_summary``
+#: and ``clone_persistence`` store a frame, ``clonotype_sharing`` stores
+#: ``{pairs, groups, clonotypes}``.
+REPERTOIRE_SUMMARY = "tcri_repertoire_summary"
+CLONOTYPE_SHARING = "tcri_clonotype_sharing"
+CLONE_PERSISTENCE = "tcri_clone_persistence"
 
 #: The layer recorded by setup_anndata.
 LAYER = "tcri_layer"
