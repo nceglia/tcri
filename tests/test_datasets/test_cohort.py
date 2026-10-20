@@ -33,7 +33,8 @@ def test_the_shape_is_patients_x_timepoints_x_arms(cohort):
 
 
 def test_clones_pair_across_timepoints_within_a_patient(cohort):
-    """The whole point. Without this, `phenotypic_flux` and every `delta_*` measure nothing.
+    """The whole point. Without this, `phenotypic_flux` and every change call (a metric with
+    `cov_from` and `cov_to`) measure nothing.
 
     Measured by MASS, not by count. With power-law clone sizes some rare clones simply are
     not drawn at both timepoints — that is what a heavy tail does to a finite sample, and it

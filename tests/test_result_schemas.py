@@ -6,10 +6,14 @@ forces the number to move when the fields do: the layouts live in comments in
 test a renamed or dropped column passes the suite while making every result stored by an earlier
 version unreadable.
 
-This test runs each tool twice on the ``cohort`` fixture — once with only its required arguments,
-once with grouping, splitting and draws — records the slots (a level's frames as
-``<level>.<frame>``), their column names and index levels, and compares that against ``tests/snapshots/tl_schemas.json``. Changing the fields fails until the
-version is bumped and the snapshot updated::
+This test runs each tool on the ``cohort`` fixture once with only its required arguments
+(``minimal``) and once with grouping, splitting and draws (``maximal``); a metric that also takes
+a change (``cov_from``/``cov_to``) runs the same two calls on a change, recorded as
+``change_minimal`` and ``change_maximal`` under the same stored result, since a change is stored
+under the metric's own key. It records the slots (a level's frames as ``<level>.<frame>``), their
+column names and index levels per call, and compares that against
+``tests/snapshots/tl_schemas.json``. Changing the fields fails until the version is bumped and
+the snapshot updated::
 
     pytest tests/test_result_schemas.py --update-schema-snapshot
 
@@ -49,35 +53,43 @@ def _writer(name: str) -> str:
 
 
 def _calls(adata):
-    """``name -> (minimal kwargs, maximal kwargs)``, from the fixture's own levels."""
+    """``name -> {label: kwargs}``, from the fixture's own levels. A ``*minimal`` call runs with no
+    registered replicate (:func:`observed`)."""
     cov = list(adata.obs["covariate"].cat.categories)
     scalar = {"covariate": cov[0]}
-    delta = {"cov_from": cov[0], "cov_to": cov[1]}
+    change = {"cov_from": cov[0], "cov_to": cov[1]}
     wide = {"groupby": _GROUPBY, "splitby": _SPLITBY, "n_samples": 3}
     meta = adata.uns[K.METADATA]
     clonotype, covariate = meta[K.CLONE_COL], meta[K.COVARIATE_COL]
     genes = {"genes": list(adata.var_names[:3])}
+
+    def levels(at):
+        return {"minimal": {**at, "null_model": None}, "maximal": {**at, **wide}}
+
+    def and_a_change():
+        return {**levels(scalar),
+                **{f"change_{label}": kw for label, kw in levels(change).items()}}
+
     return {
         # joint_distribution takes neither a reference nor grouping
-        "joint_distribution": ({}, {"n_samples": 3}),
-        "mutual_information": ({**scalar, "null_model": None}, {**scalar, **wide}),
-        "clonotypic_entropy": ({**scalar, "null_model": None}, {**scalar, **wide}),
-        "phenotypic_entropy": ({**scalar, "null_model": None}, {**scalar, **wide}),
-        "phenotypic_flux": ({**delta, "null_model": None}, {**delta, **wide}),
-        "delta_clonotypic_entropy": ({**delta, "null_model": None}, {**delta, **wide}),
-        "delta_phenotypic_entropy": ({**delta, "null_model": None}, {**delta, **wide}),
+        "joint_distribution": {"minimal": {}, "maximal": {"n_samples": 3}},
+        "mutual_information": and_a_change(),
+        "clonotypic_entropy": and_a_change(),
+        "phenotypic_entropy": and_a_change(),
+        # flux is always a change
+        "phenotypic_flux": levels(change),
         # gene_importance stores the adjusted value only, so it always runs with its reference
-        "gene_importance": (genes, {**genes, **wide}),
+        "gene_importance": {"minimal": genes, "maximal": {**genes, **wide}},
         # the repertoire summaries read obs: the registered clonotype and covariate columns
-        "repertoire_summary": ({"clonotype_key": clonotype},
-                               {"clonotype_key": clonotype, "groupby": _GROUPBY,
-                                "splitby": _SPLITBY, "covariate_key": covariate}),
-        "clonotype_sharing": ({"clonotype_key": clonotype, "groupby": _GROUPBY},
-                              {"clonotype_key": clonotype, "groupby": _GROUPBY,
-                               "splitby": _SPLITBY}),
-        "clone_persistence": ({"clonotype_key": clonotype, "covariate_key": covariate},
-                              {"clonotype_key": clonotype, "covariate_key": covariate,
-                               "groupby": _GROUPBY, "splitby": _SPLITBY}),
+        "repertoire_summary": {"minimal": {"clonotype_key": clonotype},
+                               "maximal": {"clonotype_key": clonotype, "groupby": _GROUPBY,
+                                           "splitby": _SPLITBY, "covariate_key": covariate}},
+        "clonotype_sharing": {"minimal": {"clonotype_key": clonotype, "groupby": _GROUPBY},
+                              "maximal": {"clonotype_key": clonotype, "groupby": _GROUPBY,
+                                          "splitby": _SPLITBY}},
+        "clone_persistence": {"minimal": {"clonotype_key": clonotype, "covariate_key": covariate},
+                              "maximal": {"clonotype_key": clonotype, "covariate_key": covariate,
+                                          "groupby": _GROUPBY, "splitby": _SPLITBY}},
     }
 
 
@@ -136,9 +148,10 @@ def observed(cohort):
     bare.uns[K.METADATA] = {**bare.uns[K.METADATA], "replicate": None}
 
     seen = {}
-    for name, (minimal, maximal) in _calls(adata).items():
+    for name, calls in _calls(adata).items():
         slots = {}
-        for label, kwargs, on in (("minimal", minimal, bare), ("maximal", maximal, adata)):
+        for label, kwargs in calls.items():
+            on = bare if label.endswith("minimal") else adata
             for slot, shape in _observe(_run(name, kwargs, model, on), placeholders).items():
                 entry = slots.setdefault(slot, {"type": shape["type"],
                                                 "columns": {}, "index": {}})

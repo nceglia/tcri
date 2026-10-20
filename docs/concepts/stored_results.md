@@ -39,13 +39,19 @@ it:
 
 ```python
 @tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
-           values=("value", "denom"), denominators=("denom",), default_null="phenotype")
-def mutual_information(adata, *, covariate=None, groupby=None, ..., fit=None):
+           values=("value", "denom", "value_from", "value_to", "denom_from", "denom_to"),
+           denominators=("denom", "denom_from", "denom_to"),
+           default_null={"covariate": "phenotype", "change": "covariate"})
+def mutual_information(adata, *, covariate=None, cov_from=None, cov_to=None, groupby=None, ...,
+                       fit=None):
     ...
 ```
 
 The function declares the parameters it computes with. The decorator adds `key_added`, `inplace`
 and, for a metric with a reference, `null_model` after them, and reads those three itself.
+`values` lists every value column the metric can return, and a call skips those it does not
+return; `default_null` is the reference `null_model="auto"` resolves to, here the phenotype null
+at one covariate level and the covariate null on a change.
 
 ## Where a result lands
 
@@ -58,14 +64,14 @@ The key is the tool's name, so the key says what wrote it.
 | `tl.mutual_information(adata, fit="null.phenotype[0]")` | `uns["tcri_null.phenotype[0]_mutual_information"]` |
 | `perturb.gene_importance(model, adata)` | `uns["tcri_gene_importance"]` |
 
-Mutual information, the two entropies and `gene_importance` store their result by level:
+Mutual information, the two entropies, flux and `gene_importance` store their result by level:
 
 ```text
 adata.uns["tcri_<metric>"]
 ├── replicate
 │   ├── draws      one row per replicate and draw (and null fit)
 │   └── summary    one row per replicate           ← get.replicates
-├── item           (the entropies and gene_importance; mutual information has none)
+├── item           (the entropies, flux and gene_importance; mutual information has none)
 │   ├── draws      one row per replicate, item and draw (and null fit)
 │   └── summary    one row per replicate and item
 ├── stats          one row per test; None when nothing is compared
@@ -75,9 +81,26 @@ adata.uns["tcri_<metric>"]
 The replicate summary is the main result, read with `get.replicates`. Every replicate has its
 replicate row, NaN when it has no cells at the covariate or no clone left by `clones=`.
 
-The other tools store a dict of frames: `table` is the unreduced substrate, one row
-per covariate, group and item (and draw, with `n_samples > 0`), and `result` is the reduced
-per-group frame the plots consume. The tools that contrast groups add `stats`.
+A call at one covariate level labels its rows with `covariate`. A change, `cov_from` with
+`cov_to`, labels them with `cov_from` and `cov_to` instead, and its `value` is `cov_to − cov_from`
+with the endpoints beside it, `value_from` and `value_to` (and `denom_from`, `denom_to` for mutual
+information). A reference adds a `null_*` column for each of them and the adjusted endpoints,
+`adjusted_from` and `adjusted_to`. A summary reduces a change and its endpoints over one set of
+draws, so `value = value_to − value_from` and `adjusted = adjusted_to − adjusted_from` hold in the
+summary as they do on every draw. On a change the item rows are the persistent clones, those at
+both levels within the replicate.
+
+Flux is a distance between the two levels, so it has no endpoints. Its item rows hold one
+distance per persistent clone, and its replicate rows those distances weighted by each clone's
+share of the replicate's `cov_from` joint, renormalized over the persistent clones (equally at
+`weighted=False`, by cells at `cov_from` with `weighted=True`); a replicate with no
+persistent clone has a NaN replicate row.
+
+`gene_importance` labels every row with the gene: its replicate level is the importance, one row
+per gene and group, and its item level the per-phenotype shift, one row per gene, group and
+phenotype. It stores only the adjusted value, so its frames carry `adjusted` and, on the
+summaries, `adjusted_sd` and the adjusted HDI, and no `value` (the reference, below).
+
 `joint_distribution` stores `{summary, draws}`: its posterior-mean clone × phenotype table and
 its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`. The
 snapshot below is the written record of which slots each tool has.
@@ -141,14 +164,12 @@ first — tcri.pl.* renders the stored result and never recomputes it.
 
 `get.items` and `get.draws(items=True)` raise for mutual information and the joint, which have no
 items. `get.replicates` raises for the joint, whose summary `get.result(adata,
-"joint_distribution")["summary"]` reads and whose draws `get.draws` reads. `get.replicates`,
-`get.items` and `get.draws` raise for a result stored as `table` and `result` (flux and the
-deltas), which `get.result` reads. They raise for the repertoire summaries too, which have no
-levels: read those with `get.result(adata, "clonotype_sharing")`, and the frame or frames come
-back.
+"joint_distribution")["summary"]` reads and whose draws `get.draws` reads. They raise for the
+repertoire summaries too, which have no levels: read those with
+`get.result(adata, "clonotype_sharing")`, and the frame or frames come back.
 
 `pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
-summary, or with `view="item"` the item summary, or the stored `result` of the other tools.
+summary, or with `view="item"` the item summary.
 
 ## Named fits, side by side
 
@@ -167,17 +188,21 @@ An ambiguous name raises rather than silently preferring one, and so does a refe
 
 When a metric declares `null_model`, the decorator runs the whole call again on each fit of the
 named reference, with every other argument forwarded verbatim and each null's draws seeded from
-their own seed, and joins them draw by draw: every per-draw frame (each level's `draws`, or
-`table`) gains a `null` column numbering the fits, every frame gains `null_*` columns and, for
-the value columns, `adjusted*` columns, and each summary (or `result`) carries the adjusted
-value's spread over all the pairs. Forwarding verbatim is
-the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
-estimand, and a reference computed at defaults would be a different quantity subtracted from a
-different quantity.
+their own seed, and joins them draw by draw: each level's `draws` gains a `null` column
+numbering the fits, every frame gains `null_*` columns and, for the value columns, `adjusted*`
+columns, and each summary carries the adjusted value's spread over all the pairs. Forwarding
+verbatim is the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change
+the estimand, and a reference computed at defaults would be a different quantity subtracted from
+a different quantity.
 
 The reference run is itself a stored result under its own fit key, so it is plottable with
 `key=`, readable through `tcri.get`, and never computed twice. `pl` draws the adjusted value
 against a zero rule by default, or `quantity="value"` with the reference behind it.
+
+`gene_importance` forwards its arguments the same way, but at `n_samples > 0` it pairs each draw
+with one null, its null runs store nothing, and it keeps only the `adjusted*` columns, so
+`pl.gene_importance` takes no `quantity`; its pairing is on the
+[perturbation page](../api/perturbation.md).
 
 ## Surviving `.h5ad`
 
@@ -201,9 +226,10 @@ recognizes its own output and passes everything else through.
 ## What stops a result from changing quietly
 
 `version` is the layout's version, declared as `@tl_result(version=N)`. It is guarded by a
-snapshot test rather than by review: `tests/test_result_schemas.py` runs every tool twice — a
-minimal call and a maximal one — and compares the slots, their column names and their index
-levels against `tests/snapshots/tl_schemas.json`.
+snapshot test rather than by review: `tests/test_result_schemas.py` runs every tool with a
+minimal call and a maximal one, and the metrics that take a change run both again with `cov_from`
+and `cov_to`. It compares the slots, their column names and their index levels against
+`tests/snapshots/tl_schemas.json`.
 
 - A renamed, added or dropped column fails the test until the version is bumped, and the message
   says so.

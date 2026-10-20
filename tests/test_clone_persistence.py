@@ -229,11 +229,12 @@ def ragged_cohort():
     return adata
 
 
-def test_shared_clones_are_the_clones_a_change_is_computed_on(ragged_cohort):
+def test_shared_clones_are_the_item_rows_of_a_change(ragged_cohort):
     """Per patient, the shared clones of (``cov_0``, ``cov_1``) on the registered column are the
-    clones flux and the phenotypic entropy change report, at the metrics' default
-    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is not one of
-    them, and P2, with none, has no rows in those results.
+    item rows of a change at the metrics' default ``exclude_pools=True``: the clones
+    ``phenotypic_entropy`` and ``phenotypic_flux`` report per item. Each patient's pool has cells
+    at both timepoints and is not one of them. P2 has no shared clone: no item row, and a NaN
+    flux.
 
     Run at ``null_model=None``: what is compared is which clones are used, not a value.
     """
@@ -252,9 +253,14 @@ def test_shared_clones_are_the_clones_a_change_is_computed_on(ragged_cohort):
     kw = dict(cov_from="cov_0", cov_to="cov_1", groupby="patient", null_model=None,
               inplace=False)
     with warnings.catch_warnings():
-        # the metrics name the clones seen at one level only, which is the point here
+        # the metrics name the patient with no clone at both levels, which is the point here
         warnings.simplefilter("ignore", UserWarning)
-        for name in ("delta_phenotypic_entropy", "phenotypic_flux"):
-            result = getattr(tcri.tl, name)(adata, **kw)["result"]
-            reported = result.groupby("patient", observed=True)["clonotype"].nunique()
+        for name in ("phenotypic_entropy", "phenotypic_flux"):
+            result = getattr(tcri.tl, name)(adata, **kw)
+            items = result["item"]["summary"]
+            reported = items.groupby(items["patient"].astype(str))["clonotype"].nunique()
             assert {p: int(reported.get(p, 0)) for p in shared} == shared, name
+            assert not items["clonotype"].astype(str).str.startswith("pooled@").any(), name
+    flux = result["replicate"]["summary"].set_index(
+        result["replicate"]["summary"]["patient"].astype(str))["value"]
+    assert np.isnan(flux["P2"]) and np.isfinite(flux[["P0", "P1"]]).all()

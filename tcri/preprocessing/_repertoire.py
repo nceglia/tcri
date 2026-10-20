@@ -390,8 +390,11 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, groupby=None,
     tissue × timepoint is one combined covariate column. Clones are counted, never cells.
 
     On the clonotype column registered at setup, and with the ``groupby`` the metrics use,
-    ``shared_clones`` of a pair of levels is the number of persistent clones a change between
-    those levels is computed on, at the metrics' default ``exclude_pools=True``. The metrics
+    ``shared_clones`` of a pair of levels is the number of persistent clones of a change between
+    those levels: the item rows of ``tl.phenotypic_flux`` and of the entropies with ``cov_from``
+    and ``cov_to``, at their default ``exclude_pools=True``. Each endpoint of an entropy or mutual
+    information change counts every clone at its level. A group without a shared clone has no
+    item rows (one NaN item row per phenotype for clonotypic entropy) and a NaN flux. The metrics
     read ``groupby=None`` as the replicate registered at setup, while here it means the whole
     dataset.
 

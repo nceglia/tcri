@@ -1,4 +1,5 @@
-"""``pl.phenotypic_flux`` — cache renderer for per-clone phenotype-distribution flux.
+"""``pl.phenotypic_flux`` — cache renderer for the phenotype-distribution flux, per replicate
+and per persistent clone.
 
 The tidy flux values are available via ``return_df=True``.
 """
@@ -9,10 +10,13 @@ from ._base import render_metric
 __all__ = ["phenotypic_flux"]
 
 
-def phenotypic_flux(adata, *, quantity="auto", key=None, order=None, hue_order=None,
-                    palette=None, legend=True, ax=None, figsize=(8, 4), save=None, show=None,
-                    return_df=False):
-    """Per-clone flux from ``cov_from`` to ``cov_to``, from the cached ``tl.phenotypic_flux``.
+def phenotypic_flux(adata, *, view="replicate", quantity="auto", key=None, order=None,
+                    hue_order=None, palette=None, legend=True, ax=None, figsize=(8, 4), save=None,
+                    show=None, return_df=False):
+    """Flux from ``cov_from`` to ``cov_to``, from the cached ``tl.phenotypic_flux``.
+
+    The replicate view draws each replicate's flux, by split when the result has one, with the
+    split test starred. The item view draws one point per persistent clone within each replicate.
 
     The endpoints and the distance come from the cached ``params``, so the axis label and the
     numbers beneath it describe the same quantity; the distance is chosen in one place,
@@ -22,6 +26,8 @@ def phenotypic_flux(adata, *, quantity="auto", key=None, order=None, hue_order=N
     ----------
     adata
         The object ``tl.phenotypic_flux`` stored its result in.
+    view
+        ``"replicate"`` (one mark per replicate) or ``"item"`` (one per persistent clone).
     quantity
         ``"auto"`` draws the adjusted value when the result carries a reference and the value
         otherwise; ``"adjusted"`` or ``"value"`` asks for one by name.
@@ -44,17 +50,18 @@ def phenotypic_flux(adata, *, quantity="auto", key=None, order=None, hue_order=N
     show
         Show the figure.
     return_df
-        Return the cached ``result`` frame instead of drawing.
+        Return the view's stored summary instead of drawing.
 
     Returns
     -------
     matplotlib.axes.Axes or pandas.DataFrame
-        The axes drawn on, or the cached ``result`` with ``return_df=True``.
+        The axes drawn on, or the view's stored summary with ``return_df=True``.
     """
     from .. import get as _get
 
     metric = _get.params(adata, "phenotypic_flux", key=key).get("distance_metric", "kl")
     return render_metric(adata, "phenotypic_flux", ylabel=f"phenotypic flux ({metric})",
-                         item_col="clonotype", quantity=quantity, key=key, order=order,
+                         item_col="clonotype", view=view, distance=True, quantity=quantity,
+                         key=key, order=order,
                          hue_order=hue_order, palette=palette, legend=legend, ax=ax,
                          figsize=figsize, save=save, show=show, return_df=return_df)

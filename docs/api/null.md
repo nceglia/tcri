@@ -16,9 +16,9 @@ Three axes, one function each:
 
 | function | shuffled within | destroys | the reference for |
 |---|---|---|---|
-| {func}`phenotype <tcri.null.phenotype>` | batch, covariate, replicate | which cell carries which phenotype | clonotypic and phenotypic entropy, mutual information, gene importance |
+| {func}`phenotype <tcri.null.phenotype>` | batch, covariate, replicate | which cell carries which phenotype | clonotypic and phenotypic entropy and mutual information at one covariate level, gene importance |
 | {func}`clonotype <tcri.null.clonotype>` | batch, covariate, replicate | which cells share a clone | the complement: a metric that moves here and not under the phenotype null is reading clonal structure |
-| {func}`covariate <tcri.null.covariate>` | clonotype, batch | which covariate level a cell sits at | phenotypic flux and the two deltas |
+| {func}`covariate <tcri.null.covariate>` | clonotype, batch | which covariate level a cell sits at | phenotypic flux, and the entropies and mutual information on a change between covariate levels (`cov_from` with `cov_to`) |
 
 ```python
 model.train(max_epochs=200, batch_size=512)
@@ -31,11 +31,11 @@ Each call writes `n_nulls` named fits into the same `AnnData`, `null.phenotype[0
 {doc}`One main fit, and as many named fits beside it <../concepts/index>`), each with the integer
 permutation it used and a settings record: the kind, the resolved strata and their cell counts,
 the permutation seed and its spawn key, the reference and index, the training arguments and the
-parent. The cost scales with `n_nulls`: that many fits per kind, and a metric's per-draw `table`
+parent. The cost scales with `n_nulls`: that many fits per kind, and a metric's per-draw frames
 that many times longer. Calling again replaces the whole reference.
 
 Once they are there, every scored metric picks them up on its own. `null_model` defaults to
-`"auto"`, which is the metric's entry in the table above; `result` gains `null_value` and
+`"auto"`, which is the metric's entry in the table above; every frame gains `null_value` and
 `adjusted = value - null_value`, the quantity the metric reports; `null_model=None` reports the
 bare value and creates no column. `null_model="null.phenotype[2]"` reads one fit alone, and the
 list of models a `tcri.null.*` call returned can be passed back as `null_model`.

@@ -459,7 +459,7 @@ def simulate_cohort(
     **Clones are paired across timepoints.** Simulating each timepoint independently and
     giving the runs matching clone names does *not* pair them: the ids line up but the
     underlying clone->phenotype relationship is unrelated, so ``phenotypic_flux`` and every
-    ``delta_*`` would have nothing to measure. Each patient is simulated **once**, fixing that
+    change between timepoints would have nothing to measure. Each patient is simulated **once**, fixing that
     patient's clone->phenotype structure and its clone sizes, and every timepoint is drawn
     from that one population.
 

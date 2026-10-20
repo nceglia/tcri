@@ -2,13 +2,19 @@
 and the group-comparison math.
 
 Every ``tl`` stores its result under its ``uns`` key and returns ``None``; with
-``inplace=False`` it stores nothing and returns that result. Mutual information and the two
-entropies hold ``{replicate, item, stats}``, each level ``draws`` (one row per draw, never
-reduced) and ``summary`` (reduced over draws); flux holds ``table``, ``result`` and ``stats``.
-``stats`` is the between-split contrast, ``None`` without ``splitby``. These tests read the
-result rather than a bare float/Series, so there is one shape to learn rather than a return
-type per combination of axes.
+``inplace=False`` it stores nothing and returns that result. The four metrics hold
+``{replicate, item, stats}`` (mutual information has no ``item``), each level ``draws`` (one
+row per draw, never reduced) and ``summary`` (reduced over draws). ``stats`` holds the tests:
+the covariate rows of a change and the between-split contrast, ``None`` at one covariate level
+without ``splitby``. These tests read the result rather than a bare float/Series, so there is
+one shape to learn rather than a return type per combination of axes.
 """
+import contextlib
+import io
+import logging
+import warnings
+
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
@@ -126,57 +132,70 @@ def test_every_tool_stores_what_inplace_false_returns(trained_model):
     """
     model, adata = trained_model
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
-    assert rest, "the fixture needs two covariate levels for flux and the deltas"
+    assert rest, "the fixture needs two covariate levels for the change calls"
     pair = dict(cov_from=cov, cov_to=rest[0])
 
     def importance(obj, **kwargs):
         return tcri.perturb.gene_importance(model, obj, **kwargs)
 
-    calls = {
-        "joint_distribution": (tcri.tl.joint_distribution, K.JOINT_DISTRIBUTION,
-                               dict(covariate=cov)),
-        "mutual_information": (tcri.tl.mutual_information, K.MUTUAL_INFORMATION,
-                               dict(covariate=cov)),
-        "clonotypic_entropy": (tcri.tl.clonotypic_entropy, K.CLONOTYPIC_ENTROPY,
-                               dict(covariate=cov)),
-        "phenotypic_entropy": (tcri.tl.phenotypic_entropy, K.PHENOTYPIC_ENTROPY,
-                               dict(covariate=cov)),
-        "phenotypic_flux": (tcri.tl.phenotypic_flux, K.PHENOTYPIC_FLUX, pair),
-        "delta_clonotypic_entropy": (tcri.tl.delta_clonotypic_entropy,
-                                     K.DELTA_CLONOTYPIC_ENTROPY, pair),
-        "delta_phenotypic_entropy": (tcri.tl.delta_phenotypic_entropy,
-                                     K.DELTA_PHENOTYPIC_ENTROPY, pair),
-        "gene_importance": (importance, K.GENE_IMPORTANCE,
-                            dict(genes=list(adata.var_names[:2]), covariate=cov)),
-    }
+    # (tool, call, uns key, arguments): a metric that takes both forms is called at one level
+    # and on a change, each stored under the same key
+    calls = [
+        ("joint_distribution", tcri.tl.joint_distribution, K.JOINT_DISTRIBUTION,
+         dict(covariate=cov)),
+        ("mutual_information", tcri.tl.mutual_information, K.MUTUAL_INFORMATION,
+         dict(covariate=cov)),
+        ("mutual_information", tcri.tl.mutual_information, K.MUTUAL_INFORMATION, pair),
+        ("clonotypic_entropy", tcri.tl.clonotypic_entropy, K.CLONOTYPIC_ENTROPY,
+         dict(covariate=cov)),
+        ("clonotypic_entropy", tcri.tl.clonotypic_entropy, K.CLONOTYPIC_ENTROPY, pair),
+        ("phenotypic_entropy", tcri.tl.phenotypic_entropy, K.PHENOTYPIC_ENTROPY,
+         dict(covariate=cov)),
+        ("phenotypic_entropy", tcri.tl.phenotypic_entropy, K.PHENOTYPIC_ENTROPY, pair),
+        ("phenotypic_flux", tcri.tl.phenotypic_flux, K.PHENOTYPIC_FLUX, pair),
+        ("gene_importance", importance, K.GENE_IMPORTANCE,
+         dict(genes=list(adata.var_names[:2]), covariate=cov)),
+    ]
 
-    for name, (fn, key, kwargs) in calls.items():
+    for name, fn, key, kwargs in calls:
+        label = f"{name}({', '.join(kwargs)})"
         fresh = adata.copy()
         fresh.uns.pop(key, None)
         before = set(fresh.uns)
         returned = fn(fresh, **kwargs, inplace=False)
-        assert key not in fresh.uns, f"{name}: inplace=False stored its result"
-        assert set(fresh.uns) == before, f"{name}: inplace=False wrote to uns"
+        assert key not in fresh.uns, f"{label}: inplace=False stored its result"
+        assert set(fresh.uns) == before, f"{label}: inplace=False wrote to uns"
 
-        assert fn(adata, **kwargs) is None, f"{name}: a storing call returned its result"
-        _assert_same_result(tcri.get.result(adata, name), returned, name)
+        assert fn(adata, **kwargs) is None, f"{label}: a storing call returned its result"
+        _assert_same_result(tcri.get.result(adata, name), returned, label)
 
         params = tcri.get.params(adata, name)
         for param, value in kwargs.items():
-            assert params[param] == value, f"{name}: params lost {param}"
+            assert params[param] == value, f"{label}: params lost {param}"
 
 
 def test_phenotypic_flux_over_common_clones(trained_model):
+    """Flux is one value per clone at both levels, and per replicate their mean at
+    ``weighted=False``; it has no endpoints."""
     _, adata = trained_model
     covs = list(adata.uns[K.COVARIATE_CATEGORIES])
     if len(covs) < 2:
         pytest.skip("needs >=2 covariates")
     res = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1], n_samples=0,
                                   distance_metric="l1", inplace=False)
-    out = res["result"]
+    out = res["item"]["summary"]
     assert {"cov_from", "cov_to", "clonotype", "value"}.issubset(out.columns)
+    assert not {"value_from", "value_to"} & set(out.columns)
     v = out["value"].dropna().to_numpy()
     assert (v >= -1e-9).all() and (v <= 2 + 1e-9).all()  # l1 on the simplex is bounded [0,2]
+
+    obs = adata.obs
+    at = {lv: set(obs.loc[obs["timepoint"] == lv, "unique_clone_id"].astype(str))
+          for lv in covs[:2]}
+    assert set(out["clonotype"].astype(str)) == at[covs[0]] & at[covs[1]]
+    rep = res["replicate"]["summary"]
+    assert len(rep) == 1, "no replicate registered: the whole object is one replicate"
+    assert float(rep["value"].iloc[0]) == pytest.approx(v.mean(), rel=1e-12)
 
 
 @pytest.mark.parametrize("distance_metric", ["jsd", "js"])
@@ -200,7 +219,7 @@ def test_compare_groups_is_not_public():
     picked by the caller. It stays importable internally, for the metrics to use."""
     assert "compare_groups" not in tcri.tl.__all__
     assert not hasattr(tcri.tl, "compare_groups")
-    from tcri._stats import compare_groups   # still there, just not a public step
+    from tcri._stats import compare_groups   # importable internally, not a public step
 
     assert callable(compare_groups)
 
@@ -262,6 +281,7 @@ def test_stats_carries_the_between_replicate_spread(cohort):
 @pytest.mark.parametrize("metric,item_col", [
     ("phenotypic_entropy", "clonotype"),
     ("clonotypic_entropy", "phenotype"),
+    ("phenotypic_flux", "clonotype"),
     ("mutual_information", None),
 ])
 def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_col, cohort):
@@ -269,19 +289,22 @@ def test_the_contrast_counts_groups_even_when_the_metric_has_items(metric, item_
 
     The item-bearing metrics are where this bites: the item summary holds one row per (patient,
     clone), so handing it to a rank test would compare hundreds of clones and report a star off
-    six patients. Checked here on all three because the same assertion on `mutual_information`
-    alone proves nothing — MI has no item axis.
+    six patients. Checked here on all four because the same assertion on `mutual_information`
+    alone proves nothing — MI has no item axis. Flux is always a change, so its ``stats`` also
+    holds covariate rows; the split row is the one read here.
     """
     _, adata = cohort
-    cov = list(adata.uns[K.COVARIATE_CATEGORIES])[0]
+    covs = list(adata.uns[K.COVARIATE_CATEGORIES])
     kwargs = dict(groupby="patient", splitby="disease_status")
     if metric == "phenotypic_flux":
-        kwargs.update(cov_from=cov, cov_to=cov)
+        kwargs.update(cov_from=covs[0], cov_to=covs[1])
     else:
-        kwargs["covariate"] = cov
+        kwargs["covariate"] = covs[0]
     res = getattr(tcri.tl, metric)(adata, **kwargs, inplace=False)
 
-    row = res["stats"].iloc[0]
+    split = res["stats"].loc[res["stats"]["comparison"] == "split"]
+    assert len(split) == 1
+    row = split.iloc[0]
     assert row["n_a"] == 3 and row["n_b"] == 3, (
         f"{metric}: n={row['n_a']}/{row['n_b']} is not the 3 patients per arm"
     )
@@ -375,8 +398,8 @@ def test_build_result_survives_an_empty_table():
     those columns are a bare RangeIndex, so `keys` is empty, the scalar branch runs, and
     `table["value"]` raises KeyError('value') from inside pandas.
 
-    This is a real path, not a hypothetical: `phenotypic_flux` legitimately produces nothing
-    when no replicate has clones at both covariate levels — which is always true if the
+    This is a real path, not a hypothetical: `phenotypic_flux` legitimately produces no item
+    rows when no replicate has clones at both covariate levels — which is always true if the
     covariate is constant within replicate.
     """
     import pandas as pd
@@ -387,36 +410,98 @@ def test_build_result_survives_an_empty_table():
     assert "value" in out.columns, "the result must keep its schema so downstream code can read it"
 
 
-def test_flux_explains_an_empty_result(cohort, monkeypatch):
-    """A flux that finds nothing must say WHY, not return a silently empty frame.
+@pytest.fixture(scope="module")
+def constant_within():
+    """Two fitted patients, each with cells at one covariate level only: the covariate is
+    constant within every replicate, as a between-group label (treatment arm, response) is."""
+    from tcri.datasets import simulate_tcri
+    from tcri.model._model import TCRIModel
 
-    The empty result is legitimate — no clone present at both covariate levels within any
-    replicate — and is exactly what a covariate that is constant within replicate produces.
-    A user who points flux at a between-group label (treatment arm, response) gets nothing
-    back, and without the warning has no way to tell that their covariate is the problem
-    rather than their data.
+    parts = []
+    for i, (patient, level) in enumerate((("P0", "cov_0"), ("P1", "cov_1"))):
+        block = simulate_tcri(n_clones=8, n_phenotypes=4, n_genes=25, n_cells=150,
+                              n_covariates=1, omega_concentration=0.3, seed=i)
+        block.obs["clone_id"] = block.obs["clone_id"].astype(str) + "@" + patient
+        block.obs["covariate"] = level
+        block.obs["patient"] = patient
+        block.obs_names = [f"{patient}_{j}" for j in range(block.n_obs)]
+        parts.append(block)
+    adata = ad.concat(parts, join="outer", label=None)
+    for col in ("clone_id", "phenotype", "covariate", "patient"):
+        adata.obs[col] = adata.obs[col].astype("category")
+    adata.layers["counts"] = adata.X.copy()
 
-    The empty table is injected rather than contrived from the fixture: the fixture's
-    covariate is already registered on the model, so making it constant within replicate
-    would mean refitting, and that would test the fixture rather than the warning.
+    logging.disable(logging.INFO)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            TCRIModel.setup_anndata(adata, layer="counts", clonotype_key="clone_id",
+                                    phenotype_key="phenotype", covariate_key="covariate",
+                                    batch_key="patient", replicate="patient")
+            model = TCRIModel(adata, n_latent=8, n_hidden=16, n_layers=1,
+                              classifier_n_layers=1, classifier_hidden=16, K=4, seed=0,
+                              name="constant_within")
+            model.train(max_epochs=10, batch_size=128, n_epochs_kl_warmup=4,
+                        accelerator="cpu", enable_progress_bar=False,
+                        enable_model_summary=False)
+            model.to_anndata(adata)
+    finally:
+        logging.disable(logging.NOTSET)
+    return adata
+
+
+@pytest.mark.parametrize("metric", ["phenotypic_flux", "mutual_information",
+                                    "clonotypic_entropy", "phenotypic_entropy"])
+def test_a_change_explains_a_covariate_constant_within_every_replicate(metric,
+                                                                       constant_within):
+    """A change that finds no clone at both levels must say WHY, not return silently empty.
+
+    The outcome is legitimate -- no clone present at both covariate levels within any replicate
+    -- and is exactly what a covariate that is constant within replicate produces. A user who
+    points a change at a between-group label gets NaN back, and without the warnings has no way
+    to tell that their covariate is the problem rather than their data. Two warnings, from the
+    caller's line: how many replicates have no clone at one of the levels, and that none has a
+    clone at both, naming both levels and the within-replicate rule, and, on a metric with
+    items, that there are no item rows.
+
+    ``null_model=None``: no covariate null is fitted on this object, and the warnings are about
+    the call's inputs, not its reference.
     """
-    import warnings as _w
+    adata = constant_within
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = getattr(tcri.tl, metric)(adata, cov_from="cov_0", cov_to="cov_1",
+                                       null_model=None, inplace=False)
 
-    import tcri
-    from tcri._compute import _tables
+    mine = [w for w in caught if str(w.message).startswith(f"{metric}:")]
+    messages = [str(w.message) for w in mine]
+    assert len(messages) == 2, messages
+    assert messages[0] == (
+        f"{metric}: 2 of 2 patient groups have no counted clone at 'cov_0' or at 'cov_1'; "
+        f"their values are NaN and they leave the tests.")
+    has_items = metric != "mutual_information"
+    assert messages[1].startswith(
+        f"{metric}: no patient has a clone at both 'cov_0' and 'cov_1'"
+        + (", so there are no item rows. " if has_items else ". ")), messages[1]
+    if not has_items:
+        assert "item rows" not in messages[1], "mutual information has no items to be without"
+    assert "taken within each patient" in messages[1], "the warning must name the rule"
+    assert "varies inside a single patient" in messages[1]
+    assert all(w.filename == __file__ for w in mine), "a warning names a line in the package"
 
-    _model, adata = cohort
-    covs = list(adata.uns[K.COVARIATE_CATEGORIES])
+    rep = res["replicate"]["summary"]
+    assert sorted(rep["patient"].astype(str)) == ["P0", "P1"]
+    assert rep["value"].isna().all(), "a replicate with one level has no change"
+    if metric == "clonotypic_entropy":
+        items = res["item"]["summary"]
+        assert len(items) == 2 * len(adata.uns[K.PHENOTYPE_CATEGORIES])
+        assert items["value"].isna().all()
+    elif metric != "mutual_information":
+        items = res["item"]["summary"]
+        assert len(items) == 0 and "value" in items.columns, "no item rows, and no crash"
 
-    monkeypatch.setattr(_tables, "metric_table", lambda *a, **k: pd.DataFrame())
-    monkeypatch.setattr("tcri.tools._flux.metric_table", lambda *a, **k: pd.DataFrame())
-
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        res = tcri.tl.phenotypic_flux(adata, cov_from=covs[0], cov_to=covs[1],
-                                      inplace=False)
-
-    assert len(res["result"]) == 0, "an empty table must yield an empty result, not a crash"
-    msgs = " ".join(str(c.message) for c in caught)
-    assert "within" in msgs.lower(), f"the warning must name the within-replicate rule: {msgs}"
-    assert covs[0] in msgs and covs[1] in msgs, f"it must name both levels: {msgs}"
+    row = res["stats"].loc[res["stats"]["comparison"] == "covariate"].iloc[0]
+    if metric != "phenotypic_flux":
+        # a flux row without a usable reference is pinned by its missing test alone
+        assert row["n_a"] == row["n_b"] == 0
+    assert np.isnan(row["p"]) and row["stars"] == ""
