@@ -54,6 +54,12 @@ test = [
 mudata = [
     "mudata>=0.3.1",   # 0.3.0 imports anndata internals removed in anndata 0.12
 ]
+# Downloading and building the published datasets in tcri.datasets, such as yost2019.
+datasets = [
+    "scirpy>=0.25.1",
+    "mudata>=0.3.1",
+    "pooch>=1.9.0",
+]
 # Building examples/example.ipynb with its outputs embedded. Not needed to use tcri.
 notebook = [
     "jupytext>=1.16",

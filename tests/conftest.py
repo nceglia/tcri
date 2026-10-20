@@ -37,10 +37,15 @@ def pytest_configure(config):
         "markers",
         "gpu: needs a CUDA device; skipped without one. Run them with `pytest -m gpu`",
     )
+    config.addinivalue_line(
+        "markers",
+        "network: downloads from the internet; skipped unless selected with `pytest -m network`",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip ``@pytest.mark.slow`` unless ``--runslow``, and ``@pytest.mark.gpu`` without CUDA.
+    """Skip ``@pytest.mark.slow`` unless ``--runslow``, ``@pytest.mark.gpu`` without CUDA, and
+    ``@pytest.mark.network`` unless the ``-m`` expression names ``network``.
 
     Recovery tests fit real models across a grid, so they are minutes-scale and do
     not belong in the per-commit suite — but they are the only tests with an
@@ -51,6 +56,11 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "gpu" in item.keywords:
                 item.add_marker(skip_gpu)
+    if "network" not in (config.getoption("-m") or ""):
+        skip_network = pytest.mark.skip(reason="downloads; select with `pytest -m network`")
+        for item in items:
+            if "network" in item.keywords:
+                item.add_marker(skip_network)
     if config.getoption("--runslow"):
         return
     skip_slow = pytest.mark.skip(reason="needs --runslow")
