@@ -362,7 +362,20 @@ compare. Choose `"average"` explicitly when you need the classical NMI.
 
 Flux measures how a clone's phenotype distribution $P(\phi\mid c)$ **shifts between two
 covariates** — pre to post treatment, say. The default `distance_metric="kl"` is a
-Kullback–Leibler divergence; `"l1"` is also available.
+Kullback–Leibler divergence; `"l1"` is also available. It is defined for the clones present at
+both covariates, the persistent clones, and a replicate's flux is their distances weighted by
+each clone's share of the replicate's `cov_from` joint, renormalized over them: equally at the
+default `weighted=False`, by its cells at `cov_from` with `weighted=True`.
+
+### Changes between covariates
+
+Every other metric takes `cov_from` and `cov_to` in place of `covariate` and reports the change,
+its value at `cov_to` minus its value at `cov_from`, taken within each posterior draw with both
+covariates drawn from one shared sample. A replicate's change counts, on each side, every clone
+the replicate has at that covariate. An item's change is over the persistent clones only, so both
+sides of it rest on one set of clones: one change per persistent clone for phenotypic entropy, and
+each phenotype recomputed on the persistent clones for clonotypic entropy. Mutual information has
+no items, so its change is per replicate.
 
 ### How they fit together
 

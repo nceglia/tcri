@@ -13,7 +13,8 @@ def mutual_information(adata, *, view="replicate", quantity="auto", key=None, or
     ``tl.mutual_information``.
 
     The axes are whatever that call used: with ``groupby``, one value per group; with
-    ``splitby``, the groups boxed by split with the contrast from ``stats`` bracketed above.
+    ``splitby``, the groups boxed by split with the contrast from ``stats`` bracketed above. A
+    change result (``cov_from``, ``cov_to``) draws each replicate's change against a zero rule.
 
     Parameters
     ----------

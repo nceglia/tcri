@@ -1,9 +1,10 @@
 """``pp.clone_persistence``: which clones are seen at more than one covariate level.
 
-The summary counts the clones the paired metrics are computed on: both deltas and
-``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``, and
-leave pools out by default. A pool is not a clone and is never persistent. The summary reads
-``obs`` and the clonotype derivation record and writes nothing to the object.
+The persistent clones it counts, those of each group seen at both ``cov_from`` and ``cov_to``,
+are the item rows of a change: ``phenotypic_flux``'s clones, phenotypic entropy's clones and the
+clones clonotypic entropy recomputes each phenotype on, with pools left out by default. A pool is
+not a clone and is never persistent. The summary reads ``obs`` and the clonotype derivation record
+and writes nothing to the object.
 """
 from __future__ import annotations
 
@@ -19,7 +20,9 @@ import pytest
 from anndata import AnnData
 
 import tcri
-import tcri.tools._delta as delta_module
+import tcri._compute._tables as tables_module
+import tcri.tools._entropy as entropy_module
+import tcri.tools._flux as flux_module
 from tcri._compute._repertoire import _record_derivation
 from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
@@ -349,11 +352,17 @@ def ragged_cohort():
     return adata
 
 
-def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
-    """The persistent clones of each group are the clones both deltas hand the engine, and the
-    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report, at the metrics' default
-    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is in none of
-    them. A group without a persistent clone is the group those results leave out.
+def test_clone_persistence_matches_the_item_rows_of_a_change(ragged_cohort, monkeypatch):
+    """The persistent clones of each group are the item rows of a change at the metrics' default
+    ``exclude_pools=True``: the clones each change's item kernel is handed, and the clones
+    ``phenotypic_entropy`` and ``phenotypic_flux`` report per item. Each patient's pool has cells
+    at both timepoints and is in none of them. The replicate endpoints count every clone at their
+    level, so the engine is handed every counted clone, persistent or not.
+
+    Every patient has a replicate row. P2 has no persistent clone: its flux is NaN, it has no
+    item row in phenotypic entropy or flux, and clonotypic entropy gives it one NaN row per
+    phenotype. Its entropy changes are differences of two replicate values that count every clone
+    at each level, so they are finite.
 
     Run at ``null_model=None``: what is compared is which clones are used, not a value.
     """
@@ -373,27 +382,51 @@ def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
     assert len(clones) > len(both) and with_persistent == {"P0", "P1"}, \
         "the fixture cannot tell persistent clones apart"
     assert summary["persistent_clones"].sum() == len(persistent)
+    phenotypes = list(adata.uns[K.PHENOTYPE_CATEGORIES])
 
-    handed = []
-    joint_draws = delta_module.joint_draws
+    handed, itemized = [], []
+    joint_draws = tables_module.joint_draws
 
-    def spy(adata, covariate, **kwargs):
+    def spy_engine(adata, covariate, **kwargs):
         handed.extend(kwargs["clones"])
         return joint_draws(adata, covariate, **kwargs)
 
-    monkeypatch.setattr(delta_module, "joint_draws", spy)
+    def spy_items(module):
+        rows_of = module.rows_of
+
+        def spy(clone_ids, J, wanted):
+            itemized.append(tuple(wanted))
+            return rows_of(clone_ids, J, wanted)
+        return spy
+
+    monkeypatch.setattr(tables_module, "joint_draws", spy_engine)
+    monkeypatch.setattr(entropy_module, "rows_of", spy_items(entropy_module))
+    monkeypatch.setattr(flux_module, "rows_of", spy_items(flux_module))
     results = {}
-    with warnings.catch_warnings():
-        # the deltas name the clones seen at one level only, which is the point here
-        warnings.simplefilter("ignore", UserWarning)
-        for name in ("delta_clonotypic_entropy", "delta_phenotypic_entropy",
-                     "phenotypic_flux"):
-            handed.clear()
-            results[name] = getattr(tcri.tl, name)(adata, **kw, null_model=None,
-                                                   inplace=False)["result"]
-            if name != "phenotypic_flux":
-                assert set(handed) == {c for _, c in persistent}, name
-            assert set(results[name]["patient"]) == with_persistent, name
-    for name in ("delta_phenotypic_entropy", "phenotypic_flux"):
-        result = results[name]
-        assert set(zip(result["patient"], result["clonotype"])) == persistent, name
+    for name in ("clonotypic_entropy", "phenotypic_entropy", "phenotypic_flux"):
+        handed.clear()
+        itemized.clear()
+        results[name] = getattr(tcri.tl, name)(adata, **kw, null_model=None, inplace=False)
+        assert set(handed) == set(clones["clonotype"]), name
+        assert {c for wanted in itemized for c in wanted} == {c for _, c in persistent}, name
+        assert () in itemized, f"{name}: P2's empty set of persistent clones was not itemized"
+
+        reps = results[name]["replicate"]["summary"].set_index("patient")["value"]
+        assert sorted(reps.index) == ["P0", "P1", "P2"], name
+        assert np.isfinite(reps[["P0", "P1"]]).all(), name
+        if name == "phenotypic_flux":
+            assert np.isnan(reps["P2"]), name
+        else:
+            assert np.isfinite(reps["P2"]), name
+
+    for name in ("phenotypic_entropy", "phenotypic_flux"):
+        for frame in ("draws", "summary"):
+            items = results[name]["item"][frame]
+            assert set(zip(items["patient"], items["clonotype"])) == persistent, (name, frame)
+
+    items = results["clonotypic_entropy"]["item"]["summary"]
+    for patient, rows in items.groupby("patient", observed=True):
+        assert sorted(rows["phenotype"]) == sorted(phenotypes), patient
+    assert set(items["patient"]) == {"P0", "P1", "P2"}
+    assert items.loc[items["patient"] == "P2", "value"].isna().all()
+    assert np.isfinite(items.loc[items["patient"] != "P2", "value"]).any()

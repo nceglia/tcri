@@ -284,9 +284,11 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, cov_from=None, cov
     With ``cov_from`` and ``cov_to``, it counts the clones of each group seen at both levels,
     the persistent clones, and those seen at one of the two only. On the clonotype column
     registered at setup, and with the ``groupby`` the metrics use, the persistent clones are the
-    clones ``tl.phenotypic_flux``, ``tl.delta_phenotypic_entropy`` and
-    ``tl.delta_clonotypic_entropy`` are computed on at their default ``exclude_pools=True``,
-    and a group without any has no row in those results. The metrics read ``groupby=None`` as
+    item rows of a change (``tl.phenotypic_flux``, and the entropies with ``cov_from`` and
+    ``cov_to``) at their default ``exclude_pools=True``, and the clones flux is computed on; each
+    endpoint of an entropy or mutual information change counts every clone at its level. A group
+    without a persistent clone has no item rows (one NaN item row per phenotype for clonotypic
+    entropy) and a NaN flux. The metrics read ``groupby=None`` as
     the replicate registered at setup, while here it means the whole dataset. Without
     ``cov_from`` and ``cov_to``, it counts the clones seen at one level and at more than one.
 

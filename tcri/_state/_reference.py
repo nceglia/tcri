@@ -283,7 +283,7 @@ def _attach_frames(table, result, ref_tables, *, values, denominators=()):
     with draw ``d`` of every null, and every adjusted column is their difference on that pair.
     ``result`` then gains the nulls' mean over all their draws and the adjusted values
     summarized over all the pairs: ``adjusted`` with ``adjusted_sd``, ``adjusted_hdi_low`` and
-    ``adjusted_hdi_high``, and the delta endpoints' ``adjusted_from`` and ``adjusted_to`` as
+    ``adjusted_hdi_high``, and a change's endpoints, ``adjusted_from`` and ``adjusted_to``, as
     means. With one draw per side (``n_samples=0``) a row has one pair per null: ``adjusted_sd``
     is then the sd between the nulls and the HDI is NaN, since an interval read off that few
     points is not one. A row with no reference row gets NaN rather than being dropped, so the
@@ -322,8 +322,11 @@ def _attach_frames(table, result, ref_tables, *, values, denominators=()):
                                 - merged[null].to_numpy(dtype=float))
 
     group = [c for c in labels if c in result.columns]
+    # a change and its endpoints share one mask over the (null, draw) pairs, so
+    # adjusted == adjusted_to - adjusted_from holds in the summary as it does on every pair
     summary = build_result(merged[group + ["draw"] + per_draw], value="adjusted",
-                           extra_values=[c for c in per_draw if c != "adjusted"])
+                           extra_values=[c for c in per_draw if c != "adjusted"],
+                           one_mask="value_from" in present)
     summary = summary.rename(columns=ADJUSTED_SUMMARY)
     if "draw" not in merged.columns or merged["draw"].nunique() <= 1:
         summary[ADJUSTED_SUMMARY["hdi_low"]] = np.nan
@@ -337,6 +340,65 @@ def _attach_frames(table, result, ref_tables, *, values, denominators=()):
     else:
         result = result.assign(**summary.iloc[0].to_dict())
     return merged, result
+
+
+def mask_unmovable(payload, adata, references, *, arguments, values, denominators=(), metric):
+    """Blank the reference of every group a covariate null cannot move, in place.
+
+    A covariate null shuffles levels within (clonotype, batch), so a group whose counted clones
+    sit at one level in every batch is left exactly as the fit has it, and its adjusted value is 0
+    by construction rather than by the data. Such a group has no reference: its value is kept, and
+    every reference column of its replicate and item rows is NaN, so it leaves the tests. It is
+    named in a warning. Applies only when the reference is a covariate null; which groups qualify
+    is decided from ``obs`` (:func:`~tcri._compute._tables.movable_clones`), never from a drawn
+    shuffle. Returns the label rows of the groups blanked, for :func:`restat_levels`.
+    """
+    import os
+    import warnings
+
+    from .._compute._tables import unmovable_groups   # the lower layer, reached lazily
+
+    kinds = {(adata.uns.get(K.fit_key(K.FIT_SETTINGS, r)) or {}).get("kind")
+             for r in references if isinstance(r, str)}
+    if "covariate" not in kinds:
+        return []
+    if arguments.get("cov_from") is not None:
+        levels = (arguments["cov_from"], arguments.get("cov_to"))
+    else:
+        levels = (arguments.get("covariate"),)
+    groupby = arguments.get("groupby")
+    unmoved = unmovable_groups(adata, levels=levels, groupby=groupby,
+                               splitby=arguments.get("splitby"), clones=arguments.get("clones"),
+                               exclude_pools=arguments.get("exclude_pools", True),
+                               fit=arguments.get("fit"))
+    if not unmoved:
+        return []
+    pairs = column_pairs(values, denominators)
+    columns = ([n for _, n, _ in pairs] + [a for _, _, a in pairs if a is not None]
+               + list(ADJUSTED_SUMMARY.values()))
+    labels = [row.get(groupby) for row in unmoved] if groupby is not None else None
+    for level in ("replicate", "item"):
+        own = payload.get(level)
+        for frame_name in ("draws", "summary"):
+            frame = (own or {}).get(frame_name)
+            if frame is None or not len(frame):
+                continue
+            rows = (np.ones(len(frame), dtype=bool) if labels is None
+                    else frame[groupby].isin(labels).to_numpy())
+            present = [c for c in columns if c in frame.columns]
+            frame.loc[rows, present] = np.nan
+    where = (f"{groupby} {', '.join(repr(x) for x in labels)}" if labels is not None
+             else "the whole object")
+    warnings.warn(
+        f"{metric}: the covariate null cannot move any cell of {where} at "
+        f"{', '.join(repr(x) for x in levels)}: within each of its clones, every batch holds one "
+        f"covariate level, so a shuffle within (clonotype, batch) changes nothing and there is no "
+        f"reference. Its adjusted values are NaN and it leaves the tests.",
+        UserWarning,
+        skip_file_prefixes=(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), ""),),
+    )
+    return unmoved
 
 
 def restat(payload, *, groupby, splitby, per_gene=False):
@@ -369,16 +431,27 @@ def restat(payload, *, groupby, splitby, per_gene=False):
     return payload
 
 
-def restat_levels(payload, *, groupby, splitby):
+def restat_levels(payload, *, groupby, splitby, change=None, without=()):
     """Recompute a ``{replicate, item, stats}`` payload's ``stats`` on the replicate summary, as
     :func:`restat` does for a ``{table, result, stats}`` one: on the adjusted value when it has
-    something finite, else on the value."""
+    something finite, else on the value. ``change`` is the covariate-row settings of a change
+    call (:func:`~tcri._compute._tables.build_stats`), whose stats exist with or without
+    ``splitby``. ``without`` names groups (label rows, :func:`mask_unmovable`) that have no
+    reference and leave the tests, on the value as on the adjusted value."""
     summary = (payload.get("replicate") or {}).get("summary")
-    if summary is None or not len(summary) or splitby is None:
+    if summary is None or not len(summary) or (splitby is None and change is None):
         return payload
     from .._compute._tables import build_stats
     target = "adjusted" if usable_reference(summary, "adjusted") else "value"
-    rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target)
+    if without:
+        summary = summary.copy()
+        if groupby is not None and groupby in summary.columns:
+            gone = summary[groupby].isin([row.get(groupby) for row in without]).to_numpy()
+        else:
+            gone = np.ones(len(summary), dtype=bool)
+        own = [c for c in ("value", "value_from", "value_to") if c in summary.columns]
+        summary.loc[gone, own] = np.nan
+    rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target, change=change)
     if rebuilt is not None and len(rebuilt):
         payload["stats"] = rebuilt
     return payload

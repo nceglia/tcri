@@ -58,7 +58,7 @@ SEED = 0
 #
 # - **Clones are paired across timepoints.** Each patient is simulated once, fixing its
 #   clone→phenotype structure, and every timepoint is drawn from that one population. Without
-#   this, `phenotypic_flux` and the `delta_*` metrics would have nothing to measure.
+#   this, `phenotypic_flux` and every change from pre to post would have nothing to measure.
 # - **Clone sizes are heavy-tailed** — a power law, as real repertoires are: a few large
 #   expanded clones over a long tail of singletons.
 #
@@ -142,7 +142,7 @@ TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="timepoint",   # the axis a delta is taken across
+    covariate_key="timepoint",   # the axis a change is taken across
     batch_key="patient",         # one-hot into the networks
     replicate="patient",         # the independent unit for statistics
 )
@@ -240,7 +240,7 @@ print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
 # ## 4. `tl` — compute once, cached with provenance
 #
 # Every `tl` call stores its result in `uns` and returns `None`; `tcri.get` reads it back.
-# Mutual information and the two entropies store it **by level**:
+# Mutual information, the two entropies and `phenotypic_flux` store it **by level**:
 #
 # | frame | one row per | read with |
 # |---|---|---|
@@ -248,13 +248,14 @@ print(null[["covariate", "observed", "null_mean", "null_sd", "z", "p"]]
 # | `replicate.draws` | (covariate, replicate, draw) | `tcri.get.draws` |
 # | `item.summary` | (covariate, replicate, item) | `tcri.get.items` |
 # | `item.draws` | (covariate, replicate, item, draw) | `tcri.get.draws(..., items=True)` |
-# | `stats` | (split_a, split_b) | `tcri.get.stats` |
+# | `stats` | test | `tcri.get.stats` |
 #
 # A summary is built *from* its draws, so the two cannot drift. Mutual information has one
-# value per joint and no item level. `stats` appears only when `splitby` is set, and its
-# **n counts replicates, never items** — 18 clones from 4 patients give n=4, not n=18. The
-# other `tl` functions store `table` and `result`, and `stats` when they contrast groups,
-# read with `tcri.get.result`.
+# value per joint and no item level. A change between two timepoints (section 6) labels its
+# rows `cov_from`/`cov_to` in place of `covariate`. `stats` holds a split row for each pair of
+# `splitby` levels, and a change adds its covariate rows; its **n counts replicates, never
+# items** — 18 clones from 4 patients give n=4, not n=18. `joint_distribution` stores `table`
+# and `result`, read with `tcri.get.result`.
 
 # %%
 tcri.tl.mutual_information(
@@ -379,44 +380,112 @@ print("disease_status palette:", palette)
 print("stored in uns   :", adata.uns[K.colors("disease_status")])
 
 # %% [markdown]
-# ## 6. The paired entropies — what changed, per clone
+# ## 6. Changes between timepoints — what moved, per patient and per clone
 #
-# `delta_*` takes `cov_from`/`cov_to` and subtracts **within a posterior draw**, so the
-# reported interval is the interval of the *difference*. HDIs do not subtract — you cannot
-# recover it from the endpoints' intervals, which is why this is a function rather than
-# arithmetic you do yourself.
+# Pass `cov_from`/`cov_to` in place of `covariate` and mutual information or either entropy
+# reports the **change** `cov_to − cov_from`. Both timepoints come from one shared posterior
+# sample and the subtraction happens **within each draw**, so the reported interval is the
+# interval of the *difference*. HDIs do not subtract — you cannot recover it from the
+# endpoints' intervals, which is why the call takes both timepoints rather than leaving the
+# subtraction to you.
 #
-# Support is the **intersection**: clones present at both timepoints, within each patient. A
-# delta needs both endpoints, and the drop is warned about because it moves `n`.
+# Each patient's change is the difference of its two per-patient values, each side counting
+# every clone the patient has at that timepoint. The endpoints stay beside it, as
+# `value_from`/`value_to` and `adjusted_from`/`adjusted_to`; mutual information also keeps
+# `denom_from`/`denom_to`, each side's own normalizer.
 #
-# There is deliberately **no `delta_mutual_information`** — MI has no item axis, so it is
-# already the repertoire-level number and its "delta" is a subtraction of two cached scalars.
-# That one belongs to you, not the package.
+# On a change the default reference is the **covariate null**, which shuffles the timepoint
+# within each clone and batch, so `adjusted` is the change minus the null's change. The
+# adjusted endpoints are read against that null, so they are not the adjusted values of a
+# single-timepoint call, which are read against the phenotype null.
+#
+# `stats` on a change holds two kinds of row, told apart by `comparison`:
+#
+# - `"covariate"` — did this arm change? A Wilcoxon signed-rank test on each patient's change,
+#   one row per `splitby` level (one over every patient without `splitby`), with
+#   `level_a`/`level_b` = `cov_from`/`cov_to`.
+# - `"split"` — did the change differ between arms? A Mann–Whitney test between the arms on
+#   the per-patient changes.
 
 # %%
-tcri.tl.delta_phenotypic_entropy(
-    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
-    n_samples=60, random_state=SEED)
-tcri.tl.delta_clonotypic_entropy(
-    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status",
-    n_samples=60, random_state=SEED)
-d_phen = tcri.get.result(adata, "delta_phenotypic_entropy")
-
-print("Δ phenotypic entropy (post − pre), per arm:")
-print(d_phen["result"].groupby("disease_status", observed=True)["value"]
-      .agg(["mean", "count"]).round(4).to_string())
-d_phen["stats"][["level_a", "level_b", "n_a", "n_b", "delta", "p", "stars"]].round(4)
+# a change: cov_from/cov_to in place of covariate. key_added keeps section 4's post-only MI
+tcri.tl.mutual_information(adata, cov_from="pre", cov_to="post", splitby="disease_status",
+                           n_samples=100, random_state=SEED, key_added="mi_change")
+mi_change = tcri.get.replicates(adata, "mutual_information", key="mi_change")
+mi_change[["patient", "disease_status", "value_from", "value_to", "value",
+           "adjusted", "adjusted_hdi_low", "adjusted_hdi_high"]].round(4)
 
 # %%
+# the covariate rows (did each arm change), then the split row (did the arms differ).
+# `n_a`/`n_b` count PATIENTS here too
+STATS = ["comparison", "disease_status", "level_a", "level_b", "quantity",
+         "n_a", "n_b", "mean_a", "mean_b", "delta", "p", "stars"]
+tcri.get.stats(adata, "mutual_information", key="mi_change")[STATS].round(4)
+
+# %% [markdown]
+# **Per item, a change covers the persistent clones**, the clones a patient has at both
+# timepoints. Phenotypic entropy has one item row per persistent clone; clonotypic entropy has
+# one per phenotype, recomputed on the persistent clones so both sides share one clone set and
+# one normalizer. Mutual information has no items. `pp.clone_persistence` counts the persistent
+# clones of each patient.
+#
+# `phenotypic_flux` is a change by construction and is stored the same way: per persistent
+# clone, the distance its phenotype distribution moved (the item rows), and per patient those
+# distances weighted by each clone's share of the `cov_from` joint (the replicate rows). Its covariate
+# row tests the adjusted flux against 0, since flux is never negative.
+#
+# A change warns when some patients have no clone at a timepoint, and when no patient has a
+# clone at both, whose usual cause is a covariate that is constant within each patient.
+
+# %%
+tcri.tl.phenotypic_entropy(adata, cov_from="pre", cov_to="post", splitby="disease_status",
+                           n_samples=60, random_state=SEED)
+
+# the change is taken within each draw, so it is exactly the difference of its endpoints there
+pe_draws = tcri.get.draws(adata, "phenotypic_entropy")
+print("value == value_to - value_from on every draw:",
+      np.allclose(pe_draws["value"], pe_draws["value_to"] - pe_draws["value_from"],
+                  equal_nan=True))
+
+
+def item_rows(name):
+    n = tcri.get.items(adata, name).groupby("patient", observed=True).size()
+    return pd.Series(n.to_numpy(), index=n.index.astype(str))
+
+
+# the item rows of the entropy's change and of flux are the persistent clones
+persistence = tcri.pp.clone_persistence(adata, clonotype_key="clone_id",
+                                        covariate_key="timepoint", cov_from="pre",
+                                        cov_to="post", groupby="patient")
+persistence = persistence.set_index("patient")[["clones_from_only", "clones_to_only",
+                                                "persistent_clones"]]
+persistence["entropy items"] = item_rows("phenotypic_entropy")
+persistence["flux items"] = item_rows("phenotypic_flux")
+persistence.head(8)
+
+# %%
+# flux, computed in section 4, read the same way: one row per patient
+flux = tcri.get.replicates(adata, "phenotypic_flux")
+flux[["patient", "disease_status", "value", "null_value", "adjusted",
+      "adjusted_hdi_low", "adjusted_hdi_high"]].round(4)
+
+# %%
+# the same two kinds of row on the entropy's change and on flux
+pd.concat({name: tcri.get.stats(adata, name)[STATS]
+           for name in ("phenotypic_entropy", "phenotypic_flux")}).round(4)
+
+# %%
+# a change panel draws each patient's change against a zero line; view="item" draws each
+# persistent clone's
 fig, axes = plt.subplots(2, 2, figsize=(13, 8.5))
-tcri.pl.delta_phenotypic_entropy(adata, kind="delta", ax=axes[0, 0])
-axes[0, 0].set_title("delta_phenotypic_entropy — the change\nzero rule; dots = patients", fontsize=10)
-tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints", ax=axes[0, 1])
-axes[0, 1].set_title("kind='endpoints' — a line per patient\n(a clonotype persists: matched)", fontsize=10)
-tcri.pl.delta_clonotypic_entropy(adata, kind="delta", ax=axes[1, 0])
-axes[1, 0].set_title("delta_clonotypic_entropy — per phenotype", fontsize=10)
-tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints", ax=axes[1, 1])
-axes[1, 1].set_title("no lines, no size legend\n(a phenotype is a bin, not a barcode)", fontsize=10)
+tcri.pl.mutual_information(adata, key="mi_change", ax=axes[0, 0])
+axes[0, 0].set_title("mutual_information — pre → post\none dot per patient", fontsize=10)
+tcri.pl.phenotypic_entropy(adata, ax=axes[0, 1])
+axes[0, 1].set_title("phenotypic_entropy — pre → post\none dot per patient", fontsize=10)
+tcri.pl.phenotypic_entropy(adata, view="item", ax=axes[1, 0])
+axes[1, 0].set_title("phenotypic_entropy, view='item'\none dot per persistent clone", fontsize=10)
+tcri.pl.phenotypic_flux(adata, view="item", ax=axes[1, 1])
+axes[1, 1].set_title("phenotypic_flux, view='item'\none dot per persistent clone", fontsize=10)
 fig.tight_layout()
 plt.show()
 

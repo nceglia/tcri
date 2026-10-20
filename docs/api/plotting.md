@@ -16,17 +16,37 @@ tcri.pl.mutual_information(adata)                    # the adjusted value, on a 
 tcri.pl.mutual_information(adata, quantity="value")  # the value, reference behind it
 ```
 
-Three details are deliberate. The x order is computed once and given to every mark, so the
+Two details are deliberate. The x order is computed once and given to every mark, so the
 reference pass cannot re-sort the axis under marks already drawn. The adjusted value is drawn
 like the value: its per-draw differences make a violin where draws are the sample. Behind the
 value's violins the null is one marker at its mean: its spread over draws is already inside the
-adjusted value's interval. And the endpoint view of a delta draws its gray dots at a fixed size with no connector —
-the null's matched clone count is provably its parent's, so sizing it would repeat one number,
-and a line between gray dots would assert matched identity across a permuted fit.
+adjusted value's interval.
 
 A result computed with `null_model=None` has no reference: the default draws the value, with
 "(no reference)" on the y label, and asking for `quantity="adjusted"` raises rather than drawing
 an empty panel.
+
+## Drawing a change
+
+A twin draws a change result, computed with `cov_from` and `cov_to`, in the same two views as a
+value. The default view draws one mark per replicate, its change, against a zero rule, since a
+change can be negative. `view="item"` draws each item's change from the item summary: one per
+persistent clone for phenotypic entropy, one per phenotype, recomputed on the persistent clones,
+for clonotypic entropy. Mutual information has no item view. The y label of a change carries a
+`Δ`, as in "adjusted Δ phenotypic entropy (bits)"; flux, a distance between the two levels,
+keeps its own label.
+
+```python
+tcri.tl.phenotypic_entropy(adata, cov_from="pre", cov_to="post", splitby="disease_status")
+tcri.pl.phenotypic_entropy(adata)                # each replicate's change, by split
+tcri.pl.phenotypic_entropy(adata, view="item")   # each persistent clone's change
+```
+
+`pl.phenotypic_flux` takes the same `view=`: each replicate's flux, or each persistent clone's
+with `view="item"`. Flux is a distance and never negative, so its zero rule is on the adjusted
+panel only. Every plotted number is a stored one: the endpoints of a change stay in its
+summaries, `value_from` and `value_to` with `adjusted_from` and `adjusted_to`, read with
+`tcri.get.replicates` and `tcri.get.items`.
 
 ## Small multiples
 

@@ -4,7 +4,7 @@
 - :mod:`._joint`    — ``_joint_draws``: the batched ``[S, n_clones, P]`` engine core.
 - :mod:`._distance` — kl / l1 kernels over phenotype distributions.
 - :mod:`._tables`   — the metric-table plumbing every ``tools`` metric reduces through
-  (``metric_table``, ``build_result``, ``build_stats``, ``collapse_to_replicates``).
+  (``metric_frames``, ``build_result``, ``build_stats``, ``collapse_to_replicates``).
 - :mod:`._repertoire` — clonotype-label helpers (``_missing_clonotypes``, ``_label_problems``,
   ``_clonotype_sharing``, ``_make_clonotypes_replicate_specific``, ``_size_counts``,
   ``TCRIDataWarning``), the clonotype derivation record in ``uns`` (``_record_derivation``,

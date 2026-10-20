@@ -34,9 +34,8 @@ as many lines as it needs.
 
 **Connecting lines.** A line between x positions implies the two points are the same entity
 observed twice, which is a claim only matched data supports, so it is drawn from an identity
-key and never from adjacency: the endpoints view joins one replicate's two endpoint values,
-computed over one intersected clone set, and only where the item is an entity that persists
-across the two levels. The gray reference points are never joined, and a significance bracket
+key and never from adjacency; no view draws one. The gray reference points are never
+joined, and a significance bracket
 -- which spans x positions by design -- carries its own label so the guard can tell it from a
 matched-identity line.
 """
@@ -78,8 +77,8 @@ REFERENCE_LEGEND = "permutation null"
 def _reference_legend(ax, drawn):
     """Name the gray marks, keeping whatever legend the panel already has.
 
-    Appends rather than replaces: the box-and-strip legend carries the split levels and the
-    endpoints view carries the matched-clone sizes, and both are still wanted. Re-creating the
+    Appends rather than replaces: the box-and-strip legend carries the split levels, which are
+    still wanted. Re-creating the
     legend is the only way matplotlib lets a handle be added, so the existing entries and the
     title are read back off it first.
     """
@@ -143,6 +142,11 @@ def _empty(ax, message, ylabel):
     return ax
 
 
+def _zero_rule(ax):
+    """Zero is a real position on an adjusted or a change axis, so mark it."""
+    ax.axhline(0.0, lw=0.8, ls="--", c="0.45", zorder=0, label=BRACKET_LABEL)
+
+
 def _colors_for(adata, key, levels, palette):
     """A ``{level: hex}`` map, persisted under ``uns[f"{key}_colors"]`` when ``key`` names an
     obs column so the same level keeps its color in every later figure (and in scanpy's)."""
@@ -174,8 +178,8 @@ def check_quantity(quantity, *, value_only=False, message=None):
     """The ``quantity`` argument alone, before anything is loaded.
 
     Rejects a name that is not ``"auto"``, ``"value"`` or ``"adjusted"``, and an explicit
-    ``"adjusted"`` on a view that can draw nothing but the value (the delta endpoints, the shift
-    heatmap), which raises with that view's own ``message``. An argument error never depends on
+    ``"adjusted"`` on a view that can draw nothing but the value (the shift heatmap), which raises
+    with that view's own ``message``. An argument error never depends on
     the data: it fires whether or not a result exists and whether or not ``return_df`` was
     passed.
     """
@@ -492,7 +496,7 @@ def _points(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, ref=No
 def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=False, key=None,
                   order=None, hue_order=None, palette=None, legend=True, ax=None,
                   figsize=(8, 4), save=None, show=None, return_df=False, annotate=True,
-                  rotation=90, decorate=None, view="replicate"):
+                  rotation=90, decorate=None, view="replicate", distance=False):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
     ``view`` picks the level of a result stored by level: ``"replicate"`` draws the replicate
@@ -512,6 +516,12 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
     result carries one. The star drawn is always the one for the quantity on the axis, so a
     value panel of a result whose ``stats`` is on the adjusted value carries none.
 
+    A change result (``cov_from`` and ``cov_to`` in ``params``) draws each replicate's change, or
+    each item's with ``view="item"``, against a zero rule, since a change can be negative, and
+    prefixes its y label with ``Δ``.
+    ``distance=True`` marks a change that is a distance between the levels (flux), never
+    negative, whose zero rule is on its adjusted panel only.
+
     ``order`` overrides the category order of the x axis; ``legend=False`` draws no legend.
     """
     from .. import get as _get
@@ -522,6 +532,10 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
         raise ValueError(f"view must be 'replicate' or 'item', got {view!r}")
     payload = _get.result(adata, name, key=key)
     params = _get.params(adata, name, key=key)
+    change = params.get("cov_from") is not None
+    if change and not distance:
+        # a change's axis says so; flux is between two levels by definition and keeps its label
+        ylabel = f"Δ {ylabel}"
     if "replicate" in payload:
         if view == "item":
             level = payload.get("item")
@@ -562,7 +576,8 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
         else:
             result = result.drop(columns=["null_value"])
     ylabel = _reference.label_for(result, quantity, ylabel)
-    if quantity == "adjusted":
+    # a change can be negative, so 0 is a position on its axis; a distance (flux) cannot
+    if quantity == "adjusted" or (change and not distance):
         decorate = decorate or _zero_rule
 
     has_groups = groupby is not None and groupby in d.columns
@@ -585,7 +600,9 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
             d = d.assign(_all="all")
             x, hue = "_all", None
     else:
-        d = d.assign(_one=str(params.get("covariate") or name))
+        position = (f"{params['cov_from']} → {params['cov_to']}" if change
+                    else params.get("covariate") or name)
+        d = d.assign(_one=str(position))
         x, hue = "_one", None
         single = True
 
@@ -662,155 +679,3 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
         _annotate_contrasts(ax, stats, _order, quantity=quantity)
     return _finish(fig, ax, save=save, show=show, legend=legend)
 
-
-# ── the delta family ─────────────────────────────────────────────────────────
-
-#: Connectors carry this so the "nothing spans two x positions" guard can tell a
-#: matched-identity line from a claim made out of adjacency.
-CONNECTOR_LABEL = "_tcri_matched"
-
-
-def _zero_rule(ax):
-    """Zero is a real position on a delta axis, so mark it."""
-    ax.axhline(0.0, lw=0.8, ls="--", c="0.45", zorder=0, label=BRACKET_LABEL)
-
-
-def _matched_counts(result, *, groupby, item_col):
-    """Clones matched per replicate — the n each replicate's value rests on.
-
-    Derived, not stored: the intersection already decided which rows exist, so counting them
-    is the count. It varies per replicate (one patient may match 240 of 300, another 30 of
-    400), which is why it is encoded per point rather than stated once in a title.
-    """
-    if groupby is None or groupby not in result.columns or item_col not in result.columns:
-        return None
-    return result.groupby(groupby, observed=True)[item_col].nunique()
-
-
-def _sizes_from(counts, labels, *, lo=25.0, hi=190.0):
-    """Marker AREA proportional to the matched count, clamped to a legible band.
-
-    `s` is already area in points^2, so proportionality is perceptually right; the clamp stops
-    a 400-clone replicate from swallowing a 12-clone one at 33x the area.
-    """
-    n = np.array([counts.get(l, np.nan) for l in labels], dtype=float)
-    if not np.isfinite(n).any():
-        return None, None
-    lo_n, hi_n = np.nanmin(n), np.nanmax(n)
-    if not np.isfinite(lo_n) or hi_n <= lo_n:
-        return np.full(len(n), (lo + hi) / 2), n
-    return lo + (hi - lo) * (n - lo_n) / (hi_n - lo_n), n
-
-
-def _size_legend(ax, counts):
-    """Three reference dots spanning the observed range, labeled with real counts."""
-    vals = np.array(sorted(set(int(v) for v in counts.values if np.isfinite(v))), dtype=float)
-    if vals.size == 0:
-        return
-    picks = np.unique(np.percentile(vals, [0, 50, 100]).round().astype(int))
-    sizes, _ = _sizes_from(counts, list(counts.index))
-    lut = dict(zip(counts.values.astype(int), sizes))
-    handles = [plt.scatter([], [], s=lut.get(int(v), 60), c="0.6", edgecolor="black",
-                           linewidth=.3, label=str(int(v))) for v in picks]
-    ax.legend(handles=handles, title="clones matched", bbox_to_anchor=(1.02, 1.0),
-              loc="upper left", frameon=False, fontsize=8, title_fontsize=8, labelspacing=1.1)
-
-
-def render_delta(adata, name, *, quantity, ylabel, item_col, kind="delta",
-                 item_as_x=False, entity_matched=False, key=None, order=None, hue_order=None,
-                 palette=None, legend=True, ax=None, figsize=(8, 4), save=None, show=None,
-                 return_df=False, rotation=90):
-    """Render a cached delta result — the change, or its two endpoints.
-
-    ``entity_matched`` says the ITEM is an entity that persists across the two levels (a
-    clonotype), rather than a category measured twice (a phenotype). It gates two things at
-    once because both are claims about the same fact:
-
-    * connectors — a line asserts "this is the same thing, later";
-    * dot area = matched count — the number of matched CLONES the value rests on.
-
-    The second is not merely cosmetic to gate. For a phenotype-item metric the matched clone
-    count is not in ``result`` at all: those clones were summed over inside ``H(c|phi)``, so
-    counting item rows would count PHENOTYPES and label them "clones matched".
-    """
-    from .. import get as _get
-    from .._compute._tables import collapse_to_replicates
-
-    if kind not in ("delta", "endpoints"):
-        raise ValueError(f"kind must be 'delta' or 'endpoints', got {kind!r}")
-    # The endpoints view draws the two levels a delta is taken between and never reads
-    # `quantity` again, so the argument check is all it needs; the delta view resolves inside
-    # `render_metric`.
-    check_quantity(quantity, value_only=(kind == "endpoints"), message=(
-        f"kind='endpoints' has no {quantity!r}: the view draws the two levels a delta is "
-        f"taken between, and it draws the reference's own two endpoints beside them. A "
-        f"single adjusted axis would have to pick one of the two. Use kind='delta', "
-        f"quantity={quantity!r}, or kind='endpoints', quantity='value'."))
-
-    payload = _get.result(adata, name, key=key)
-    params = _get.params(adata, name, key=key)
-    result = payload["result"]
-    if return_df:
-        return result
-
-    if kind == "delta":
-        return render_metric(adata, name, ylabel=ylabel, item_col=item_col,
-                             item_as_x=item_as_x, key=key, order=order, hue_order=hue_order,
-                             palette=palette, legend=legend, ax=ax, figsize=figsize, save=save,
-                             show=show, annotate=True, rotation=rotation, quantity=quantity,
-                             decorate=_zero_rule)
-
-    # ── the endpoints view ──────────────────────────────────────────────────
-    groupby = params.get("groupby")
-    fig, ax = _axes(ax, figsize)
-    if groupby is None or groupby not in result.columns:
-        return _finish(fig, _empty(
-            ax, f"{name} endpoints need a replicate axis\n(re-run with groupby=)", ylabel),
-            save=save, show=show, legend=legend)
-
-    counts = _matched_counts(result, groupby=groupby,
-                             item_col=item_col) if entity_matched else None
-
-    # ONE collapse over every endpoint column present, selected by presence rather than
-    # hard-coded so the branch works at null_model=None. Collapsing the endpoints separately
-    # and merging would give each its own non-finite mask, so a replicate could contribute
-    # one endpoint and not the other and the pair drawn would not be a pair.
-    endpoints = [c for c in ("value_from", "value_to") if c in result.columns]
-    reference = [c for c in ("null_value_from", "null_value_to") if c in result.columns]
-    per = collapse_to_replicates(
-        result, groupby=groupby, value=endpoints + reference,
-        keep=[params.get("splitby")] if params.get("splitby") else [])
-
-    levels = [str(params["cov_from"]), str(params["cov_to"])]
-    reps = per[groupby].astype(str).tolist()
-    colors = _colors_for(adata, groupby, reps, palette)
-    sizes, _n = _sizes_from(counts, reps) if counts is not None else (None, None)
-
-    for i, rep in enumerate(reps):
-        if len(reference) == 2:
-            # NO connector between the gray points: a line asserts matched identity across a
-            # PERMUTED fit, which is the claim CONNECTOR_LABEL exists to prevent. And a FIXED
-            # size, not `_sizes_from`: the null's matched clone count is provably the parent's,
-            # so sizing these would repeat one number and make the legend ambiguous about which
-            # collection it describes.
-            ax.scatter([0, 1], [per[reference[0]].iloc[i], per[reference[1]].iloc[i]],
-                       s=[55, 55], facecolors="none", edgecolors="0.55", linewidths=1.1,
-                       zorder=2, label=REFERENCE_LABEL)
-        y = [per["value_from"].iloc[i], per["value_to"].iloc[i]]
-        if entity_matched:
-            ax.plot([0, 1], y, lw=0.9, c=colors[rep], alpha=0.7, zorder=1,
-                    label=CONNECTOR_LABEL)
-        s = 60 if sizes is None else sizes[i]
-        # one replicate, one size: the matched clone set is the SAME on both sides, so a
-        # difference between a replicate's two dots would mean the intersection did not hold
-        ax.scatter([0, 1], y, s=[s, s], color=colors[rep], edgecolor="black",
-                   linewidth=0.3, zorder=3)
-
-    ax.set_xticks([0, 1]); ax.set_xticklabels(levels, rotation=0)
-    ax.set_xlim(-0.4, 1.4)
-    ax.set_ylabel(ylabel.replace("Δ ", "").replace(" (bits)", " (bits)"))
-    ax.set_xlabel(params.get("groupby") and "")
-    if counts is not None:
-        _size_legend(ax, counts)
-    _reference_legend(ax, len(reference) == 2)
-    return _finish(fig, ax, save=save, show=show, legend=legend)

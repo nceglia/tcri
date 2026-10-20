@@ -33,7 +33,7 @@ adata = tcri.datasets.simulate_cohort(seed=0)
 ```
 
 {func}`simulate_tcri <tcri.datasets.simulate_tcri>` is the single-sample alternative, with a
-mutual information known in closed form; it has one covariate level, so the flux and
+mutual information known in closed form; it has one covariate level, so the flux, change and
 group-comparison steps below do not apply to it.
 
 ## 2. Register the columns
@@ -89,8 +89,9 @@ tcri.null.all(model, adata)
 **Upgrading from 0.11.** Every scored metric now computes a permutation reference by default, so
 a script that recomputes a metric on a loaded 0.11 session raises until `tcri.null.all(model,
 adata)` has run, or until it passes `null_model=None`. Rendering a cached 0.11 result is
-unaffected: it draws with a "no reference" label. One phenotype fit serves both entropies,
-mutual information and gene importance, so this is one prerequisite rather than four.
+unaffected: it draws with a "no reference" label. `tcri.null.all` builds every reference the
+metrics read: the phenotype fits for both entropies and mutual information at one covariate and
+for gene importance, the covariate fits for flux and every change between covariates.
 ```
 
 ## 5. Compute metrics
@@ -114,10 +115,10 @@ tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post")
 ```
 
 Each call stores its result in `adata.uns` and returns `None`; `tcri.get` reads it back.
-Mutual information and the two entropies have one row per replicate, read with
-`tcri.get.replicates(adata, "mutual_information")`. The entropies also have one value per item,
-per phenotype or per clone, read with `tcri.get.items(adata, "phenotypic_entropy")`. Flux is read
-with `tcri.get.result(adata, "phenotypic_flux")`.
+Every metric has one row per replicate, read with
+`tcri.get.replicates(adata, "mutual_information")`. The entropies and flux also have one value per
+item, per phenotype or per clone, read with `tcri.get.items(adata, "phenotypic_entropy")`; flux's
+items are the clones present at both covariates.
 
 ```{important}
 For the classical NMI, pass `normalize_mode="average"` explicitly. The default
@@ -136,12 +137,13 @@ and the figure cannot disagree with the frame in your hand:
 tcri.tl.mutual_information(adata, covariate="pre", groupby="patient", splitby="disease_status")
 tcri.pl.mutual_information(adata)
 
-# per-clone phenotype flux from the first to the last covariate
+# phenotype flux from the first to the last covariate, per patient and per clone
 tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", groupby="patient")
 tcri.pl.phenotypic_flux(adata)
+tcri.pl.phenotypic_flux(adata, view="item")
 ```
 
-## 7. Compare groups
+## 7. Compare groups and covariates
 
 Contrasting a metric across cohorts is **not a separate step**. Pass `splitby` and the
 metric produces the contrast itself, with the replicate unit already resolved:
@@ -160,6 +162,27 @@ tcri.get.stats(adata, "mutual_information")       # the disease-vs-control contr
 which must be constant within each group. The contrast in `stats` is computed **over
 groups**, not over rows, so a handful of patients cannot be inflated into significance by
 the number of clones they happen to contain.
+
+A change between covariates is the same call with `cov_from` and `cov_to` in place of
+`covariate`, on mutual information and both entropies:
+
+```python
+tcri.tl.mutual_information(
+    adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status"
+)
+
+tcri.get.replicates(adata, "mutual_information")  # each patient's change, post - pre,
+                                                  # with value_from and value_to
+tcri.get.stats(adata, "mutual_information")       # comparison="covariate": did each arm change
+                                                  # comparison="split": did the change differ
+```
+
+The change is taken within each posterior draw, so its interval is the interval of the
+difference. The covariate rows of `stats` are a Wilcoxon signed-rank test on each patient's
+change, one per `disease_status` level, and the split row compares the changes between the arms.
+The entropies and flux also have item rows, read with `tcri.get.items`, over the clones present
+at both covariates: per clone for phenotypic entropy and flux, and per phenotype, recomputed on
+those clones, for clonotypic entropy.
 
 ## 8. Which genes drive the calls
 

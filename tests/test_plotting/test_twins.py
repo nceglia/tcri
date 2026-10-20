@@ -22,6 +22,9 @@ from tcri.plotting._base import BRACKET_LABEL
 
 TWINS = ["mutual_information", "clonotypic_entropy", "phenotypic_entropy", "phenotypic_flux"]
 
+#: The twins with an item view; mutual information has one value per replicate and no items.
+ITEM_TWINS = ["clonotypic_entropy", "phenotypic_entropy", "phenotypic_flux"]
+
 #: Anything on this list reaching a `pl` signature means the plot can compute something.
 METRIC_ARGS = {
     "covariate", "cov_from", "cov_to", "groupby", "splitby", "n_samples", "temperature",
@@ -75,6 +78,32 @@ def _n_violins(ax):
     return sum(isinstance(c, PolyCollection) for c in ax.collections)
 
 
+def _bracket_stars(ax):
+    """The significance brackets, as ``{(x_a, x_b): [text drawn over the bracket's middle]}``.
+
+    A bracket carries :data:`BRACKET_LABEL` and steps up and down in y; the zero rule carries the
+    same label and is flat, so it is not a bracket.
+    """
+    out = {}
+    for line in ax.lines:
+        ys = np.asarray(line.get_ydata(), dtype=float)
+        if line.get_label() != BRACKET_LABEL or len(set(np.round(ys, 12))) < 2:
+            continue
+        xs = np.asarray(line.get_xdata(), dtype=float)
+        mid = (xs.min() + xs.max()) / 2
+        out[(float(xs.min()), float(xs.max()))] = [
+            t.get_text() for t in ax.texts if np.isclose(t.get_position()[0], mid)]
+    return out
+
+
+def _has_zero_rule(ax):
+    """Whether a flat line at y == 0 is drawn, the zero rule of an adjusted or a change axis."""
+    return any(line.get_label() == BRACKET_LABEL
+               and len(set(np.round(line.get_ydata(), 12))) == 1
+               and float(line.get_ydata()[0]) == 0.0
+               for line in ax.lines)
+
+
 def _compute_all(adata, **kw):
     """Run every ``tl`` so the cache is populated for the renderers."""
     cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
@@ -84,19 +113,60 @@ def _compute_all(adata, **kw):
     tcri.tl.phenotypic_flux(adata, cov_from=cov, cov_to=rest[0] if rest else cov, **kw)
 
 
+def _views(name):
+    """The views a twin draws: the replicate view, and the item view when it has items."""
+    return ("replicate", "item") if name in ITEM_TWINS else ("replicate",)
+
+
+def _change_key(name):
+    """The ``key_added`` a change result is stored under by :func:`_compute_changes`.
+
+    A change call replaces the metric's stored result under its own key, so a change kept beside
+    a single-covariate result needs a key of its own.
+    """
+    return f"{name}_change"
+
+
+def _call(adata, name, mode, **kw):
+    """``tl.<name>`` at the first covariate level (``mode="covariate"``), or as the change from
+    the first level to the second (``mode="change"``), stored under the metric's own key."""
+    cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    at = (dict(covariate=cov_from) if mode == "covariate"
+          else dict(cov_from=cov_from, cov_to=cov_to))
+    getattr(tcri.tl, name)(adata, **at, **kw)
+
+
+def _compute_changes(adata, **kw):
+    """Every twin's change from the first covariate level to the second, each under
+    :func:`_change_key`, beside whatever :func:`_compute_all` stored."""
+    cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    for name in TWINS:
+        getattr(tcri.tl, name)(adata, cov_from=cov_from, cov_to=cov_to,
+                               key_added=_change_key(name), **kw)
+    return cov_from, cov_to
+
+
+#: Every (twin, view, mode) a stored result is drawn in: each view a twin has, at one covariate
+#: and as a change. Flux is always a change.
+RENDERED = [(name, view, mode) for name in TWINS for view in _views(name)
+            for mode in (("change",) if name == "phenotypic_flux" else ("covariate", "change"))]
+
+
 # ── the renderer contract ────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("name", TWINS)
 def test_pl_takes_no_metric_arguments(name):
-    """A ``pl`` twin's signature is ``(adata, key=, display args)`` — nothing computable.
+    """A ``pl`` twin's signature is ``(adata, key=, view=, display args)`` — nothing computable.
 
     A metric argument on both sides gives two places to choose it: a ``distance_metric`` on
     the plot that differs from the one the ``tl`` call used makes the axis label and the numbers
     under it describe different quantities. With none on the plot, the distance is chosen once.
+    A change result is drawn by the same twin, so ``cov_from``/``cov_to`` stay off it too.
     """
     params = set(inspect.signature(getattr(tcri.pl, name)).parameters)
     assert not (params & METRIC_ARGS), f"pl.{name} can still compute: {sorted(params & METRIC_ARGS)}"
     assert "key" in params, "a twin must be able to render a non-default key_added"
+    assert "view" in params, "a twin picks the level it draws with view="
 
 
 @pytest.mark.parametrize("name", TWINS)
@@ -126,8 +196,8 @@ def test_pl_never_recomputes(name, trained_model, monkeypatch):
 
 @pytest.mark.parametrize("name", TWINS)
 def test_pl_return_df_is_the_cached_result(name, trained_model):
-    """``return_df`` hands back the frame ``tcri.get`` does, for each view — not a private
-    copy."""
+    """``return_df`` hands back the frame ``tcri.get`` does, for each view, at one covariate and
+    on a change — not a private copy."""
     _, adata = trained_model
     adata = adata.copy()
     _compute_all(adata)
@@ -141,6 +211,32 @@ def test_pl_return_df_is_the_cached_result(name, trained_model):
         pd.testing.assert_frame_equal(
             getattr(tcri.pl, name)(adata, return_df=True, view="item"), tcri.get.items(adata, name),
         )
+
+    # ...and for a change result, read under its own key
+    _compute_changes(adata)
+    key = _change_key(name)
+    pd.testing.assert_frame_equal(getattr(tcri.pl, name)(adata, key=key, return_df=True),
+                                  tcri.get.replicates(adata, name, key=key))
+    if name in ITEM_TWINS:
+        pd.testing.assert_frame_equal(
+            getattr(tcri.pl, name)(adata, key=key, return_df=True, view="item"),
+            tcri.get.items(adata, name, key=key),
+        )
+
+
+@pytest.mark.parametrize("name", ["mutual_information", "clonotypic_entropy",
+                                  "phenotypic_entropy"])
+def test_a_change_frame_carries_its_endpoints(name, cohort):
+    """There is no endpoints view: a change's two endpoints are stored beside it, so the frame
+    ``return_df`` hands back carries them in each view. Flux, a distance between the two levels,
+    has no endpoints and is not listed."""
+    _, adata = cohort
+    adata = adata.copy()
+    _call(adata, name, "change", groupby="patient")
+    for view in _views(name):
+        frame = getattr(tcri.pl, name)(adata, view=view, return_df=True)
+        assert {"value_from", "value_to", "adjusted_from", "adjusted_to"} <= set(frame.columns), (
+            f"{name}, {view} view: the endpoints are not in the stored frame")
 
 
 def test_pl_renders_the_axes_the_tl_call_used(trained_model):
@@ -234,6 +330,50 @@ def test_pl_brackets_the_contrast_only_on_the_split_axis(cohort):
     assert tcri.get.result(adata, "clonotypic_entropy")["stats"] is not None
     assert not pheno_ax.texts, "the cohort contrast was bracketed over the phenotype axis"
 
+    # a change with a split: `stats` holds the covariate rows beside the split row, and the
+    # bracket over the split axis is the split row's
+    to = list(adata.uns[K.COVARIATE_CATEGORIES])[1]
+    tcri.tl.mutual_information(adata, cov_from=cov, cov_to=to, groupby="patient",
+                               splitby="disease_status")
+    stats = tcri.get.stats(adata, "mutual_information")
+    split = stats.loc[stats["comparison"] == "split"]
+    assert len(split) == 1 and (stats["comparison"] == "covariate").any()
+    change_ax = tcri.pl.mutual_information(adata)
+    assert change_ax.get_xlabel() == "disease_status"
+    assert _bracket_stars(change_ax).get((0.0, 1.0)) == [split.iloc[0]["stars"] or "ns"]
+
+
+def test_a_split_named_like_a_covariate_level_gets_its_own_bracket(cohort):
+    """A change's covariate rows and its split row can name the same two levels.
+
+    Here the split levels are named as the covariate levels, so a covariate row's ``level_a`` and
+    ``level_b`` match the two split positions on x. The bracket between them is the split row's:
+    the stars are selected by ``comparison`` as well as by level, so a covariate row is never
+    drawn as the contrast between the splits.
+    """
+    _, adata = cohort
+    adata = adata.copy()
+    cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    adata.obs["arm"] = (adata.obs["disease_status"].astype(str)
+                        .map({"disease": cov_from, "control": cov_to}).astype("category"))
+
+    for name in TWINS:
+        getattr(tcri.tl, name)(adata, cov_from=cov_from, cov_to=cov_to, groupby="patient",
+                               splitby="arm")
+        stats = tcri.get.stats(adata, name)
+        covariate = stats.loc[stats["comparison"] == "covariate"]
+        split = stats.loc[stats["comparison"] == "split"]
+        # the fixture: both kinds of row name the two levels on x
+        assert len(covariate) == 2 and len(split) == 1, name
+        assert {(r["level_a"], r["level_b"]) for _, r in covariate.iterrows()} == {
+            (cov_from, cov_to)}, name
+        assert {split.iloc[0]["level_a"], split.iloc[0]["level_b"]} == {cov_from, cov_to}, name
+
+        ax = getattr(tcri.pl, name)(adata)
+        assert ax.get_xlabel() == "arm"
+        assert _ticks(ax) == [cov_from, cov_to], name
+        assert _bracket_stars(ax).get((0.0, 1.0)) == [split.iloc[0]["stars"] or "ns"], name
+
 
 # ── shapes each twin chooses ─────────────────────────────────────────────────
 
@@ -289,18 +429,23 @@ def test_the_clone_item_view_puts_replicates_on_x_and_the_split_in_hue(cohort):
 
 def test_the_metric_twins_take_a_view(trained_model):
     """``view="replicate"`` draws one value per replicate, ``"item"`` one per replicate and
-    item; mutual information has no items and raises for ``"item"``, and any other view
-    raises."""
+    item; mutual information has no items and raises for ``"item"``, at one covariate and on a
+    change, and any other view raises."""
     _, adata = trained_model
     adata = adata.copy()
     _compute_all(adata)
-    for name in ("mutual_information", "clonotypic_entropy", "phenotypic_entropy"):
+    for name in TWINS:
         with pytest.raises(ValueError, match="view must be"):
             getattr(tcri.pl, name)(adata, view="items")
     with pytest.raises(ValueError, match="no item view"):
         tcri.pl.mutual_information(adata, view="item")
-    for name in ("clonotypic_entropy", "phenotypic_entropy"):
+    for name in ITEM_TWINS:
         assert getattr(tcri.pl, name)(adata, view="item") is not None
+
+    # a change of mutual information has no items either
+    _compute_changes(adata)
+    with pytest.raises(ValueError, match="no item view"):
+        tcri.pl.mutual_information(adata, key=_change_key("mutual_information"), view="item")
 
 
 def test_flux_labels_the_distance_it_was_computed_with(trained_model):
@@ -461,24 +606,23 @@ def test_plots_route_through_the_shared_palette(trained_model):
 
 # ── the mark and the statistic must describe one unit ────────────────────────
 
-@pytest.mark.parametrize("metric", ["phenotypic_entropy", "clonotypic_entropy",
-                                    "mutual_information"])
-def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
+@pytest.mark.parametrize(("metric", "mode"),
+                         [(m, mode) for m, view, mode in RENDERED if view == "replicate"])
+def test_the_dots_are_the_same_unit_as_the_p_value(metric, mode, cohort):
     """The marks and the p-value drawn above them must describe the same unit.
 
-    The item summary of an entropy carries one row per (replicate, item) — patient x clone — so
-    a strip drawn from it would show clones while the bracket from ``stats`` tests patients.
-    The default view draws the replicate summary, one mark per patient, the rows the contrast
-    is run on. ``mutual_information`` has no item axis and cannot show the difference, which
-    is why the parametrization covers all three.
+    The item summary of an entropy or of flux carries one row per (replicate, item) — patient x
+    clone — so a strip drawn from it would show clones while the bracket from ``stats`` tests
+    patients. The default view draws the replicate summary, one mark per patient, the rows the
+    contrast is run on, at one covariate and on a change. ``mutual_information`` has no item
+    axis and cannot show the difference, which is why the parametrization covers every twin.
     """
     _, adata = cohort
     adata = adata.copy()
-    cov = _cov(adata)
 
     from tcri._compute._tables import collapse_to_replicates
 
-    getattr(tcri.tl, metric)(adata, covariate=cov, groupby="patient", splitby="disease_status")
+    _call(adata, metric, mode, groupby="patient", splitby="disease_status")
     res = tcri.get.replicates(adata, metric)
     ax = getattr(tcri.pl, metric)(adata)
 
@@ -494,15 +638,16 @@ def test_the_dots_are_the_same_unit_as_the_p_value(metric, cohort):
     assert _n_points(ax) % 6 == 0, f"{metric}: dots are not a whole number of patients"
 
 
-def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
+@pytest.mark.parametrize("mode", ["covariate", "change"])
+def test_the_plot_draws_the_values_the_contrast_ran_on(mode, cohort):
     """Not merely the same COUNT — the same values: the replicate view's marks are the
     replicate summary, the frame ``build_stats`` tests, so the figure cannot rest on other
-    numbers than the contrast drawn over it.
+    numbers than the contrast drawn over it. On a change the split row tests each replicate's
+    change, the value the mark draws.
     """
     _, adata = cohort
     adata = adata.copy()
-    cov = _cov(adata)
-    tcri.tl.phenotypic_entropy(adata, covariate=cov, groupby="patient", splitby="disease_status")
+    _call(adata, "phenotypic_entropy", mode, groupby="patient", splitby="disease_status")
     res = tcri.get.replicates(adata, "phenotypic_entropy")
 
     # the default panel draws the adjusted value, the column `build_stats` tests
@@ -512,7 +657,9 @@ def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
     assert not len(_mark_ys(ax, reference=True)), "a gray mark was drawn on the adjusted panel"
     stats = tcri.get.stats(adata, "phenotypic_entropy")
     assert set(stats["quantity"]) == {"adjusted"}
-    row = stats.iloc[0]
+    split = stats.loc[stats["comparison"] == "split"]
+    assert len(split) == 1
+    row = split.iloc[0]
     assert len(expected) == row["n_a"] + row["n_b"], (
         "the marks and the contrast rest on different replicate sets")
 
@@ -524,16 +671,20 @@ def test_the_plot_draws_the_values_the_contrast_ran_on(cohort):
                        np.sort(expected["null_value"].to_numpy()))
 
 
-def test_the_replicate_marks_are_the_replicate_values_not_the_item_means(cohort):
+@pytest.mark.parametrize("mode", ["covariate", "change"])
+def test_the_replicate_marks_are_the_replicate_values_not_the_item_means(mode, cohort):
     """Clonotypic entropy's replicate view draws each replicate's H(C|P), the stored replicate
     summary, which weights each phenotype by its share of the replicate's joint. That is not
     the plain mean of the replicate's item values, and on this fixture the two differ, so the
     marks matching the replicate summary rules out marks drawn from the item means.
+
+    On a change the replicate mark is the difference of the replicate's two values, each over
+    every clone at its level, and the item rows are the per-phenotype changes over the
+    persistent clones; an average of those item changes is not drawn either.
     """
     _, adata = cohort
     adata = adata.copy()
-    tcri.tl.clonotypic_entropy(adata, covariate=_cov(adata), groupby="patient",
-                               splitby="disease_status")
+    _call(adata, "clonotypic_entropy", mode, groupby="patient", splitby="disease_status")
     expected = tcri.get.replicates(adata, "clonotypic_entropy").dropna(subset=["adjusted"])
     item_means = (tcri.get.items(adata, "clonotypic_entropy").dropna(subset=["adjusted"])
                   .groupby("patient", observed=True)["adjusted"].mean())
@@ -549,30 +700,35 @@ def test_the_replicate_marks_are_the_replicate_values_not_the_item_means(cohort)
 
 
 @pytest.mark.parametrize("quantity", ["auto", "value"])
-@pytest.mark.parametrize("metric", ["clonotypic_entropy", "phenotypic_entropy"])
-def test_the_item_marks_are_the_item_summary(metric, quantity, cohort):
-    """Every mark of an item view is a row of the stored item summary, and every row is drawn.
+@pytest.mark.parametrize("splitby", [None, "disease_status"])
+@pytest.mark.parametrize(("metric", "view", "mode"), RENDERED,
+                         ids=[f"{m}-{v}-{mode}" for m, v, mode in RENDERED])
+def test_the_marks_are_the_stored_summary_of_their_view(metric, view, mode, splitby, quantity,
+                                                        cohort):
+    """Every mark is a row of the stored summary of its view, and every row is drawn: the
+    replicate view draws ``tcri.get.replicates`` and the item view ``tcri.get.items``, for every
+    twin at one covariate and on a change, with and without a split.
 
     Clonotypic entropy's item view collapses to one value per (replicate, phenotype), which on
-    the item summary is one row each; phenotypic entropy's draws one mark per (replicate,
-    clone) row. ``"auto"`` draws the adjusted value with no gray marks; ``"value"`` draws the
-    value with its reference, gray, from the same rows.
+    the item summary is one row each; the clone item views draw one mark per (replicate, clone)
+    row. ``"auto"`` draws the adjusted value with no gray marks; ``"value"`` draws the value
+    with its reference, gray, from the same rows.
     """
     _, adata = cohort
     adata = adata.copy()
-    getattr(tcri.tl, metric)(adata, covariate=_cov(adata), groupby="patient",
-                             splitby="disease_status")
-    items = tcri.get.items(adata, metric)
-    ax = getattr(tcri.pl, metric)(adata, view="item", quantity=quantity)
+    _call(adata, metric, mode, groupby="patient", splitby=splitby)
+    frame = (tcri.get.items if view == "item" else tcri.get.replicates)(adata, metric)
+    ax = getattr(tcri.pl, metric)(adata, view=view, quantity=quantity)
 
     if quantity == "auto":
-        expected = items.dropna(subset=["adjusted"])
+        expected = frame.dropna(subset=["adjusted"])
+        assert len(expected), "the fixture has no finite adjusted value to draw"
         np.testing.assert_allclose(_mark_ys(ax), np.sort(expected["adjusted"].to_numpy()),
                                    atol=1e-12)
         assert not len(_mark_ys(ax, reference=True)), (
             "a gray mark was drawn on the adjusted panel")
     else:
-        expected = items.dropna(subset=["value", "null_value"])
+        expected = frame.dropna(subset=["value", "null_value"])
         np.testing.assert_allclose(_mark_ys(ax), np.sort(expected["value"].to_numpy()),
                                    atol=1e-12)
         np.testing.assert_allclose(_mark_ys(ax, reference=True),
@@ -589,14 +745,19 @@ def test_nothing_connects_two_x_positions(cohort):
     This is a prohibition, not a feature: a connector must be drawn from an identity key, never
     from adjacency, so adding one is a deliberate change to this test rather than a side effect
     of a style change.
+
+    A change result is drawn the same way, in each of its views: a replicate's or an item's
+    change is one mark, never its two endpoints joined.
     """
     _, adata = cohort
     adata = adata.copy()
-    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
     _compute_all(adata, groupby="patient", splitby="disease_status")
+    _compute_changes(adata, groupby="patient", splitby="disease_status")
 
-    for name in TWINS:
-        ax = getattr(tcri.pl, name)(adata)
+    panels = [(name, None, "replicate") for name in TWINS] + [
+        (name, _change_key(name), view) for name in TWINS for view in _views(name)]
+    for name, key, view in panels:
+        ax = getattr(tcri.pl, name)(adata, key=key, view=view)
         for line in ax.lines:
             if line.get_label() == BRACKET_LABEL:
                 continue      # a significance bracket spans x by design
@@ -604,7 +765,8 @@ def test_nothing_connects_two_x_positions(cohort):
             if xs.size < 2 or not np.isfinite(xs).all():
                 continue
             assert xs.max() - xs.min() < 1.0, (
-                f"pl.{name} drew a line spanning x positions {xs.min()}..{xs.max()}"
+                f"pl.{name}(key={key!r}, view={view!r}) drew a line spanning x positions "
+                f"{xs.min()}..{xs.max()}"
             )
 
 
@@ -661,164 +823,117 @@ def test_the_same_level_keeps_its_color_across_panels(cohort):
         )
 
 
-# ── the delta twins ──────────────────────────────────────────────────────────
+# ── changes between covariates ───────────────────────────────────────────────
 
-DELTAS = ["delta_clonotypic_entropy", "delta_phenotypic_entropy"]
+@pytest.mark.parametrize(("metric", "view"), [(n, v) for n in TWINS for v in _views(n)])
+def test_a_change_marks_zero(metric, view, cohort):
+    """Zero is a real position on a change axis: an unmarked one hides the direction.
 
-
-def _compute_deltas(adata, **kw):
-    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
-    to = rest[0] if rest else cov
-    for name in DELTAS:
-        getattr(tcri.tl, name)(adata, cov_from=cov, cov_to=to, **kw)
-
-
-@pytest.mark.parametrize("name", DELTAS)
-def test_delta_twins_obey_the_renderer_contract(name, cohort):
-    """Same rules as every other twin: no metric arguments, and it names the tool to run."""
-    _, adata = cohort
-    adata = adata.copy()
-    params = set(inspect.signature(getattr(tcri.pl, name)).parameters)
-    assert not (params & METRIC_ARGS)
-    assert {"kind", "key"} <= params
-
-    # `cohort` is session-scoped and other modules compute on it, so a copy inherits whatever
-    # they cached. Asserting a key is ABSENT has to clear it first or the test passes or fails
-    # on file ordering rather than on behavior.
-    adata.uns.pop(getattr(K, name.upper()), None)
-    with pytest.raises(KeyError, match=f"tcri.tl.{name}"):
-        getattr(tcri.pl, name)(adata)
-
-    _compute_deltas(adata, groupby="patient")
-    with pytest.raises(ValueError, match="kind must be"):
-        getattr(tcri.pl, name)(adata, kind="nonsense")
-
-
-@pytest.mark.parametrize("name", DELTAS)
-def test_the_delta_view_marks_zero(name, cohort):
-    """Zero is a real position on a delta axis — an unmarked one hides the direction."""
-    _, adata = cohort
-    adata = adata.copy()
-    _compute_deltas(adata, groupby="patient", splitby="disease_status")
-    ax = getattr(tcri.pl, name)(adata, kind="delta")
-    rules = [l for l in ax.lines
-             if l.get_label() == BRACKET_LABEL and len(set(np.round(l.get_ydata(), 12))) == 1
-             and float(l.get_ydata()[0]) == 0.0]
-    assert rules, "the delta axis has no zero rule"
-
-
-def test_only_the_clone_metric_connects_its_endpoints(cohort):
-    """A line asserts persistence. A clonotype persists; a phenotype is a bin.
-
-    Both metrics can show their endpoints, but only the clone-item one may join them — the
-    entity/category distinction, drawn.
+    A change can be negative, so its value panel and its adjusted panel both carry a zero rule,
+    in each view. Flux is a distance between the two levels and is never negative, so only its
+    adjusted panel, whose zero is the reference, carries one.
     """
     _, adata = cohort
     adata = adata.copy()
-    _compute_deltas(adata, groupby="patient")
-    from tcri.plotting._base import CONNECTOR_LABEL
+    _call(adata, metric, "change", groupby="patient", splitby="disease_status")
 
-    def _connectors(ax):
-        return [l for l in ax.lines if l.get_label() == CONNECTOR_LABEL]
-
-    clone_ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    assert len(_connectors(clone_ax)) == adata.obs["patient"].nunique()
-
-    pheno_ax = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
-    assert not _connectors(pheno_ax), "a phenotype is a category, not a barcode"
-
-    # and no connector survives into the delta view, where a point IS the pairing
-    assert not _connectors(tcri.pl.delta_phenotypic_entropy(adata, kind="delta"))
+    for quantity in ("auto", "adjusted"):
+        ax = getattr(tcri.pl, metric)(adata, view=view, quantity=quantity)
+        assert _has_zero_rule(ax), f"the adjusted change axis has no zero rule ({quantity!r})"
+    value_ax = getattr(tcri.pl, metric)(adata, view=view, quantity="value")
+    if metric == "phenotypic_flux":
+        assert not _has_zero_rule(value_ax), "a zero rule was drawn on the flux value axis"
+    else:
+        assert _has_zero_rule(value_ax), "the change's value axis has no zero rule"
 
 
-def test_endpoints_come_from_the_matched_result(cohort):
-    """The endpoints view is rendered from the DELTA result, where both sides were computed
-    over the intersected clone set — so the unmatched version of this figure is unreachable
-    rather than merely discouraged."""
+@pytest.mark.parametrize("metric", ["mutual_information", "clonotypic_entropy",
+                                    "phenotypic_entropy", "phenotypic_flux"])
+def test_a_change_axis_says_it_is_a_change(metric, cohort):
+    """A change panel of mutual information or an entropy prefixes its y label with Δ, on the
+    adjusted and the value panel alike; flux is between two levels by definition and keeps its
+    label."""
     _, adata = cohort
     adata = adata.copy()
-    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
-    tcri.tl.delta_phenotypic_entropy(adata, cov_from=cov, cov_to=rest[0], groupby="patient")
-
-    res = frames(tcri.get.result(adata, "delta_phenotypic_entropy"))[1]
-    assert {"value_from", "value_to"} <= set(res.columns), (
-        "the endpoints are not in the payload, so the view would need a second result"
-    )
-    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    assert [t.get_text() for t in ax.get_xticklabels()] == [str(cov), str(rest[0])]
-
-    drawn = np.concatenate([c.get_offsets()[:, 1] for c in ax.collections])
-    from tcri._compute._tables import collapse_to_replicates
-    for col in ("value_from", "value_to"):
-        want = collapse_to_replicates(res, groupby="patient", value=col)[col].to_numpy()
-        assert all(np.isclose(drawn, w).any() for w in want), f"{col} is not on the figure"
+    _call(adata, metric, "change", groupby="patient", splitby="disease_status")
+    adjusted = getattr(tcri.pl, metric)(adata).get_ylabel().replace("\n", " ")
+    value = getattr(tcri.pl, metric)(adata, quantity="value").get_ylabel().replace("\n", " ")
+    if metric == "phenotypic_flux":
+        assert "Δ" not in adjusted and "Δ" not in value, (adjusted, value)
+        return
+    assert adjusted.startswith("adjusted Δ "), adjusted
+    assert value.startswith("Δ "), value
+    _call(adata, metric, "covariate", groupby="patient")
+    assert "Δ" not in getattr(tcri.pl, metric)(adata).get_ylabel()
 
 
-def test_dot_area_is_the_matched_clone_count(cohort):
-    """`n_matched` varies per replicate, so it is encoded per point rather than in a title.
-
-    And a replicate's two endpoint dots must be the SAME size: the matched clone set is the
-    same on both sides, so a size difference would mean the intersection did not hold.
+def test_the_flux_item_view_draws_each_persistent_clone(trained_model):
+    """``pl.phenotypic_flux(view="item")`` draws one mark per persistent clone within each
+    replicate: the clones ``pp.clone_persistence`` finds at both levels, each at its replicate's
+    x position with its stored item value. A clone seen at one level only has no item row and
+    no mark.
     """
-    _, adata = cohort
-    adata = adata.copy()
-    cov, *rest = list(adata.uns[K.COVARIATE_CATEGORIES])
-    tcri.tl.delta_phenotypic_entropy(adata, cov_from=cov, cov_to=rest[0], groupby="patient")
-    res = frames(tcri.get.result(adata, "delta_phenotypic_entropy"))[1]
-    counts = res.groupby("patient", observed=True)["clonotype"].nunique()
-
-    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    # the gray reference pair is excluded: its size is FIXED by design, because the null's
-    # matched clone count is provably the parent's and sizing it would repeat one number
     from tcri.plotting._base import REFERENCE_LABEL
-    per_patient = [c.get_sizes() for c in ax.collections
-                   if len(c.get_offsets()) == 2 and c.get_label() != REFERENCE_LABEL]
-    assert len(per_patient) == len(counts)
-    for sizes in per_patient:
-        assert len(set(np.round(sizes, 9))) == 1, "a patient's two endpoints differ in size"
 
-    if counts.nunique() > 1:
-        flat = sorted(float(s[0]) for s in per_patient)
-        assert flat[0] < flat[-1], "the matched count is not encoded in the area"
-    assert ax.get_legend() is not None, "no size legend to read the areas against"
-
-
-def test_only_the_entity_matched_metric_sizes_by_matched_clones(cohort):
-    """The size legend says "clones matched", so it must be clones.
-
-    For `delta_clonotypic_entropy` the item is a phenotype and the matched clone count is not
-    in `result` — those clones were summed over inside H(c|phi). Counting item rows there would
-    put a phenotype count behind a legend that claims clones, so that panel draws no size
-    legend and no size variation at all.
-    """
-    _, adata = cohort
+    _, adata = trained_model
     adata = adata.copy()
-    _compute_deltas(adata, groupby="patient")
+    cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    # the fixture's clonotype and covariate columns
+    persistence = tcri.pp.clone_persistence(adata, clonotype_key="unique_clone_id",
+                                            covariate_key="timepoint", cov_from=cov_from,
+                                            cov_to=cov_to, groupby="patient")
+    persistence = persistence.set_index("patient")
+    assert ((persistence["clones_from_only"] + persistence["clones_to_only"]) > 0).all(), (
+        "the fixture has a patient whose every clone persists, so nothing is left out there")
+    per_clone = tcri.pp.clone_persistence(adata, clonotype_key="unique_clone_id",
+                                          covariate_key="timepoint", cov_from=cov_from,
+                                          cov_to=cov_to, groupby="patient", per_clone=True)
+    persistent = per_clone.loc[(per_clone[str(cov_from)] > 0) & (per_clone[str(cov_to)] > 0)]
 
-    sized = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    assert sized.get_legend() is not None
+    tcri.tl.phenotypic_flux(adata, cov_from=cov_from, cov_to=cov_to, groupby="patient")
+    items = tcri.get.items(adata, "phenotypic_flux")
+    for patient, clones in persistent.groupby("patient")["clonotype"]:
+        assert set(items.loc[items["patient"].astype(str) == patient, "clonotype"]) == set(
+            clones), f"{patient}: the item rows are not the persistent clones"
 
-    unsized = tcri.pl.delta_clonotypic_entropy(adata, kind="endpoints")
-    # a legend may exist to name the gray reference; what must NOT be there is a SIZE legend,
-    # whose title is the claim being guarded against
-    from tcri.plotting._base import REFERENCE_LEGEND
-    lg = unsized.get_legend()
-    if lg is not None:
-        assert lg.get_title().get_text() != "clones matched", (
-            "a phenotype count was labeled as clones matched")
-        assert [t.get_text() for t in lg.get_texts()] == [REFERENCE_LEGEND], [
-            t.get_text() for t in lg.get_texts()]
-    from tcri.plotting._base import REFERENCE_LABEL
-    areas = {round(float(s), 6) for c in unsized.collections
-             if c.get_label() != REFERENCE_LABEL for s in c.get_sizes()}
-    assert len(areas) == 1, "the phenotype panel encoded a count in the dot area"
+    ax = tcri.pl.phenotypic_flux(adata, view="item")
+    assert ax.get_xlabel() == "patient"
+    patients = _ticks(ax)
+    drawn = {}
+    for coll in ax.collections:
+        if coll.get_label() == REFERENCE_LABEL:
+            continue
+        for x, y in coll.get_offsets():
+            drawn.setdefault(patients[int(round(x))], []).append(float(y))
+    assert {p: len(ys) for p, ys in drawn.items()} == (
+        persistence["persistent_clones"].to_dict()), "not one mark per persistent clone"
+    for patient, ys in drawn.items():
+        want = items.loc[items["patient"].astype(str) == patient, "adjusted"].to_numpy()
+        np.testing.assert_allclose(np.sort(ys), np.sort(want), atol=1e-12, err_msg=patient)
 
-    # ...and the reference's own dots are all one size too, for the same reason stated the
-    # other way round: the null's matched clone count IS the parent's, so encoding it would
-    # repeat one number in a channel that means "this varies".
-    gray = {round(float(s), 6) for c in sized.collections
-            if c.get_label() == REFERENCE_LABEL for s in c.get_sizes()}
-    assert len(gray) <= 1, f"the reference dots were sized by a count: {sorted(gray)}"
+
+@pytest.mark.parametrize("name", TWINS)
+def test_a_change_without_replicates_is_one_position(name, trained_model):
+    """With no replicate registered the whole object is one replicate, so its change is one
+    value, drawn at one x position labeled ``"cov_from → cov_to"``, with its reference behind it
+    on the value panel."""
+    _, adata = trained_model
+    adata = adata.copy()
+    assert adata.uns[K.METADATA].get(K.Config.REPLICATE) is None, (
+        "the fixture registers a replicate")
+    cov_from, cov_to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    getattr(tcri.tl, name)(adata, cov_from=cov_from, cov_to=cov_to)
+    row = tcri.get.replicates(adata, name)
+    assert len(row) == 1
+
+    for quantity, column in (("auto", "adjusted"), ("value", "value")):
+        ax = getattr(tcri.pl, name)(adata, quantity=quantity)
+        assert _ticks(ax) == [f"{cov_from} → {cov_to}"], quantity
+        assert _n_points(ax) == 1, quantity
+        np.testing.assert_allclose(_mark_ys(ax), row[column].to_numpy(), atol=1e-12)
+        if quantity == "value":
+            np.testing.assert_allclose(_mark_ys(ax, reference=True),
+                                       row["null_value"].to_numpy(), atol=1e-12)
 
 
 # ── small multiples ──────────────────────────────────────────────────────────
@@ -858,17 +973,18 @@ def test_panels_given_the_same_categories_share_an_x_order(cohort):
 
 def _all_twins(adata, model):
     """Every metric twin and gene importance, computed with replicates and a split, as
-    ``name -> callable(**display kwargs)``."""
-    cov, to = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
+    ``name -> callable(**display kwargs)``: each twin's default result, each twin's change in
+    every view it has, and gene importance."""
     kw = dict(groupby="patient", splitby="disease_status")
     _compute_all(adata, **kw)
-    _compute_deltas(adata, **kw)
+    _compute_changes(adata, **kw)
     tcri.perturb.gene_importance(model, adata, genes=[0, 1, 2], **kw)
     draw = {name: (lambda name=name, **k: getattr(tcri.pl, name)(adata, **k))
-            for name in TWINS + DELTAS + ["gene_importance"]}
-    for name in DELTAS:
-        draw[f"{name}:endpoints"] = (lambda name=name, **k: getattr(tcri.pl, name)(
-            adata, kind="endpoints", **k))
+            for name in TWINS + ["gene_importance"]}
+    for name in TWINS:
+        for view in _views(name):
+            draw[f"{name}:change:{view}"] = (lambda name=name, view=view, **k: getattr(
+                tcri.pl, name)(adata, key=_change_key(name), view=view, **k))
     return draw
 
 

@@ -6,9 +6,9 @@ merged. So the ledger is pinned here: a deleted symbol reappearing on the public
 revert, a bad merge or a helpful re-export, fails this test instead of shipping.
 
 Most entries assert **absence from the public namespace**: gone from the namespace, from
-``__all__`` and from the imports. Two entries are deliberately narrower and are handled separately
+``__all__`` and from the imports. One entry is deliberately narrower and is handled separately
 below: `compare_groups`, which was removed from the public surface but *kept* as an internal
-helper, and the delta pair, which was removed and then reinstated.
+helper.
 
 The ledger also pins removed **stored-result columns** and the word they were named after. A
 column has no namespace to be absent from, so it is checked on the payloads every tool stores;
@@ -38,6 +38,8 @@ REMOVED = {
     "tl": [
         "clone_fraction", "mi_compare", "delta_entropy_table", "flux_table",
         "clonotypic_entropy_base", "clonality", "dkl",
+        # a change is the metric itself at cov_from/cov_to
+        "delta_clonotypic_entropy", "delta_phenotypic_entropy",
     ],
     # non-core plots — dropped, not moved to examples
     "pl": [
@@ -46,6 +48,8 @@ REMOVED = {
         "plot_phenotype_probabilities", "compare_phenotypes", "ridge_delta_entropy",
         "clonality", "tcri_boxplot", "set_color_palette", "plot_pheno_sankey",
         "resolve_palette", "centropy", "pentropy",
+        # a change result is drawn by its metric's own twin
+        "delta_clonotypic_entropy", "delta_phenotypic_entropy",
     ],
     # out of the package
     "ut": [
@@ -73,7 +77,7 @@ LEAKED_FROM_INIT = ["sys", "PackageNotFoundError", "version", "annotations"]
 #: Deleted modules. ``hasattr`` on a namespace cannot catch these — they were never attributes of
 #: a namespace, they were importable module paths — so they need an import check.
 DELETED_MODULES = ["tcri._console", "tcri._keys", "tcri.tools._common", "tcri.tools._compare",
-                   "tcri._distance"]
+                   "tcri._distance", "tcri.tools._delta", "tcri.plotting._delta"]
 
 
 @pytest.mark.parametrize(
@@ -100,15 +104,21 @@ def test_compare_groups_is_internal_not_public():
     from tcri._stats import compare_groups  # noqa: F401
 
 
-def test_the_delta_pair_was_reinstated_and_must_exist():
-    """The counter-case, pinned so nobody "fixes" a failure by re-adding these to REMOVED.
+def test_no_delta_result_is_registered():
+    """No delta result has a name ``tcri.get`` resolves or a ``uns`` key a tool stores under.
 
-    `compare_groups` contrasts between groups on a tidy frame and cannot compute a metric at two
-    covariate levels, so it never replaced the paired entropies. `delta_entropy_table` stayed
-    gone (it is in REMOVED above); these two are the public form the capability came back as.
+    The namespace checks above cover ``tl``, ``pl`` and the ``get`` accessor names. They cannot
+    see the registry ``tcri.get`` resolves a result name through, or the key constants in
+    ``tcri._state.keys``, so those two are pinned here.
     """
-    assert hasattr(tcri.tl, "delta_clonotypic_entropy")
-    assert hasattr(tcri.tl, "delta_phenotypic_entropy")
+    from tcri._state import keys, schemas
+
+    assert not [n for n in vars(schemas) if n.startswith("Delta")], "a delta schema is back"
+    assert not [n for n in tcri.get._RESULTS if "delta" in n], sorted(tcri.get._RESULTS)
+    assert not [k for k in tcri.get._RESULTS.values() if "delta" in k], (
+        sorted(tcri.get._RESULTS.values()))
+    assert not [n for n in vars(keys) if n.startswith("DELTA_")], (
+        "tcri._state.keys still names a delta result key")
 
 
 @pytest.mark.parametrize("name", LEAKED_FROM_INIT)
@@ -141,23 +151,26 @@ _SKIPPED_PARTS = {"__pycache__", "_build", "release-notes"}
 
 
 def test_removed_columns_stay_removed(cohort):
-    """No slot of any stored result carries a removed column, at the widest call each tool has.
+    """No slot of any stored result carries a removed column, at any call of the schema
+    snapshot.
 
-    The maximal calls of the schema snapshot are reused so the check covers every column a
-    reference adds: ``groupby``, ``splitby``, draws, and the metric's default null. A level's
-    frames are walked as ``<level>.<frame>``.
+    The snapshot's calls are reused so the check covers every column a reference adds:
+    ``groupby``, ``splitby``, draws, and the metric's default null, at one covariate and on a
+    change, whose rows add the endpoint columns. A level's frames are walked as
+    ``<level>.<frame>``.
     """
     from tests.test_result_schemas import _calls, _run, _slots
 
     model, adata = cohort
-    for name, (_minimal, maximal) in _calls(adata).items():
-        payload = _run(name, maximal, model, adata)
-        for slot, frame in _slots(payload):
-            if not isinstance(frame, pd.DataFrame):
-                continue
-            bad = [c for c in frame.columns
-                   if c in REMOVED_COLUMNS or str(c).startswith("excess")]
-            assert not bad, f"{name}.{slot} carries removed columns {bad}"
+    for name, calls in _calls(adata).items():
+        for label, kwargs in calls.items():
+            payload = _run(name, kwargs, model, adata)
+            for slot, frame in _slots(payload):
+                if not isinstance(frame, pd.DataFrame):
+                    continue
+                bad = [c for c in frame.columns
+                       if c in REMOVED_COLUMNS or str(c).startswith("excess")]
+                assert not bad, f"{name} ({label}).{slot} carries removed columns {bad}"
 
 
 def test_the_retired_words_are_gone():

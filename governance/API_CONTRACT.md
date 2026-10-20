@@ -8,19 +8,18 @@ declared parameter is read by the function that declares it. Nothing else binds 
 interface. Adding a public function is a contract change by construction: the
 test fails until it is declared here.
 
-Namespaces: `tcri.ml` (`TCRIModel`), `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.diag`,
-`tcri.perturb`, `tcri.ut`, `tcri.datasets`. `tl`, `pl`, `pp`, `diag`, `perturb`, `ut` and
+Namespaces: `tcri.ml` (`TCRIModel`), `tcri.pp`, `tcri.tl`, `tcri.pl`, `tcri.get`, `tcri.diag`,
+`tcri.perturb`, `tcri.ut`, `tcri.datasets`. `tl`, `pl`, `get`, `pp`, `diag`, `perturb`, `ut` and
 `datasets` are containers for namespacing only; `TCRIModel` is a real class. Private helpers
 (`_state`, `_stats`, `_compute`, and every underscore name) are outside the contract.
 
 ## The scope principle
 
-A comparison belongs in the API when producing it requires applying a metric at a level the
-surface does not already expose. When it is arithmetic on values the package has already
-computed, it belongs to the user. So the two metrics with an item axis (clone or phenotype)
-have paired `delta_*` forms, because a within-draw difference needs the engine; mutual
-information has no item axis, so its difference is a subtraction the caller performs. Always
-know what a metric reduces to.
+Every metric is computed at one covariate level or as a change between two (`cov_from`, `cov_to`),
+per replicate and per item, and compared across splits with `splitby`: comparisons are one
+mechanism on every metric, and none needs a function of its own. A change is taken within a
+posterior draw, which needs the engine, so it is the metric's own call rather than a subtraction
+of stored values. Always know what a metric reduces to.
 
 ## Semantics that are not in a signature
 
@@ -78,7 +77,8 @@ fitted model per process is the supported pattern.
 **`n_samples`.** `0` is the deterministic plug-in at the posterior mean: no draw, reproducible
 on repeat calls. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
 the guide's clamped concentration, seeded by `random_state` through a torch generator. One draw
-serves every covariate, group and clone in a call (draw-once), so a self-delta is exactly zero.
+serves every covariate, group and clone in a call (draw-once), so a level against itself changes
+by exactly zero.
 The plug-in and the posterior mean are different estimators; see `METRICS_CONTRACT.md`.
 
 **`temperature`.** Power-tempers `p_ct` once, `softmax(log(p_ct + 1e-8) / T)`, identically in
@@ -96,25 +96,38 @@ Different estimands, both valid; the docstrings say which question each answers.
 (never by slicing the AnnData) and adds a group axis; clones are assumed disjoint across
 groups. `splitby` produces the contrast between split levels in the `stats` slot: a two-sided
 Mann–Whitney U on per-group values, uncorrected across contrasts, with the replicate unit
-being the group: mutual information and the entropies test their replicate values, and the
-other metrics average items to one value per group before the test; the contrast refuses a frame
-holding more than one row per group and level. `delta` is the second level's mean minus the
-first's. Every pair of split levels with a group has its row, `comparison` `"split"`; an arm with
-no finite value has `n` 0 and NaN statistics. A contrast whose p is undefined has blank `stars`.
+being the group: the metrics test their replicate values, and gene importance each gene's
+per-group values; the contrast refuses a frame holding more than one row per group and level.
+`delta` is the second level's mean minus the first's. Every pair of split levels with a group has
+its row, `comparison` `"split"`; an arm with no finite value has `n` 0 and NaN statistics. A
+change call (`cov_from`, `cov_to`) also tests whether each replicate changed, in rows that come
+first: `comparison` `"covariate"`, `level_a`/`level_b` the two covariate levels, a two-sided
+Wilcoxon signed-rank test on the per-replicate change, one row per split level with `splitby` (the
+split column holds the level) and one over every replicate without. Its arms are the change's
+endpoints; the arms, `delta` and `n` are over the replicates the test used (both endpoints finite,
+change not exactly 0), and fewer than two give NaN statistics. Flux's covariate row tests its
+adjusted value against 0, its arms NaN; without a usable reference it has no test and `delta` is
+the mean flux. With no replicate registered the covariate row is present with `n` of 1 or 0 and no
+test. A contrast whose p is undefined has blank `stars`.
 
 **Return shape.** Every `tl`, and `perturb.gene_importance`, stores its result under `uns[key_added
 or "tcri_<metric>"]` with a `params` block recording every argument, defaults included, and returns
 `None`; `inplace=False` stores nothing and returns the whole result. Nothing is read from a returned
-object: `tcri.get` is the only reader of a stored result. Mutual information and the two entropies
-store `{replicate, item, stats}`. Each level holds `draws`, one row per (covariate, replicate[,
-item], draw), never reduced, and `summary`, which reduces over draw only. The replicate level has
-one row per replicate, NaN when the replicate has no joint at the covariate; the item level has one
-row per replicate and phenotype (clonotypic entropy) or clone (phenotypic entropy), and mutual
-information has no item level. The other tools store `{table, result, stats}`: `table` one row per
-(covariate, group, item, draw), `result` reduced over draw only. Every summary and `result` carries
+object: `tcri.get` is the only reader of a stored result. A stateful `random_state` (a numpy or
+torch generator) is turned into one integer seed before the call, and `params` records that
+integer. Mutual information, the two entropies and flux store `{replicate, item, stats}`. Each
+level holds `draws`, one row per (covariate, replicate[, item], draw), never reduced, and
+`summary`, which reduces over draw only; a change labels its rows `cov_from`/`cov_to` in place of
+`covariate` and carries `value_from`/`value_to` (mutual information also `denom_from`/`denom_to`),
+and its summaries reduce the change and its endpoints under one mask. The replicate level has one
+row per replicate, NaN when the replicate has no joint at a level; the item level has one row per
+replicate and phenotype (clonotypic entropy) or clone (phenotypic entropy; on a change and for
+flux, the persistent clones), and mutual information has no item level. `joint_distribution`
+stores `{table, result}` and `gene_importance` `{table, result, stats, shift}`: `table` one row per (covariate, group, item,
+draw), `result` reduced over draw only. Every summary and `result` carries
 `value`, `sd`, `hdi_low`, `hdi_high` (a true highest-density interval, NaN at `n_samples ≤ 1`);
-`stats` is `None` without `splitby` and otherwise carries one row per contrast, with `quantity`
-naming the column contrasted. Every frame survives an h5ad round trip: flat columns, no vectors in
+`stats` is `None` when nothing is compared and otherwise carries one row per contrast, with
+`quantity` naming the column contrasted. Every frame survives an h5ad round trip: flat columns, no vectors in
 cells, per-draw values as rows with a `draw` column. Read back with `tcri.get.result(adata, name)`
 (the whole result), `tcri.get.replicates`, `tcri.get.items`, `tcri.get.stats` and
 `tcri.get.draws(adata, name, items=False)` (the frames of a result stored by level), and
@@ -128,7 +141,8 @@ permutation, namespace and records; the calls return the fitted models, a list p
 `tcri.null.all` therefore fits 3 x `n_nulls` nulls, and a metric's per-draw frames are
 `n_nulls` times longer than with one. A null's permutation is drawn from the seed spawned by its
 kind, `key_added` and index, so it does not depend on the fits already on the object. Every scored
-metric takes `null_model`, defaulting to `"auto"`: the reference is computed and every summary
+metric takes `null_model`, defaulting to `"auto"`: the phenotype null at one covariate level, the
+covariate null for flux and every change. The reference is computed and every summary
 (`result`) gains `null_value` and `adjusted = value - null_value` beside every native value column
 (`null_denom` has no adjusted column; a denominator is not a reported quantity). The per-draw
 frames (`draws`, `table`) carry them per pair of draws, the fit's draw *d* paired with draw *d*
@@ -145,8 +159,11 @@ creates no column, and `stats` is then on the value. The reference is the caller
 each null — `fit` set to the null, `null_model=None`, and the draws seeded from their own seed
 derived from `random_state` and the null's index — every other argument forwarded verbatim, so
 both sides are the same functional at the same arguments. `fit=` selects one fit, so a
-reference's name there raises, naming its fits. `joint_distribution` returns a matrix rather than a scored
-quantity and takes no `null_model`.
+reference's name there raises, naming its fits. A covariate null can move a group only where one of
+its counted clones has a (clonotype, batch) holding a level the call reads and another level; a
+group it cannot move keeps its value, has NaN reference columns, is named in a warning and leaves
+the tests, and building a covariate null that could move no cell raises before anything is fitted.
+`joint_distribution` returns a matrix rather than a scored quantity and takes no `null_model`.
 
 **Substrate and fits.** One AnnData carries one main fit and any number of named ones, written
 by `to_anndata(fit=...)`. Every per-fit key is prefixed through `fit_key`; the metadata and the
@@ -161,9 +178,11 @@ no metric arguments. A mark shows one variance component: the coarsest unit that
 an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
 result carries one, against a zero rule, and `quantity="value"` draws the value with its null
 behind it; the star a panel draws is always about the quantity on its axis. The twins of mutual
-information and the two entropies take `view=`: `"replicate"` (the default) draws one mark per
-replicate from the replicate summary, with the split on x and its test starred; `"item"` draws
-the item summary; mutual information has no items and raises for `"item"`. Connecting lines are
+information, the two entropies and flux take `view=`: `"replicate"` (the default) draws one mark
+per replicate from the replicate summary, with the split on x and its test starred; `"item"` draws
+the item summary; mutual information has no items and raises for `"item"`. A change is drawn
+against a zero rule; flux, a distance that is never negative, has its zero rule on the adjusted
+panel only. Connecting lines are
 drawn only between points sharing an identity across the compared levels. Every twin takes
 `legend=`, and `False` draws no legend, so a row of panels can carry one; a y label longer than
 its axes is wrapped. In the metric twins the x axis is in the category order of the column on it
@@ -290,7 +309,8 @@ class tl:
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> Optional[dict]: ...
     def clonotypic_entropy(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
+        cov_to: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
@@ -298,7 +318,8 @@ class tl:
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> Optional[dict]: ...
     def phenotypic_entropy(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
+        cov_to: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
@@ -306,7 +327,8 @@ class tl:
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> Optional[dict]: ...
     def mutual_information(
-        adata: AnnData, *, covariate: Optional[str] = ..., groupby: Optional[str] = ...,
+        adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
+        cov_to: Optional[str] = ..., groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
@@ -318,22 +340,6 @@ class tl:
         splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
-        fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> Optional[dict]: ...
-    def delta_clonotypic_entropy(
-        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
-        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
-        normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
-        device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> Optional[dict]: ...
-    def delta_phenotypic_entropy(
-        adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
-        splitby: Optional[str] = ..., n_samples: int = ..., temperature: float = ...,
-        clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
-        normalized: bool = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> Optional[dict]: ...
@@ -360,22 +366,10 @@ class pl:
         save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def phenotypic_flux(
-        adata: AnnData, *, quantity: str = ..., key: Optional[str] = ..., order: Any = ...,
-        hue_order: Any = ...,
+        adata: AnnData, *, view: str = ..., quantity: str = ..., key: Optional[str] = ...,
+        order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
-    ) -> Any: ...
-    def delta_clonotypic_entropy(
-        adata: AnnData, *, kind: str = ..., quantity: str = ..., key: Optional[str] = ...,
-        order: Any = ...,
-        hue_order: Any = ..., palette: Any = ..., legend: bool = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
-    ) -> Any: ...
-    def delta_phenotypic_entropy(
-        adata: AnnData, *, kind: str = ..., quantity: str = ..., key: Optional[str] = ...,
-        order: Any = ...,
-        hue_order: Any = ..., palette: Any = ..., legend: bool = ..., ax: Any = ...,
-        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
         adata: AnnData, *, kind: str = ..., quantity: str = ..., n_top: int = ...,

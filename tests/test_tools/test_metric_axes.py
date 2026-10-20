@@ -1,7 +1,8 @@
 """Behavioral tests for the metric comparison axes.
 
-Every metric takes the same family of arguments — ``covariate``, ``groupby``, ``splitby``,
-``clones``, ``weighted``, ``normalize_mode``, ``n_samples``, ``temperature``. An argument can
+Every metric takes the same family of arguments — ``covariate`` (or ``cov_from`` with
+``cov_to``), ``groupby``, ``splitby``, ``clones``, ``weighted``, ``normalize_mode``,
+``n_samples``, ``temperature``. An argument can
 be declared, accepted, and completely inert while every test stays green, so these tests
 assert that each axis CHANGES THE ANSWER, and — where an exact identity exists — that it
 changes it to the right thing.
@@ -90,7 +91,7 @@ def blocks():
         # The references every scored metric defaults to, built ONCE here rather than passed
         # as `null_model=None` at the thirty-odd call sites below. This file is about the
         # AXES -- covariate, groupby, splitby, clones, weighted, temperature, n_samples -- and
-        # each of those assertions is now also an assertion that the reference run forwards
+        # each of those assertions is also an assertion that the reference run forwards
         # that axis, since a reference computed at defaults would move the adjusted column
         # but not the value and nothing here would notice.
         import tcri
@@ -297,29 +298,72 @@ def test_model_ranks_the_blocks_as_the_oracle_does(blocks):
     )
 
 
-# ── covariate is required wherever the result is reduced ─────────────────────
+# ── one covariate level, or one pair of them ─────────────────────────────────
 
+#: The sentence every malformed call's error carries: it names both call forms.
+BOTH_FORMS = (r"pass covariate= for the value at one covariate level, or cov_from= with "
+              r"cov_to= for the change from one level to another")
+
+
+@pytest.mark.parametrize("kwargs", [
+    {},
+    {"covariate": None, "groupby": "patient"},
+    {"covariate": "cov_0", "cov_from": "cov_0", "cov_to": "cov_1"},
+    {"covariate": "cov_0", "cov_to": "cov_1"},
+    {"cov_from": "cov_0"},
+    {"cov_to": "cov_1"},
+], ids=["neither", "covariate-None", "both", "covariate-and-half-a-pair", "cov_from-only",
+        "cov_to-only"])
 @pytest.mark.parametrize("metric", ["mutual_information", "clonotypic_entropy",
                                     "phenotypic_entropy"])
-def test_scalar_metrics_require_an_explicit_covariate(blocks, metric):
-    """A metric that reduces over clones requires an explicit covariate level.
+def test_a_metric_takes_one_covariate_level_or_one_pair(blocks, metric, kwargs):
+    """A metric reduces one joint, so a call names exactly one covariate level (``covariate=``)
+    or one pair for a change (``cov_from=`` with ``cov_to=``). Neither, both, or half a pair
+    raises, and the error names both call forms.
 
-    Stacking every covariate level into one table treats each (covariate, clone) pair as a
-    distinct clone, which inflates H(c) and so moves ``normalize_mode="average"``. The default
-    ``min`` divides by min(H(c), H(phi)), and in the realistic regime for a repertoire — clones
-    vastly outnumbering phenotypes — that selects H(phi), which row-splitting does not touch;
-    the exemption is a property of the ratio, not of the metric.
-
-    There is also no single meaning for ``covariate=None`` across the three reducing metrics:
-    collapsing to a per-phenotype index, keeping a (covariate, clonotype) index and stacking
-    are three different estimands. Requiring the level is how that choice stays the caller's.
+    There is no default level. Stacking every covariate level into one table treats each
+    (covariate, clone) pair as a distinct clone, which inflates H(c) and so moves
+    ``normalize_mode="average"``; the default ``min`` divides by min(H(c), H(phi)), which in the
+    realistic regime (clones outnumbering phenotypes) selects H(phi), untouched by row-splitting,
+    so the exemption is a property of the ratio, not of the metric. Collapsing to a per-phenotype
+    index, keeping a (covariate, clonotype) index and stacking are three different estimands, and
+    requiring the level keeps that choice the caller's. ``covariate`` is an optional keyword
+    because a required one would make the change call impossible.
     """
     _model, adata, _truth = blocks
-    with pytest.raises(ValueError, match="covariate is required"):
-        getattr(tcri.tl, metric)(adata)
+    with pytest.raises(ValueError, match=BOTH_FORMS) as err:
+        getattr(tcri.tl, metric)(adata, **kwargs)
+    assert str(err.value).startswith(f"{metric}: ")
 
-    with pytest.raises(ValueError, match="covariate is required"):
-        getattr(tcri.tl, metric)(adata, covariate=None, groupby="patient")
+
+@pytest.mark.parametrize("metric", ["mutual_information", "clonotypic_entropy",
+                                    "phenotypic_entropy", "phenotypic_flux"])
+def test_an_unregistered_covariate_level_raises(blocks, metric):
+    """A level that is not registered raises, on either side of a change and at one level."""
+    _model, adata, _truth = blocks
+    fn = getattr(tcri.tl, metric)
+    for name, kwargs in (("cov_from", dict(cov_from="cov_9", cov_to="cov_1")),
+                         ("cov_to", dict(cov_from="cov_0", cov_to="cov_9"))):
+        with pytest.raises(ValueError,
+                           match=rf"^{metric}: {name}='cov_9' is not a registered covariate "
+                                 rf"level; the levels are \['cov_0', 'cov_1'\]"):
+            fn(adata, **kwargs)
+    if metric != "phenotypic_flux":
+        with pytest.raises(ValueError, match="'cov_9' not found"):
+            fn(adata, covariate="cov_9")
+
+
+def test_flux_takes_both_levels_and_no_single_one(blocks):
+    """Flux is a distance between two levels: ``cov_from`` and ``cov_to`` are required and there
+    is no ``covariate``."""
+    import inspect
+
+    _model, adata, _truth = blocks
+    params = inspect.signature(tcri.tl.phenotypic_flux).parameters
+    assert "covariate" not in params
+    assert all(params[name].default is inspect.Parameter.empty for name in ("cov_from", "cov_to"))
+    with pytest.raises(TypeError, match="cov_to"):
+        tcri.tl.phenotypic_flux(adata, cov_from="cov_0")
 
 
 def test_joint_distribution_still_returns_every_covariate(blocks):
@@ -349,7 +393,8 @@ def test_pl_cannot_reach_the_metric_at_all(blocks):
     import inspect
 
     sig = inspect.signature(tcri.pl.mutual_information)
-    assert not ({"covariate", "n_samples", "groupby", "splitby", "weighted", "normalize_mode"}
+    assert not ({"covariate", "cov_from", "cov_to", "n_samples", "groupby", "splitby",
+                 "weighted", "normalize_mode"}
                 & set(sig.parameters)), "a metric argument survived on the plotting layer"
 
     adata.uns.pop(K.MUTUAL_INFORMATION, None)
@@ -475,34 +520,43 @@ def test_a_single_draw_reports_no_spread(blocks):
 
 # ── flux: the two sides must come from one shared draw ───────────────────────
 
-@pytest.mark.parametrize("random_state", [None, 0, 7])
+@pytest.mark.parametrize("random_state", [None, 0, 7, "generator"],
+                         ids=["None", "0", "7", "numpy-generator"])
 @pytest.mark.parametrize("distance_metric", ["kl", "l1"])
 def test_self_flux_is_exactly_zero(blocks, random_state, distance_metric):
     """The flux of a covariate against ITSELF is the distance of a distribution from itself,
-    which is exactly 0 for every metric here.
+    which is exactly 0 for every metric here, per clone and per replicate, on every draw.
 
     Two independent ``joint_draws`` calls would instead report the sampling noise floor, which
     grows with ``n_samples`` rather than shrinking. ``random_state=None`` is parametrized
     deliberately: it is the default, and it is the case where nothing but a shared draw makes
-    the two sides agree, so a seeded-only test could not see it.
+    the two sides agree, so a seeded-only test could not see it. A numpy ``Generator`` is
+    stateful, so it is turned into one integer per call for the same reason.
     """
     _model, adata, _truth = blocks
-    out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_0", n_samples=16,
-                                  distance_metric=distance_metric, random_state=random_state,
-                                  inplace=False)["result"]
-    values = out["value"].to_numpy(float)
-    worst = float(np.nanmax(values))
-    assert worst == pytest.approx(0.0, abs=1e-12), (
-        f"flux of cov_0 against itself is {worst:.6f} under {distance_metric} at "
-        f"random_state={random_state}; the two sides are not sharing a draw"
-    )
+    rs = np.random.default_rng(7) if random_state == "generator" else random_state
+    res = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_0", n_samples=16,
+                                  distance_metric=distance_metric, random_state=rs,
+                                  inplace=False)
+    for level in ("replicate", "item"):
+        for slot in ("draws", "summary"):
+            values = res[level][slot]["value"].to_numpy(float)
+            assert np.isfinite(values).all(), f"{level} {slot}: a non-finite self-flux"
+            worst = float(np.abs(values).max())
+            assert worst == 0.0, (
+                f"{level} {slot}: flux of cov_0 against itself is {worst:.6f} under "
+                f"{distance_metric} at random_state={random_state}; the two sides are not "
+                f"sharing a draw"
+            )
 
 
 def test_real_flux_keeps_posterior_spread(blocks):
     """Coupling the draws must not flatten the posterior. Two different covariate levels are
-    different latent variables, so their flux retains genuine spread — this guards against
-    'fixing' self-flux by collapsing the draw path altogether."""
+    different latent variables, so their flux retains genuine spread, per clone and per
+    replicate — this guards against 'fixing' self-flux by collapsing the draw path altogether."""
     _model, adata, _truth = blocks
-    out = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_1", n_samples=16,
-                                  random_state=0, inplace=False)["result"]
-    assert (out["sd"].to_numpy(float) > 0).any(), "no spread across draws; the draw path is dead"
+    res = tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to="cov_1", n_samples=16,
+                                  random_state=0, inplace=False)
+    for level in ("replicate", "item"):
+        sd = res[level]["summary"]["sd"].to_numpy(float)
+        assert (sd > 0).any(), f"{level}: no spread across draws; the draw path is dead"

@@ -43,7 +43,7 @@ tcri.perturb.knockout(adata_model, adata, genes=["GZMB", "PRF1"], key_added="X_k
    :members:
 ```
 
-The payload has the three slots flux and the deltas store, plus a fourth:
+The payload has four slots:
 
 | slot | one row per | holds |
 |---|---|---|

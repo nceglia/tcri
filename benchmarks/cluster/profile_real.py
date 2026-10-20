@@ -143,25 +143,26 @@ def main():
         tcri.tl.phenotypic_entropy(adata, null_model=None, covariate=cov, groupby=args.replicate,
                                    n_samples=args.n_samples, random_state=0, device=dev)
 
-    # flux and the deltas need two covariate levels; skipping is a result, not a failure
+    # flux and the changes need two covariate levels; skipping is a result, not a failure.
+    # The changes go under their own keys, so the single-level results stay readable.
     if len(covs) >= 2:
         a, b = str(covs[0]), str(covs[1])
         with s("phenotypic_flux"):
             tcri.tl.phenotypic_flux(adata, null_model=None, cov_from=a, cov_to=b, groupby=args.replicate,
                                     n_samples=args.n_samples, random_state=0, device=dev)
-        with s("delta_phenotypic_entropy"):
-            tcri.tl.delta_phenotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
-                                             groupby=args.replicate,
-                                             n_samples=args.n_samples, random_state=0,
-                                             device=dev)
-        with s("delta_clonotypic_entropy"):
-            tcri.tl.delta_clonotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
-                                             groupby=args.replicate,
-                                             n_samples=args.n_samples, random_state=0,
-                                             device=dev)
+        with s("phenotypic_entropy_change"):
+            tcri.tl.phenotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
+                                       groupby=args.replicate,
+                                       n_samples=args.n_samples, random_state=0, device=dev,
+                                       key_added="phenotypic_entropy_change")
+        with s("clonotypic_entropy_change"):
+            tcri.tl.clonotypic_entropy(adata, null_model=None, cov_from=a, cov_to=b,
+                                       groupby=args.replicate,
+                                       n_samples=args.n_samples, random_state=0, device=dev,
+                                       key_added="clonotypic_entropy_change")
     else:
-        rec["skipped"] = "flux/deltas need >=2 covariate levels"
-        print(f"    SKIPPED flux+deltas: covariate has {len(covs)} level(s)", flush=True)
+        rec["skipped"] = "flux/changes need >=2 covariate levels"
+        print(f"    SKIPPED flux+changes: covariate has {len(covs)} level(s)", flush=True)
 
     with s("diagnostics"):
         tcri.diag.joint_distribution_ppc(adata, covariate=cov, distance_metric="l1")

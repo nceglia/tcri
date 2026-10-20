@@ -6,7 +6,8 @@ joint. `tests/test_metrics_contract_conformance.py` enforces it: each equation b
 recomputed from a hand-written reference on that joint, the identities are asserted, the
 defaults are read off the live signatures, and the pinned values are compared to a tolerance.
 The perturbation is not a function of the joint, so it has no pinned value; its identities are
-enforced by `tests/test_perturbation.py`. Nothing else binds the metrics.
+enforced by `tests/test_perturbation.py`, and the identities of a change (`cov_from`, `cov_to`) by
+`tests/test_tools/test_changes.py`. Nothing else binds the metrics.
 
 Equation numbers are this document's; 2 to 6 keep the numbering of the manuscript's metrics
 section, which is not kept in the repository.
@@ -30,7 +31,7 @@ a second threshold, per covariate level or otherwise: the pooling rule is the on
 clones count.
 
 The counted clones are the rows of the joint, so they are the clones `weighted=False` gives equal
-mass, the clones a normalizer counts in `log₂ C`, and the support of a flux or a delta.
+mass, the clones a normalizer counts in `log₂ C`, and the support of a flux or of a change's items.
 
 ## Definitions
 
@@ -96,24 +97,43 @@ entropy, and for mutual information one clone or one phenotype at `normalize_mod
 clone and one phenotype at `"average"`. The item values keep their own rules: a phenotype with
 one supported clone has clonotypic entropy 0.
 
-### `phenotypic_flux`, one value per clone (eq 7)
+### `phenotypic_flux`, one value per persistent clone and per replicate (eq 7)
 
 ```
-D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
+D_c = D( P(φ|c) at cov_from ‖ P(φ|c) at cov_to )
+flux = Σ_c w(c) D_c          over the persistent clones, w = P(c) at cov_from renormalized
 ```
 
 `distance_metric="kl"` (default) is `Σ_φ p log₂(p/q)` in bits with both rows floored at 1e-12
-and renormalized; `"l1"` is `Σ_φ |p − q|` in [0, 2]. A clone absent from either level is
-**NaN**. Not normalized: a divergence has no maximum-entropy reference.
+and renormalized; `"l1"` is `Σ_φ |p − q|` in [0, 2]. Flux is defined for the persistent clones,
+those with cells at both levels within the replicate; a clone at one level only has no item row.
+The replicate value weights each persistent clone by its share of the `cov_from` joint,
+renormalized over them: equally at `weighted=False`, by its cells at `cov_from` at
+`weighted=True`. A clone whose distance is undefined (no mass at a level) has no weight, and a
+replicate with no persistent clone has a NaN flux. Not normalized: a divergence has no
+maximum-entropy reference.
 
-### `delta_clonotypic_entropy`, `delta_phenotypic_entropy`
+### Changes between covariates (`cov_from`, `cov_to`)
 
-`value(cov_to) − value(cov_from)` per item, computed **within a posterior draw** so the
-summary is of the difference's distribution, not a difference of summaries. Only the two
-metrics with an item axis have a delta; mutual information has none, so its difference is a
-subtraction the caller performs. The clone set is the intersection of clones present at both
-levels within each replicate, which for the clonotypic form makes the normalizer identical on
-both sides; the drop is warned about.
+`mutual_information`, `clonotypic_entropy` and `phenotypic_entropy` take `cov_from` and `cov_to`
+in place of `covariate`, exactly one of the two forms. The change is `value(cov_to) −
+value(cov_from)`, computed **within a posterior draw**, with both levels drawn from one shared
+sample, so the summary is of the difference's distribution, not a difference of summaries; a level
+against itself changes by exactly 0. Every change row carries its endpoints, `value_from` and
+`value_to`.
+
+- **Per replicate:** the difference of the two replicate values, each counting every clone the
+  replicate has at its level and normalized at its level: `log₂ C` per side for clonotypic
+  entropy (or both by `log₂(n_clones_ref)`), each side's own normalizer for mutual information,
+  which stores both (`denom_from`, `denom_to`) so the bits are recoverable.
+- **Per item:** over the persistent clones only. Phenotypic entropy has one item per persistent
+  clone; clonotypic entropy recomputes each phenotype on the persistent clones, so both sides share
+  one clone set and one normalizer. Mutual information has no items.
+- A normalized endpoint whose normalizer is 0 raises, naming the replicate and that level.
+
+A change call warns when replicates have no counted clone at a level (their values are NaN) and
+when no replicate has a clone at both levels, whose usual cause is a covariate constant within
+each replicate.
 
 ## The perturbation (`tcri.perturb`)
 
@@ -188,6 +208,9 @@ test may equate them. The return shape does not change with `n_samples`; `sd`, `
 | `I(c;φ) = H(φ) − H(P\|C) = H(c) − H(C\|P)` | a replicate value that disagrees with mutual information |
 | row-normalized joint: `H(P\|C)` is the plain mean, normalized `H(C\|P) = 1 − I / log₂ C` | wrong `weighted=False` weights |
 | a normalizer of 0 raises | a replicate value reported as 0 or NaN when its normalizer is 0 |
+| a change is the per-draw difference of two single-covariate calls with one seed | a change computed on a different clone set or sample than its endpoints |
+| `value == value_to − value_from` in every draw and summary; a level against itself is 0 | endpoints and change reduced under different masks or seeds |
+| per-replicate flux is the `cov_from`-share-weighted mean of the item flux | flux weighted by anything but the joint's shares |
 
 The decomposition is the keystone: it ties the entropy and MI families together so neither can
 change alone.
@@ -207,18 +230,27 @@ accounts for.
 `value` and `null_value`, beside it; they are what a reader checking the correction needs, not
 alternative answers. `stats` contrasts `adjusted`, or `value` when no usable reference was computed
 (`null_model=None`, or a reference that is non-finite everywhere), and names the column it
-contrasted in `quantity`. A delta's `adjusted_from` and `adjusted_to` are its endpoints and carry no
-contrast, as `value_from` and `value_to` do not. A denominator has a reference (`null_denom`) and no
-adjusted column: a difference of two normalizers is not a quantity anyone reports.
+contrasted in `quantity`. A change's covariate rows test its endpoints, `adjusted_from` and
+`adjusted_to` (or `value_from` and `value_to`), as a pair within each replicate. A denominator has a
+reference (`null_denom`) and no adjusted column: a difference of two normalizers is not a quantity
+anyone reports.
 
 | quantity | read against | what the reference destroys |
 |---|---|---|
-| clonotypic entropy, phenotypic entropy, mutual information, gene importance | the phenotype null | which cell carries which phenotype |
-| phenotypic flux, both deltas | the covariate null | which covariate level a cell sits at |
+| clonotypic entropy, phenotypic entropy, mutual information at one covariate; gene importance | the phenotype null | which cell carries which phenotype |
+| phenotypic flux; every change (`cov_from`, `cov_to`) | the covariate null | which covariate level a cell sits at |
+
+The covariate null shuffles each cell's level within (clonotype, batch), so it can move a group
+only where one of the group's counted clones has a (clonotype, batch) holding a level the call
+reads and another level. That is decided from `obs`, not from a drawn shuffle. A group it cannot
+move keeps its value and has NaN in every reference column, is named in a warning and leaves the
+tests; building a covariate null that could move no cell anywhere raises before anything is
+fitted.
 
 The reference is **the caller's own call on the null** -- the fit, `null_model=None` and the
-seed of its draws changed -- and every other argument forwarded verbatim. `groupby`, `splitby`,
-`clones`, `exclude_pools`, `weighted`, `normalized`, `normalize_mode`, `n_clones_ref`,
+seed of its draws changed -- and every other argument forwarded verbatim. `covariate`, `cov_from`,
+`cov_to`, `groupby`, `splitby`, `clones`, `exclude_pools`, `weighted`, `normalized`,
+`normalize_mode`, `n_clones_ref`,
 `distance_metric`, `temperature` and `n_samples` each change the estimand, so a reference
 computed at defaults is a different quantity subtracted from a different quantity.
 
@@ -249,11 +281,10 @@ a per-draw mean of 0.4429281. Take the bits per draw from the replicate draws
 The null's MI is never computed with the parent's denominator: that would break the one thing
 `null_value` means, which is the metric OF the null.
 
-**A delta's adjusted value is closed within its own result.** `adjusted - (adjusted_to -
-adjusted_from)` equals `value - (value_to - value_from)`: the reference introduces no gap that was
-not already there.
-It is not zero, because `value == value_to - value_from` already fails when a draw has a
-non-finite endpoint, and the two sides use different masks.
+**A change is closed within its own result.** Each side reduces its change and endpoints under one
+mask, the fit side over its draws and the reference side over its (null, draw) pairs, so
+`value - (value_to - value_from)` and `adjusted - (adjusted_to - adjusted_from)` are both 0 in
+every summary.
 
 ## The machine-checked part
 
@@ -263,7 +294,7 @@ LOG_BASE = 2
 # every public tl function; each has a section above and a pinned default set below
 METRICS = [
     "joint_distribution", "clonotypic_entropy", "phenotypic_entropy", "mutual_information",
-    "phenotypic_flux", "delta_clonotypic_entropy", "delta_phenotypic_entropy",
+    "phenotypic_flux",
 ]
 
 # every public perturb function; each has a section above. Not functions of the joint, so
@@ -288,18 +319,17 @@ DEFAULTS = {
 NULLS = ["phenotype", "clonotype", "covariate"]
 OFFSET = {"phenotype": 10_000, "clonotype": 20_000, "covariate": 30_000}
 
-# which null each scored quantity is read against at null_model="auto". joint_distribution has
-# no entry (it returns a matrix, not a scored quantity); knockout has none (it returns the
-# per-cell frame). The conformance test asserts the KEY SET, so a metric added later cannot
-# quietly acquire no default
+# which null each scored quantity is read against at null_model="auto": one null, or one per
+# mode for a metric that takes either covariate= ("covariate") or cov_from/cov_to ("change").
+# joint_distribution has no entry (it returns a matrix, not a scored quantity); knockout has none
+# (it returns the per-cell frame). The conformance test asserts the KEY SET, so a metric added
+# later cannot quietly acquire no default
 DEFAULT_NULL = {
-    "clonotypic_entropy":       "phenotype",
-    "phenotypic_entropy":       "phenotype",
-    "mutual_information":       "phenotype",
-    "phenotypic_flux":          "covariate",
-    "delta_clonotypic_entropy": "covariate",
-    "delta_phenotypic_entropy": "covariate",
-    "gene_importance":          "phenotype",
+    "clonotypic_entropy": {"covariate": "phenotype", "change": "covariate"},
+    "phenotypic_entropy": {"covariate": "phenotype", "change": "covariate"},
+    "mutual_information": {"covariate": "phenotype", "change": "covariate"},
+    "phenotypic_flux":    "covariate",
+    "gene_importance":    "phenotype",
 }
 
 # the reference joint (3 clones x 2 phenotypes, deliberately asymmetric) and the values the

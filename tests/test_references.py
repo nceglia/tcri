@@ -55,7 +55,8 @@ def _cov(adata):
 # ── the columns, and what they mean ──────────────────────────────────────────
 
 def test_a_metric_with_a_reference_reports_adjusted(ref):
-    """Per value column, on every scored metric and on the perturbation, to 1e-12.
+    """Per value column, on every scored metric, at one covariate level and on a change, and on
+    the perturbation, to 1e-12.
 
     Also the shape rule: one ``null_*`` per native column and one ``adjusted*`` per native
     column that is not a denominator. A denominator has a reference -- both are needed to
@@ -65,22 +66,33 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
     """
     model, adata = ref
     a, b = _cov(adata)[:2]
+    change = dict(cov_from=a, cov_to=b, key_added="change")
+    # label -> (tool, call, key); a change is stored under its own key_added
     calls = {
-        "mutual_information": lambda: tcri.tl.mutual_information(adata, covariate=a),
-        "clonotypic_entropy": lambda: tcri.tl.clonotypic_entropy(adata, covariate=a),
-        "phenotypic_entropy": lambda: tcri.tl.phenotypic_entropy(adata, covariate=a),
-        "phenotypic_flux": lambda: tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b),
-        "delta_clonotypic_entropy": lambda: tcri.tl.delta_clonotypic_entropy(
-            adata, cov_from=a, cov_to=b),
-        "delta_phenotypic_entropy": lambda: tcri.tl.delta_phenotypic_entropy(
-            adata, cov_from=a, cov_to=b),
-        "gene_importance": lambda: tcri.perturb.gene_importance(
-            model, adata, genes=list(adata.var_names[:4])),
+        "mutual_information": (tcri.tl.mutual_information,
+                               lambda: tcri.tl.mutual_information(adata, covariate=a), None),
+        "clonotypic_entropy": (tcri.tl.clonotypic_entropy,
+                               lambda: tcri.tl.clonotypic_entropy(adata, covariate=a), None),
+        "phenotypic_entropy": (tcri.tl.phenotypic_entropy,
+                               lambda: tcri.tl.phenotypic_entropy(adata, covariate=a), None),
+        "mutual_information change": (
+            tcri.tl.mutual_information,
+            lambda: tcri.tl.mutual_information(adata, **change), "change"),
+        "clonotypic_entropy change": (
+            tcri.tl.clonotypic_entropy,
+            lambda: tcri.tl.clonotypic_entropy(adata, **change), "change"),
+        "phenotypic_entropy change": (
+            tcri.tl.phenotypic_entropy,
+            lambda: tcri.tl.phenotypic_entropy(adata, **change), "change"),
+        "phenotypic_flux": (tcri.tl.phenotypic_flux,
+                            lambda: tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b), None),
+        "gene_importance": (tcri.perturb.gene_importance,
+                            lambda: tcri.perturb.gene_importance(
+                                model, adata, genes=list(adata.var_names[:4])), None),
     }
-    for name, call in calls.items():
-        fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
+    for name, (fn, call, key) in calls.items():
         assert call() is None, f"{name}: a storing call returned its result"
-        payload = tcri.get.result(adata, name)
+        payload = tcri.get.result(adata, fn.__name__, key=key)
         if "replicate" in payload:
             levels = [lv for lv in ("replicate", "item") if payload.get(lv) is not None]
             slots = {f"{lv}.{f}": payload[lv][f] for lv in levels for f in ("draws", "summary")}
@@ -97,7 +109,13 @@ def test_a_metric_with_a_reference_reports_adjusted(ref):
         for result in summaries:
             if not len(result):
                 continue
+            # a tool lists every native column it can return; a call returns some of them
+            assert "value" in result.columns, name
+            if key == "change":
+                assert {"value_from", "value_to"} <= set(result.columns), name
             for native, null, adjusted in pairs:
+                if native not in result.columns:
+                    continue
                 assert null in result.columns, f"{name}: no {null}"
                 if adjusted is None:
                     assert f"adjusted_{native}" not in result.columns
@@ -174,39 +192,57 @@ def test_the_adjusted_value_of_a_fit_against_itself_is_zero(ref):
         res[["adjusted", "adjusted_hdi_low", "adjusted_hdi_high"]])
 
 
-def test_a_delta_adjusted_value_is_closed_within_its_own_result(ref):
-    """``adjusted - (adjusted_to - adjusted_from)`` equals ``value - (value_to - value_from)``.
+def test_a_change_is_closed_under_one_mask(ref, monkeypatch):
+    """``value - (value_to - value_from)`` and ``adjusted - (adjusted_to - adjusted_from)`` are 0
+    in every summary, on a reference of two nulls with one non-finite pair.
 
-    The reference introduces no gap that was not already there. It is deliberately NOT asserted
-    to be zero: ``value == value_to - value_from`` already fails when a draw has a non-finite
-    endpoint, because the three columns are averaged over their own masks, and that is a
-    pre-existing property of the delta result rather than something the reference caused.
+    One draw of the fit and one draw of the second covariate null get an empty joint at
+    ``cov_from``, so that draw's change and its ``cov_from`` endpoint are NaN while its ``cov_to``
+    endpoint stays finite. Each side reduces a change and its endpoints over one mask, the fit's
+    draws and the (null, draw) pairs, so the identity holds exactly. Over a mask per column the
+    ``cov_to`` mean would keep the draws the other two drop, and the identity would fail.
     """
+    import tcri.tools._entropy as entropy
+
     _, adata = ref
     a, b = _cov(adata)[:2]
-    r = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
-                                         inplace=False)["result"]
-    lhs = (r["adjusted"] - (r["adjusted_to"] - r["adjusted_from"])).to_numpy(dtype=float)
-    rhs = (r["value"] - (r["value_to"] - r["value_from"])).to_numpy(dtype=float)
-    np.testing.assert_allclose(lhs, rhs, atol=1e-12, equal_nan=True)
+    emptied = {None: 1, "null.covariate[1]": 2}   # fit -> the draw whose cov_from joint is empty
+    seen = set()
+    change_draws = entropy.change_draws
 
+    def with_an_empty_draw(adata, cov_from, cov_to, *, fit=None, **kw):
+        draws_from, draws_to, cols = change_draws(adata, cov_from, cov_to, fit=fit, **kw)
+        if fit in emptied and fit not in seen:   # the first replicate of that fit's run
+            seen.add(fit)
+            d = emptied[fit]
+            ids, J = draws_from[d]
+            draws_from = [*draws_from[:d], (ids, np.zeros_like(J)), *draws_from[d + 1:]]
+        return draws_from, draws_to, cols
 
-def test_endpoint_means_use_their_own_masks(ref):
-    """Pin the known discrepancy so the next reader cannot assume the identity.
+    monkeypatch.setattr(entropy, "change_draws", with_an_empty_draw)
+    res = tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                                     n_samples=4, random_state=0, inplace=False)
+    assert seen == set(emptied), f"the runs were on {seen}"
 
-    ``build_result`` averages ``value``, ``value_from`` and ``value_to`` over their own finite
-    masks, so ``value != value_to - value_from`` wherever a draw has a non-finite endpoint. The
-    gap belongs to the delta result rather than to the reference, and this asserts its shape
-    rather than a specific size.
-    """
-    _, adata = ref
-    a, b = _cov(adata)[:2]
-    r = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
-                                         null_model=None, inplace=False)["result"]
-    gap = np.abs(r["value"] - (r["value_to"] - r["value_from"])).to_numpy(dtype=float)
-    assert np.isfinite(gap).any()
-    # equal wherever every endpoint draw was finite, which on this fixture is every row
-    assert float(np.nanmax(gap)) < 1e-9 or float(np.nanmax(gap)) > 0.0
+    for level in ("replicate", "item"):
+        draws, summary = res[level]["draws"], res[level]["summary"]
+        assert sorted(set(draws["null"])) == [0, 1], level
+        fit_gap = (draws["draw"] == 1) & draws["value"].isna() & draws["value_to"].notna()
+        pair_gap = ((draws["null"] == 1) & (draws["draw"] == 2) & draws["value"].notna()
+                    & draws["adjusted"].isna() & draws["adjusted_to"].notna())
+        assert fit_gap.any() and pair_gap.any(), f"{level}: no non-finite draw or pair"
+        for value in ("value", "adjusted"):
+            closure = summary[value] - (summary[f"{value}_to"] - summary[f"{value}_from"])
+            np.testing.assert_allclose(closure.to_numpy(dtype=float), 0.0, atol=1e-12,
+                                       err_msg=f"{level}: {value}")
+
+        # the identity is not vacuous: a mean per column breaks it on the emptied replicate
+        labels = [c for c in ("patient", "clonotype") if c in summary.columns]
+        means = draws.groupby(labels, observed=True)[
+            ["value", "value_from", "value_to", "adjusted", "adjusted_from", "adjusted_to"]].mean()
+        for value in ("value", "adjusted"):
+            gap = means[value] - (means[f"{value}_to"] - means[f"{value}_from"])
+            assert (gap.abs() > 1e-9).any(), f"{level}: {value} needs no shared mask here"
 
 
 # ── the paired draws ─────────────────────────────────────────────────────────
@@ -248,36 +284,54 @@ def test_adjusted_is_paired_per_draw(ref):
 
 
 def test_every_scored_metric_pairs_its_draws(ref):
-    """The same per-draw identity on every scored metric and on the perturbation, with the
-    delta endpoints paired too, and no row of ``result`` gained or lost."""
+    """The same per-draw identity on every scored metric, at one covariate level and on a change,
+    and on the perturbation, at every level of a result stored by level, with a change's
+    endpoints paired too, and no summary row gained or lost."""
     model, adata = ref
     a, b = _cov(adata)[:2]
     kw = dict(groupby="patient", n_samples=5, random_state=2, inplace=False)
+    change = dict(cov_from=a, cov_to=b, **kw)
     calls = {
-        "mutual_information": lambda: tcri.tl.mutual_information(adata, covariate=a, **kw),
-        "clonotypic_entropy": lambda: tcri.tl.clonotypic_entropy(adata, covariate=a, **kw),
-        "phenotypic_entropy": lambda: tcri.tl.phenotypic_entropy(adata, covariate=a, **kw),
-        "phenotypic_flux": lambda: tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b, **kw),
-        "delta_clonotypic_entropy": lambda: tcri.tl.delta_clonotypic_entropy(
-            adata, cov_from=a, cov_to=b, **kw),
-        "delta_phenotypic_entropy": lambda: tcri.tl.delta_phenotypic_entropy(
-            adata, cov_from=a, cov_to=b, **kw),
-        "gene_importance": lambda: tcri.perturb.gene_importance(
-            model, adata, genes=list(adata.var_names[:3]), **kw),
+        "mutual_information": (tcri.tl.mutual_information,
+                               lambda: tcri.tl.mutual_information(adata, covariate=a, **kw)),
+        "clonotypic_entropy": (tcri.tl.clonotypic_entropy,
+                               lambda: tcri.tl.clonotypic_entropy(adata, covariate=a, **kw)),
+        "phenotypic_entropy": (tcri.tl.phenotypic_entropy,
+                               lambda: tcri.tl.phenotypic_entropy(adata, covariate=a, **kw)),
+        "mutual_information change": (tcri.tl.mutual_information,
+                                      lambda: tcri.tl.mutual_information(adata, **change)),
+        "clonotypic_entropy change": (tcri.tl.clonotypic_entropy,
+                                      lambda: tcri.tl.clonotypic_entropy(adata, **change)),
+        "phenotypic_entropy change": (tcri.tl.phenotypic_entropy,
+                                      lambda: tcri.tl.phenotypic_entropy(adata, **change)),
+        "phenotypic_flux": (tcri.tl.phenotypic_flux,
+                            lambda: tcri.tl.phenotypic_flux(adata, **change)),
+        "gene_importance": (tcri.perturb.gene_importance,
+                            lambda: tcri.perturb.gene_importance(
+                                model, adata, genes=list(adata.var_names[:3]), **kw)),
     }
-    for name, call in calls.items():
-        fn = getattr(tcri.tl, name, None) or getattr(tcri.perturb, name)
+    for name, (fn, call) in calls.items():
         res = call()
-        table, result = frames(res)
-        assert len(table) and len(result), name
-        for native, null, adjusted in _reference.column_pairs(fn.tcri_values,
-                                                               fn.tcri_denominators):
-            assert null in table.columns, f"{name}: no per-draw {null}"
-            if adjusted is not None:
-                np.testing.assert_allclose(table[adjusted], table[native] - table[null],
-                                           atol=1e-12, equal_nan=True, err_msg=name)
-        assert {"adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high"} <= set(result.columns)
-        assert len(result) == len(table.drop_duplicates(_labels_of(table))), name
+        if "replicate" in res:
+            levels = [lv for lv in ("replicate", "item") if res.get(lv) is not None]
+            pairs_of = [(f"{name} {lv}", *frames(res, lv)) for lv in levels]
+        else:
+            pairs_of = [(name, *frames(res))]
+        for where, table, result in pairs_of:
+            assert len(table) and len(result), where
+            for native, null, adjusted in _reference.column_pairs(fn.tcri_values,
+                                                                   fn.tcri_denominators):
+                if native not in table.columns:
+                    continue
+                assert null in table.columns, f"{where}: no per-draw {null}"
+                if adjusted is not None:
+                    np.testing.assert_allclose(table[adjusted], table[native] - table[null],
+                                               atol=1e-12, equal_nan=True, err_msg=where)
+            if "cov_from" in table.columns and name != "phenotypic_flux":
+                assert {"null_value_from", "null_value_to"} <= set(table.columns), where
+            assert {"adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high"} <= set(
+                result.columns), where
+            assert len(result) == len(table.drop_duplicates(_labels_of(table))), where
 
 
 def test_a_per_draw_difference_between_two_covariate_levels_has_an_interval(ref):
@@ -365,20 +419,88 @@ def test_without_draws_a_row_has_one_pair_per_null(ref):
 
 # ── selecting the reference, and selecting the fit ───────────────────────────
 
-def test_null_model_default_is_the_contract_table(ref):
-    """``"auto"`` resolves to the metric's entry in the contract's ``DEFAULT_NULL``, and the
-    resolved name is what lands in ``params`` -- never ``"auto"``, and never a model object."""
-    from tests._governance import contract_namespace
-
-    table = contract_namespace("METRICS_CONTRACT.md")["DEFAULT_NULL"]
+def test_null_model_default_follows_the_mode(ref):
+    """``"auto"`` resolves to the tool's own default null for the mode of the call, read off the
+    live function: the phenotype null at one covariate level and the covariate null on a change
+    for mutual information and the entropies, the covariate null for flux, which is always a
+    change, and the phenotype null for the perturbation. The resolved name is what lands in
+    ``params`` -- never ``"auto"``, and never a model object."""
     model, adata = ref
     a, b = _cov(adata)[:2]
-    tcri.tl.mutual_information(adata, covariate=a)
+    per_mode = {"covariate": "phenotype", "change": "covariate"}
+    for name in ("mutual_information", "clonotypic_entropy", "phenotypic_entropy"):
+        fn = getattr(tcri.tl, name)
+        assert fn.tcri_default_null == per_mode, name
+        fn(adata, covariate=a)
+        fn(adata, cov_from=a, cov_to=b, key_added=f"{name}_change")
+        for mode, key in (("covariate", None), ("change", f"{name}_change")):
+            got = tcri.get.params(adata, name, key=key)["null_model"]
+            assert got == f"null.{fn.tcri_default_null[mode]}", f"{name} {mode}: {got!r}"
+    assert tcri.tl.phenotypic_flux.tcri_default_null == "covariate"
+    assert tcri.perturb.gene_importance.tcri_default_null == "phenotype"
     tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b)
     tcri.perturb.gene_importance(model, adata, genes=[0])
-    for name in ("mutual_information", "phenotypic_flux", "gene_importance"):
+    for name, fn in (("phenotypic_flux", tcri.tl.phenotypic_flux),
+                     ("gene_importance", tcri.perturb.gene_importance)):
         got = tcri.get.params(adata, name)["null_model"]
-        assert got == f"null.{table[name]}", f"{name}: params say {got!r}"
+        assert got == f"null.{fn.tcri_default_null}", f"{name}: params say {got!r}"
+
+
+def test_the_reference_run_forwards_the_change(ref):
+    """The reference of a change is the caller's own change call on each null: every stored
+    reference result is a change between the same two levels, and its per-draw values are the
+    ``null_*`` columns the caller's result pairs with."""
+    _, adata = ref
+    a, b = _cov(adata)[:2]
+    tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
+    main = tcri.get.result(adata, "phenotypic_entropy")
+    members = K.members(adata, "null.covariate")
+    assert len(members) > 1
+    for i, fit in enumerate(members):
+        params = tcri.get.params(adata, "phenotypic_entropy", fit=fit)
+        assert (params["cov_from"], params["cov_to"], params.get("covariate")) == (a, b, None), \
+            fit
+        stored = tcri.get.result(adata, "phenotypic_entropy", fit=fit)
+        for level in ("replicate", "item"):
+            own = stored[level]["draws"]
+            assert "covariate" not in own.columns, (fit, level)
+            assert set(own["cov_from"]) == {a} and set(own["cov_to"]) == {b}, (fit, level)
+            labels = _labels_of(own) + ["draw"]
+            mine = main[level]["draws"].loc[lambda t: t["null"] == i]
+            merged = mine.merge(own, on=labels, suffixes=("", "_own"), validate="one_to_one")
+            assert len(merged) == len(mine) == len(own), (fit, level)
+            for column in ("value", "value_from", "value_to"):
+                np.testing.assert_allclose(merged[f"null_{column}"], merged[f"{column}_own"],
+                                           atol=1e-12, equal_nan=True, err_msg=(fit, level))
+
+
+def test_the_covariate_null_keeps_each_levels_clones(ref):
+    """The covariate null permutes each cell's level within its clone and batch, so every clone
+    keeps its cells at each level: the clones at each level are the fit's, and clonotypic
+    entropy's normalizer, log2 of the clones a replicate has at a level, is the same on both
+    runs of a change."""
+    from tcri._compute._tables import clones_at
+
+    _, adata = ref
+    a, b = _cov(adata)[:2]
+    members = K.members(adata, "null.covariate")
+    for fit in members:
+        for level in (a, b):
+            assert clones_at(adata, level, fit=fit) == clones_at(adata, level), (fit, level)
+
+    kw = dict(cov_from=a, cov_to=b, groupby="patient", inplace=False)
+    normalized = tcri.tl.clonotypic_entropy(adata, **kw)["replicate"]["draws"]
+    bits = tcri.tl.clonotypic_entropy(adata, normalized=False, **kw)["replicate"]["draws"]
+    both = normalized.merge(bits, on=["patient", "null", "draw"], suffixes=("", "_bits"))
+    assert len(both) == len(normalized) == len(bits)
+    assert sorted(set(both["null"])) == list(range(len(members)))
+    for level, end in ((a, "from"), (b, "to")):
+        n_clones = both["patient"].map(
+            lambda p: sum(str(c).endswith(f"@{p}") for c in clones_at(adata, level)))
+        log_c = np.log2(n_clones.to_numpy(dtype=float))
+        for side in ("value", "null_value"):
+            ratio = (both[f"{side}_{end}_bits"] / both[f"{side}_{end}"]).to_numpy(dtype=float)
+            np.testing.assert_allclose(ratio, log_c, rtol=1e-9, err_msg=f"{side}_{end}")
 
 
 def test_null_model_none_is_the_old_result(ref):
@@ -405,12 +527,12 @@ def test_null_model_none_is_the_old_result(ref):
 def test_rule_9_shape_changes_are_the_only_ones(ref):
     """At ``null_model=None`` the reference machinery changes the frames in exactly four ways.
 
-    (a) ``build_result``'s empty branch carries its declared extras; (b) the delta ``table``'s
-    row order follows the substrate rather than obs first appearance; (c) ``stats`` gains a
+    (a) ``build_result``'s empty branch carries its declared extras; (b) a change's item rows
+    follow the substrate's clone order rather than obs first appearance; (c) ``stats`` gains a
     ``quantity`` column; (d) ``mutual_information`` gains ``denom``. Everything else -- every
     value, and the ``uns`` key set -- is unchanged. Listed here so nobody has to discover them.
     """
-    from tcri._compute._tables import build_result
+    from tcri._compute._tables import build_result, clones_at
 
     _, adata = ref
     a, b = _cov(adata)[:2]
@@ -429,11 +551,21 @@ def test_rule_9_shape_changes_are_the_only_ones(ref):
     assert set(mi["replicate"]["summary"].columns) == {"covariate", "patient", "disease_status",
                                                        "value",
                                          "sd", "hdi_low", "hdi_high", "denom"}
-    delta = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
-                                             null_model=None, inplace=False)
-    assert set(delta["result"].columns) == {"cov_from", "cov_to", "patient", "clonotype",
-                                            "value", "sd", "hdi_low", "hdi_high",
-                                            "value_from", "value_to"}
+    change = tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                                        null_model=None, inplace=False)
+    ends = {"value", "sd", "hdi_low", "hdi_high", "value_from", "value_to"}
+    assert set(change["replicate"]["summary"].columns) == {"cov_from", "cov_to", "patient",
+                                                           *ends}
+    assert set(change["item"]["summary"].columns) == {"cov_from", "cov_to", "patient",
+                                                      "clonotype", *ends}
+
+    # (b) within each replicate and draw, the persistent clones in the substrate's order
+    at_b = set(clones_at(adata, b))
+    for (patient, draw), rows in change["item"]["draws"].groupby(["patient", "draw"],
+                                                                 observed=True):
+        want = [c for c in clones_at(adata, a)
+                if c in at_b and str(c).endswith(f"@{patient}")]
+        assert rows["clonotype"].tolist() == want, (patient, draw)
 
 
 def test_missing_null_names_the_fix(ref):
@@ -638,19 +770,49 @@ def test_stats_carry_the_adjusted_quantity(ref):
     assert len(bare) == len(stats)
 
 
-def test_a_delta_contrasts_only_the_adjusted_value(ref):
-    """A delta's ``stats`` has exactly one row per contrast, on ``adjusted``, and no row about
-    an endpoint: ``adjusted_from`` and ``adjusted_to`` are inputs, like ``value_from`` and
-    ``value_to``, and inputs carry no contrast."""
+def test_a_change_tests_the_adjusted_value(ref):
+    """A change with ``splitby`` has one covariate row per split level, then one split row per
+    contrast, all on ``adjusted``. A covariate row's arms are the ``adjusted_from`` and
+    ``adjusted_to`` endpoints of its split level's replicates, its ``stat`` the signed-rank test
+    of their difference; a split row is a Mann-Whitney on each arm's per-replicate adjusted
+    change."""
+    from scipy.stats import mannwhitneyu, wilcoxon
+
     _, adata = ref
     a, b = _cov(adata)[:2]
-    res = tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
-                                           splitby="disease_status", inplace=False)
-    stats, result = res["stats"], res["result"]
+    res = tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                                     splitby="disease_status", inplace=False)
+    stats, result = res["stats"], res["replicate"]["summary"]
     assert stats is not None and len(stats)
-    arms = result["disease_status"].astype(str).nunique()
-    assert len(stats) == arms * (arms - 1) // 2
+    arms = sorted(result["disease_status"].astype(str).unique())
+    assert len(stats) == len(arms) + len(arms) * (len(arms) - 1) // 2
     assert set(stats["quantity"]) == {"adjusted"}
+    assert stats["comparison"].tolist() == ["covariate"] * len(arms) + ["split"] * (
+        len(stats) - len(arms))
+
+    covariate = stats[stats["comparison"] == "covariate"]
+    assert sorted(covariate["disease_status"]) == arms
+    for _, row in covariate.iterrows():
+        assert (row["level_a"], row["level_b"]) == (a, b)
+        rows = result[result["disease_status"] == row["disease_status"]]
+        ends_a = rows["adjusted_from"].to_numpy(dtype=float)
+        ends_b = rows["adjusted_to"].to_numpy(dtype=float)
+        used = np.isfinite(ends_a) & np.isfinite(ends_b) & (ends_b - ends_a != 0)
+        assert row["n_a"] == row["n_b"] == used.sum() >= 2
+        assert row["mean_a"] == pytest.approx(ends_a[used].mean())
+        assert row["mean_b"] == pytest.approx(ends_b[used].mean())
+        assert row["delta"] == pytest.approx(row["mean_b"] - row["mean_a"])
+        W, p = wilcoxon(ends_b[used], ends_a[used])
+        assert float(row["stat"]) == pytest.approx(float(W))
+        assert float(row["p"]) == pytest.approx(float(p))
+
+    for _, row in stats[stats["comparison"] == "split"].iterrows():
+        va = result.loc[result["disease_status"] == row["level_a"], "adjusted"]
+        vb = result.loc[result["disease_status"] == row["level_b"], "adjusted"]
+        U, p = mannwhitneyu(va.to_numpy(dtype=float), vb.to_numpy(dtype=float),
+                            alternative="two-sided")
+        assert float(row["stat"]) == pytest.approx(float(U))
+        assert float(row["p"]) == pytest.approx(float(p))
 
 
 def test_restat_is_idempotent(ref):
@@ -851,11 +1013,14 @@ def test_the_quantity_argument_is_checked_before_the_data(ref):
     returns it rather than raising about a column nothing was going to draw."""
     model, adata = ref
     a, b = _cov(adata)[:2]
-    for key in (K.MUTUAL_INFORMATION, K.DELTA_PHENOTYPIC_ENTROPY, K.GENE_IMPORTANCE):
+    for key in (K.MUTUAL_INFORMATION, "change", K.GENE_IMPORTANCE):
         adata.uns.pop(key, None)
     twins = {
         "mutual_information": lambda **kw: tcri.pl.mutual_information(adata, **kw),
-        "delta_phenotypic_entropy": lambda **kw: tcri.pl.delta_phenotypic_entropy(adata, **kw),
+        "phenotypic_entropy change": lambda **kw: tcri.pl.phenotypic_entropy(
+            adata, key="change", **kw),
+        "phenotypic_entropy change, item view": lambda **kw: tcri.pl.phenotypic_entropy(
+            adata, key="change", view="item", **kw),
         "gene_importance": lambda **kw: tcri.pl.gene_importance(adata, **kw),
     }
     for name, twin in twins.items():
@@ -866,8 +1031,8 @@ def test_the_quantity_argument_is_checked_before_the_data(ref):
                 twin(quantity="exces", **kw)
 
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
-    tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
-                                     null_model=None)
+    tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient", null_model=None,
+                               key_added="change")
     tcri.perturb.gene_importance(model, adata, genes=list(adata.var_names[:3]),
                                  null_model=None)
     for name, twin in twins.items():
@@ -998,9 +1163,11 @@ def test_oe_shape_smoke():
         f"null: {mi[['value', 'null_value', 'adjusted']].to_string()}")
 
     flux = tcri.tl.phenotypic_flux(adata, cov_from=levels[0], cov_to=levels[-1],
-                                   groupby="patient", inplace=False)["result"]
-    if len(flux):
-        assert np.isfinite(flux["adjusted"]).any(), flux
+                                   groupby="patient", inplace=False)
+    for level in ("replicate", "item"):
+        summary = flux[level]["summary"]
+        if len(summary):
+            assert np.isfinite(summary["adjusted"]).any(), (level, summary)
 
 
 # ── the reference on the reading and the plotting paths ──────────────────────
@@ -1251,18 +1418,54 @@ def test_the_draw_path_draws_the_adjusted_draws_and_the_reference(ref):
     assert reference_marks(value_ax) == patients, "the null was not drawn behind the violins"
 
 
-def test_the_endpoints_view_refuses_the_adjusted_value(ref):
-    """It draws the two levels a delta is taken between; a single adjusted axis would pick
-    one."""
+def test_the_views_of_a_change_draw_its_stored_values(ref):
+    """A change is drawn from its stored summaries: the replicate view each replicate's change,
+    the item view each item's, the adjusted change by default and the change itself with its
+    reference behind it at ``quantity="value"``, against a zero rule either way, since a change
+    can be negative. Flux is a distance, never negative: its zero rule is on the adjusted panel
+    only. With no replicate the change sits at one x position named for its two levels."""
     import matplotlib
     matplotlib.use("Agg")
+    from tcri.plotting._base import REFERENCE_LABEL
 
     _, adata = ref
     a, b = _cov(adata)[:2]
-    tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
-    with pytest.raises(ValueError, match="kind='delta'"):
-        tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints", quantity="adjusted")
-    assert tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints") is not None
+
+    def colored_y(ax):
+        return np.sort(np.concatenate([c.get_offsets()[:, 1] for c in ax.collections
+                                       if c.get_label() != REFERENCE_LABEL
+                                       and len(c.get_offsets())]))
+
+    def gray(ax):
+        return [c for c in ax.collections if c.get_label() == REFERENCE_LABEL]
+
+    def zero_rule(ax):
+        return any(len(ln.get_ydata()) == 2 and np.allclose(ln.get_ydata(), 0.0)
+                   for ln in ax.lines)
+
+    tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
+    for view, summary in (("replicate", tcri.get.replicates(adata, "phenotypic_entropy")),
+                          ("item", tcri.get.items(adata, "phenotypic_entropy"))):
+        for quantity, column in (("auto", "adjusted"), ("value", "value")):
+            ax = tcri.pl.phenotypic_entropy(adata, view=view, quantity=quantity)
+            want = summary[column].to_numpy(dtype=float)
+            np.testing.assert_allclose(colored_y(ax), np.sort(want[np.isfinite(want)]),
+                                       err_msg=f"{view} {quantity}")
+            assert zero_rule(ax), f"{view} {quantity}: no zero rule on a change"
+            assert bool(gray(ax)) == (quantity == "value"), f"{view} {quantity}"
+
+    tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b, groupby="patient")
+    for view in ("replicate", "item"):
+        assert zero_rule(tcri.pl.phenotypic_flux(adata, view=view)), view
+        assert not zero_rule(tcri.pl.phenotypic_flux(adata, view=view, quantity="value")), view
+
+    bare = adata.copy()
+    bare.uns[K.METADATA] = {**bare.uns[K.METADATA], "replicate": None}
+    tcri.tl.phenotypic_entropy(bare, cov_from=a, cov_to=b)
+    ax = tcri.pl.phenotypic_entropy(bare)
+    assert [t.get_text() for t in ax.get_xticklabels()] == [f"{a} → {b}"]
+    np.testing.assert_allclose(colored_y(ax),
+                               tcri.get.replicates(bare, "phenotypic_entropy")["adjusted"])
 
 
 def test_a_reloaded_fit_can_still_be_measured(ref, tmp_path):
@@ -1297,7 +1500,7 @@ def test_the_gray_marks_are_named_in_the_legend(ref):
     colored ones and nothing says what they are. A reader can take them for a third arm.
 
     The entry is APPENDED, never replacing what the panel already had: the box-and-strip
-    legend carries the split levels and the endpoints view carries the matched-clone sizes.
+    legend carries the split levels, at one covariate level and on a change.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -1323,11 +1526,14 @@ def test_the_gray_marks_are_named_in_the_legend(ref):
     assert got.count(REFERENCE_LEGEND) == 1
     assert REFERENCE_LEGEND not in entries(tcri.pl.clonotypic_entropy(adata))
 
-    # the endpoints view keeps its size legend AND its title
-    tcri.tl.delta_phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient")
-    ax = tcri.pl.delta_phenotypic_entropy(adata, kind="endpoints")
-    assert ax.get_legend().get_title().get_text() == "clones matched"
-    assert entries(ax)[-1] == REFERENCE_LEGEND
+    # ...and on a change, in either view
+    tcri.tl.phenotypic_entropy(adata, cov_from=a, cov_to=b, groupby="patient",
+                               splitby="disease_status")
+    for view in ("replicate", "item"):
+        got = entries(tcri.pl.phenotypic_entropy(adata, quantity="value", view=view))
+        assert got[-1] == REFERENCE_LEGEND and len(got) > 1, (view, got)
+        assert got.count(REFERENCE_LEGEND) == 1, view
+        assert REFERENCE_LEGEND not in entries(tcri.pl.phenotypic_entropy(adata, view=view))
 
     # ...and nothing is named when nothing gray was drawn
     tcri.tl.mutual_information(adata, covariate=a, groupby="patient", null_model=None)
@@ -1477,21 +1683,27 @@ def test_the_stored_table_grows_by_n_nulls(pooled):
         assert len(with_ref) == 3 * len(bare), n_samples
 
 
-def test_a_delta_pairs_its_endpoints_within_one_null(pooled):
-    """Every pair row of a delta takes its value and both endpoints from one null, so the
-    delta's closure holds pair by pair, and each null's rows are that null's own call."""
+def test_a_change_pairs_its_endpoints_within_one_null(pooled):
+    """Every pair row of a change takes its value and both endpoints from one null of the
+    covariate reference, so the change's closure holds pair by pair, at both levels, and each
+    null's rows are that null's own call."""
     _, adata, _ = pooled
     a, b = (str(c) for c in adata.uns[K.COVARIATE_CATEGORIES][:2])
     kw = dict(cov_from=a, cov_to=b, n_samples=4, random_state=1, inplace=False)
-    table = tcri.tl.delta_phenotypic_entropy(adata, **kw)["table"]
-    assert sorted(set(table["null"])) == [0, 1]
-    closure = table["adjusted"] - (table["adjusted_to"] - table["adjusted_from"])
-    np.testing.assert_allclose(closure, table["value"] - (table["value_to"] - table["value_from"]),
-                               atol=1e-12, equal_nan=True)
-    for i in (0, 1):
-        own = tcri.tl.delta_phenotypic_entropy(adata, null_model=f"null.covariate[{i}]",
-                                               **kw)["table"]
-        mine = table[table["null"] == i]
-        for column in ("null_value", "null_value_from", "null_value_to"):
-            np.testing.assert_allclose(mine[column].to_numpy(), own[column].to_numpy(),
-                                       atol=1e-12, equal_nan=True, err_msg=column)
+    res = tcri.tl.phenotypic_entropy(adata, **kw)
+    owns = [tcri.tl.phenotypic_entropy(adata, null_model=f"null.covariate[{i}]", **kw)
+            for i in (0, 1)]
+    for level in ("replicate", "item"):
+        table = res[level]["draws"]
+        assert sorted(set(table["null"])) == [0, 1], level
+        closure = table["adjusted"] - (table["adjusted_to"] - table["adjusted_from"])
+        np.testing.assert_allclose(closure, 0.0, atol=1e-12, err_msg=level)
+        np.testing.assert_allclose(table["value"] - (table["value_to"] - table["value_from"]),
+                                   0.0, atol=1e-12, err_msg=level)
+        for i, own in enumerate(owns):
+            own, mine = own[level]["draws"], table[table["null"] == i]
+            assert set(own["null"]) == {0}
+            for column in ("null_value", "null_value_from", "null_value_to"):
+                np.testing.assert_allclose(mine[column].to_numpy(), own[column].to_numpy(),
+                                           atol=1e-12, equal_nan=True,
+                                           err_msg=f"{level} {column}")

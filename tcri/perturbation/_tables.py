@@ -1,6 +1,6 @@
 """Frame builders for ``perturb.gene_importance``.
 
-``metric_table`` is clone-oriented (its callback receives a clone subset), and the
+``metric_frames`` is clone-oriented (its callback receives a clone subset), and the
 perturbation reduces over cells, so the long frames are assembled here from the accumulated
 arrays instead. ``build_result``/``build_stats`` from ``_compute`` then apply unchanged.
 """
@@ -21,7 +21,7 @@ def cell_groups(adata, *, cov_col, covariate, groupby, splitby):
     group.
 
     ``covariate`` restricts to the cells at that level; ``groupby`` partitions them. Cells with
-    no group label are excluded with the same warning ``metric_table`` gives. No clone
+    no group label are excluded with the same warning ``metric_frames`` gives. No clone
     disjointness is required: the reduction is over cells.
     """
     obs = adata.obs
@@ -77,8 +77,7 @@ def importance_table(importance, *, names, labels, present, covariate, groupby, 
                      split):
     """``importance[G, S, n_groups]`` -> one row per (gene, group, draw) with ``value``.
 
-    Groups with no cell (``present`` false) are dropped, as ``metric_table`` drops a group
-    with no clones.
+    Groups with no cell (``present`` false) are dropped.
     """
     G, S, n_groups = importance.shape
     groups = np.flatnonzero(present)

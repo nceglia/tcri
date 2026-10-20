@@ -9,6 +9,7 @@ relies on clones being disjoint across groups (a TCR clone never spans two patie
 from __future__ import annotations
 
 import itertools
+import os
 import warnings
 
 import numpy as np
@@ -159,7 +160,7 @@ def fit_clone_labels(adata, fit=None):
     """Per-cell clone id **as the fit saw it**, indexed by ``obs_names``.
 
     ``CLONOTYPE_CATEGORIES[ct_to_c[ct_array]]``. On the main fit this equals ``obs[clone_col]``
-    cell for cell; under a clonotype null it does not, and THAT is the point. `metric_table`
+    cell for cell; under a clonotype null it does not, and THAT is the point. `metric_frames`
     restricts the engine by clone id while the engine's rows come from the permuted codes, so a
     clone list built from ``obs`` selects the wrong null rows whenever a permutation stratum spans
     more than one group -- silently, because the parent's ``obs`` passes every disjointness check.
@@ -189,12 +190,13 @@ def clones_at(adata, covariate, *, fit=None, group_clones=None):
 
     Raises ``ValueError`` when the fit stores a negative clone code (see :func:`_clone_codes`).
     """
-    meta = adata.uns[K.METADATA]
     ct_to_c = _clone_codes(adata, fit)
-    cov_cats = [str(c) for c in adata.uns[K.COVARIATE_CATEGORIES]]
-    if str(covariate) not in cov_cats:
+    # the engine's rule for a level: equal to a registered category, so 0 finds a level
+    # registered as 0.0 here exactly as it does in the joint
+    cov_cats = list(adata.uns[K.COVARIATE_CATEGORIES])
+    if covariate not in cov_cats:
         return []
-    m = cov_cats.index(str(covariate))
+    m = cov_cats.index(covariate)
     ct_to_cov = np.asarray(adata.uns[K.fit_key(K.CT_TO_COV, fit)])
     codes = np.unique(ct_to_c[ct_to_cov == m])
     cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
@@ -374,7 +376,7 @@ def across_groups(values):
             "ci_low": float(lo), "ci_high": float(hi), "n_groups": n}
 
 
-def build_result(table, *, value="value", extra_values=()):
+def build_result(table, *, value="value", extra_values=(), one_mask=False):
     """Reduce ``table`` (per draw) to ``result`` (per group[, item]).
 
     ``result`` is built FROM ``table`` rather than computed alongside it, so the two cannot
@@ -386,30 +388,40 @@ def build_result(table, *, value="value", extra_values=()):
 
     Items are KEPT: a swarm plot needs one point per clone, and collapsing them here would make
     the per-item view unreachable from the cached result.
+
+    ``one_mask=True`` reduces ``value`` and every ``extra_values`` column over one set of draws,
+    the draws where all of them are finite. A change and its two endpoints are reduced that way,
+    so ``value == value_to - value_from`` holds in the summary as it does on every draw; with a
+    mask per column, a draw finite on one side only would enter one mean and not the other.
     """
     val_cols = (value, *extra_values)
 
     # An empty table has NO columns at all, so `keys` comes back empty and the scalar branch
     # below indexes table[value] -- which does not exist -- raising KeyError('value') four
-    # frames deep in pandas. That is a real path, not a defensive check: phenotypic_flux
-    # produces nothing when no replicate has clones at BOTH covariate levels, which is exactly
-    # what happens if the covariate is constant within replicate (a between-group label like
-    # treatment arm rather than a within-patient axis). The metric is right to find nothing;
-    # crashing on it hides why.
+    # frames deep in pandas. That is a real path, not a defensive check: a change has no item
+    # rows when no replicate has clones at BOTH covariate levels, which is exactly what happens
+    # if the covariate is constant within replicate (a between-group label like treatment arm
+    # rather than a within-patient axis). The metric is right to find nothing; crashing on it
+    # hides why.
     if table is None or not len(table):
         # The columns the non-empty shape would have had, not just `value`. An empty frame
         # that is missing its declared extras is indistinguishable from a frame computed
-        # without them, which is how an empty `phenotypic_flux` -- a real and documented
-        # outcome -- would read as "no reference was computed" rather than "no rows".
+        # without them, which is how an empty item level -- a real and documented outcome --
+        # would read as "no reference was computed" rather than "no rows".
         return pd.DataFrame(columns=list(val_cols))
 
     keys = [c for c in table.columns if c not in ("draw", *val_cols)]
 
+    def _masked(chunk):
+        if not one_mask:
+            return chunk
+        finite = np.isfinite(chunk[list(val_cols)].to_numpy(dtype=float)).all(axis=1)
+        return chunk.loc[finite]
+
     def _extra(chunk):
-        # the endpoints of a delta: their posterior means, carried so the paired view is
-        # renderable from the delta result alone and therefore matched by construction. A column
-        # with no number in it (a replicate with no joint) has a NaN mean, an expected outcome
-        # rather than a numpy warning.
+        # further value columns (a change's endpoints, a denominator): their posterior means. A
+        # column with no number in it (a replicate with no joint) has a NaN mean, an expected
+        # outcome rather than a numpy warning.
         out = {}
         for c in extra_values:
             v = chunk[c].to_numpy(dtype=float)
@@ -418,13 +430,15 @@ def build_result(table, *, value="value", extra_values=()):
         return out
 
     if not keys:
-        agg = summarize(table[value].to_numpy())
-        row = {value: agg.pop("mean"), **agg, **_extra(table)}
+        chunk = _masked(table)
+        agg = summarize(chunk[value].to_numpy())
+        row = {value: agg.pop("mean"), **agg, **_extra(chunk)}
         return pd.DataFrame([row])
     rows = []
     for label, chunk in table.groupby(keys, observed=True, dropna=False):
         label = label if isinstance(label, tuple) else (label,)
         row = dict(zip(keys, label))
+        chunk = _masked(chunk)
         agg = summarize(chunk[value].to_numpy())
         row[value] = agg.pop("mean")
         row.update(agg)
@@ -468,8 +482,9 @@ def collapse_to_replicates(result, *, groupby, splitby=None, value="value", keep
             .mean().reset_index())
 
 
-def build_stats(result, *, groupby, splitby, value="value"):
-    """The between-split contrast on one quantity, or ``None`` when ``splitby`` is not set.
+def build_stats(result, *, groupby, splitby, value="value", change=None):
+    """The tests of one quantity: the covariate rows of a change, then the split rows; ``None``
+    when nothing is compared.
 
     ``value`` names the column contrasted -- ``"value"``, or ``"adjusted"`` once a reference has
     been computed -- and the frame carries it back in a ``quantity`` column, so a reader of a
@@ -490,11 +505,21 @@ def build_stats(result, *, groupby, splitby, value="value"):
     arm with no finite value has ``n`` 0 and the row has NaN statistics and blank stars, so the
     rows are fixed by the replicates and their splits. ``comparison`` is ``"split"`` on these
     rows.
+
+    ``change`` is ``{"cov_from", "cov_to", "distance"}`` for a change result, which adds its
+    covariate rows (:func:`_covariate_rows`).
     """
-    if splitby is None or groupby is None or result is None or not len(result):
+    if result is None or not len(result) or value not in result.columns:
         return None
-    if value not in result.columns:
-        return None
+    rows = []
+    if change is not None:
+        rows += _covariate_rows(result, groupby=groupby, splitby=splitby, value=value, **change)
+    if splitby is not None and groupby is not None:
+        rows += _split_rows(result, groupby=groupby, splitby=splitby, value=value)
+    return pd.DataFrame(rows) if rows else None
+
+
+def _split_rows(result, *, groupby, splitby, value):
     from .._stats import compare_groups
 
     # THE pseudoreplication step. Everything after this sees one number per group. Shared with
@@ -523,15 +548,172 @@ def build_stats(result, *, groupby, splitby, value="value"):
             row.update(delta=float(c["delta"]), stat=float(c["stat"]), p=float(c["p"]),
                        stars=c["stars"])
         rows.append(row)
-    return pd.DataFrame(rows) if rows else None
+    return rows
+
+
+def _covariate_rows(result, *, groupby, splitby, value, cov_from, cov_to, distance=False):
+    """The paired test of a change, one row per split level, or one over every replicate
+    without ``splitby``: a Wilcoxon signed-rank test on each replicate's change.
+
+    The arms are the change's endpoints of the tested quantity (``value_from``/``value_to``, or
+    ``adjusted_from``/``adjusted_to``), and ``level_a``/``level_b`` are ``cov_from``/``cov_to``,
+    so ``delta = mean_b - mean_a`` as on a split row. A replicate enters when both endpoints are
+    finite and its change is not exactly 0; the arms, ``delta`` and ``n`` are all over the
+    replicates the test used. Fewer than two leave the row with NaN statistics and blank stars.
+
+    ``distance=True`` is a change that is a distance between the two levels (flux), with no
+    endpoints and never negative: the row tests the adjusted value against 0, its arms are NaN and
+    ``delta`` is the mean over the replicates used. Without a usable reference (``value`` is
+    ``"value"``) a test against 0 rejects for any data, so p is NaN and stars are blank.
+
+    With no replicate the whole object is one replicate: the row is present, with ``n`` of 1 or 0
+    and NaN statistics.
+    """
+    from .._stats import compare_groups
+
+    frame = result if groupby is not None else result.assign(_replicate=0)
+    unit = groupby if groupby is not None else "_replicate"
+    if splitby is not None and splitby in frame.columns:
+        levels = sorted(frame[splitby].dropna().unique().tolist(), key=str)
+    else:
+        levels = [None]
+    ends = (None if distance else
+            ("adjusted_from", "adjusted_to") if value == "adjusted" else
+            ("value_from", "value_to"))
+    rows = []
+    for level in levels:
+        sub = frame if level is None else frame.loc[frame[splitby] == level]
+        sub = collapse_to_replicates(sub, groupby=unit, splitby=None,
+                                     value=[value] if distance else list(ends))
+        if distance:
+            a = np.zeros(len(sub))
+            b = sub[value].to_numpy(dtype=float)
+        else:
+            a = sub[ends[0]].to_numpy(dtype=float)
+            b = sub[ends[1]].to_numpy(dtype=float)
+        used = np.isfinite(a) & np.isfinite(b) & (b - a != 0)
+        row = {"comparison": "covariate"}
+        if splitby is not None:
+            row[splitby] = level
+        row.update(level_a=cov_from, level_b=cov_to,
+                   replicate_unit=groupby if groupby is not None else np.nan, quantity=value)
+        for suffix, arm in (("a", a[used]), ("b", b[used])):
+            summary = across_groups(arm)
+            row[f"mean_{suffix}"] = np.nan if distance else summary["value"]
+            row[f"sd_{suffix}"] = np.nan if distance else summary["sd"]
+            row[f"ci_low_{suffix}"] = np.nan if distance else summary["ci_low"]
+            row[f"ci_high_{suffix}"] = np.nan if distance else summary["ci_high"]
+            row[f"n_{suffix}"] = int(used.sum())
+        row["delta"] = (float(np.mean(b[used] - a[used])) if used.any() else np.nan)
+        row.update(stat=np.nan, p=np.nan, stars="")
+        if not (distance and value != "adjusted"):
+            ids = sub[unit].to_numpy()[used]
+            paired = pd.DataFrame({unit: np.concatenate([ids, ids]),
+                                   "_arm": [0] * len(ids) + [1] * len(ids),
+                                   "_v": np.concatenate([a[used], b[used]])})
+            tested = compare_groups(paired, value="_v", splitby="_arm", replicate=unit,
+                                    paired=True)
+            if len(tested):
+                c = tested.iloc[0]
+                row.update(stat=float(c["stat"]), p=float(c["p"]), stars=c["stars"])
+        rows.append(row)
+    return rows
 
 
 class ZeroNormalizer(ValueError):
     """A replicate kernel's normalizer is 0, so its normalized value is undefined.
 
     Raised inside ``compute``, where the replicate is not known; :func:`metric_frames` re-raises
-    it as a ``ValueError`` naming the replicate and the covariate level.
+    it as a ``ValueError`` naming the replicate and the covariate level. ``level`` is the level
+    whose joint raised, set on a change, where the call has two.
     """
+
+    def __init__(self, message, level=None):
+        super().__init__(message)
+        self.level = level
+
+
+def at_level(level, kernel, *args, **kwargs):
+    """``kernel(*args, **kwargs)``, with a :class:`ZeroNormalizer` it raises naming ``level``."""
+    try:
+        return kernel(*args, **kwargs)
+    except ZeroNormalizer as err:
+        raise ZeroNormalizer(str(err), level=level) from None
+
+
+def check_covariates(adata, *, covariate, cov_from, cov_to, metric):
+    """Whether a call is at one covariate level (``"covariate"``) or a change (``"change"``).
+
+    Raises ``ValueError`` unless exactly one of ``covariate`` or the pair ``cov_from`` +
+    ``cov_to`` is given, naming both call forms, and on a change when either level is not a
+    registered covariate level. ``cov_from == cov_to`` is allowed: its change is 0.
+    """
+    pair = (cov_from is not None, cov_to is not None)
+    if covariate is not None and not any(pair):
+        return "covariate"
+    if covariate is None and all(pair):
+        levels = list(adata.uns[K.COVARIATE_CATEGORIES])
+        for name, level in (("cov_from", cov_from), ("cov_to", cov_to)):
+            if level not in levels:
+                raise ValueError(
+                    f"{metric}: {name}={level!r} is not a registered covariate level; the "
+                    f"levels are {levels}."
+                )
+        return "change"
+    raise ValueError(
+        f"{metric}: pass covariate= for the value at one covariate level, or cov_from= with "
+        f"cov_to= for the change from one level to another (got covariate={covariate!r}, "
+        f"cov_from={cov_from!r}, cov_to={cov_to!r})."
+    )
+
+
+def resolve_seed(random_state) -> int:
+    """One integer seed for a call: every ``tl`` call turns a stateful ``random_state`` into one
+    (:func:`~tcri._state.storage.tl_result`), and a change turns ``None`` into one too.
+
+    Both levels of a change are drawn from one shared sample: the engine samples every clone x
+    covariate row and then selects a level's block, so two engine calls carrying one integer seed
+    realize the same draw, and a level against itself changes by exactly 0. A stateful source
+    would hand each engine call a fresh seed and decouple the two levels, so it is turned into an
+    integer once per call: ``None`` generates one, an integer is itself, a ``torch.Generator``
+    gives its initial seed, and anything else (a numpy ``Generator``, ``RandomState``,
+    ``BitGenerator`` or ``SeedSequence``) gives one draw.
+
+    This is common random numbers: the estimand is a difference between two levels of the same
+    clones, so the draws are coupled and the interval is the coupled quantity's. Independent draws
+    would report the sum of the two posteriors' spread plus a positive bias that does not vanish.
+    """
+    if random_state is None:
+        return int(np.random.SeedSequence().generate_state(1)[0])
+    if isinstance(random_state, (int, np.integer)):
+        return int(random_state)
+    import torch
+
+    if isinstance(random_state, torch.Generator):
+        return int(random_state.initial_seed())
+    return int(np.random.default_rng(random_state).integers(0, 2**31 - 1))
+
+
+def change_draws(adata, cov_from, cov_to, *, clones, seed, n_samples, weighted, temperature,
+                 device=None, fit=None):
+    """Both levels' joints of a set of clones, from one shared draw: ``(draws_from, draws_to,
+    cols)``, each a list of ``(clone_ids, J)`` per draw as :func:`joint_draws` returns.
+
+    ``seed`` is an integer (:func:`resolve_seed`). A level against itself reuses one draw, so its
+    change is exactly 0.
+    """
+    kw = dict(n_samples=n_samples, weighted=weighted, temperature=temperature, clones=clones,
+              random_state=seed, device=device, fit=fit)
+    draws_from, cols = joint_draws(adata, cov_from, **kw)
+    draws_to = draws_from if cov_to == cov_from else joint_draws(adata, cov_to, **kw)[0]
+    return draws_from, draws_to, cols
+
+
+def rows_of(clone_ids, J, wanted):
+    """The rows of ``J`` for the clones in ``wanted``, in the order of ``wanted``."""
+    at = {c: i for i, c in enumerate(clone_ids)}
+    J = np.asarray(J, dtype=np.float64)
+    return J[[at[c] for c in wanted]].reshape(len(wanted), J.shape[-1])
 
 
 def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_empty):
@@ -581,20 +763,84 @@ def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_e
         yield label_row, group_clones
 
 
-def metric_frames(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
-                  compute, metric, fit=None):
+def movable_clones(adata, levels=None):
+    """The clonotype labels whose cells the covariate null can move, at ``levels`` or at any.
+
+    The covariate null shuffles each cell's covariate level within (clonotype, batch), so it can
+    move a clonotype's cells at a level only where one of its (clonotype, batch) groups holds a
+    cell at that level and a cell at another level. Decided from ``obs`` alone, not from a drawn
+    shuffle, so the answer is the same on every run and for any number of nulls. ``levels=None``
+    asks about any level.
+    """
+    frame = _cell_levels(adata)
+    strata = frame.groupby(["clone", "batch"], sort=False)["level"]
+    mixed = strata.nunique() > 1
+    if levels is not None:
+        wanted = _level_names(adata, levels)
+        mixed &= strata.agg(lambda s: bool(s.isin(wanted).any()))
+    return set(mixed[mixed].index.get_level_values("clone"))
+
+
+def _cell_levels(adata):
+    """Each cell's clonotype, batch and covariate level, as text."""
+    meta = adata.uns[K.METADATA]
+    obs = adata.obs
+    return pd.DataFrame({
+        "clone": obs[meta[K.Config.CLONE_COL]].astype(str).to_numpy(),
+        "batch": obs[meta[K.Config.BATCH_COL]].astype(str).to_numpy(),
+        "level": obs[meta[K.Config.COVARIATE_COL]].astype(str).to_numpy(),
+    })
+
+
+def _level_names(adata, levels):
+    """The text of the registered categories ``levels`` name, by the engine's rule (equality)."""
+    cats = list(adata.uns[K.COVARIATE_CATEGORIES])
+    return {str(cats[cats.index(level)]) for level in levels if level in cats}
+
+
+def unmovable_groups(adata, *, levels, groupby, splitby, clones, exclude_pools, fit=None):
+    """The label rows of the groups the covariate null cannot move at ``levels``: groups with a
+    counted clone at one of ``levels``, none of which is in :func:`movable_clones`. A group with
+    no counted clone at those levels has no values to adjust and is not one of them. The groups
+    are those of :func:`_groups`."""
+    movable = movable_clones(adata, levels)
+    frame = _cell_levels(adata)
+    present = set(frame.loc[frame["level"].isin(_level_names(adata, levels)), "clone"])
+    out = []
+    with warnings.catch_warnings():
+        # the metric's own pass over the groups has already warned about cells with no group
+        warnings.simplefilter("ignore", UserWarning)
+        groups = list(_groups(adata, groupby=groupby, splitby=splitby, clones=clones,
+                              exclude_pools=exclude_pools, fit=fit, base={}, skip_empty=False))
+    for label_row, group_clones in groups:
+        counted = (group_clones if group_clones is not None
+                   else adata.uns[K.CLONOTYPE_CATEGORIES])
+        at = [str(c) for c in counted if str(c) in present]
+        if at and not any(c in movable for c in at):
+            out.append(label_row)
+    return out
+
+
+def metric_frames(adata, *, covariate=None, cov_from=None, cov_to=None, groupby, splitby, clones,
+                  exclude_pools, item_col, compute, metric, fit=None):
     """Build a metric's per-draw frames: ``(replicate_draws, item_draws)``.
 
-    ``compute(clone_subset)`` returns one ``(replicate, items)`` pair per draw: ``replicate`` maps
-    value columns to the replicate's number for its whole joint, and ``items`` maps each item to
-    a mapping of value columns, or is ``None`` for a metric with no items. ``replicate_draws`` has
-    one row per (covariate, group, draw); ``item_draws`` one row per (covariate, group, item,
-    draw), or is ``None`` when ``item_col`` is ``None``.
+    At one covariate level, ``compute(clone_subset)`` returns one ``(replicate, items)`` pair per
+    draw: ``replicate`` maps value columns to the replicate's number for its whole joint, and
+    ``items`` maps each item to a mapping of value columns, or is ``None`` for a metric with no
+    items. ``replicate_draws`` has one row per (covariate, group, draw); ``item_draws`` one row per
+    (covariate, group, item, draw), or is ``None`` when ``item_col`` is ``None``.
 
-    Every group has its replicate rows: a group with no joint at ``covariate``, or none of its
-    clones left by ``clones=`` or ``exclude_pools``, gets them as NaN rather than no rows, so the
-    row set is fixed by the inputs. Its item rows are whatever ``compute`` returns for an empty
-    joint.
+    On a change (``cov_from`` and ``cov_to``), ``compute(clone_subset, persistent)`` also receives
+    the group's persistent clones, those with cells at both levels, in ascending clone-code order;
+    the rows are labeled ``cov_from`` and ``cov_to`` instead of ``covariate``. Two warnings name
+    what the inputs leave out: the groups with no counted clone at a level, and a call where no
+    group has a persistent clone, whose usual cause is a covariate that does not vary within a
+    replicate.
+
+    Every group has its replicate rows: a group with no joint at a level, or none of its clones
+    left by ``clones=`` or ``exclude_pools``, gets them as NaN rather than no rows, so the row set
+    is fixed by the inputs. Its item rows are whatever ``compute`` returns for an empty joint.
 
     Raises
     ------
@@ -602,54 +848,64 @@ def metric_frames(adata, *, covariate, groupby, splitby, clones, exclude_pools, 
         When a replicate's normalizer is 0 (:class:`ZeroNormalizer`), naming the replicate and
         the covariate level.
     """
-    base = {"covariate": covariate} if covariate is not None else {}
+    change = cov_from is not None
+    if change:
+        base = {"cov_from": cov_from, "cov_to": cov_to}
+    else:
+        base = {"covariate": covariate} if covariate is not None else {}
     rep_rows, item_rows = [], []
+    n_groups, missing, persistent = 0, 0, False
     for label_row, group_clones in _groups(adata, groupby=groupby, splitby=splitby,
                                            clones=clones, exclude_pools=exclude_pools, fit=fit,
                                            base=base, skip_empty=False):
+        n_groups += 1
+        args = (group_clones,)
+        if change:
+            at_from = clones_at(adata, cov_from, fit=fit, group_clones=group_clones)
+            at_to = set(clones_at(adata, cov_to, fit=fit, group_clones=group_clones))
+            shared = [c for c in at_from if c in at_to]
+            persistent = persistent or bool(shared)
+            missing += not (at_from and at_to)
+            args = (group_clones, shared)
         try:
-            per_draw = compute(group_clones)
+            per_draw = compute(*args)
         except ZeroNormalizer as err:
             where = (f"{groupby}={label_row[groupby]!r}" if groupby is not None
                      else "the whole object")
-            raise ValueError(f"{metric}: {where} at covariate {covariate!r}: {err}") from None
+            level = err.level if err.level is not None else covariate
+            raise ValueError(f"{metric}: {where} at covariate {level!r}: {err}") from None
         for draw, (replicate, items) in enumerate(per_draw):
             rep_rows.append({**label_row, "draw": draw, **replicate})
             for item, vals in (items or {}).items():
                 item_rows.append({**label_row, item_col: item, "draw": draw, **vals})
+    if change:
+        _warn_change(metric, groupby=groupby, cov_from=cov_from, cov_to=cov_to,
+                     n_groups=n_groups, missing=missing, persistent=persistent,
+                     has_items=item_col is not None)
     item_draws = pd.DataFrame(item_rows) if item_col is not None else None
     return pd.DataFrame(rep_rows), item_draws
 
 
-def metric_table(adata, *, covariate, groupby, splitby, clones, exclude_pools, item_col,
-                 compute, extra_labels=None, fit=None):
-    """Build the long ``table`` of a metric stored in the ``{table, result, stats}`` layout: one
-    row per (covariate, group, item, draw).
+#: Warnings are attributed to the caller's line, never to a frame inside the package. The
+#: trailing separator keeps a sibling directory whose name starts with the package's out of it.
+_PACKAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "")
 
-    ``compute(clone_subset)`` returns one entry per draw. With an item axis that entry is a
-    ``{item: value}`` mapping; without one it is a scalar. A group that counts no clone has no
-    rows. The groups are those of :func:`_groups`.
-    """
-    # a None label is not a label: `phenotypic_flux` has no single covariate, and carrying
-    # `covariate=None` through would add an all-NaN column to every row of its result
-    base = {"covariate": covariate} if covariate is not None else {}
-    if extra_labels:
-        base.update({k: v for k, v in extra_labels.items() if v is not None})
 
-    rows = []
-    for label_row, group_clones in _groups(adata, groupby=groupby, splitby=splitby,
-                                           clones=clones, exclude_pools=exclude_pools, fit=fit,
-                                           base=base, skip_empty=True):
-        for draw, payload in enumerate(compute(group_clones)):
-            if item_col is None:
-                # a draw's payload is a scalar, or a mapping of value columns
-                rows.append({**label_row, "draw": draw,
-                             **(payload if isinstance(payload, dict) else {"value": payload})})
-            else:
-                for item, value in payload.items():
-                    row = {**label_row, item_col: item, "draw": draw}
-                    # an item's payload is a scalar, or a mapping of value columns when the
-                    # metric carries more than one (the delta and its two endpoints)
-                    row.update(value if isinstance(value, dict) else {"value": value})
-                    rows.append(row)
-    return pd.DataFrame(rows)
+def _warn_change(metric, *, groupby, cov_from, cov_to, n_groups, missing, persistent, has_items):
+    unit = groupby or "replicate"
+    if missing:
+        warnings.warn(
+            f"{metric}: {missing} of {n_groups} {unit} groups have no counted clone at "
+            f"{cov_from!r} or at {cov_to!r}; their values are NaN and they leave the tests.",
+            UserWarning, skip_file_prefixes=(_PACKAGE_DIR,),
+        )
+    if not persistent:
+        items = ", so there are no item rows" if has_items else ""
+        warnings.warn(
+            f"{metric}: no {unit} has a clone at both {cov_from!r} and {cov_to!r}{items}. A "
+            f"change is taken within each {unit}: it needs a covariate that varies inside a "
+            f"single {unit} (a timepoint, say). A covariate that is constant within each {unit} "
+            f"only distinguishes one {unit} from another.",
+            UserWarning, skip_file_prefixes=(_PACKAGE_DIR,),
+        )
+

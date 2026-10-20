@@ -14,6 +14,14 @@ in **bits**, engine-backed, per replicate and per item.
 In bits, I(C;P) = H(P) − H(P|C) = H(C) − H(C|P). A normalized replicate value whose normalizer
 is 0 raises. ``n_samples=0`` is the deterministic plug-in; ``n_samples>0`` returns the
 posterior-mean + sd + HDI of the entropy (the plug-in value is ≥ the posterior mean for entropy).
+
+**A change** (``cov_from``, ``cov_to``) is ``cov_to`` − ``cov_from``, taken within a draw, both
+levels drawn from one shared sample. Per replicate it is the difference of the two replicate
+values, each counting every clone the replicate has at its level and normalized at its level
+(or both by ``n_clones_ref``). Per item it covers the persistent clones, those at both levels:
+phenotypic entropy has one item per persistent clone, and clonotypic entropy recomputes each
+phenotype on the persistent clones alone, so both sides share one clone set and one normalizer.
+Every change row carries its endpoints, ``value_from`` and ``value_to``.
 """
 from __future__ import annotations
 
@@ -23,8 +31,9 @@ import pandas as pd
 from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
-from .._compute._tables import (ZeroNormalizer, build_result, build_stats, joint_draws,
-                                metric_frames, resolve_groupby, validate_splitby)
+from .._compute._tables import (ZeroNormalizer, at_level, build_result, build_stats,
+                                change_draws, check_covariates, joint_draws, metric_frames,
+                                resolve_groupby, resolve_seed, rows_of, validate_splitby)
 
 __all__ = ["clonotypic_entropy", "phenotypic_entropy"]
 
@@ -118,9 +127,9 @@ def _clonotypic_replicate(J, cols, *, normalized, n_clones_ref=None):
     return {"value": value}
 
 
-def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temperature,
-                    clones, exclude_pools, weighted, normalized, random_state, n_clones_ref=None,
-                    device=None, fit=None):
+def _entropy_metric(adata, *, kind, covariate, cov_from, cov_to, groupby, splitby, n_samples,
+                    temperature, clones, exclude_pools, weighted, normalized, random_state,
+                    n_clones_ref=None, device=None, fit=None):
     """Shared body for both entropies.
 
     The two differ only in their ITEM AXIS: clonotypic entropy H(c|phi) is one value per
@@ -129,6 +138,9 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
     identical, which is why it lives here.
     """
     item_col = "phenotype" if kind == "clonotypic" else "clonotype"
+    metric = f"{kind}_entropy"
+    change = check_covariates(adata, covariate=covariate, cov_from=cov_from, cov_to=cov_to,
+                              metric=metric) == "change"
 
     def _items(clone_ids, J, cols):
         if kind == "clonotypic":
@@ -152,23 +164,53 @@ def _entropy_metric(adata, *, kind, covariate, groupby, splitby, n_samples, temp
         return [(_replicate(J, cols), {k: {"value": v} for k, v in _items(ids, J, cols).items()})
                 for ids, J in draws]
 
+    seed = resolve_seed(random_state) if change else None
+
+    def _compute_change(clone_subset, persistent):
+        draws_from, draws_to, cols = change_draws(
+            adata, cov_from, cov_to, clones=clone_subset, seed=seed, n_samples=n_samples,
+            weighted=weighted, temperature=temperature, device=device, fit=fit)
+        per = []
+        for (ids_f, Jf), (ids_t, Jt) in zip(draws_from, draws_to):
+            h_from = at_level(cov_from, _replicate, Jf, cols)["value"]
+            h_to = at_level(cov_to, _replicate, Jt, cols)["value"]
+            # the persistent clones' rows, in one order on both sides: a column sum depends on
+            # the order its rows are added in
+            i_from = _items(persistent, rows_of(ids_f, Jf, persistent), cols)
+            i_to = _items(persistent, rows_of(ids_t, Jt, persistent), cols)
+            items = {k: {"value": i_to[k] - i_from[k], "value_from": i_from[k],
+                         "value_to": i_to[k]} for k in i_from}
+            per.append(({"value": h_to - h_from, "value_from": h_from, "value_to": h_to},
+                        items))
+        return per
+
     rep_draws, item_draws = metric_frames(
-        adata, covariate=covariate, groupby=gkey, splitby=splitby, clones=clones,
-        exclude_pools=exclude_pools, item_col=item_col, compute=_compute,
-        metric=f"{kind}_entropy", fit=fit)
-    rep_summary = build_result(rep_draws)
+        adata, covariate=covariate, cov_from=cov_from, cov_to=cov_to, groupby=gkey,
+        splitby=splitby, clones=clones, exclude_pools=exclude_pools, item_col=item_col,
+        compute=_compute_change if change else _compute, metric=metric, fit=fit)
+    ends = ("value_from", "value_to") if change else ()
+    rep_summary = build_result(rep_draws, extra_values=ends, one_mask=change)
     payload = {"replicate": {"draws": rep_draws, "summary": rep_summary},
-               "item": {"draws": item_draws, "summary": build_result(item_draws)},
-               "stats": build_stats(rep_summary, groupby=gkey, splitby=splitby)}
+               "item": {"draws": item_draws,
+                        "summary": build_result(item_draws, extra_values=ends,
+                                                one_mask=change)},
+               "stats": build_stats(rep_summary, groupby=gkey, splitby=splitby,
+                                    change=({"cov_from": cov_from, "cov_to": cov_to}
+                                            if change else None))}
     return with_resolved_params(payload, groupby=gkey) if resolved else payload
 
 
+#: The reference of each mode: the phenotype null at one covariate level, the covariate null on a
+#: change, whose movement between levels is what the change measures.
+DEFAULT_NULL = {"covariate": "phenotype", "change": "covariate"}
+
+
 @tl_result(key=K.CLONOTYPIC_ENTROPY, version=4, schema=schemas.ClonotypicEntropy,
-           default_null="phenotype")
-def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-                       temperature=1.0, clones=None, exclude_pools=True, weighted=False,
-                       normalized=True, n_clones_ref=None, random_state=None, device=None,
-                       fit=None):
+           values=("value", "value_from", "value_to"), default_null=DEFAULT_NULL)
+def clonotypic_entropy(adata, *, covariate=None, cov_from=None, cov_to=None, groupby=None,
+                       splitby=None, n_samples=0, temperature=1.0, clones=None,
+                       exclude_pools=True, weighted=False, normalized=True, n_clones_ref=None,
+                       random_state=None, device=None, fit=None):
     """H(C|P) per replicate and H[P(c|φ)] per phenotype (bits). ``n_clones_ref`` fixes the
     normalizer for cross-group comparability (else per-group #supported clones). See module
     docstring.
@@ -179,12 +221,18 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     one row per replicate, read with ``tcri.get.replicates``; the item level one row per
     replicate and phenotype, read with ``tcri.get.items``.
 
-    A replicate with no joint at ``covariate`` has a NaN replicate row and one NaN item row per
-    phenotype. With ``normalized=True``, a replicate with one clone raises ``ValueError`` naming
-    it; ``normalized=False`` reports its bits.
+    Pass ``covariate`` for the value at one level, or ``cov_from`` with ``cov_to`` for the change
+    from one to the other (see the module docstring); on a change each phenotype's item value is
+    recomputed on the replicate's persistent clones. ``stats`` then also holds the paired test of
+    the change, one row per split level with ``splitby``, or one over every replicate without.
 
-    ``null_model`` names the permutation reference: ``"auto"`` is the phenotype null, ``None``
-    reports the bare value, and any fit on this object can be named instead. ``fit`` selects
+    A replicate with no joint at a level has a NaN replicate row and one NaN item row per
+    phenotype. With ``normalized=True``, a replicate with one clone raises ``ValueError`` naming
+    it and the level; ``normalized=False`` reports its bits.
+
+    ``null_model`` names the permutation reference: ``"auto"`` is the phenotype null at one
+    level and the covariate null on a change, ``None`` reports the bare value, and any fit on
+    this object can be named instead. ``fit`` selects
     which fit the number is computed ON, which is a different question -- see the module
     docstring of :mod:`tcri.null`.
 
@@ -193,7 +241,8 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     and the entropy counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
     selecting among them. ``False`` counts each pool as one clone. A column with no pooling
     step has nothing to leave out."""
-    return _entropy_metric(adata, kind="clonotypic", covariate=covariate, groupby=groupby,
+    return _entropy_metric(adata, kind="clonotypic", covariate=covariate, cov_from=cov_from,
+                           cov_to=cov_to, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, exclude_pools=exclude_pools, weighted=weighted,
                            normalized=normalized, random_state=random_state,
@@ -201,10 +250,11 @@ def clonotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
 
 
 @tl_result(key=K.PHENOTYPIC_ENTROPY, version=4, schema=schemas.PhenotypicEntropy,
-           default_null="phenotype")
-def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_samples=0,
-                       temperature=1.0, clones=None, exclude_pools=True, weighted=False,
-                       normalized=True, random_state=None, device=None, fit=None):
+           values=("value", "value_from", "value_to"), default_null=DEFAULT_NULL)
+def phenotypic_entropy(adata, *, covariate=None, cov_from=None, cov_to=None, groupby=None,
+                       splitby=None, n_samples=0, temperature=1.0, clones=None,
+                       exclude_pools=True, weighted=False, normalized=True, random_state=None,
+                       device=None, fit=None):
     """H(P|C) per replicate and H[P(φ|c)] per clone (bits). See module docstring.
 
     Stores ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``, under
@@ -213,19 +263,26 @@ def phenotypic_entropy(adata, *, covariate=None, groupby=None, splitby=None, n_s
     one row per replicate, read with ``tcri.get.replicates``; the item level one row per
     replicate and clone, read with ``tcri.get.items``.
 
-    A replicate with no joint at ``covariate`` has a NaN replicate row and no item rows. With
+    Pass ``covariate`` for the value at one level, or ``cov_from`` with ``cov_to`` for the change
+    from one to the other (see the module docstring); on a change the item rows are the
+    replicate's persistent clones. ``stats`` then also holds the paired test of the change, one
+    row per split level with ``splitby``, or one over every replicate without.
+
+    A replicate with no joint at a level has a NaN replicate row and no item rows. With
     ``normalized=True`` and one phenotype, the call raises ``ValueError``; ``normalized=False``
     reports bits.
 
-    ``null_model`` names the permutation reference (``"auto"`` is the phenotype null); ``fit``
-    selects which fit the number is computed on.
+    ``null_model`` names the permutation reference (``"auto"`` is the phenotype null at one
+    level and the covariate null on a change); ``fit`` selects which fit the number is computed
+    on.
 
     ``exclude_pools`` leaves out the ``pooled@{group}`` labels ``tcri.pp.pool_rare_clones``
     writes. A pool is a mixture of many rare clones, not a clone, so by default it is left out
     and the entropy counts exactly the clones ``pool_rare_clones`` kept, with ``clones``
     selecting among them. ``False`` counts each pool as one clone. A column with no pooling
     step has nothing to leave out."""
-    return _entropy_metric(adata, kind="phenotypic", covariate=covariate, groupby=groupby,
+    return _entropy_metric(adata, kind="phenotypic", covariate=covariate, cov_from=cov_from,
+                           cov_to=cov_to, groupby=groupby,
                            splitby=splitby, n_samples=n_samples, temperature=temperature,
                            clones=clones, exclude_pools=exclude_pools, weighted=weighted,
                            normalized=normalized, random_state=random_state, device=device,
