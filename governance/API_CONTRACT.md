@@ -65,6 +65,22 @@ numbers of clones and cells pooled; a later call with the same `key_added` repla
 clonotypes, as defined above, and NaN or None in `groupby` or `samples` raise `ValueError`
 naming the column and the number of cells; a group that keeps no clone warns.
 
+**Repertoire summaries.** `pp.repertoire_summary`, `pp.clonotype_sharing` and
+`pp.clone_persistence` read `obs` and the derivation record, filter nothing, and store their result
+under `uns[key_added or "tcri_<function>"]` with a `params` block, returning `None`;
+`inplace=False` stores nothing and returns it, and `tcri.get.result` reads it back.
+`repertoire_summary` stores its table; `clonotype_sharing` and `clone_persistence` store
+`{table, pairs}`, or with `per_clonotype=True` or `per_clone=True` the frame per clonotype or per
+clone. `pairs` has one row per ordered pair, counted in clonotypes or clones, never cells: for
+sharing, a pair of groups, with the first group's clonotypes and those the second also carries;
+for persistence, a pair of covariate levels within a group, with the clones at the first level and
+those also seen at the second. Sharing and clonality are measured on the column the derivation
+record leads back to, and raise when it is not in `obs`; `clonality` is `1 − H/log2(N)` over the
+clone sizes of a row there, every clone included, NaN with fewer than two clones. Each takes
+`splitby`, checked as the metrics check it, and its tables carry the split label as a string.
+`pl.repertoire_summary`, `pl.clonotype_sharing` and `pl.clone_persistence` draw the stored result,
+compute nothing, and raise on a result per clonotype or per clone.
+
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
@@ -159,8 +175,8 @@ computed ON; `fit=` on `tcri.get.*` selects which fit's result blob to read; a r
 a named fit is stored under the fit-suffixed key, so it never overwrites the main one. A bare
 kind resolves to the fit that carries it.
 
-**Plotting.** Each `pl` twin renders the result its `tl` twin stored; the covariate, groups,
-splits and distance it draws are the ones `tl` used, read from `params`. `pl` functions take
+**Plotting.** Each `pl` twin renders the result its `tl` or `pp` twin stored; the covariate,
+groups, splits and distance it draws are the ones that call used, read from `params`. `pl` functions take
 no metric arguments. A mark shows one variance component: the coarsest unit that varies within
 an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
 result carries one, against a zero rule, and `quantity="value"` draws the value with its null
@@ -299,16 +315,20 @@ class pp:
     ) -> AnnData: ...
     def repertoire_summary(
         adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,
-        covariate_key: Optional[str] = ..., phenotype_key: Optional[str] = ...,
-    ) -> pd.DataFrame: ...
+        splitby: Optional[str] = ..., covariate_key: Optional[str] = ...,
+        phenotype_key: Optional[str] = ..., key_added: Optional[str] = ...,
+        inplace: bool = ...,
+    ) -> Optional[pd.DataFrame]: ...
     def clone_persistence(
         adata: AnnData, *, clonotype_key: str, covariate_key: str,
         cov_from: Optional[str] = ..., cov_to: Optional[str] = ...,
-        groupby: Optional[str] = ..., per_clone: bool = ...,
-    ) -> pd.DataFrame: ...
+        groupby: Optional[str] = ..., splitby: Optional[str] = ..., per_clone: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> Any: ...
     def clonotype_sharing(
-        adata: AnnData, *, clonotype_key: str, groupby: str, per_clonotype: bool = ...,
-    ) -> pd.DataFrame: ...
+        adata: AnnData, *, clonotype_key: str, groupby: str, splitby: Optional[str] = ...,
+        per_clonotype: bool = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+    ) -> Any: ...
 
 
 # ── tools / metrics (tl) ─────────────────────────────────────────────────────
@@ -413,6 +433,19 @@ class pl:
         order: Any = ..., hue_order: Any = ..., palette: Any = ..., legend: bool = ...,
         ax: Any = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
         return_df: bool = ...,
+    ) -> Any: ...
+    def repertoire_summary(
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., palette: Any = ...,
+        legend: bool = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
+        return_df: bool = ...,
+    ) -> Any: ...
+    def clonotype_sharing(
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., legend: bool = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def clone_persistence(
+        adata: AnnData, *, key: Optional[str] = ..., order: Any = ..., legend: bool = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def resolve_colors(
         adata: AnnData, cat_key: str, categories: Any = ..., *, palette: Any = ...,

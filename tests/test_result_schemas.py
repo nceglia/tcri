@@ -1,4 +1,4 @@
-"""The shape of every stored ``tl`` result, pinned.
+"""The shape of every stored ``tl`` and ``pp`` result, pinned.
 
 ``@tl_result(version=N)`` declares the schema version of a stored result, but nothing in the code
 forces the number to move when the fields do: the layouts live in comments in
@@ -37,9 +37,15 @@ SNAPSHOT = Path(__file__).parent / "snapshots" / "tl_schemas.json"
 _GROUPBY, _SPLITBY = "patient", "disease_status"
 
 
+#: The repertoire summaries, stored by ``tcri.pp``.
+_PP = ("repertoire_summary", "clonotype_sharing", "clone_persistence")
+
+
 def _writer(name: str) -> str:
     """The public call that writes a result — never the private module it lives in."""
-    return "tcri.perturb.gene_importance" if name == "gene_importance" else f"tcri.tl.{name}"
+    if name == "gene_importance":
+        return "tcri.perturb.gene_importance"
+    return f"tcri.pp.{name}" if name in _PP else f"tcri.tl.{name}"
 
 
 def _calls(adata):
@@ -48,6 +54,8 @@ def _calls(adata):
     scalar = {"covariate": cov[0]}
     delta = {"cov_from": cov[0], "cov_to": cov[1]}
     wide = {"groupby": _GROUPBY, "splitby": _SPLITBY, "n_samples": 3}
+    meta = adata.uns[K.METADATA]
+    clonotype, covariate = meta[K.CLONE_COL], meta[K.COVARIATE_COL]
     genes = {"genes": list(adata.var_names[:3])}
     return {
         # joint_distribution takes neither a reference nor grouping
@@ -60,6 +68,16 @@ def _calls(adata):
         "delta_phenotypic_entropy": ({**delta, "null_model": None}, {**delta, **wide}),
         # gene_importance stores the adjusted value only, so it always runs with its reference
         "gene_importance": (genes, {**genes, **wide}),
+        # the repertoire summaries read obs: the registered clonotype and covariate columns
+        "repertoire_summary": ({"clonotype_key": clonotype},
+                               {"clonotype_key": clonotype, "groupby": _GROUPBY,
+                                "splitby": _SPLITBY, "covariate_key": covariate}),
+        "clonotype_sharing": ({"clonotype_key": clonotype, "groupby": _GROUPBY},
+                              {"clonotype_key": clonotype, "groupby": _GROUPBY,
+                               "splitby": _SPLITBY}),
+        "clone_persistence": ({"clonotype_key": clonotype, "covariate_key": covariate},
+                              {"clonotype_key": clonotype, "covariate_key": covariate,
+                               "groupby": _GROUPBY, "splitby": _SPLITBY}),
     }
 
 
@@ -67,11 +85,16 @@ def _run(name, kwargs, model, adata):
     """Call one tool with ``inplace=False``, so the shared fixture is left as it was."""
     if name == "gene_importance":
         return tcri.perturb.gene_importance(model, adata, inplace=False, **kwargs)
-    return getattr(tcri.tl, name)(adata, inplace=False, **kwargs)
+    namespace = tcri.pp if name in _PP else tcri.tl
+    return getattr(namespace, name)(adata, inplace=False, **kwargs)
 
 
 def _slots(result):
-    """``slot -> value``, a level's frames named ``<level>.<frame>``."""
+    """``slot -> value``, a level's frames named ``<level>.<frame>``; a result stored as one
+    frame is the slot ``frame``."""
+    if isinstance(result, pd.DataFrame):
+        yield "frame", result
+        return
     for slot, value in result.items():
         if isinstance(value, dict):
             for frame, inner in value.items():
@@ -97,7 +120,8 @@ def _observe(result, placeholders):
 
 def _placeholders(adata):
     phenotypes = adata.uns.get(K.PHENOTYPE_CATEGORIES, [])
-    return {_GROUPBY: "<groupby>", _SPLITBY: "<splitby>",
+    return {_GROUPBY: "<groupby>", _SPLITBY: "<splitby>", f"{_GROUPBY}_a": "<groupby>_a",
+            f"{_GROUPBY}_b": "<groupby>_b",
             **{str(p): "<phenotype>" for p in phenotypes}}
 
 

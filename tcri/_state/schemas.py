@@ -1,4 +1,4 @@
-"""Result shapes for the ``tl`` metrics, as ``TypedDict``s.
+"""Result shapes for the ``tl`` metrics and the ``pp`` repertoire summaries, as ``TypedDict``s.
 
 ``@tl_result(schema=...)`` checks required-key PRESENCE on dict results. The shapes in the
 trailing comments are documentation of the payload layout; nothing parses them.
@@ -167,3 +167,19 @@ def validate(schema, result, *, name: str = "result") -> None:
     missing = required - set(result)
     if missing:
         raise ValueError(f"{name}: missing required keys {sorted(missing)}")
+
+
+class ClonotypeSharing(TypedDict):
+    """``pp.clonotype_sharing`` at ``per_clonotype=False``: the groups and their pairs."""
+
+    table: pd.DataFrame     # one row per group, then the row for all groups
+    pairs: pd.DataFrame     # one row per ordered pair of groups: <groupby>_a, <groupby>_b,
+                            #   n_clonotypes, shared_clonotypes, shared_fraction
+
+
+class ClonePersistence(TypedDict):
+    """``pp.clone_persistence`` at ``per_clone=False``: the groups and their pairs of levels."""
+
+    table: pd.DataFrame     # one row per group
+    pairs: pd.DataFrame     # one row per (group, ordered pair of levels): [<groupby>,]
+                            #   covariate_a, covariate_b, n_clones, shared_clones, shared_fraction

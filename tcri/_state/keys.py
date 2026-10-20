@@ -61,6 +61,11 @@ DELTA_PHENOTYPIC_ENTROPY = "tcri_delta_phenotypic_entropy"
 #: The in-silico perturbation (``tcri.perturb.gene_importance``): a query on the fitted model,
 #: stored by level like the metrics, ``{replicate, item, stats}``, with the adjusted value only.
 GENE_IMPORTANCE = "tcri_gene_importance"
+#: The repertoire summaries (``tcri.pp``), stored by the same decorator: ``repertoire_summary``
+#: stores its frame, ``clonotype_sharing`` and ``clone_persistence`` store ``{table, pairs}``.
+REPERTOIRE_SUMMARY = "tcri_repertoire_summary"
+CLONOTYPE_SHARING = "tcri_clonotype_sharing"
+CLONE_PERSISTENCE = "tcri_clone_persistence"
 
 #: The layer recorded by setup_anndata.
 LAYER = "tcri_layer"
