@@ -1,10 +1,10 @@
-"""``pp.clone_persistence``: which clones are seen at more than one covariate level.
+"""``pp.clone_persistence``: how many clones each group carries between covariate levels.
 
-The summary counts the clones the paired metrics are computed on: both deltas and
-``phenotypic_flux`` use the clones of each group seen at both ``cov_from`` and ``cov_to``, and
-leave pools out by default. A pool is not a clone and is never persistent. The summary reads
-``obs`` and the clonotype derivation record and stores its result, ``{table, pairs}``, or the
-table per clone.
+For each group and pair of levels at which it has clones, the clones at each level and the
+clones seen at both. On the registered column, the shared clones of a pair of levels are the
+persistent clones a change between them is computed on, which leaves pools out by default; a pool
+is not a clone and is never shared. The summary reads ``obs`` and the clonotype derivation
+record and stores one frame.
 """
 from __future__ import annotations
 
@@ -20,25 +20,20 @@ import pytest
 from anndata import AnnData
 
 import tcri
-import tcri.tools._delta as delta_module
 from tcri._compute._repertoire import _record_derivation
 from tcri._state import keys as K
 from tcri.datasets import simulate_tcri
 from tcri.model._model import TCRIModel
 
 KEYS = dict(clonotype_key="clone_id", covariate_key="timepoint")
+COUNTS = ["covariate_a", "covariate_b", "n_clones_a", "n_clones_b", "shared_clones",
+          "shared_fraction_a", "shared_fraction_b"]
+DTYPES = ["object", "category", "string", "str"]
 
 
 def _persistence(adata, **arguments):
-    """What ``pp.clone_persistence`` returns with ``inplace=False``: the table per group, or
-    with ``per_clone=True`` the table per clone."""
-    result = tcri.pp.clone_persistence(adata, inplace=False, **arguments)
-    return result["table"] if isinstance(result, dict) else result
-CONTRAST = ["clones_from_only", "clones_to_only", "persistent_clones", "cells_from_only",
-            "cells_to_only", "cells_in_persistent_clones", "has_persistent_clones"]
-OVERVIEW = ["n_levels", "clones_at_one_level", "clones_at_multiple_levels",
-            "cells_at_one_level", "cells_at_multiple_levels"]
-DTYPES = ["object", "category", "string", "str"]
+    """The frame ``pp.clone_persistence`` returns with ``inplace=False``."""
+    return tcri.pp.clone_persistence(adata, inplace=False, **arguments)
 
 
 def _adata(obs):
@@ -65,151 +60,72 @@ def _cohort():
     return _adata(pd.DataFrame(rows, columns=["clone_id", "patient", "timepoint"]))
 
 
-# ── the three modes ───────────────────────────────────────────────────────────────────────────
+# ── the pairs ─────────────────────────────────────────────────────────────────────────────────
 
-def test_contrast_mode_counts_clones_at_one_endpoint_and_at_both():
-    """Per group: the clones seen at one of the two levels only, the clones seen at both, and
-    their cells at those two levels. Cells at other levels and cells without a clonotype are
-    not counted, and a group with no persistent clone keeps its row."""
-    got = _persistence(_cohort(), **KEYS, cov_from="t0", cov_to="t1",
-                                    groupby="patient")
-    assert list(got.columns) == ["patient"] + CONTRAST
-    assert got.to_dict("records") == [
-        {"patient": "P1", "clones_from_only": 1, "clones_to_only": 1, "persistent_clones": 1,
-         "cells_from_only": 2, "cells_to_only": 1, "cells_in_persistent_clones": 3,
-         "has_persistent_clones": True},
-        {"patient": "P2", "clones_from_only": 1, "clones_to_only": 1, "persistent_clones": 0,
-         "cells_from_only": 2, "cells_to_only": 2, "cells_in_persistent_clones": 0,
-         "has_persistent_clones": False},
-    ]
-    assert (got[CONTRAST[:-1]].dtypes == "int64").all()
-    assert got["has_persistent_clones"].dtype == bool
-
-
-def test_a_level_contrasted_with_itself_counts_each_cell_once():
-    """Every clone at the level is persistent, and its cells there are counted once."""
-    got = _persistence(_cohort(), **KEYS, cov_from="t0", cov_to="t0",
-                                    groupby="patient")
-    assert got[["persistent_clones", "cells_in_persistent_clones", "clones_from_only",
-                "clones_to_only"]].values.tolist() == [[2, 4, 0, 0], [1, 2, 0, 0]]
-
-
-def test_overview_mode_counts_clones_at_one_level_and_at_several():
-    """Without the two levels, every level is counted: the levels each group has cells at,
-    and the clones, with their cells, seen at exactly one level or at more than one."""
+def test_each_pair_of_levels_counts_the_clones_at_each_and_at_both():
+    """Counted by hand on the cohort. P1 has clones a and b at t0, a and c at t1, a and d at t2:
+    each pair shares a. P2 has e at t0 and a at t1, which share nothing, and no clone at t2, so
+    no pair with t2. Each pair is one row, first level before the second."""
     got = _persistence(_cohort(), **KEYS, groupby="patient")
-    assert list(got.columns) == ["patient"] + OVERVIEW
-    assert got.to_dict("records") == [
-        {"patient": "P1", "n_levels": 3, "clones_at_one_level": 3,
-         "clones_at_multiple_levels": 1, "cells_at_one_level": 5, "cells_at_multiple_levels": 4},
-        {"patient": "P2", "n_levels": 2, "clones_at_one_level": 2,
-         "clones_at_multiple_levels": 0, "cells_at_one_level": 4, "cells_at_multiple_levels": 0},
+    assert list(got.columns) == ["patient"] + COUNTS
+    assert got.values.tolist() == [
+        ["P1", "t0", "t1", 2, 2, 1, 0.5, 0.5],
+        ["P1", "t0", "t2", 2, 2, 1, 0.5, 0.5],
+        ["P1", "t1", "t2", 2, 2, 1, 0.5, 0.5],
+        ["P2", "t0", "t1", 1, 1, 0, 0.0, 0.0],
     ]
-    assert (got[OVERVIEW].dtypes == "int64").all()
+    assert (got[["n_clones_a", "n_clones_b", "shared_clones"]].dtypes == "int64").all()
 
 
-def test_per_clone_lists_each_clone_with_its_cells_per_level():
-    """One row per (group, clonotype) with a column of cells per level. In a contrast the
-    columns are ``cov_from`` then ``cov_to`` and only clones seen at either are listed."""
+def test_groupby_none_is_the_whole_dataset():
+    """Without ``groupby`` the whole dataset is one group with no group column, where a
+    clonotype that two patients carry is one clone: a, b and e at t0, a and c at t1, a and d at
+    t2. With no counted cell there is no pair."""
+    got = _persistence(_cohort(), **KEYS)
+    assert list(got.columns) == COUNTS
+    assert got.values.tolist() == [
+        ["t0", "t1", 3, 2, 1, 1 / 3, 0.5],
+        ["t0", "t2", 3, 2, 1, 1 / 3, 0.5],
+        ["t1", "t2", 2, 2, 1, 0.5, 0.5],
+    ]
     adata = _cohort()
-    every = _persistence(adata, **KEYS, groupby="patient", per_clone=True)
-    assert list(every.columns) == ["patient", "clonotype", "t0", "t1", "t2"]
-    assert list(every.itertuples(index=False, name=None)) == [
-        ("P1", "a", 2, 1, 1), ("P1", "b", 2, 0, 0), ("P1", "c", 0, 1, 0), ("P1", "d", 0, 0, 2),
-        ("P2", "a", 0, 2, 0), ("P2", "e", 2, 0, 0),
-    ]
-    ends = _persistence(adata, **KEYS, cov_from="t1", cov_to="t0",
-                                     groupby="patient", per_clone=True)
-    assert list(ends.columns) == ["patient", "clonotype", "t1", "t0"]
-    assert list(ends.itertuples(index=False, name=None)) == [
-        ("P1", "a", 1, 2), ("P1", "b", 0, 2), ("P1", "c", 1, 0), ("P2", "a", 2, 0),
-        ("P2", "e", 0, 2),
-    ]
-    whole = _persistence(adata, **KEYS, per_clone=True)
-    assert list(whole.columns) == ["clonotype", "t0", "t1", "t2"]
-    assert whole.loc[whole["clonotype"] == "a", ["t0", "t1", "t2"]].values.tolist() == [[2, 3, 1]]
+    adata.obs["clone_id"] = ""
+    assert _persistence(adata, **KEYS).empty
+    assert _persistence(adata, **KEYS, groupby="patient").empty
 
 
-def test_rows_and_level_columns_follow_category_order():
-    """Groups, clonotypes and level columns come in each column's category order."""
+def test_rows_follow_category_order_and_labels_are_strings():
+    """Groups and levels come in each column's category order, the first level of a pair before
+    the second, and as strings whatever the columns hold."""
     adata = _cohort()
     adata.obs["patient"] = pd.Categorical(adata.obs["patient"], categories=["P2", "P1"])
     adata.obs["timepoint"] = pd.Categorical(adata.obs["timepoint"],
                                             categories=["t2", "t1", "t0"])
-    adata.obs["clone_id"] = pd.Categorical(adata.obs["clone_id"],
-                                           categories=["e", "d", "c", "b", "a", ""])
-    summary = _persistence(adata, **KEYS, groupby="patient")
-    assert summary["patient"].tolist() == ["P2", "P1"]
-    every = _persistence(adata, **KEYS, groupby="patient", per_clone=True)
-    assert list(every.columns) == ["patient", "clonotype", "t2", "t1", "t0"]
-    assert list(zip(every["patient"], every["clonotype"])) == [
-        ("P2", "e"), ("P2", "a"), ("P1", "d"), ("P1", "c"), ("P1", "b"), ("P1", "a"),
-    ]
+    got = _persistence(adata, **KEYS, groupby="patient")
+    assert list(zip(got["patient"], got["covariate_a"], got["covariate_b"])) == [
+        ("P2", "t1", "t0"), ("P1", "t2", "t1"), ("P1", "t2", "t0"), ("P1", "t1", "t0")]
+
+    numbered = _cohort()
+    numbered.obs["timepoint"] = numbered.obs["timepoint"].map({"t0": 0, "t1": 1, "t2": 2})
+    numbered.obs["patient"] = numbered.obs["patient"].map({"P1": 1, "P2": 2})
+    got = _persistence(numbered, **KEYS, groupby="patient")
+    expected = _persistence(_cohort(), **KEYS, groupby="patient")
+    assert got["patient"].tolist() == ["1", "1", "1", "2"]
+    assert got["covariate_a"].tolist() == ["0", "0", "1", "0"]
+    pd.testing.assert_frame_equal(got[COUNTS[2:]], expected[COUNTS[2:]])
 
 
-def test_group_labels_and_level_keys_are_strings():
-    """Groups and levels that are not strings come out as strings: the group column holds the
-    group as a string, level columns are named by the level as a string, and ``cov_from`` and
-    ``cov_to`` match a level either way."""
+def test_splitby_labels_each_group():
     adata = _cohort()
-    adata.obs["timepoint"] = adata.obs["timepoint"].map({"t0": 0, "t1": 1, "t2": 2})
-    adata.obs["patient"] = adata.obs["patient"].map({"P1": 1, "P2": 2})
-    every = _persistence(adata, **KEYS, groupby="patient", per_clone=True)
-    assert list(every.columns) == ["patient", "clonotype", "0", "1", "2"]
-    assert every["patient"].tolist() == ["1"] * 4 + ["2"] * 2
-    overview = _persistence(adata, **KEYS, groupby="patient")
-    assert overview["patient"].tolist() == ["1", "2"]
-    expected = _persistence(_cohort(), **KEYS, cov_from="t0", cov_to="t1",
-                                         groupby="patient")
-    for ends in (dict(cov_from=0, cov_to=1), dict(cov_from="0", cov_to="1")):
-        got = _persistence(adata, **KEYS, groupby="patient", **ends)
-        assert got["patient"].tolist() == ["1", "2"]
-        pd.testing.assert_frame_equal(got.drop(columns="patient"),
-                                      expected.drop(columns="patient"))
+    adata.obs["response"] = adata.obs["patient"].map({"P1": "R", "P2": "NR"})
+    got = _persistence(adata, **KEYS, groupby="patient", splitby="response")
+    assert list(got.columns[:2]) == ["patient", "response"]
+    assert got["response"].tolist() == ["R", "R", "R", "NR"]
+    with pytest.raises(ValueError, match="splitby='response' needs groupby"):
+        _persistence(adata, **KEYS, splitby="response")
 
 
-def test_clonotype_labels_are_strings():
-    """Integer clonotype labels come out as strings in the per-clone ``clonotype`` column, with
-    the rows and counts they have as text labels."""
-    adata = _cohort()
-    adata = adata[adata.obs["clone_id"] != ""].copy()
-    codes = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}
-    for ends in ({}, dict(cov_from="t0", cov_to="t1")):
-        expected = _persistence(adata, **KEYS, groupby="patient", per_clone=True,
-                                             **ends)
-        numbered = adata.copy()
-        numbered.obs["clone_id"] = numbered.obs["clone_id"].map(codes)
-        got = _persistence(numbered, **KEYS, groupby="patient", per_clone=True,
-                                        **ends)
-        assert got["clonotype"].tolist() == [str(codes[c]) for c in expected["clonotype"]]
-        pd.testing.assert_frame_equal(got.drop(columns="clonotype"),
-                                      expected.drop(columns="clonotype"))
-
-
-# ── arguments ─────────────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("ends", [dict(cov_from="t0"), dict(cov_to="t1")])
-def test_cov_from_and_cov_to_are_given_together(ends):
-    with pytest.raises(ValueError, match="together or not at all"):
-        _persistence(_cohort(), **KEYS, **ends)
-
-
-def test_a_level_must_belong_to_the_covariate():
-    """A level the column does not have raises, naming it; a declared category with no cells
-    is a level, and nothing is seen there."""
-    adata = _cohort()
-    with pytest.raises(ValueError, match=r"cov_to='t9' is not a level of "
-                                         r"adata.obs\['timepoint'\]"):
-        _persistence(adata, **KEYS, cov_from="t0", cov_to="t9")
-    adata.obs["timepoint"] = pd.Categorical(adata.obs["timepoint"],
-                                            categories=["t0", "t1", "t2", "t3"])
-    got = _persistence(adata, **KEYS, cov_from="t0", cov_to="t3",
-                                    groupby="patient")
-    assert got[["clones_from_only", "clones_to_only", "persistent_clones"]].values.tolist() \
-        == [[2, 0, 0], [1, 0, 0]]
-
-
-@pytest.mark.parametrize("argument", ["clonotype_key", "covariate_key", "groupby"])
+@pytest.mark.parametrize("argument", ["clonotype_key", "covariate_key", "groupby", "splitby"])
 def test_a_missing_column_raises_naming_it(argument):
     arguments = dict(KEYS, groupby="patient")
     arguments[argument] = "absent"
@@ -217,19 +133,18 @@ def test_a_missing_column_raises_naming_it(argument):
         _persistence(_cohort(), **arguments)
 
 
-def test_two_output_columns_with_one_name_raise():
-    """A level named like another output column cannot be given a column of its own."""
+def test_a_group_column_named_like_another_column_raises():
     adata = _cohort()
-    adata.obs["timepoint"] = adata.obs["timepoint"].replace({"t2": "clonotype"})
-    with pytest.raises(ValueError, match="'clonotype'"):
-        _persistence(adata, **KEYS, per_clone=True)
+    adata.obs["shared_clones"] = adata.obs["patient"]
+    with pytest.raises(ValueError, match="groupby='shared_clones' would name"):
+        _persistence(adata, **KEYS, groupby="shared_clones")
 
 
-def test_pools_are_never_persistent():
-    """A pool holds many rare clones, so it is not a clone and never persistent: on a column
-    whose derivation record lists its pools, their cells are in no count and no row. P1 keeps
-    one clone at both timepoints, and P2's only clone is at t0, while each patient's pool has
-    cells at both."""
+def test_pools_are_never_shared():
+    """A pool holds many rare clones, so it is not a clone: on a column whose derivation record
+    lists its pools, their cells are in no count. P1 keeps one clone at both timepoints and P2
+    one at t0 only, while each patient's pool has cells at both. Without the record nothing
+    marks the pools, and each label is a clone."""
     obs = pd.DataFrame({
         "clone_id_pooled": ["c1@P1"] * 4 + ["pooled@P1"] * 4 + ["c2@P2"] * 3 + ["pooled@P2"] * 2,
         "patient": ["P1"] * 8 + ["P2"] * 5,
@@ -242,65 +157,22 @@ def test_pools_are_never_persistent():
                        pool_labels=["pooled@P1", "pooled@P2"], n_clones_pooled=4,
                        n_cells_pooled=6)
     kw = dict(clonotype_key="clone_id_pooled", covariate_key="timepoint", groupby="patient")
+    assert _persistence(adata, **kw).values.tolist() == [["P1", "t0", "t1", 1, 1, 1, 1.0, 1.0]]
 
-    contrast = _persistence(adata, **kw, cov_from="t0", cov_to="t1")
-    assert contrast[["patient"] + CONTRAST].values.tolist() == [
-        ["P1", 0, 0, 1, 0, 0, 4, True],
-        ["P2", 1, 0, 0, 3, 0, 0, False],
-    ]
-    clones = _persistence(adata, **kw, cov_from="t0", cov_to="t1", per_clone=True)
-    assert list(clones.itertuples(index=False, name=None)) == [("P1", "c1@P1", 3, 1),
-                                                               ("P2", "c2@P2", 3, 0)]
-    overview = _persistence(adata, **kw)
-    assert overview[["patient"] + OVERVIEW].values.tolist() == [["P1", 2, 0, 1, 0, 4],
-                                                                ["P2", 1, 1, 0, 3, 0]]
-
-    # without the record nothing marks the pools, and each label is a clone
     del adata.uns[K.CLONOTYPE_DERIVATIONS]
-    unmarked = _persistence(adata, **kw, cov_from="t0", cov_to="t1")
-    assert unmarked["persistent_clones"].tolist() == [2, 1]
+    assert _persistence(adata, **kw).values.tolist() == [
+        ["P1", "t0", "t1", 2, 2, 2, 1.0, 1.0], ["P2", "t0", "t1", 2, 1, 1, 0.5, 1.0]]
 
 
 @pytest.mark.parametrize("dtype", DTYPES)
 def test_cells_without_a_clonotype_are_not_counted(dtype):
-    """NaN, None, empty or whitespace-only strings and ``"nan"`` are no clone and no cell."""
+    """NaN, None, empty or whitespace-only strings and ``"nan"`` are no clone."""
     obs = pd.DataFrame({
         "clone_id": pd.Series(["a", "a", "", "nan", None, " ", "b"], dtype=dtype),
         "timepoint": ["t0", "t1", "t0", "t1", "t0", "t1", "t0"],
     })
-    contrast = _persistence(_adata(obs), **KEYS, cov_from="t0", cov_to="t1")
-    assert contrast[CONTRAST].values.tolist() == [[1, 0, 1, 1, 0, 2, True]], dtype
-    overview = _persistence(_adata(obs), **KEYS)
-    assert overview[OVERVIEW].values.tolist() == [[2, 1, 1, 1, 2]], dtype
-
-
-# ── the whole dataset ─────────────────────────────────────────────────────────────────────────
-
-def test_groupby_none_is_one_whole_dataset_row():
-    """Without ``groupby`` the whole dataset is one row with no group column. On ids that never
-    span groups its counts are the sums of the grouped rows; a clonotype that two groups carry
-    is one clone instead of two. With no counted cell the row is still there."""
-    adata = _cohort()
-    for ends, columns in ((dict(cov_from="t0", cov_to="t1"), CONTRAST), ({}, OVERVIEW)):
-        whole = _persistence(adata, **KEYS, **ends)
-        assert list(whole.columns) == columns and len(whole) == 1
-
-    clone, patient = adata.obs["clone_id"], adata.obs["patient"]
-    adata.obs["clone_patient"] = clone.where(clone == "", clone + "@" + patient)
-    scoped = dict(clonotype_key="clone_patient", covariate_key="timepoint", cov_from="t0",
-                  cov_to="t1")
-    by_patient = _persistence(adata, **scoped, groupby="patient")
-    whole = _persistence(adata, **scoped)
-    assert whole[CONTRAST[:-1]].iloc[0].tolist() == by_patient[CONTRAST[:-1]].sum().tolist()
-
-    # clonotype a is at t0 and t1 in P1 and at t1 in P2: one persistent clone of five cells
-    shared = _persistence(adata, **KEYS, cov_from="t0", cov_to="t1")
-    assert shared[CONTRAST].values.tolist() == [[2, 1, 1, 4, 1, 5, True]]
-
-    adata.obs["clone_id"] = ""
-    for ends, row in ((dict(cov_from="t0", cov_to="t1"), [0] * 6 + [False]), ({}, [0] * 5)):
-        assert _persistence(adata, **KEYS, **ends).values.tolist() == [row]
-        assert _persistence(adata, **KEYS, **ends, groupby="patient").empty
+    got = _persistence(_adata(obs), **KEYS)
+    assert got.values.tolist() == [["t0", "t1", 2, 1, 1, 0.5, 1.0]], dtype
 
 
 # ── the clones the metrics use ────────────────────────────────────────────────────────────────
@@ -357,11 +229,11 @@ def ragged_cohort():
     return adata
 
 
-def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
-    """The persistent clones of each group are the clones both deltas hand the engine, and the
-    clones ``delta_phenotypic_entropy`` and ``phenotypic_flux`` report, at the metrics' default
-    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is in none of
-    them. A group without a persistent clone is the group those results leave out.
+def test_shared_clones_are_the_clones_a_change_is_computed_on(ragged_cohort):
+    """Per patient, the shared clones of (``cov_0``, ``cov_1``) on the registered column are the
+    clones flux and the phenotypic entropy change report, at the metrics' default
+    ``exclude_pools=True``. Each patient's pool has cells at both timepoints and is not one of
+    them, and P2, with none, has no rows in those results.
 
     Run at ``null_model=None``: what is compared is which clones are used, not a value.
     """
@@ -370,93 +242,19 @@ def test_clone_persistence_matches_delta_support(ragged_cohort, monkeypatch):
     for patient in ("P0", "P1", "P2"):
         pool = obs.loc[obs["clone_id_pooled"] == f"pooled@{patient}", "covariate"]
         assert set(pool) == {"cov_0", "cov_1"}, f"{patient} has no pool at both timepoints"
-    kw = dict(cov_from="cov_0", cov_to="cov_1", groupby="patient")
-    keys = dict(clonotype_key="clone_id_pooled", covariate_key="covariate")
-    clones = _persistence(adata, **keys, **kw, per_clone=True)
-    assert not clones["clonotype"].str.startswith("pooled@").any()
-    both = clones[(clones["cov_0"] > 0) & (clones["cov_1"] > 0)]
-    persistent = set(zip(both["patient"], both["clonotype"]))
-    summary = _persistence(adata, **keys, **kw)
-    with_persistent = set(summary.loc[summary["has_persistent_clones"], "patient"])
-    assert len(clones) > len(both) and with_persistent == {"P0", "P1"}, \
+    pairs = _persistence(adata, clonotype_key="clone_id_pooled", covariate_key="covariate",
+                         groupby="patient")
+    pair = pairs[(pairs["covariate_a"] == "cov_0") & (pairs["covariate_b"] == "cov_1")]
+    shared = dict(zip(pair["patient"], pair["shared_clones"]))
+    assert shared["P2"] == 0 and shared["P0"] > 0 and shared["P1"] > 0, \
         "the fixture cannot tell persistent clones apart"
-    assert summary["persistent_clones"].sum() == len(persistent)
 
-    handed = []
-    joint_draws = delta_module.joint_draws
-
-    def spy(adata, covariate, **kwargs):
-        handed.extend(kwargs["clones"])
-        return joint_draws(adata, covariate, **kwargs)
-
-    monkeypatch.setattr(delta_module, "joint_draws", spy)
-    results = {}
+    kw = dict(cov_from="cov_0", cov_to="cov_1", groupby="patient", null_model=None,
+              inplace=False)
     with warnings.catch_warnings():
-        # the deltas name the clones seen at one level only, which is the point here
+        # the metrics name the clones seen at one level only, which is the point here
         warnings.simplefilter("ignore", UserWarning)
-        for name in ("delta_clonotypic_entropy", "delta_phenotypic_entropy",
-                     "phenotypic_flux"):
-            handed.clear()
-            results[name] = getattr(tcri.tl, name)(adata, **kw, null_model=None,
-                                                   inplace=False)["result"]
-            if name != "phenotypic_flux":
-                assert set(handed) == {c for _, c in persistent}, name
-            assert set(results[name]["patient"]) == with_persistent, name
-    for name in ("delta_phenotypic_entropy", "phenotypic_flux"):
-        result = results[name]
-        assert set(zip(result["patient"], result["clonotype"])) == persistent, name
-
-
-# ── pairs of levels ───────────────────────────────────────────────────────────────────────────
-
-PAIRS = ["covariate_a", "covariate_b", "n_clones", "shared_clones", "shared_fraction"]
-
-
-def _pairs(adata, **arguments):
-    return tcri.pp.clone_persistence(adata, inplace=False, **arguments)["pairs"]
-
-
-def test_pairs_count_the_clones_two_levels_share_within_each_group():
-    """For each group and ordered pair of levels at which it has clones: the clones at the
-    first level and those also seen at the second, counted in clones. A level where the group
-    has no clone has no pair, and two levels that share nothing are a pair of zero."""
-    got = _pairs(_cohort(), **KEYS, groupby="patient")
-    assert list(got.columns) == ["patient"] + PAIRS
-    assert got.values.tolist() == [
-        ["P1", "t0", "t1", 2, 1, 0.5], ["P1", "t0", "t2", 2, 1, 0.5],
-        ["P1", "t1", "t0", 2, 1, 0.5], ["P1", "t1", "t2", 2, 1, 0.5],
-        ["P1", "t2", "t0", 2, 1, 0.5], ["P1", "t2", "t1", 2, 1, 0.5],
-        ["P2", "t0", "t1", 1, 0, 0.0], ["P2", "t1", "t0", 1, 0, 0.0],
-    ]
-    assert (got[["n_clones", "shared_clones"]].dtypes == "int64").all()
-
-    # the two contrasted levels only; P2 has no clone at t2, so no pair
-    ends = _pairs(_cohort(), **KEYS, groupby="patient", cov_from="t0", cov_to="t2")
-    assert ends.values.tolist() == [["P1", "t0", "t2", 2, 1, 0.5],
-                                    ["P1", "t2", "t0", 2, 1, 0.5]]
-
-    # the whole dataset is one group, where the clonotype both patients carry is one clone
-    whole = _pairs(_cohort(), **KEYS)
-    assert list(whole.columns) == PAIRS
-    assert whole.values.tolist() == [
-        ["t0", "t1", 3, 1, 1 / 3], ["t0", "t2", 3, 1, 1 / 3], ["t1", "t0", 2, 1, 0.5],
-        ["t1", "t2", 2, 1, 0.5], ["t2", "t0", 2, 1, 0.5], ["t2", "t1", 2, 1, 0.5],
-    ]
-
-
-def test_pairs_leave_the_pools_out():
-    """A pool with cells at both levels is not a shared clone."""
-    obs = pd.DataFrame({
-        "clone_id_pooled": ["c1@P1"] * 4 + ["pooled@P1"] * 4 + ["c2@P2"] * 3 + ["pooled@P2"] * 2,
-        "patient": ["P1"] * 8 + ["P2"] * 5,
-        "timepoint": ["t0", "t0", "t0", "t1", "t0", "t0", "t1", "t1", "t0", "t0", "t0", "t0",
-                      "t1"],
-    })
-    adata = _adata(obs)
-    _record_derivation(adata, function="pool_rare_clones", source="clone_id",
-                       key_added="clone_id_pooled", groupby="patient", min_cells=3,
-                       pool_labels=["pooled@P1", "pooled@P2"], n_clones_pooled=4,
-                       n_cells_pooled=6)
-    got = _pairs(adata, clonotype_key="clone_id_pooled", covariate_key="timepoint",
-                 groupby="patient")
-    assert got.values.tolist() == [["P1", "t0", "t1", 1, 1, 1.0], ["P1", "t1", "t0", 1, 1, 1.0]]
+        for name in ("delta_phenotypic_entropy", "phenotypic_flux"):
+            result = getattr(tcri.tl, name)(adata, **kw)["result"]
+            reported = result.groupby("patient", observed=True)["clonotype"].nunique()
+            assert {p: int(reported.get(p, 0)) for p in shared} == shared, name

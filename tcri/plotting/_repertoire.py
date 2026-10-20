@@ -10,17 +10,40 @@ from __future__ import annotations
 import math
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import BoundaryNorm, LinearSegmentedColormap, ListedColormap, to_hex, to_rgba
 from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 
-from ._colors import resolve_colors, tcri_colors
+from ._base import _fit_ylabel
+from ._colors import resolve_colors
 
 __all__ = ["repertoire_summary", "clonotype_sharing", "clone_persistence"]
 
-#: Where two groups, or two levels, share nothing: apart from a small share, which is pale.
-NONE_COLOR = "#e8726e"
+#: The band colors of the sharing panels, and red also where two levels share no clone.
+GREEN, YELLOW, RED = "#7e9437", "#f0bd00", "#cd442a"
+
+#: The bands of the sharing panels, ``(low, high)``: green below ``low``, yellow from ``low``
+#: to ``high``, red above ``high``. A pair's share and a group's shared fraction are in
+#: percent; the last is the number of groups carrying a shared clonotype.
+_PAIR_BANDS = (1.0, 2.0)
+_GROUP_BANDS = (3.0, 8.0)
+_SPREAD_BANDS = (4, 5)
+
+#: The scale every ``pp`` plot draws in: light green to dark green, through GREEN. The
+#: summary's covariate levels are shades of it, and the persistence heatmap runs from white
+#: through it.
+_GREENS = LinearSegmentedColormap.from_list("tcri_greens", ["#d6e2b3", GREEN, "#3b4a14"])
+_WHITE_GREENS = LinearSegmentedColormap.from_list("tcri_white_greens",
+                                                  ["#ffffff", GREEN, "#3b4a14"])
+
+
+def _shades(n):
+    """``n`` shades of green, light to dark; GREEN itself for one."""
+    if n == 1:
+        return [GREEN]
+    return [to_hex(_GREENS(x)) for x in np.linspace(0.0, 1.0, n)]
 
 #: The label of the one group ``groupby=None`` makes.
 _ALL = "all"
@@ -33,24 +56,11 @@ _SUMMARY_PANELS = [("n_cells", "Cells"), ("n_clones", "Clones"),
 _ANNOTATE_UP_TO = 15
 
 
-def _stored(adata, name, key, per_flag=None):
-    """The stored result of ``tcri.pp.<name>`` and its arguments.
-
-    ``per_flag`` names the argument that stores a frame per clonotype or per clone instead of
-    the tables per group; a result stored that way raises, since the plot draws the tables.
-    """
+def _stored(adata, name, key):
+    """The stored result of ``tcri.pp.<name>`` and its arguments."""
     from .. import get as _get
 
-    payload = _get.result(adata, name, key=key)
-    params = _get.params(adata, name, key=key)
-    if per_flag is not None and not isinstance(payload, dict):
-        raise ValueError(
-            f"the stored {name} result was computed with {per_flag}=True, one row per "
-            f"{per_flag.removeprefix('per_')}; tcri.pl.{name} draws the tables per group. Run "
-            f"tcri.pp.{name}(adata, ..., {per_flag}=False), or pass key= for a result stored "
-            f"with key_added."
-        )
-    return payload, params
+    return _get.result(adata, name, key=key), _get.params(adata, name, key=key)
 
 
 def _groups(table, groupby, order):
@@ -112,29 +122,18 @@ def _legend(fig, sections, **where):
         fig.legend(handles=handles, frameon=False, fontsize=8, **where)
 
 
+def _band(value, low, high):
+    """GREEN below ``low``, YELLOW from ``low`` to ``high``, RED above ``high``."""
+    if value < low:
+        return GREEN
+    return YELLOW if value <= high else RED
+
+
 def _finish(fig, *, save=None, show=None):
     if save:
         fig.savefig(save, bbox_inches="tight", dpi=150)
     if show:
         plt.show()
-
-
-def _heatmap(ax, values, none, *, vmax, annotate, digits):
-    """A square heatmap of ``values`` with the diagonal blank and ``none`` drawn red."""
-    shown = values.astype(float).copy()
-    np.fill_diagonal(shown, np.nan)
-    image = ax.imshow(shown, cmap="Purples", vmin=0, vmax=vmax)
-    red = np.where(none, 1.0, np.nan)
-    np.fill_diagonal(red, np.nan)
-    ax.imshow(red, cmap=ListedColormap([NONE_COLOR]), vmin=0, vmax=1)
-    if annotate:
-        for i in range(len(shown)):
-            for j in range(len(shown)):
-                if i != j and np.isfinite(shown[i, j]):
-                    dark = vmax > 0 and shown[i, j] > 0.6 * vmax
-                    ax.text(j, i, f"{shown[i, j]:.{digits}f}", ha="center", va="center",
-                            fontsize=8, color="white" if dark else "black")
-    return image
 
 
 def repertoire_summary(adata, *, key=None, order=None, palette=None, legend=True, figsize=None,
@@ -143,8 +142,8 @@ def repertoire_summary(adata, *, key=None, order=None, palette=None, legend=True
     ``tcri.pp.repertoire_summary``.
 
     One panel per quantity, the groups on x. With ``covariate_key``, the levels of each group
-    stand side by side, in the level colors of ``adata.uns[f"{covariate_key}_colors"]``. On a
-    pooled column the cells in pools are shaded inside each cell bar.
+    stand side by side, in shades of green from light to dark, or in ``palette``. On a pooled
+    column the cells in pools are shaded inside each cell bar.
 
     Parameters
     ----------
@@ -155,7 +154,8 @@ def repertoire_summary(adata, *, key=None, order=None, palette=None, legend=True
     order
         The groups to draw, in this order; by default every group, in the table's order.
     palette
-        Colors for the covariate levels: a dict, a list, or a colormap name.
+        Colors for the covariate levels in place of the shades of green: a dict, a list, or a
+        colormap name.
     legend
         ``False`` draws no legend.
     figsize
@@ -182,13 +182,14 @@ def repertoire_summary(adata, *, key=None, order=None, palette=None, legend=True
 
     if covariate is None:
         levels = [None]
-        level_colors = {None: tcri_colors[0]}
+        level_colors = {None: GREEN}
     else:
         observed = set(rows["covariate"].astype(str))
         categories = [str(c) for c in adata.obs[covariate].astype("category").cat.categories] \
             if covariate in adata.obs else sorted(observed)
         levels = [level for level in categories if level in observed]
-        level_colors = _by_label(adata, covariate, levels, palette)
+        level_colors = (_by_label(adata, covariate, levels, palette) if palette is not None
+                        else dict(zip(levels, _shades(len(levels)))))
     group_colors, split_colors = _split_colors(adata, table, groupby, splitby, groups)
 
     width = 0.8 / len(levels)
@@ -233,10 +234,17 @@ def clonotype_sharing(adata, *, key=None, order=None, legend=True, figsize=None,
                       show=None, return_df=False):
     """Clonotypes shared between groups, from the stored ``tcri.pp.clonotype_sharing``.
 
-    Left, a group × group heatmap: cell (a, b) is the percentage of group a's clonotypes also
-    found in group b, red where the two groups share none, with the values printed when there
-    are at most 15 groups. Right, each group's ``shared_fraction`` as a percentage: its
-    clonotypes found in any other group. Each row label carries the group's clonotype count.
+    Three panels:
+
+    - a group × group heatmap: cell (a, b) is the percentage of group a's clonotypes also found
+      in group b, green below 1%, yellow from 1% to 2%, red above 2%, with the values printed
+      when there are at most 15 groups; each row label carries the group's clonotype count;
+    - each group's shared fraction, the percentage of its clonotypes found in any other group,
+      green below 3%, yellow from 3% to 8%, red above 8%;
+    - the shared clonotypes by the number of groups that carry them, green up to 3 groups,
+      yellow at 4 and 5, red at 6 or more.
+
+    With ``splitby``, the group labels take the colors of their split levels.
 
     Parameters
     ----------
@@ -245,7 +253,8 @@ def clonotype_sharing(adata, *, key=None, order=None, legend=True, figsize=None,
     key
         The ``uns`` key of a result stored with ``key_added``.
     order
-        The groups to draw, in this order; by default every group, in the table's order.
+        The groups of the first two panels, in this order; by default every group, in the
+        stored order.
     legend
         ``False`` draws no legend.
     figsize
@@ -255,39 +264,50 @@ def clonotype_sharing(adata, *, key=None, order=None, legend=True, figsize=None,
     show
         Show the figure.
     return_df
-        Return the stored ``{table, pairs}`` instead of drawing.
+        Return the stored ``{pairs, groups, clonotypes}`` instead of drawing.
 
     Returns
     -------
     numpy.ndarray or dict
-        The two axes, or the stored result with ``return_df=True``.
-
-    Raises
-    ------
-    ValueError
-        When the stored result was computed with ``per_clonotype=True``.
+        The three axes, or the stored result with ``return_df=True``.
     """
-    result, params = _stored(adata, "clonotype_sharing", key, per_flag="per_clonotype")
+    result, params = _stored(adata, "clonotype_sharing", key)
     if return_df:
         return result
     groupby, splitby = params["groupby"], params.get("splitby")
-    table = result["table"][result["table"][groupby].astype(str) != "All"]
-    pairs = result["pairs"]
+    table, pairs = result["groups"], result["pairs"]
     groups = _groups(table, groupby, order)
-    first, second = f"{groupby}_a", f"{groupby}_b"
-    percent = (pairs.pivot(index=first, columns=second, values="shared_fraction")
-               .reindex(index=groups, columns=groups).to_numpy(float) * 100)
-    none = (pairs.pivot(index=first, columns=second, values="shared_clonotypes")
-            .reindex(index=groups, columns=groups).to_numpy(float) == 0)
+    percent = np.full((len(groups), len(groups)), np.nan)
+    at = {group: i for i, group in enumerate(groups)}
+    first, second = pairs[f"{groupby}_a"].astype(str), pairs[f"{groupby}_b"].astype(str)
+    for a, b, share_a, share_b in zip(first, second, pairs["shared_fraction_a"],
+                                      pairs["shared_fraction_b"]):
+        if a in at and b in at:
+            percent[at[a], at[b]] = 100 * share_a
+            percent[at[b], at[a]] = 100 * share_b
     rows = table.set_index(table[groupby].astype(str))
     group_colors, split_colors = _split_colors(adata, table, groupby, splitby, groups)
+    spread = result["clonotypes"]["n_groups"].value_counts()
+    carriers = np.arange(2, max(len(table), int(spread.index.max()) if len(spread) else 2) + 1)
+    spread = spread.reindex(carriers, fill_value=0)
 
     size = max(4.5, 0.45 * len(groups) + 2)
-    fig, (left, right) = plt.subplots(1, 2, figsize=figsize or (2 * size + 2, size),
-                                      gridspec_kw={"width_ratios": [1.15, 1]})
-    finite = percent[np.isfinite(percent)]
-    image = _heatmap(left, percent, none, vmax=finite.max() if finite.size else 1.0,
-                     annotate=len(groups) <= _ANNOTATE_UP_TO, digits=2)
+    fig, (left, middle, right) = plt.subplots(
+        1, 3, figsize=figsize or (2 * size + 0.3 * len(carriers) + 5, size),
+        gridspec_kw={"width_ratios": [1.15, 1, 0.8]})
+    image = np.ones((len(groups), len(groups), 4))
+    for i in range(len(groups)):
+        for j in range(len(groups)):
+            if i != j and np.isfinite(percent[i, j]):
+                image[i, j] = to_rgba(_band(percent[i, j], *_PAIR_BANDS))
+    left.imshow(image)
+    if len(groups) <= _ANNOTATE_UP_TO:
+        for i in range(len(groups)):
+            for j in range(len(groups)):
+                if i != j and np.isfinite(percent[i, j]):
+                    yellow = _band(percent[i, j], *_PAIR_BANDS) == YELLOW
+                    left.text(j, i, f"{percent[i, j]:.2f}", ha="center", va="center",
+                              fontsize=8, color="black" if yellow else "white")
     left.set_xticks(range(len(groups)), groups, rotation=90)
     left.set_yticks(range(len(groups)),
                     [f"{group} ({int(rows.loc[group, 'n_clonotypes'])})" for group in groups])
@@ -295,29 +315,45 @@ def clonotype_sharing(adata, *, key=None, order=None, legend=True, figsize=None,
     _color_labels(left.get_yticklabels(), groups, group_colors)
     left.set_xlabel(groupby)
     left.set_title("Shared clonotypes")
-    fig.colorbar(image, ax=left, fraction=0.046,
-                 label=f"% of the row {groupby}'s clonotypes found in the column {groupby}")
+    scale = fig.colorbar(
+        ScalarMappable(norm=BoundaryNorm([0, *_PAIR_BANDS, 2 * _PAIR_BANDS[1]], 3),
+                       cmap=ListedColormap([GREEN, YELLOW, RED])),
+        ax=left, fraction=0.046, ticks=[0, *_PAIR_BANDS],
+        label=f"% of the row {groupby}'s clonotypes found in the column {groupby}")
 
     shared = rows["shared_fraction"].reindex(groups).to_numpy(float) * 100
-    colors = [group_colors.get(group, tcri_colors[0]) for group in groups]
-    right.bar(range(len(groups)), shared, color=colors)
+    middle.bar(range(len(groups)), shared,
+               color=[_band(value, *_GROUP_BANDS) for value in shared])
     for k, value in enumerate(shared):
         if np.isfinite(value):
-            right.text(k, value, f"{value:.2f}", ha="center", va="bottom", fontsize=8)
-    right.set_xticks(range(len(groups)), groups, rotation=90)
-    _color_labels(right.get_xticklabels(), groups, group_colors)
-    right.set_xlabel(groupby)
-    right.set_ylabel(f"% of the {groupby}'s clonotypes found in another {groupby}")
-    right.set_title("Shared fraction")
-    right.spines[["top", "right"]].set_visible(False)
+            middle.text(k, value, f"{value:.2f}", ha="center", va="bottom", fontsize=8)
+    middle.set_xticks(range(len(groups)), groups, rotation=90)
+    _color_labels(middle.get_xticklabels(), groups, group_colors)
+    middle.set_xlabel(groupby)
+    middle.set_ylabel(f"% of the {groupby}'s clonotypes found in another {groupby}")
+    middle.set_title("Shared fraction")
+
+    right.bar(carriers, spread.to_numpy(),
+              color=[_band(n, *_SPREAD_BANDS) for n in carriers])
+    for n, count in spread.items():
+        right.text(n, count, str(count), ha="center", va="bottom", fontsize=8)
+    right.set_xticks(carriers)
+    right.set_xlabel(f"{groupby}s carrying the clonotype")
+    right.set_ylabel("clonotypes")
+    right.set_title(f"Clonotypes by number of {groupby}s")
+    for ax in (middle, right):
+        ax.set_ylim(bottom=0)
+        ax.spines[["top", "right"]].set_visible(False)
 
     if legend:
-        _legend(fig, [(splitby, list(split_colors.items())),
-                      (None, [("no shared clonotypes", NONE_COLOR)] if none.any() else [])],
+        _legend(fig, [(splitby, list(split_colors.items()))],
                 loc="upper left", bbox_to_anchor=(1.0, 0.95))
     fig.tight_layout()
+    for ax in (middle, right, scale.ax):
+        _fit_ylabel(ax)
+    fig.tight_layout()
     _finish(fig, save=save, show=show)
-    return np.array([left, right])
+    return np.array([left, middle, right])
 
 
 def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None, save=None,
@@ -327,17 +363,18 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
 
     One heatmap per group, in rows of three: cell (a, b) is the share of the group's clones at
     level a also seen at level b, counted in clones, red where the two levels share none. Each
-    row label carries the level's clone count. Levels are in the covariate's category order, and
-    a group seen at one level only has no pair to draw.
+    row label carries the level's clone count, and the x axis is labeled with the covariate.
+    Levels are in the covariate's category order. A group with clones at one level only has no
+    pair, so no row in the frame and no panel.
 
     Parameters
     ----------
     adata
-        The object ``tcri.pp.clone_persistence`` stored its result in.
+        The object ``tcri.pp.clone_persistence`` stored its frame in.
     key
-        The ``uns`` key of a result stored with ``key_added``.
+        The ``uns`` key of a frame stored with ``key_added``.
     order
-        The groups to draw, in this order; by default every group, in the table's order.
+        The groups to draw, in this order; by default every group, in the stored order.
     legend
         ``False`` draws no legend.
     figsize
@@ -347,30 +384,29 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
     show
         Show the figure.
     return_df
-        Return the stored ``{table, pairs}`` instead of drawing.
+        Return the stored frame instead of drawing.
 
     Returns
     -------
-    numpy.ndarray or dict
-        The axes, one per group, or the stored result with ``return_df=True``.
-
-    Raises
-    ------
-    ValueError
-        When the stored result was computed with ``per_clone=True``.
+    numpy.ndarray or pandas.DataFrame
+        The axes, one per group, or the stored frame with ``return_df=True``.
     """
-    result, params = _stored(adata, "clone_persistence", key, per_flag="per_clone")
+    pairs, params = _stored(adata, "clone_persistence", key)
     if return_df:
-        return result
+        return pairs
     groupby, splitby = params.get("groupby"), params.get("splitby")
     covariate = params["covariate_key"]
-    table, pairs = result["table"], result["pairs"]
-    groups = _groups(table, groupby, order)
     group_of = (pd.Series(_ALL, index=pairs.index) if groupby is None
                 else pairs[groupby].astype(str))
+    present = list(dict.fromkeys(group_of)) or [_ALL]
+    groups = present if order is None else _groups(
+        pd.DataFrame({groupby: present}), groupby, order)
     categories = ([str(c) for c in adata.obs[covariate].astype("category").cat.categories]
-                  if covariate in adata.obs else sorted(set(pairs["covariate_a"].astype(str))))
-    group_colors, split_colors = _split_colors(adata, table, groupby, splitby, groups)
+                  if covariate in adata.obs else
+                  sorted(set(pairs["covariate_a"]) | set(pairs["covariate_b"])))
+    group_colors, split_colors = _split_colors(
+        adata, pairs.drop_duplicates(groupby) if groupby is not None else pairs, groupby,
+        splitby, groups)
 
     ncols = min(3, len(groups))
     nrows = math.ceil(len(groups) / ncols)
@@ -378,35 +414,43 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
                              figsize=figsize or (5.2 * ncols, 4.8 * nrows))
     image, drew_none = None, False
     for ax, group in zip(axes.ravel(), groups):
-        sub = pairs[group_of == group]
-        present = set(sub["covariate_a"].astype(str))
-        levels = [level for level in categories if level in present]
+        sub = pairs[(group_of == group).to_numpy()]
+        named = set(sub["covariate_a"].astype(str)) | set(sub["covariate_b"].astype(str))
+        levels = [level for level in categories if level in named]
         ax.set_title(f"Clone overlap - {group}", color=group_colors.get(group, "black"))
         if len(levels) < 2:
             ax.text(0.5, 0.5, "one level", ha="center", va="center", transform=ax.transAxes)
             ax.set_xticks([])
             ax.set_yticks([])
             continue
-        a, b = sub["covariate_a"].astype(str), sub["covariate_b"].astype(str)
-        share = (sub.assign(a=a, b=b).pivot(index="a", columns="b", values="shared_fraction")
-                 .reindex(index=levels, columns=levels).to_numpy(float))
-        none = (sub.assign(a=a, b=b).pivot(index="a", columns="b", values="shared_clones")
-                .reindex(index=levels, columns=levels).to_numpy(float) == 0)
+        at = {level: i for i, level in enumerate(levels)}
+        share = np.full((len(levels), len(levels)), np.nan)
+        none = np.zeros_like(share, dtype=bool)
+        n_clones = {}
+        for row in sub.itertuples(index=False):
+            a, b = at[str(row.covariate_a)], at[str(row.covariate_b)]
+            share[a, b], share[b, a] = row.shared_fraction_a, row.shared_fraction_b
+            none[a, b] = none[b, a] = row.shared_clones == 0
+            n_clones[a], n_clones[b] = row.n_clones_a, row.n_clones_b
         drew_none |= bool(none.any())
-        n_clones = sub.assign(a=a).drop_duplicates("a").set_index("a")["n_clones"]
-        image = _heatmap(ax, share, none, vmax=1.0, annotate=False, digits=2)
+        image = ax.imshow(share, cmap=_WHITE_GREENS, vmin=0, vmax=1)
+        ax.imshow(np.where(none, 1.0, np.nan), cmap=ListedColormap([RED]), vmin=0, vmax=1)
         ax.set_xticks(range(len(levels)), levels, rotation=90, fontsize=8)
         ax.set_yticks(range(len(levels)),
-                      [f"{level} ({int(n_clones[level])})" for level in levels], fontsize=8)
+                      [f"{level} ({int(n_clones[i])})" for i, level in enumerate(levels)],
+                      fontsize=8)
+        ax.set_xlabel(covariate)
     for ax in axes.ravel()[len(groups):]:
         ax.set_axis_off()
     if image is not None:
-        fig.colorbar(image, ax=axes, fraction=0.02, aspect=40,
-                     label="share of the row level's clones also seen at the column level")
+        scale = fig.colorbar(image, ax=axes, fraction=0.02, aspect=40,
+                             label="share of the row level's clones also seen at the column "
+                                   "level")
+        _fit_ylabel(scale.ax)
 
     if legend:
         _legend(fig, [(splitby, list(split_colors.items())),
-                      (None, [("no shared clones", NONE_COLOR)] if drew_none else [])],
+                      (None, [("no shared clones", RED)] if drew_none else [])],
                 loc="outside upper right")
     _finish(fig, save=save, show=show)
     return axes.ravel()[:len(groups)]

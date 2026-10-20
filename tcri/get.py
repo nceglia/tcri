@@ -17,8 +17,8 @@ information, the two entropies and ``perturb.gene_importance`` store their resul
 :func:`result` returns the whole stored result, provenance stripped, and :func:`params` the
 provenance. ``joint_distribution`` stores ``{summary, draws}``: its summary is read with
 :func:`result` and its draws with :func:`draws`. The repertoire summaries of ``tcri.pp`` are
-stored the same way and read with :func:`result`: ``repertoire_summary`` stores its table,
-``clonotype_sharing`` and ``clone_persistence`` store ``{table, pairs}``.
+stored the same way and read with :func:`result`: ``repertoire_summary`` and
+``clone_persistence`` store a frame, ``clonotype_sharing`` stores ``{pairs, groups, clonotypes}``.
 """
 from __future__ import annotations
 

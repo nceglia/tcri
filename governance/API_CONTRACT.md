@@ -69,17 +69,18 @@ naming the column and the number of cells; a group that keeps no clone warns.
 `pp.clone_persistence` read `obs` and the derivation record, filter nothing, and store their result
 under `uns[key_added or "tcri_<function>"]` with a `params` block, returning `None`;
 `inplace=False` stores nothing and returns it, and `tcri.get.result` reads it back.
-`repertoire_summary` stores its table; `clonotype_sharing` and `clone_persistence` store
-`{table, pairs}`, or with `per_clonotype=True` or `per_clone=True` the frame per clonotype or per
-clone. `pairs` has one row per ordered pair, counted in clonotypes or clones, never cells: for
-sharing, a pair of groups, with the first group's clonotypes and those the second also carries;
-for persistence, a pair of covariate levels within a group, with the clones at the first level and
-those also seen at the second. Sharing and clonality are measured on the column the derivation
-record leads back to, and raise when it is not in `obs`; `clonality` is `1 − H/log2(N)` over the
-clone sizes of a row there, every clone included, NaN with fewer than two clones. Each takes
-`splitby`, checked as the metrics check it, and its tables carry the split label as a string.
-`pl.repertoire_summary`, `pl.clonotype_sharing` and `pl.clone_persistence` draw the stored result,
-compute nothing, and raise on a result per clonotype or per clone.
+`repertoire_summary` stores its table. `clone_persistence` stores one frame: per group and
+unordered pair of the covariate levels at which the group has clones, the clones at each level,
+the clones seen at both, and that count as a share of each level's clones. `clonotype_sharing`
+stores `{pairs, groups, clonotypes}`: per unordered pair of groups, the clonotypes of each, those
+both carry, and that count as a share of each; per group, its clonotypes, those present in any
+other group, and their share; and per shared clonotype, the groups carrying it and their cells.
+Both count clonotypes or clones, never cells. Sharing and clonality are measured on the column the
+derivation record leads back to, and raise when it is not in `obs`; `clonality` is
+`1 − H/log2(N)` over the clone sizes of a row there, every clone included, NaN with fewer than
+two clones. Each takes `splitby`, checked as the metrics check it, and its frames carry the split
+label as a string. `pl.repertoire_summary`, `pl.clonotype_sharing` and `pl.clone_persistence` draw
+the stored result and compute nothing.
 
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
@@ -321,13 +322,12 @@ class pp:
     ) -> Optional[pd.DataFrame]: ...
     def clone_persistence(
         adata: AnnData, *, clonotype_key: str, covariate_key: str,
-        cov_from: Optional[str] = ..., cov_to: Optional[str] = ...,
-        groupby: Optional[str] = ..., splitby: Optional[str] = ..., per_clone: bool = ...,
+        groupby: Optional[str] = ..., splitby: Optional[str] = ...,
         key_added: Optional[str] = ..., inplace: bool = ...,
-    ) -> Any: ...
+    ) -> Optional[pd.DataFrame]: ...
     def clonotype_sharing(
         adata: AnnData, *, clonotype_key: str, groupby: str, splitby: Optional[str] = ...,
-        per_clonotype: bool = ..., key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ...,
     ) -> Any: ...
 
 

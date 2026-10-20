@@ -170,16 +170,13 @@ def validate(schema, result, *, name: str = "result") -> None:
 
 
 class ClonotypeSharing(TypedDict):
-    """``pp.clonotype_sharing`` at ``per_clonotype=False``: the groups and their pairs."""
+    """``pp.clonotype_sharing``: the pairs of groups, the groups, and the shared clonotypes.
+    ``pp.clone_persistence`` stores its one frame and has no ``TypedDict``."""
 
-    table: pd.DataFrame     # one row per group, then the row for all groups
-    pairs: pd.DataFrame     # one row per ordered pair of groups: <groupby>_a, <groupby>_b,
-                            #   n_clonotypes, shared_clonotypes, shared_fraction
-
-
-class ClonePersistence(TypedDict):
-    """``pp.clone_persistence`` at ``per_clone=False``: the groups and their pairs of levels."""
-
-    table: pd.DataFrame     # one row per group
-    pairs: pd.DataFrame     # one row per (group, ordered pair of levels): [<groupby>,]
-                            #   covariate_a, covariate_b, n_clones, shared_clones, shared_fraction
+    pairs: pd.DataFrame       # one row per unordered pair of groups: <groupby>_a, <groupby>_b,
+                              #   [<splitby>_a, <splitby>_b,] n_clonotypes_a, n_clonotypes_b,
+                              #   shared_clonotypes, shared_fraction_a, shared_fraction_b
+    groups: pd.DataFrame      # one row per group: <groupby>, [<splitby>,] n_clonotypes,
+                              #   shared_clonotypes, shared_fraction
+    clonotypes: pd.DataFrame  # one row per shared clonotype: clonotype, n_groups, groups,
+                              #   n_cells, cells_per_group

@@ -2,51 +2,27 @@
   "tools": {
     "tcri_clone_persistence": {
       "slots": {
-        "pairs": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "covariate_a",
-              "covariate_b",
-              "n_clones",
-              "shared_clones",
-              "shared_fraction"
-            ],
-            "minimal": [
-              "covariate_a",
-              "covariate_b",
-              "n_clones",
-              "shared_clones",
-              "shared_fraction"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        },
-        "table": {
+        "frame": {
           "columns": {
             "maximal": [
               "<groupby>",
               "<splitby>",
-              "cells_at_multiple_levels",
-              "cells_at_one_level",
-              "clones_at_multiple_levels",
-              "clones_at_one_level",
-              "n_levels"
+              "covariate_a",
+              "covariate_b",
+              "n_clones_a",
+              "n_clones_b",
+              "shared_clones",
+              "shared_fraction_a",
+              "shared_fraction_b"
             ],
             "minimal": [
-              "cells_at_multiple_levels",
-              "cells_at_one_level",
-              "clones_at_multiple_levels",
-              "clones_at_one_level",
-              "n_levels"
+              "covariate_a",
+              "covariate_b",
+              "n_clones_a",
+              "n_clones_b",
+              "shared_clones",
+              "shared_fraction_a",
+              "shared_fraction_b"
             ]
           },
           "index": {
@@ -65,18 +41,44 @@
     },
     "tcri_clonotype_sharing": {
       "slots": {
-        "pairs": {
+        "clonotypes": {
           "columns": {
             "maximal": [
-              "<groupby>_a",
-              "<groupby>_b",
+              "cells_per_group",
+              "clonotype",
+              "groups",
+              "n_cells",
+              "n_groups"
+            ],
+            "minimal": [
+              "cells_per_group",
+              "clonotype",
+              "groups",
+              "n_cells",
+              "n_groups"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "groups": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
               "n_clonotypes",
               "shared_clonotypes",
               "shared_fraction"
             ],
             "minimal": [
-              "<groupby>_a",
-              "<groupby>_b",
+              "<groupby>",
               "n_clonotypes",
               "shared_clonotypes",
               "shared_fraction"
@@ -92,28 +94,27 @@
           },
           "type": "DataFrame"
         },
-        "table": {
+        "pairs": {
           "columns": {
             "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "cells_in_shared_clonotypes",
-              "n_cells",
-              "n_clonotypes",
-              "registered_shared_clonotypes",
+              "<groupby>_a",
+              "<groupby>_b",
+              "disease_status_a",
+              "disease_status_b",
+              "n_clonotypes_a",
+              "n_clonotypes_b",
               "shared_clonotypes",
-              "shared_fraction",
-              "source_column"
+              "shared_fraction_a",
+              "shared_fraction_b"
             ],
             "minimal": [
-              "<groupby>",
-              "cells_in_shared_clonotypes",
-              "n_cells",
-              "n_clonotypes",
-              "registered_shared_clonotypes",
+              "<groupby>_a",
+              "<groupby>_b",
+              "n_clonotypes_a",
+              "n_clonotypes_b",
               "shared_clonotypes",
-              "shared_fraction",
-              "source_column"
+              "shared_fraction_a",
+              "shared_fraction_b"
             ]
           },
           "index": {

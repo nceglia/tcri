@@ -6,7 +6,7 @@ not counted, and group labels and clonotypes come back as strings. ``repertoire_
 cells and clones per group: its ``n_clones`` is the clone count clonotypic entropy normalizes by,
 and on a pooled column its pools are counted apart from the clones. ``clonotype_sharing``
 measures a column tcri derived on the column the record leads back to. ``clone_persistence`` has
-a module of its own, and every summary is checked here for leaving the object as it was.
+a module of its own; every summary is checked here for storing its result and nothing else.
 """
 from __future__ import annotations
 
@@ -59,11 +59,11 @@ def _summary(adata, **arguments):
     return tcri.pp.repertoire_summary(adata, inplace=False, **arguments)
 
 
-def _sharing(adata, **arguments):
-    """What ``pp.clonotype_sharing`` returns with ``inplace=False``: the table per group, or with
-    ``per_clonotype=True`` the table per shared clonotype."""
+def _sharing(adata, part="groups", **arguments):
+    """What ``pp.clonotype_sharing`` returns with ``inplace=False``: one of its frames, the
+    ``groups`` frame by default, or the whole result with ``part=None``."""
     result = tcri.pp.clonotype_sharing(adata, inplace=False, **arguments)
-    return result["table"] if isinstance(result, dict) else result
+    return result if part is None else result[part]
 
 
 def _clonality(sizes):
@@ -270,20 +270,27 @@ COHORT = {
                 "P3", "P3", "P3", "P3", "P3", None],
 }
 
-#: ``clonotype_sharing`` on COHORT by patient. The All row counts the five distinct clonotypes
-#: once each, while its cells are the sum of the group rows.
-EXPECTED = pd.DataFrame({
-    "patient": ["P1", "P2", "P3", "All"],
-    "n_clonotypes": [3, 3, 3, 5],
-    "shared_clonotypes": [2, 3, 2, 3],
-    "shared_fraction": [2 / 3, 1.0, 2 / 3, 3 / 5],
-    "n_cells": [4, 4, 5, 13],
-    "cells_in_shared_clonotypes": [3, 4, 2, 9],
-    "source_column": "clone_id",
-    "registered_shared_clonotypes": [2, 3, 2, 3],
+#: ``groups`` on COHORT by patient: e counts once in each group's shared clonotypes, however
+#: many groups carry it.
+EXPECTED_GROUPS = pd.DataFrame({
+    "patient": ["P1", "P2", "P3"],
+    "n_clonotypes": [3, 3, 3],
+    "shared_clonotypes": [2, 3, 2],
+    "shared_fraction": [2 / 3, 1.0, 2 / 3],
 })
 
-EXPECTED_PER_CLONOTYPE = pd.DataFrame({
+#: ``pairs``, each pair once: P1 and P2 share a and e, P1 and P3 share e, P2 and P3 share c and e.
+EXPECTED_PAIRS = pd.DataFrame({
+    "patient_a": ["P1", "P1", "P2"],
+    "patient_b": ["P2", "P3", "P3"],
+    "n_clonotypes_a": [3, 3, 3],
+    "n_clonotypes_b": [3, 3, 3],
+    "shared_clonotypes": [2, 1, 2],
+    "shared_fraction_a": [2 / 3, 1 / 3, 2 / 3],
+    "shared_fraction_b": [2 / 3, 1 / 3, 2 / 3],
+})
+
+EXPECTED_CLONOTYPES = pd.DataFrame({
     "clonotype": ["a", "c", "e"],
     "n_groups": [2, 2, 3],
     "groups": ["P1|P2", "P2|P3", "P1|P2|P3"],
@@ -306,76 +313,70 @@ def _pool_then_register(adata):
     return adata
 
 
-@pytest.mark.parametrize("dtype", DTYPES)
-def test_clonotype_sharing_counts_and_fractions(dtype):
-    """Per group: its clonotypes, those also present in another group, and their cells. The
-    All row counts distinct clonotypes across groups, not a column sum, and cells without a
-    clonotype or a group are not counted. Rows follow the group's category order, labels are
-    strings, with All, the group of the row for all groups, in the column named after groupby,
-    and a group named All raises."""
-    adata = _adata({**COHORT, "clone_id": pd.Series(COHORT["clone_id"], dtype=dtype)})
-    table = _sharing(adata, clonotype_key="clone_id", groupby="patient")
-    pd.testing.assert_frame_equal(table, EXPECTED)
-    groups, whole = table.iloc[:-1], table.iloc[-1]
-    assert whole["n_clonotypes"] < groups["n_clonotypes"].sum()
-    assert whole["n_cells"] == groups["n_cells"].sum()
+def _assert_sharing(result, groups, pairs, clonotypes):
+    assert list(result) == ["pairs", "groups", "clonotypes"]
+    pd.testing.assert_frame_equal(result["groups"], groups, check_dtype=False)
+    pd.testing.assert_frame_equal(result["pairs"], pairs, check_dtype=False)
+    pd.testing.assert_frame_equal(result["clonotypes"], clonotypes, check_dtype=False)
 
-    per_clonotype = _sharing(adata, clonotype_key="clone_id", groupby="patient",
-                                              per_clonotype=True)
-    pd.testing.assert_frame_equal(per_clonotype, EXPECTED_PER_CLONOTYPE)
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_clonotype_sharing_counts_groups_pairs_and_clonotypes(dtype):
+    """Per group, its clonotypes and those also present in another group; per pair of groups,
+    each once, the clonotypes of each and those both carry; per shared clonotype, its groups and
+    cells. A clonotype carried by three groups counts once in a group's shared clonotypes, so a
+    group's fraction is not a sum over its pairs. Cells without a clonotype or a group are not
+    counted, and rows follow the group's category order."""
+    adata = _adata({**COHORT, "clone_id": pd.Series(COHORT["clone_id"], dtype=dtype)})
+    result = _sharing(adata, clonotype_key="clone_id", groupby="patient", part=None)
+    _assert_sharing(result, EXPECTED_GROUPS, EXPECTED_PAIRS, EXPECTED_CLONOTYPES)
+    p1 = EXPECTED_PAIRS[(EXPECTED_PAIRS["patient_a"] == "P1")]
+    assert p1["shared_clonotypes"].sum() > EXPECTED_GROUPS.loc[0, "shared_clonotypes"]
 
     ordered = _adata({**COHORT, "patient": pd.Categorical(
         COHORT["patient"], categories=["P3", "P1", "P2", "P0"])})
-    table = _sharing(ordered, clonotype_key="clone_id", groupby="patient")
-    pd.testing.assert_frame_equal(
-        table, EXPECTED.set_index("patient").loc[["P3", "P1", "P2", "All"]].reset_index())
-    per_clonotype = _sharing(ordered, clonotype_key="clone_id",
-                                              groupby="patient", per_clonotype=True)
-    assert per_clonotype["groups"].tolist() == ["P1|P2", "P3|P2", "P3|P1|P2"]
-    assert per_clonotype["cells_per_group"].tolist() == ["2|1", "1|2", "1|1|1"]
+    result = _sharing(ordered, clonotype_key="clone_id", groupby="patient", part=None)
+    assert result["groups"]["patient"].tolist() == ["P3", "P1", "P2"]
+    assert list(zip(result["pairs"]["patient_a"], result["pairs"]["patient_b"])) == [
+        ("P3", "P1"), ("P3", "P2"), ("P1", "P2")]
+    assert result["pairs"]["shared_clonotypes"].tolist() == [1, 2, 2]
+    assert result["clonotypes"]["groups"].tolist() == ["P1|P2", "P3|P2", "P3|P1|P2"]
+    assert result["clonotypes"]["cells_per_group"].tolist() == ["2|1", "1|2", "1|1|1"]
 
     numbered = _adata(COHORT, complete=True)
     numbered.obs["clone_number"] = numbered.obs["clone_id"].map(
         {"a": 1, "b": 2, "c": 3, "d": 4, "e": 10})
     numbered.obs["patient_number"] = numbered.obs["patient"].map({"P1": 1, "P2": 2, "P3": 3})
-    table = _sharing(numbered, clonotype_key="clone_number",
-                                      groupby="patient_number")
-    assert table["patient_number"].tolist() == ["1", "2", "3", "All"]
-    per_clonotype = _sharing(numbered, clonotype_key="clone_number",
-                                              groupby="patient_number", per_clonotype=True)
-    assert per_clonotype["clonotype"].tolist() == ["1", "3", "10"]
-    assert per_clonotype["groups"].tolist() == ["1|2", "2|3", "1|2|3"]
+    result = _sharing(numbered, clonotype_key="clone_number", groupby="patient_number",
+                      part=None)
+    assert result["groups"]["patient_number"].tolist() == ["1", "2", "3"]
+    assert result["pairs"]["patient_number_a"].tolist() == ["1", "1", "2"]
+    assert result["clonotypes"]["clonotype"].tolist() == ["1", "3", "10"]
+    assert result["clonotypes"]["groups"].tolist() == ["1|2", "2|3", "1|2|3"]
 
-    named_all = _adata({"clone_id": ["a", "a", "b"], "patient": ["All", "P1", "P1"]})
-    with pytest.raises(ValueError, match="group named 'All'"):
-        _sharing(named_all, clonotype_key="clone_id", groupby="patient")
     for clonotype_key, groupby, named in [("trb", "patient", "clonotype_key='trb'"),
                                           ("clone_id", "donor", "groupby='donor'")]:
         with pytest.raises(ValueError, match=f"{named} is not a column of adata.obs"):
             _sharing(adata, clonotype_key=clonotype_key, groupby=groupby)
 
 
+def test_a_group_sharing_nothing_has_pairs_of_zero():
+    adata = _adata({"clone_id": [*COHORT["clone_id"], "z"],
+                    "patient": [*COHORT["patient"], "P4"]})
+    pairs = _sharing(adata, clonotype_key="clone_id", groupby="patient", part="pairs")
+    with_p4 = pairs[pairs["patient_b"] == "P4"]
+    assert with_p4[["patient_a", "n_clonotypes_b", "shared_clonotypes",
+                    "shared_fraction_b"]].values.tolist() == [
+        ["P1", 1, 0, 0.0], ["P2", 1, 0, 0.0], ["P3", 1, 0, 0.0]]
+
+
 def test_clonotype_sharing_follows_the_derivation_record():
     """On a column tcri derived, sharing is measured on the source column the record leads back
-    to, which the table names. registered_shared_clonotypes counts the ids of the column itself:
-    none when they are specific to each patient, the shared clonotypes when they are not."""
+    to; a missing source column raises."""
     adata = _pool_then_register(_adata(COHORT, complete=True))
-    on_source = _sharing(adata, clonotype_key="clone_id", groupby="patient")
-    pd.testing.assert_frame_equal(on_source, EXPECTED)
-
-    for key in ["clone_id_pooled", K.CLONOTYPE]:
-        table = _sharing(adata, clonotype_key=key, groupby="patient")
-        pd.testing.assert_frame_equal(table, EXPECTED.assign(registered_shared_clonotypes=0))
-        per_clonotype = _sharing(adata, clonotype_key=key, groupby="patient",
-                                                  per_clonotype=True)
-        pd.testing.assert_frame_equal(per_clonotype, EXPECTED_PER_CLONOTYPE)
-
-    public = _adata(COHORT, complete=True)
-    public.obs[K.CLONOTYPE] = public.obs["clone_id"].astype("category")
-    _record_derivation(public, function="setup_anndata", source="clone_id",
-                       key_added=K.CLONOTYPE, replicate="patient")
-    table = _sharing(public, clonotype_key=K.CLONOTYPE, groupby="patient")
-    pd.testing.assert_frame_equal(table, EXPECTED)
+    for key in ["clone_id", "clone_id_pooled", K.CLONOTYPE]:
+        result = _sharing(adata, clonotype_key=key, groupby="patient", part=None)
+        _assert_sharing(result, EXPECTED_GROUPS, EXPECTED_PAIRS, EXPECTED_CLONOTYPES)
 
     del adata.obs["clone_id"]
     with pytest.raises(ValueError, match="derived from 'clone_id', which is not a column"):
@@ -384,16 +385,12 @@ def test_clonotype_sharing_follows_the_derivation_record():
 
 def test_clonotype_sharing_raises_on_a_clashing_group_name():
     """The group column is named after ``groupby``, so a ``groupby`` that names another column
-    of the table per group raises rather than replacing it. The table per clonotype has no group
-    column, and the same ``groupby`` is accepted there."""
+    raises rather than replacing it."""
     adata = _adata(COHORT, complete=True)
-    for clashing in ("n_cells", "source_column"):
+    for clashing in ("n_clonotypes", "shared_fraction"):
         adata.obs[clashing] = adata.obs["patient"]
         with pytest.raises(ValueError, match=f"groupby={clashing!r} would name"):
             _sharing(adata, clonotype_key="clone_id", groupby=clashing)
-        per_clonotype = _sharing(adata, clonotype_key="clone_id",
-                                                  groupby=clashing, per_clonotype=True)
-        pd.testing.assert_frame_equal(per_clonotype, EXPECTED_PER_CLONOTYPE)
 
 
 # ── every summary ─────────────────────────────────────────────────────────────────────────────
@@ -414,13 +411,8 @@ CALLS = [
     ("repertoire_summary", dict(clonotype_key=K.CLONOTYPE, groupby="patient",
                                 covariate_key="timepoint", phenotype_key="phenotype")),
     ("repertoire_summary", dict(clonotype_key="clone_id_pooled", phenotype_key="phenotype")),
-    *[("clone_persistence", dict(PERSISTENCE, groupby=groupby, per_clone=per_clone, **ends))
-      for ends in ({}, dict(cov_from="t0", cov_to="t1"))
-      for groupby in (None, "patient")
-      for per_clone in (False, True)],
+    *[("clone_persistence", dict(PERSISTENCE, groupby=groupby)) for groupby in (None, "patient")],
     ("clonotype_sharing", dict(clonotype_key=K.CLONOTYPE, groupby="patient")),
-    ("clonotype_sharing", dict(clonotype_key=K.CLONOTYPE, groupby="patient",
-                               per_clonotype=True)),
     ("clonotype_sharing", dict(clonotype_key="clone_id", groupby="patient")),
 ]
 
@@ -515,34 +507,35 @@ def _with_split():
 
 
 def test_splitby_labels_each_group_and_is_checked_like_the_metrics():
-    """Each table per group carries the split label, as a string, after the group column, with
-    ``All`` in the sharing table's row for all groups. ``splitby`` needs ``groupby``, must be
-    constant within each group, and may not take the name of another column."""
+    """Each frame carries the split label as a string: after the group column, or once for each
+    side of a pair. ``splitby`` needs ``groupby``, must be constant within each group, and may
+    not take the name of another column."""
     adata = _with_split()
     summary = _summary(adata, clonotype_key="clone_id", groupby="patient", splitby="response",
                        covariate_key="timepoint")
     assert list(summary.columns[:3]) == ["patient", "response", "covariate"]
     assert summary.drop_duplicates("patient")["response"].tolist() == ["R", "NR", "R"]
 
-    sharing = _sharing(adata, clonotype_key="clone_id", groupby="patient", splitby="response")
-    assert list(sharing.columns[:2]) == ["patient", "response"]
-    assert sharing["response"].tolist() == ["R", "NR", "R", "All"]
+    sharing = _sharing(adata, clonotype_key="clone_id", groupby="patient", splitby="response",
+                       part=None)
+    assert list(sharing["groups"].columns[:2]) == ["patient", "response"]
+    assert sharing["groups"]["response"].tolist() == ["R", "NR", "R"]
+    assert list(sharing["pairs"].columns[:4]) == ["patient_a", "patient_b", "response_a",
+                                                  "response_b"]
+    assert list(zip(sharing["pairs"]["response_a"], sharing["pairs"]["response_b"])) == [
+        ("R", "NR"), ("R", "R"), ("NR", "R")]
 
     persistence = tcri.pp.clone_persistence(adata, clonotype_key="clone_id",
                                             covariate_key="timepoint", groupby="patient",
                                             splitby="response", inplace=False)
-    assert persistence["table"]["response"].tolist() == ["R", "NR", "R"]
-    per_clone = tcri.pp.clone_persistence(adata, clonotype_key="clone_id",
-                                          covariate_key="timepoint", groupby="patient",
-                                          splitby="response", per_clone=True, inplace=False)
-    assert list(per_clone.columns[:3]) == ["patient", "response", "clonotype"]
+    assert list(persistence.columns[:2]) == ["patient", "response"]
 
     adata.obs["response_number"] = adata.obs["patient"].map({"P1": 1, "P2": 0, "P3": 1})
     numbered = _summary(adata, clonotype_key="clone_id", groupby="patient",
                         splitby="response_number")
     assert numbered["response_number"].tolist() == ["1", "0", "1"]
 
-    with pytest.raises(ValueError, match="splitby requires groupby"):
+    with pytest.raises(ValueError, match="splitby='response' needs groupby"):
         _summary(adata, clonotype_key="clone_id", splitby="response")
     adata.obs["mixed"] = (["x", "y"] * 8)[:adata.n_obs]
     with pytest.raises(ValueError, match="is not constant within"):
@@ -554,50 +547,33 @@ def test_splitby_labels_each_group_and_is_checked_like_the_metrics():
         _summary(adata, clonotype_key="clone_id", groupby="patient", splitby="patient")
 
 
-def test_clonotype_sharing_pairs_count_the_clonotypes_two_groups_carry():
-    """``pairs`` has one row per ordered pair of groups: the first group's clonotypes, those
-    the second also carries, and their share of the first. A group sharing nothing has pairs
-    of zero, and on a derived column the pairs are counted on the source column."""
-    adata = _adata({"clone_id": [*COHORT["clone_id"], "z"],
-                    "patient": [*COHORT["patient"], "P4"]})
-    pairs = tcri.pp.clonotype_sharing(adata, clonotype_key="clone_id", groupby="patient",
-                                      inplace=False)["pairs"]
-    order = ["P1", "P2", "P3", "P4"]
-    rows = [(a, b) for a in order for b in order if a != b]
-    shared = {("P1", "P2"): 2, ("P1", "P3"): 1, ("P2", "P3"): 2}
-    n = {"P1": 3, "P2": 3, "P3": 3, "P4": 1}
-    both = [shared.get((a, b), shared.get((b, a), 0)) for a, b in rows]
-    pd.testing.assert_frame_equal(pairs, pd.DataFrame({
-        "patient_a": [a for a, _ in rows],
-        "patient_b": [b for _, b in rows],
-        "n_clonotypes": [n[a] for a, _ in rows],
-        "shared_clonotypes": both,
-        "shared_fraction": [k / n[a] for (a, _), k in zip(rows, both)],
-    }))
-
-    derived = _pool_then_register(_adata(COHORT, complete=True))
-    on_source = tcri.pp.clonotype_sharing(derived, clonotype_key="clone_id", groupby="patient",
-                                          inplace=False)["pairs"]
-    on_registered = tcri.pp.clonotype_sharing(derived, clonotype_key=K.CLONOTYPE,
-                                              groupby="patient", inplace=False)["pairs"]
-    pd.testing.assert_frame_equal(on_registered, on_source)
+def _stored_parts(adata, name):
+    """``{part: frame}`` of a stored result; a result stored as one frame is the part
+    ``frame``."""
+    stored = tcri.get.result(adata, name)
+    return dict(stored) if isinstance(stored, dict) else {"frame": stored}
 
 
-def test_stored_summaries_write_to_h5ad_and_read_back(tmp_path):
-    """Every stored result, split labels included, survives a write to ``.h5ad``."""
+def test_every_stored_summary_writes_to_h5ad_and_reads_back(tmp_path):
+    """Every stored frame survives a write to ``.h5ad``, with integer covariate levels and a
+    group whose cells carry no split label."""
     adata = _with_split()
-    tcri.pp.repertoire_summary(adata, clonotype_key="clone_id", groupby="patient",
-                               splitby="response", covariate_key="timepoint")
-    tcri.pp.clonotype_sharing(adata, clonotype_key="clone_id", groupby="patient",
-                              splitby="response")
-    tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint",
-                              groupby="patient", splitby="response")
+    adata.obs["timepoint"] = adata.obs["timepoint"].map({"t0": 0, "t1": 7})
+    adata.obs["response"] = adata.obs["response"].where(adata.obs["patient"] != "P3")
+    for function, arguments in [
+        ("repertoire_summary", dict(covariate_key="timepoint")),
+        ("clonotype_sharing", {}),
+        ("clone_persistence", dict(covariate_key="timepoint")),
+    ]:
+        getattr(tcri.pp, function)(adata, clonotype_key="clone_id", groupby="patient",
+                                   splitby="response", **arguments)
+    assert tcri.get.result(adata, "clonotype_sharing")["groups"]["response"].tolist() == [
+        "R", "NR", ""]
     adata.write_h5ad(tmp_path / "summaries.h5ad")
     back = ad.read_h5ad(tmp_path / "summaries.h5ad")
-    pd.testing.assert_frame_equal(tcri.get.result(back, "repertoire_summary"),
-                                  tcri.get.result(adata, "repertoire_summary"),
-                                  check_dtype=False)
-    for name in ("clonotype_sharing", "clone_persistence"):
-        for part in ("table", "pairs"):
-            pd.testing.assert_frame_equal(tcri.get.result(back, name)[part],
-                                          tcri.get.result(adata, name)[part], check_dtype=False)
+    for name in ("repertoire_summary", "clonotype_sharing", "clone_persistence"):
+        written, read = _stored_parts(adata, name), _stored_parts(back, name)
+        assert set(read) == set(written), name
+        for part, frame in written.items():
+            pd.testing.assert_frame_equal(read[part], frame, check_dtype=False,
+                                          obj=f"{name} {part}")
