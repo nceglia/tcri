@@ -390,15 +390,26 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
     -------
     numpy.ndarray or pandas.DataFrame
         The axes, one per group, or the stored frame with ``return_df=True``.
+
+    Raises
+    ------
+    ValueError
+        When no group has clones at two levels, so the stored frame has no pair.
     """
     pairs, params = _stored(adata, "clone_persistence", key)
     if return_df:
         return pairs
     groupby, splitby = params.get("groupby"), params.get("splitby")
     covariate = params["covariate_key"]
+    if not len(pairs):
+        which = f"no {groupby}" if groupby is not None else "the dataset"
+        raise ValueError(
+            f"{which} has clones at two levels of {covariate!r}: there is no pair of levels to "
+            f"draw."
+        )
     group_of = (pd.Series(_ALL, index=pairs.index) if groupby is None
                 else pairs[groupby].astype(str))
-    present = list(dict.fromkeys(group_of)) or [_ALL]
+    present = list(dict.fromkeys(group_of))
     groups = present if order is None else _groups(
         pd.DataFrame({groupby: present}), groupby, order)
     categories = ([str(c) for c in adata.obs[covariate].astype("category").cat.categories]
@@ -412,17 +423,12 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
     nrows = math.ceil(len(groups) / ncols)
     fig, axes = plt.subplots(nrows, ncols, squeeze=False, layout="constrained",
                              figsize=figsize or (5.2 * ncols, 4.8 * nrows))
-    image, drew_none = None, False
+    drew_none = False
     for ax, group in zip(axes.ravel(), groups):
         sub = pairs[(group_of == group).to_numpy()]
         named = set(sub["covariate_a"].astype(str)) | set(sub["covariate_b"].astype(str))
         levels = [level for level in categories if level in named]
         ax.set_title(f"Clone overlap - {group}", color=group_colors.get(group, "black"))
-        if len(levels) < 2:
-            ax.text(0.5, 0.5, "one level", ha="center", va="center", transform=ax.transAxes)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            continue
         at = {level: i for i, level in enumerate(levels)}
         share = np.full((len(levels), len(levels)), np.nan)
         none = np.zeros_like(share, dtype=bool)
@@ -442,11 +448,9 @@ def clone_persistence(adata, *, key=None, order=None, legend=True, figsize=None,
         ax.set_xlabel(covariate)
     for ax in axes.ravel()[len(groups):]:
         ax.set_axis_off()
-    if image is not None:
-        scale = fig.colorbar(image, ax=axes, fraction=0.02, aspect=40,
-                             label="share of the row level's clones also seen at the column "
-                                   "level")
-        _fit_ylabel(scale.ax)
+    scale = fig.colorbar(image, ax=axes, fraction=0.02, aspect=40,
+                         label="share of the row level's clones also seen at the column level")
+    _fit_ylabel(scale.ax)
 
     if legend:
         _legend(fig, [(splitby, list(split_colors.items())),

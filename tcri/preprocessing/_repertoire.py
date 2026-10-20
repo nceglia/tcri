@@ -547,7 +547,8 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, splitby=None) -> dict:
     given under its own name, so a registered pooled column leads back the same way.
 
     A cell is counted when it has a group and a clonotype, in ``clonotype_key`` and in the source
-    column; every other cell is left out. Clonotypes are counted, never cells.
+    column; every other cell is left out. Sharing is counted in clonotypes, and the
+    ``clonotypes`` frame gives each shared clonotype's repertoire fraction in each group.
 
     The result is stored in ``adata.uns[key_added or "tcri_clonotype_sharing"]`` and read back
     with ``tcri.get.result(adata, "clonotype_sharing")``; :func:`tcri.pl.clonotype_sharing`
@@ -598,8 +599,9 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, splitby=None) -> dict:
 
         ``clonotypes`` has one row per shared clonotype of the source column, in the order of
         ``astype("category")`` on that column: ``clonotype``, ``n_groups``, ``groups`` (the group
-        labels, in group order, joined with ``"|"``), ``n_cells``, and ``cells_per_group`` (the
-        cells in each of those groups, in the same order, joined with ``"|"``).
+        labels, in group order, joined with ``"|"``), and ``repertoire_fraction``, in the same
+        order and joined the same way: the share of each group's counted cells that carry the
+        clonotype, each written in Python's ``str`` form.
 
     Raises
     ------
@@ -644,7 +646,7 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, splitby=None) -> dict:
 
 def _shared_clonotypes(shared, clonotypes, labels, cell_groups, in_shared, group_names):
     """The ``clonotypes`` frame of :func:`clonotype_sharing`: one row per shared clonotype, with
-    the groups that carry it and their cells.
+    the groups that carry it and its repertoire fraction in each.
 
     ``shared`` maps each shared clonotype code to the codes of its groups; ``labels`` and
     ``cell_groups`` are the codes of the counted cells, and ``in_shared`` marks those carrying a
@@ -652,18 +654,20 @@ def _shared_clonotypes(shared, clonotypes, labels, cell_groups, in_shared, group
     """
     n_groups = len(group_names)
     names = np.asarray(clonotypes.cat.categories.astype(str), dtype=object)
+    counted = np.bincount(cell_groups, minlength=n_groups)
     pairs, pair_cells = np.unique(labels[in_shared] * n_groups + cell_groups[in_shared],
                                   return_counts=True)
     cells_in_pair = dict(zip(pairs.tolist(), pair_cells.tolist()))
     rows = []
     for code in sorted(shared):
         members = sorted(shared[code])
-        cells = [cells_in_pair[code * n_groups + member] for member in members]
-        rows.append((names[code], len(members), "|".join(group_names[members]), sum(cells),
-                     "|".join(map(str, cells))))
-    table = pd.DataFrame(rows, columns=["clonotype", "n_groups", "groups", "n_cells",
-                                        "cells_per_group"])
-    return table.astype({"n_groups": "int64", "n_cells": "int64"})
+        fractions = [cells_in_pair[code * n_groups + member] / counted[member]
+                     for member in members]
+        rows.append((names[code], len(members), "|".join(group_names[members]),
+                     "|".join(str(float(f)) for f in fractions)))
+    table = pd.DataFrame(rows, columns=["clonotype", "n_groups", "groups",
+                                        "repertoire_fraction"])
+    return table.astype({"n_groups": "int64"})
 
 
 def _group_pairs(shared, present, group_names, n_clonotypes, *, groupby, split):

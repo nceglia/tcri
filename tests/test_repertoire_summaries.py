@@ -290,12 +290,14 @@ EXPECTED_PAIRS = pd.DataFrame({
     "shared_fraction_b": [2 / 3, 1 / 3, 2 / 3],
 })
 
+#: ``clonotypes``: each shared clonotype's share of each group's counted cells. P1 and P2 count
+#: four cells each, the cell without a clonotype and the one without a patient left out, and P3
+#: five.
 EXPECTED_CLONOTYPES = pd.DataFrame({
     "clonotype": ["a", "c", "e"],
     "n_groups": [2, 2, 3],
     "groups": ["P1|P2", "P2|P3", "P1|P2|P3"],
-    "n_cells": [3, 3, 3],
-    "cells_per_group": ["2|1", "2|1", "1|1|1"],
+    "repertoire_fraction": ["0.5|0.25", "0.5|0.2", "0.25|0.25|0.2"],
 })
 
 
@@ -324,9 +326,9 @@ def _assert_sharing(result, groups, pairs, clonotypes):
 def test_clonotype_sharing_counts_groups_pairs_and_clonotypes(dtype):
     """Per group, its clonotypes and those also present in another group; per pair of groups,
     each once, the clonotypes of each and those both carry; per shared clonotype, its groups and
-    cells. A clonotype carried by three groups counts once in a group's shared clonotypes, so a
-    group's fraction is not a sum over its pairs. Cells without a clonotype or a group are not
-    counted, and rows follow the group's category order."""
+    its share of each group's counted cells. A clonotype carried by three groups counts once in a
+    group's shared clonotypes, so a group's fraction is not a sum over its pairs. Cells without a
+    clonotype or a group are not counted, and rows follow the group's category order."""
     adata = _adata({**COHORT, "clone_id": pd.Series(COHORT["clone_id"], dtype=dtype)})
     result = _sharing(adata, clonotype_key="clone_id", groupby="patient", part=None)
     _assert_sharing(result, EXPECTED_GROUPS, EXPECTED_PAIRS, EXPECTED_CLONOTYPES)
@@ -341,7 +343,8 @@ def test_clonotype_sharing_counts_groups_pairs_and_clonotypes(dtype):
         ("P3", "P1"), ("P3", "P2"), ("P1", "P2")]
     assert result["pairs"]["shared_clonotypes"].tolist() == [1, 2, 2]
     assert result["clonotypes"]["groups"].tolist() == ["P1|P2", "P3|P2", "P3|P1|P2"]
-    assert result["clonotypes"]["cells_per_group"].tolist() == ["2|1", "1|2", "1|1|1"]
+    assert result["clonotypes"]["repertoire_fraction"].tolist() == [
+        "0.5|0.25", "0.2|0.5", "0.2|0.25|0.25"]
 
     numbered = _adata(COHORT, complete=True)
     numbered.obs["clone_number"] = numbered.obs["clone_id"].map(

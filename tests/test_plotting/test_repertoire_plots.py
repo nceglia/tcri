@@ -165,6 +165,7 @@ def test_clonotype_sharing_draws_the_bands_of_the_stored_frames():
 
     shared = stored["groups"].set_index("patient").loc[PATIENTS, "shared_fraction"] * 100
     np.testing.assert_allclose([bar.get_height() for bar in middle.patches], shared)
+    assert [t.get_text() for t in middle.texts] == [f"{v:.2f}" for v in shared]
     assert [_hex(bar.get_facecolor()) for bar in middle.patches] == [
         _band(v, *_GROUP_BANDS) for v in shared]
     assert middle.get_ylim()[0] == 0
@@ -174,6 +175,8 @@ def test_clonotype_sharing_draws_the_bands_of_the_stored_frames():
     assert carriers == [2, 3, 4]
     assert [bar.get_height() for bar in right.patches] == [int(spread.get(n, 0))
                                                           for n in carriers]
+    assert [t.get_text() for t in right.texts] == [str(int(spread.get(n, 0)))
+                                                   for n in carriers]
     assert [_hex(bar.get_facecolor()) for bar in right.patches] == [
         _band(n, *_SPREAD_BANDS) for n in carriers]
 
@@ -233,6 +236,10 @@ def test_persistence_draws_one_heatmap_per_group_from_the_frame():
             expected[a, b], expected[b, a] = row.shared_fraction_a, row.shared_fraction_b
         np.testing.assert_allclose(np.ma.filled(ax.images[0].get_array().astype(float),
                                                 np.nan), expected)
+        n_clones = {**dict(zip(sub["covariate_a"], sub["n_clones_a"])),
+                    **dict(zip(sub["covariate_b"], sub["n_clones_b"]))}
+        assert [label.get_text() for label in ax.get_yticklabels()] == [
+            f"{level} ({n_clones[level]})" for level in levels]
         assert ax.get_xlabel() == "timepoint"
         assert _hex(ax.title.get_color()) == split[response]
 
@@ -256,3 +263,25 @@ def test_persistence_of_the_whole_dataset_is_one_panel():
     tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint")
     axes = tcri.pl.clone_persistence(adata)
     assert [ax.get_title() for ax in axes] == ["Clone overlap - all"]
+
+
+def test_persistence_with_no_pair_of_levels_raises():
+    """When every group has clones at one level only there is nothing to draw, and the plot
+    raises rather than drawing an empty panel."""
+    obs = pd.DataFrame({"clone_id": ["a", "a", "b"], "patient": ["P1", "P1", "P2"],
+                        "timepoint": ["t0", "t0", "t1"]})
+    obs.index = [f"cell_{i}" for i in range(3)]
+    adata = AnnData(X=np.zeros((3, 1), dtype=np.float32), obs=obs)
+    tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint",
+                              groupby="patient")
+    with pytest.raises(ValueError, match="no patient has clones at two levels of 'timepoint'"):
+        tcri.pl.clone_persistence(adata)
+    # the whole dataset has clones at t0 and t1, a pair to draw; at one level it has none
+    tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint",
+                              key_added="whole")
+    assert len(tcri.pl.clone_persistence(adata, key="whole")) == 1
+    adata.obs["timepoint"] = "t0"
+    tcri.pp.clone_persistence(adata, clonotype_key="clone_id", covariate_key="timepoint",
+                              key_added="whole")
+    with pytest.raises(ValueError, match="the dataset has clones at two levels"):
+        tcri.pl.clone_persistence(adata, key="whole")

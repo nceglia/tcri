@@ -44,18 +44,16 @@
         "clonotypes": {
           "columns": {
             "maximal": [
-              "cells_per_group",
               "clonotype",
               "groups",
-              "n_cells",
-              "n_groups"
+              "n_groups",
+              "repertoire_fraction"
             ],
             "minimal": [
-              "cells_per_group",
               "clonotype",
               "groups",
-              "n_cells",
-              "n_groups"
+              "n_groups",
+              "repertoire_fraction"
             ]
           },
           "index": {

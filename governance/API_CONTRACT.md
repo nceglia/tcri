@@ -73,8 +73,8 @@ unordered pair of the covariate levels at which the group has clones, the clones
 the clones seen at both, and that count as a share of each level's clones. `clonotype_sharing`
 stores `{pairs, groups, clonotypes}`: per unordered pair of groups, the clonotypes of each, those
 both carry, and that count as a share of each; per group, its clonotypes, those present in any
-other group, and their share; and per shared clonotype, the groups carrying it and their cells.
-Both count clonotypes or clones, never cells. Sharing and clonality are measured on the column the
+other group, and their share; and per shared clonotype, the groups carrying it and its
+repertoire fraction in each. Sharing and persistence are counted in clonotypes or clones. Sharing and clonality are measured on the column the
 derivation record leads back to, and raise when it is not in `obs`; `clonality` is
 `1 − H/log2(N)` over the clone sizes of a row there, every clone included, NaN with fewer than
 two clones. Each takes `splitby`, checked as the metrics check it, and its frames carry the split

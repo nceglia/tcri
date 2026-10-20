@@ -147,4 +147,4 @@ class ClonotypeSharing(TypedDict):
     groups: pd.DataFrame      # one row per group: <groupby>, [<splitby>,] n_clonotypes,
                               #   shared_clonotypes, shared_fraction
     clonotypes: pd.DataFrame  # one row per shared clonotype: clonotype, n_groups, groups,
-                              #   n_cells, cells_per_group
+                              #   repertoire_fraction
