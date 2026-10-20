@@ -508,6 +508,11 @@ def build_stats(result, *, groupby, splitby, value="value", change=None):
 
     ``change`` is ``{"cov_from", "cov_to", "distance"}`` for a change result, which adds its
     covariate rows (:func:`_covariate_rows`).
+
+    The labels of a row (the ``splitby`` column, ``level_a``, ``level_b``) are stored as text:
+    one column holds a split level on a covariate row and ``"a vs b"`` on a split row, and
+    ``level_a`` a covariate level or a split level, so a boolean or numeric label beside a string
+    would make a column ``.h5ad`` cannot write.
     """
     if result is None or not len(result) or value not in result.columns:
         return None
@@ -516,7 +521,13 @@ def build_stats(result, *, groupby, splitby, value="value", change=None):
         rows += _covariate_rows(result, groupby=groupby, splitby=splitby, value=value, **change)
     if splitby is not None and groupby is not None:
         rows += _split_rows(result, groupby=groupby, splitby=splitby, value=value)
-    return pd.DataFrame(rows) if rows else None
+    if not rows:
+        return None
+    frame = pd.DataFrame(rows)
+    for column in ("level_a", "level_b", splitby):
+        if column is not None and column in frame.columns:
+            frame[column] = frame[column].map(lambda v: v if pd.isna(v) else str(v))
+    return frame
 
 
 def _split_rows(result, *, groupby, splitby, value):
@@ -593,7 +604,7 @@ def _covariate_rows(result, *, groupby, splitby, value, cov_from, cov_to, distan
             b = sub[ends[1]].to_numpy(dtype=float)
         used = np.isfinite(a) & np.isfinite(b) & (b - a != 0)
         row = {"comparison": "covariate"}
-        if splitby is not None:
+        if level is not None:
             row[splitby] = level
         row.update(level_a=cov_from, level_b=cov_to,
                    replicate_unit=groupby if groupby is not None else np.nan, quantity=value)
@@ -775,11 +786,11 @@ def movable_clones(adata, levels=None):
     asks about any level.
     """
     frame = _cell_levels(adata)
-    strata = frame.groupby(["clone", "batch"], sort=False)["level"]
-    mixed = strata.nunique() > 1
+    keys = [frame["clone"], frame["batch"]]
+    mixed = frame["level"].groupby(keys, sort=False).nunique() > 1
     if levels is not None:
         wanted = _level_names(adata, levels)
-        mixed &= strata.agg(lambda s: bool(s.isin(wanted).any()))
+        mixed &= frame["level"].isin(wanted).groupby(keys, sort=False).any()
     return set(mixed[mixed].index.get_level_values("clone"))
 
 

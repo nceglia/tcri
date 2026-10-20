@@ -5,7 +5,7 @@ provenance block, and returns ``None``; with ``inplace=False`` it stores nothing
 whole result. :mod:`tcri.get` reads the store, and ``pl`` renders it; neither recomputes. Mutual
 information, the two entropies and flux store ``{replicate, item, stats}``, read with
 ``tcri.get.replicates``, ``items``, ``stats`` and ``draws``; ``joint_distribution`` stores
-``table`` and ``result``, read with ``tcri.get.result``. Mutual information and the entropies
+``{summary, draws}``, read with ``tcri.get.result`` and ``tcri.get.draws``. Mutual information and the entropies
 take ``covariate=`` or ``cov_from=`` with ``cov_to=``, the change from one level to another.
 
 ``splitby`` produces the between-split contrast as part of the metric, stored under ``stats``.

@@ -212,12 +212,13 @@ def resolve_quantity(result, quantity, *, name, value_only=False):
 
 
 def _stat_label(stats, a, b, *, quantity="value"):
-    """The stars for the (a, b) contrast, in either order, or ``None``."""
+    """The stars for the (a, b) contrast, in either order, or ``None``. Levels are matched as
+    text, the form ``stats`` stores them in."""
     stats = filter_quantity(stats, quantity)
     if stats is None or not len(stats):
         return None
     hits = [row for _, row in stats.iterrows()
-            if {row.get("level_a"), row.get("level_b")} == {a, b}]
+            if {str(row.get("level_a")), str(row.get("level_b"))} == {str(a), str(b)}]
     if not hits:
         return None
     if len(hits) > 1:

@@ -39,7 +39,7 @@ conceptual reference is [Information-theoretic metrics](../concepts/index.md).
 ## The `stats` slot
 
 Mutual information, the two entropies and flux store `{replicate, item, stats}`;
-`joint_distribution` stores `{table, result}`. Every call returns `None`, and `tcri.get` reads the
+`joint_distribution` stores `{summary, draws}`. Every call returns `None`, and `tcri.get` reads the
 stored result. The tests land in `stats`, read with `tcri.get.stats` — you do not call a second
 function: the between-split contrast when you pass `splitby`, and the test of a change when you
 pass `cov_from` and `cov_to`.

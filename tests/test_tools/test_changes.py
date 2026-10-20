@@ -902,6 +902,36 @@ def test_stored_and_returned_agree(metric, cohort):
         assert params["covariate"] is None
 
 
+def test_a_change_with_labels_that_are_not_strings_round_trips_through_h5ad(cohort, tmp_path):
+    """A boolean split and integer covariate levels: a change's ``stats`` holds covariate rows
+    and split rows in one frame, so its labels are stored as text, and the result writes to
+    ``.h5ad`` and reads back the same."""
+    from tests.test_covariate_null_movable import _cohort, _fit
+
+    _, adata = cohort
+    adata = adata.copy()
+    adata.obs["responder"] = (adata.obs["disease_status"].astype(str) == "disease").to_numpy()
+    tcri.tl.mutual_information(adata, cov_from=A, cov_to=B, splitby="responder",
+                               null_model=None)
+
+    numeric = _cohort(split=())
+    numeric.obs["covariate"] = numeric.obs["covariate"].map({"cov_0": 0, "cov_1": 1}).astype(
+        "category")
+    _fit(numeric, "integer_levels")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        tcri.tl.mutual_information(numeric, cov_from=0, cov_to=1, splitby="arm",
+                                   null_model=None)
+
+    for obj, name in ((adata, "responder"), (numeric, "integer levels")):
+        stats = tcri.get.stats(obj, "mutual_information")
+        assert set(stats["comparison"]) == {"covariate", "split"}, name
+        path = tmp_path / f"{name}.h5ad"
+        obj.write_h5ad(path)
+        pd.testing.assert_frame_equal(tcri.get.stats(ad.read_h5ad(path), "mutual_information"),
+                                      stats, obj=name)
+
+
 @pytest.mark.parametrize("replicate", [True, False], ids=["replicate", "no-replicate"])
 def test_a_stored_change_round_trips_through_h5ad(replicate, cohort, tmp_path):
     """Every metric's stored change, written to ``.h5ad`` and read back, gives the same
