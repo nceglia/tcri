@@ -1,88 +1,72 @@
-"""``tl.phenotypic_flux`` — per-clonotype phenotype-distribution shift between two
-covariate values, engine-backed.
+"""``tl.phenotypic_flux`` — how far each clone's phenotype distribution moves between two
+covariate levels, per replicate and per persistent clone, engine-backed.
 
-For each clone in the ``cov_from`` ∩ ``cov_to`` intersection, the distance between its
-phenotype distribution at ``cov_from`` and ``cov_to``, via ``_distance`` (kl / l1, KL in
-**bits**). **KL is the default** — flux is defined as the KL divergence; l1 is available for
-when a bounded or symmetric measure is wanted. ``n_samples=0`` is the plug-in (a clone with no
-real shift reads exactly 0); ``n_samples>0`` redraws both sides from one shared draw (common
-random numbers) and summarizes; a seed is generated when ``random_state`` is None, so the
-coupling holds at the default too.
+For each clone at both ``cov_from`` and ``cov_to`` (a persistent clone), the distance between its
+phenotype distribution at the two levels, via ``_distance`` (kl / l1, KL in **bits**). **KL is
+the default** — flux is defined as the KL divergence; l1 is available for when a bounded or
+symmetric measure is wanted. Per replicate, the flux is the persistent clones' distances weighted
+by each clone's share of the replicate's ``cov_from`` joint, renormalized over them: ``1/C`` at
+``weighted=False``, the cell share at ``weighted=True``. A clone whose distance is undefined has
+no weight. ``n_samples=0`` is the plug-in (a clone with no real shift reads exactly 0);
+``n_samples>0`` redraws both levels from one shared sample (common random numbers) and
+summarizes.
 """
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
-import pandas as pd
 
 from .._compute._distance import phenotype_distance
 from .._state import keys as K
 from .._state import schemas
 from .._state.storage import tl_result, with_resolved_params
-from .._compute._tables import (build_result, build_stats, joint_draws, metric_table,
-                      resolve_groupby, validate_splitby)
+from .._compute._tables import (build_result, build_stats, change_draws, check_covariates,
+                                metric_frames, resolve_groupby, resolve_seed, rows_of,
+                                validate_splitby)
 
 __all__ = ["phenotypic_flux"]
 
 
-def _flux_once(adata, *, cov_from, cov_to, n_samples, weighted, temperature, clones,
-               distance_metric, random_state, device=None, fit=None):
-    dist_fn = phenotype_distance(distance_metric)
-    # Both sides MUST come from one shared draw. The engine samples over every ct row and then
-    # selects a covariate's block, so two calls carrying the SAME seed realize the same
-    # underlying sample and the two blocks are coherent. Left at random_state=None they are two
-    # independent samples, and the flux of a covariate against ITSELF -- which is the KL of a
-    # distribution from itself, exactly 0 -- comes back as the sampling noise floor instead.
-    #
-    # This is common random numbers, and the coupling is deliberate rather than incidental: the
-    # estimand is a DIFFERENCE between two covariate levels of the same clone, so the draws are
-    # coupled and the reported HDI is for the coupled quantity. Independent draws would report
-    # the sum of two posteriors' spread plus a positive bias that never goes to zero.
-    if random_state is None:
-        random_state = int(np.random.SeedSequence().generate_state(1)[0])
+def _distances(P, Q, dist_fn):
+    """The distance of each row of ``P`` to the same row of ``Q``, each row renormalized; NaN
+    for a row with no mass on either side."""
+    out = np.full(len(P), np.nan)
+    for i, (p, q) in enumerate(zip(P, Q)):
+        ps, qs = p.sum(), q.sum()
+        if ps > 0 and qs > 0:
+            out[i] = float(dist_fn(p / ps, q / qs))
+    return out
 
-    draws_from, _ = joint_draws(adata, cov_from, n_samples=n_samples, weighted=weighted, device=device,
-                                temperature=temperature, clones=clones, random_state=random_state,
-                                fit=fit)
-    draws_to, _ = joint_draws(adata, cov_to, n_samples=n_samples, weighted=weighted, device=device,
-                              temperature=temperature, clones=clones, random_state=random_state,
-                              fit=fit)
-    per = []
-    for (ids_f, Jf), (ids_t, Jt) in zip(draws_from, draws_to):
-        idx_t = {c: i for i, c in enumerate(ids_t)}
-        d = {}
-        for i, c in enumerate(ids_f):
-            if c not in idx_t:
-                continue
-            p = np.asarray(Jf[i], dtype=np.float64); q = np.asarray(Jt[idx_t[c]], dtype=np.float64)
-            ps, qs = p.sum(), q.sum()
-            if ps <= 0 or qs <= 0:
-                d[c] = np.nan
-                continue
-            d[c] = float(dist_fn(p / ps, q / qs))
-        per.append(d)
-    keys = sorted(set().union(*[set(p) for p in per])) if per else []
-    point = {c: float(np.nanmean([p.get(c, np.nan) for p in per])) for c in keys}
-    drawsd = ({c: [p.get(c, np.nan) for p in per] for c in keys}
-              if (n_samples and int(n_samples) > 0) else None)
-    return point, drawsd
+
+def _weighted(d, mass):
+    """The mean of ``d`` weighted by ``mass``, over the rows where both are finite and the mass
+    is positive; NaN when there are none."""
+    keep = np.isfinite(d) & np.isfinite(mass) & (mass > 0)
+    if not keep.any():
+        return np.nan
+    return float(np.sum(d[keep] * mass[keep]) / np.sum(mass[keep]))
 
 
 @tl_result(key=K.PHENOTYPIC_FLUX, version=4, schema=schemas.PhenotypicFlux,
-           default_null="covariate")
+           default_null="covariate", distance=True)
 def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_samples=0,
                     temperature=1.0, clones=None, exclude_pools=True, weighted=False,
                     distance_metric="kl", random_state=None, device=None, fit=None):
-    """Per-clone phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for
-    kl). Stores ``{table, result, stats}`` and returns ``None``; with ``inplace=False`` nothing
-    is stored and the result is returned. Read it with ``tcri.get.result``.
+    """Phenotype-distribution distance from ``cov_from`` to ``cov_to`` (bits for kl), per
+    replicate and per persistent clone. See the module docstring.
+
+    Stores ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``, under
+    ``uns[key_added or 'tcri_phenotypic_flux']`` and returns ``None``; with ``inplace=False``
+    nothing is stored and the whole result is returned. The replicate level has one row per
+    replicate, read with ``tcri.get.replicates``; the item level one row per replicate and
+    persistent clone, read with ``tcri.get.items``. A clone at one level only has no item row; a
+    replicate with no persistent clone has a NaN replicate row.
 
     Flux is defined as the KL divergence, which is why ``distance_metric`` defaults to
     ``"kl"``; ``"l1"`` is available for when a bounded or symmetric measure is wanted.
 
-    A clone present at ``cov_from`` but absent at ``cov_to`` is DROPPED, not NaN-filled — a
-    flux needs both endpoints to exist.
+    ``stats`` holds the test of the adjusted flux against 0, one row per split level with
+    ``splitby`` or one over every replicate without, beside the split rows. Flux is never negative, so the value itself is not tested against 0: without a
+    usable reference that row has a NaN p and blank stars.
 
     ``null_model`` names the permutation reference; ``"auto"`` is the COVARIATE null, because
     what a flux measures is movement between covariate levels and the reference has to be a fit
@@ -94,38 +78,37 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     selecting among them. ``False`` counts each pool as one clone. A column with no pooling
     step has nothing to leave out.
     """
+    if cov_from is None or cov_to is None:
+        raise ValueError(
+            f"phenotypic_flux: pass both cov_from= and cov_to=; flux is the distance from one "
+            f"covariate level to another (got cov_from={cov_from!r}, cov_to={cov_to!r}).")
+    check_covariates(adata, covariate=None, cov_from=cov_from, cov_to=cov_to,
+                     metric="phenotypic_flux")
     gkey, resolved = resolve_groupby(adata, groupby)
     validate_splitby(adata.obs, gkey, splitby)
+    dist_fn = phenotype_distance(distance_metric)
+    seed = resolve_seed(random_state)
 
-    def _compute(clone_subset):
-        point, drawsd = _flux_once(
-            adata, cov_from=cov_from, cov_to=cov_to, n_samples=n_samples, weighted=weighted,
-            temperature=temperature, clones=clone_subset, distance_metric=distance_metric,
-            random_state=random_state, device=device, fit=fit,
-        )
-        if drawsd is None:
-            return [point]
-        n_draws = len(next(iter(drawsd.values()))) if drawsd else 1
-        return [{c: vals[d] for c, vals in drawsd.items()} for d in range(n_draws)]
+    def _compute(clone_subset, persistent):
+        draws_from, draws_to, _cols = change_draws(
+            adata, cov_from, cov_to, clones=clone_subset, seed=seed, n_samples=n_samples,
+            weighted=weighted, temperature=temperature, device=device, fit=fit)
+        per = []
+        for (ids_f, Jf), (ids_t, Jt) in zip(draws_from, draws_to):
+            P = rows_of(ids_f, Jf, persistent)
+            d = _distances(P, rows_of(ids_t, Jt, persistent), dist_fn)
+            per.append(({"value": _weighted(d, P.sum(axis=1))},
+                        {c: {"value": float(v)} for c, v in zip(persistent, d)}))
+        return per
 
-    table = metric_table(adata, covariate=None, groupby=gkey, splitby=splitby, clones=clones,
-                         exclude_pools=exclude_pools, item_col="clonotype", compute=_compute,
-                         fit=fit,
-                         extra_labels={"cov_from": cov_from, "cov_to": cov_to})
-    if not len(table):
-        # Say WHY rather than returning a silently empty frame. The overwhelmingly likely cause
-        # is a covariate that does not vary within a replicate, and the user cannot tell that
-        # from an empty result.
-        warnings.warn(
-            f"phenotypic_flux found no clone present at both {cov_from!r} and {cov_to!r} "
-            f"within any {gkey!r}, so the result is empty. Flux is a WITHIN-replicate "
-            f"comparison: it needs a covariate that varies inside a single {gkey!r} (a "
-            f"timepoint, say). A covariate that is constant within {gkey!r} and only "
-            f"distinguishes one {gkey!r} from another cannot produce flux.",
-            stacklevel=2,
-        )
-    result = build_result(table)
-    stats = build_stats(result, groupby=gkey, splitby=splitby)
-
-    payload = {"table": table, "result": result, "stats": stats}
+    rep_draws, item_draws = metric_frames(
+        adata, cov_from=cov_from, cov_to=cov_to, groupby=gkey, splitby=splitby, clones=clones,
+        exclude_pools=exclude_pools, item_col="clonotype", compute=_compute,
+        metric="phenotypic_flux", fit=fit)
+    rep_summary = build_result(rep_draws)
+    payload = {"replicate": {"draws": rep_draws, "summary": rep_summary},
+               "item": {"draws": item_draws, "summary": build_result(item_draws)},
+               "stats": build_stats(rep_summary, groupby=gkey, splitby=splitby,
+                                    change={"cov_from": cov_from, "cov_to": cov_to,
+                                            "distance": True})}
     return with_resolved_params(payload, groupby=gkey) if resolved else payload

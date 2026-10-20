@@ -191,6 +191,8 @@ def _null(model, adata, *, kind, n_nulls=N_NULLS, within=None, seed=None, key_ad
         _check_the_name_is_free(adata, model, fit)
 
     strata = _permute.resolve_strata(adata, kind, within)
+    if kind == "covariate":
+        _permute.check_covariate_movable(adata)
     base_seed = int(seed) if seed is not None else int(
         model.init_params_.get("kwargs", {}).get("seed") or getattr(model, "_seed", None) or 0)
 
@@ -274,7 +276,7 @@ _N_NULLS_DOC = """
     and summarizes all the pairs, so ``adjusted`` and its interval carry how much the null moves
     from one fit to the next, which one fit cannot show. The cost grows with it: ``n_nulls``
     fits per call (``tcri.null.all`` fits 3 x ``n_nulls``, 15 at the default), and a metric's
-    per-draw ``table`` is ``n_nulls`` times longer. Calling again replaces the whole reference.
+    per-draw frames (``draws``) are ``n_nulls`` times longer. Calling again replaces the whole reference.
 
     A null's permutation is drawn from ``seed`` (default: the parent's seed), spawned by its
     kind, ``key_added`` and index alone, so the same call reproduces the same permutations
@@ -312,8 +314,13 @@ def covariate(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **tra
     """Refit the parent with the covariate label shuffled within (clonotype, batch).
 
     Each clone keeps its cells and its size; which covariate level a cell sits at is random. The
-    reference for anything that compares covariate levels -- phenotypic flux and the two deltas.
+    reference for anything that compares covariate levels -- phenotypic flux and every change
+    (``cov_from``/``cov_to``).
     It takes no ``within``: its strata are what make it a covariate null.
+
+    Raises ``ValueError`` before fitting when no (clonotype, batch) holds two levels, since no
+    shuffle could then move a cell. A metric reading this null blanks the reference of any group
+    it cannot move at the levels read, and names it in a warning.
     """
     return _null(model, adata, kind="covariate", n_nulls=n_nulls, seed=seed,
                  key_added=key_added, **train_kwargs)
@@ -330,8 +337,8 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
 
     The common path: one call after ``train()`` and ``to_anndata()`` and the object carries every
     reference the metrics default to. Each kind is ``n_nulls`` fits, so the default of 5 over
-    the three kinds is 15 fits, and a metric's per-draw ``table`` is ``n_nulls`` times longer
-    than with one null. ``covariate`` is skipped, with a warning, when the covariate has one
+    the three kinds is 15 fits, and a metric's per-draw frames (``draws``) are ``n_nulls`` times
+    longer than with one null. ``covariate`` is skipped, with a warning, when the covariate has one
     level -- a covariate null needs two levels to permute between -- and never skipped
     silently.
     """
@@ -349,13 +356,18 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
         )
 
     n_levels = len(adata.uns[K.COVARIATE_CATEGORIES])
+    if "covariate" in kinds and n_levels >= 2:
+        # checked before any kind is fitted, so a covariate null that could move nothing fails
+        # before the other references spend their training
+        _permute.check_covariate_movable(adata)
     out = {}
     for kind in kinds:
         if kind == "covariate" and n_levels < 2:
             warnings.warn(
                 f"skipping the covariate null: the covariate has {n_levels} level(s) and a "
                 f"covariate null permutes cells between its levels. The metrics that default "
-                f"to it (phenotypic_flux, the two deltas) are not defined here either.",
+                f"to it (phenotypic_flux and every change between levels) are not defined here "
+                f"either.",
                 UserWarning, stacklevel=2,
             )
             continue

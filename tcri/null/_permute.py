@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .._compute._tables import movable_clones
 from .._state import keys as K
 
 #: The permutation's own random stream, per kind. A null's TRAINING seed is the parent's exactly
@@ -117,6 +118,26 @@ def resolve_strata(adata, kind: str, within=None):
             f"Pass within={required_strata(adata, kind) + [c for c in within if c not in required_strata(adata, kind)]!r}."
         )
     return within
+
+
+def check_covariate_movable(adata):
+    """Raise when the covariate null can move no cell.
+
+    It shuffles each cell's covariate level within (clonotype, batch). When every such group holds
+    one level, which is what each batch holding a single level does, no shuffle changes anything
+    and the null equals the fit, so it would be a reference that measures nothing. Decided from
+    ``obs`` alone (:func:`~tcri._compute._tables.movable_clones`), before anything is fitted.
+    """
+    if movable_clones(adata):
+        return
+    meta = adata.uns[K.METADATA]
+    raise ValueError(
+        f"the covariate null cannot move any cell: within every (clonotype, batch) of "
+        f"{meta[K.Config.CLONE_COL]!r} and {meta[K.Config.BATCH_COL]!r}, the cells sit at one "
+        f"level of {meta[K.Config.COVARIATE_COL]!r}, so a shuffle within those groups changes "
+        f"nothing and the null would equal the fit. This is what a batch holding a single "
+        f"covariate level gives; a covariate null needs a batch that holds a clone at two levels."
+    )
 
 
 def build_permutation(adata, strata, rng):

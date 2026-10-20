@@ -41,18 +41,22 @@ KNOBS = dict(n_latent=8, n_hidden=16, n_layers=1, classifier_n_layers=1, classif
 TRAIN = dict(max_epochs=10, batch_size=128, n_epochs_kl_warmup=3, accelerator="cpu",
              enable_progress_bar=False, enable_model_summary=False)
 
-#: Every tool that takes ``clones=``, with the arguments it is called with here.
+#: Every tool that takes ``clones=``, with the arguments it is called with here: the metrics at
+#: one covariate level and on a change (``<metric>_change``), flux, which is always a change, and
+#: the diagnostics.
 TOOLS = {
     "joint_distribution": (tcri.tl.joint_distribution, {}),
     "mutual_information": (tcri.tl.mutual_information, {"covariate": POST, "splitby": SPLIT}),
     "clonotypic_entropy": (tcri.tl.clonotypic_entropy, {"covariate": POST, "splitby": SPLIT}),
     "phenotypic_entropy": (tcri.tl.phenotypic_entropy, {"covariate": POST, "splitby": SPLIT}),
+    "mutual_information_change": (tcri.tl.mutual_information,
+                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
+    "clonotypic_entropy_change": (tcri.tl.clonotypic_entropy,
+                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
+    "phenotypic_entropy_change": (tcri.tl.phenotypic_entropy,
+                                  {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
     "phenotypic_flux": (tcri.tl.phenotypic_flux,
                         {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
-    "delta_clonotypic_entropy": (tcri.tl.delta_clonotypic_entropy,
-                                 {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
-    "delta_phenotypic_entropy": (tcri.tl.delta_phenotypic_entropy,
-                                 {"cov_from": PRE, "cov_to": POST, "splitby": SPLIT}),
     "joint_distribution_ppc": (tcri.diag.joint_distribution_ppc,
                                {"n_samples": 3, "n_sims": 10, "random_state": 0,
                                 "plot": False}),
@@ -60,7 +64,8 @@ TOOLS = {
                          {"covariate": POST, "groupby": "patient", "n_perm": 20,
                           "random_state": 0, "plot": False}),
 }
-STORED = {name for name in TOOLS if hasattr(tcri.tl, name)}
+#: The entries whose tool is a ``tl`` tool, which stores its result under its own name.
+STORED = {name for name, (fn, _) in TOOLS.items() if getattr(tcri.tl, fn.__name__, None) is fn}
 
 #: Tools whose rows ``clones=`` orders by its list where leaving out the pools keeps the tool's
 #: own order: the joint stacked over covariates, and the per-clone table within each patient.
@@ -280,7 +285,8 @@ def test_exclude_pools_is_recorded_in_params(pooled, name):
     model, adata = pooled
     a = adata.copy()
     _run(name, model, a, inplace=True)
-    assert tcri.get.params(a, name)["exclude_pools"] is True
+    stored_as = TOOLS[name][0].__name__ if name in TOOLS else name
+    assert tcri.get.params(a, stored_as)["exclude_pools"] is True
 
 
 # ── nothing to exclude ───────────────────────────────────────────────────────

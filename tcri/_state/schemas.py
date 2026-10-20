@@ -3,48 +3,41 @@
 ``@tl_result(schema=...)`` checks required-key PRESENCE on dict results. The shapes in the
 trailing comments are documentation of the payload layout; nothing parses them.
 
-**By level.** Mutual information, the two entropies and ``perturb.gene_importance`` store
+**By level.** Mutual information, the two entropies, flux and ``perturb.gene_importance`` store
 ``{replicate, item, stats}``:
 
 ``replicate``
     ``{draws, summary}``. ``draws`` has one row per (covariate, group, draw), ``summary`` the same
     rows summarized over the draws, one per (covariate, group), read with ``tcri.get.replicates``.
+    A change labels its rows ``cov_from`` and ``cov_to`` in place of ``covariate``, and carries
+    its endpoints ``value_from`` and ``value_to`` beside ``value``; flux has none.
 
 ``item``
     ``{draws, summary}`` for the metric's items, one row per (covariate, group, item[, draw]).
-    Mutual information has one value per joint and no ``item``.
+    Mutual information has one value per joint and no ``item``. On a change the items are the
+    persistent clones (or, for clonotypic entropy, the phenotypes over them).
 
 ``stats``
     The tests on the replicate summary, or ``None`` when nothing is compared.
 
 ``joint_distribution`` stores ``{summary, draws}``: the clone × phenotype matrix it is, not a
-scored quantity. The other tools store the layout below, with two payload keys:
-
-``table``
-    The substrate. One row per (covariate, group, item[, draw]). Never reduced. All label
-    columns present, so a caller can group it any way they like.
-
-``result``
-    The reduced frame, built FROM ``table`` — one row per group (or per item when there is no
-    groupby). This is what the box/swarm plots consume. It carries the value columns and their
-    spread — ``sd``, ``hdi_*`` over draws, ``ci_*`` across groups — as columns. The contrast
-    between groups is not here: it is the ``stats`` frame below, and ``pl`` reads it from
-    there.
+scored quantity.
 
 **Reference columns.** When the metric ran with a reference — ``null_model`` not ``None``,
-which is the default — ``result`` and ``table`` each gain, beside every native value column
-``v``, a ``null_v`` (the same functional on the permutation null, at the same arguments) and an
-``adjusted`` (``value - null_value``; ``adjusted_from``/``adjusted_to`` for the delta
-endpoints). The adjusted value is the one quantity a scored metric reports; ``value`` and
-``null_value`` are its inputs and stay stored beside it. A DENOMINATOR gets ``null_denom`` and
-no adjusted column. ``table`` carries them per draw, the fit's draw ``d`` paired with the
-null's draw ``d``, and ``result`` summarizes the paired draws: ``adjusted`` is their mean, with
-``adjusted_sd``, ``adjusted_hdi_low`` and ``adjusted_hdi_high`` beside it, and ``null_v`` is the
-null's mean. At ``null_model=None`` none of them exist, on either frame.
+which is the default — every frame gains, beside every native value column ``v``, a ``null_v``
+(the same functional on the permutation null, at the same arguments) and an ``adjusted``
+(``value - null_value``; ``adjusted_from``/``adjusted_to`` for a change's endpoints). The
+adjusted value is the one quantity a scored metric reports; ``value`` and ``null_value`` are its
+inputs and stay stored beside it. A DENOMINATOR gets ``null_denom`` and no adjusted column.
+``draws`` carries them per draw, the fit's draw ``d`` paired with each null's draw ``d``, and
+``summary`` summarizes the paired draws: ``adjusted`` is their mean, with ``adjusted_sd``,
+``adjusted_hdi_low`` and ``adjusted_hdi_high`` beside it, and ``null_v`` is the nulls' mean. At
+``null_model=None`` none of them exist, on either frame. ``perturb.gene_importance`` keeps only
+the adjusted columns, and at ``n_samples > 0`` pairs fit draw ``d`` with null ``d mod K`` alone.
 
-**The ``stats`` slot.** Every metric except :class:`JointDistribution` stores it. Six of the
-``TypedDict``s below declare it; :class:`PhenotypicFlux` does not, and a declared key is a
-required one, so it accepts a payload with or without it. It carries one row per contrast and a ``quantity`` column naming
+**The ``stats`` slot.** Every metric except :class:`JointDistribution` stores it and declares it.
+It carries one row per contrast, ``comparison`` saying what it compares (``"split"``, two levels
+of ``splitby``; ``"covariate"``, the paired test of a change), and a ``quantity`` column naming
 the column contrasted: ``"adjusted"`` when the result carries a usable adjustment, ``"value"``
 otherwise (no reference, or one that is non-finite everywhere). ``pl`` stars the quantity on its
 axis, so a panel of the value carries no star when the contrast is on the adjusted value.
@@ -61,8 +54,6 @@ __all__ = [
     "ClonotypicEntropy",
     "PhenotypicEntropy",
     "PhenotypicFlux",
-    "DeltaClonotypicEntropy",
-    "DeltaPhenotypicEntropy",
     "GeneImportance",
     "validate",
 ]
@@ -85,7 +76,9 @@ class MutualInformation(TypedDict):
                             # reference). summary: one row per group; value + sd/hdi_* + denom
                             # (+ null_value/null_denom/adjusted/adjusted_sd/adjusted_hdi_*).
                             # `denom` is the normalizer this MI was divided by: the null does
-                            # not share it, so both are stored and value*denom recovers bits
+                            # not share it, so both are stored and value*denom recovers bits.
+                            # A change: cov_from, cov_to in place of covariate, and
+                            # value_from, value_to, denom_from, denom_to in place of denom
     stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
@@ -93,7 +86,8 @@ class ClonotypicEntropy(TypedDict):
     """H(c | phi) — per replicate H(C|P), and one value per PHENOTYPE."""
 
     replicate: dict         # {draws, summary}: covariate, [groupby], [splitby], [draw], value
-                            # (+ the reference columns)
+                            # (+ the reference columns); a change: cov_from, cov_to,
+                            # value_from, value_to
     item: dict              # {draws, summary}: the same, per phenotype
     stats: object           # one row per contrast; `quantity` names the column contrasted
 
@@ -102,47 +96,21 @@ class PhenotypicEntropy(TypedDict):
     """H(phi | c) — per replicate H(P|C), and one value per clone."""
 
     replicate: dict         # {draws, summary}: covariate, [groupby], [splitby], [draw], value
-                            # (+ the reference columns)
+                            # (+ the reference columns); a change: cov_from, cov_to,
+                            # value_from, value_to
     item: dict              # {draws, summary}: the same, per clone (`clonotype`)
     stats: object           # one row per contrast; `quantity` names the column contrasted
 
 
 class PhenotypicFlux(TypedDict):
-    """Distance between a clone's phenotype distribution at two covariate levels.
-
-    Clones absent from either side are dropped, not NaN-filled — a flux needs both endpoints.
+    """Distance between a clone's phenotype distribution at two covariate levels — per replicate,
+    the persistent clones' distances weighted by their ``cov_from`` shares, and per persistent
+    clone. A clone at one level only has no item row: a flux needs both endpoints.
     """
 
-    table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw, value
-    result: pd.DataFrame    # + null_value/adjusted with a reference
-
-
-class DeltaClonotypicEntropy(TypedDict):
-    """H(c|phi) at ``cov_to`` minus at ``cov_from`` — one value per PHENOTYPE.
-
-    The clone set is intersected across the two levels within each replicate, so ``log2(C)``
-    is the same on both sides and cancels out of the difference. That is why no special
-    ``n_clones_ref`` default is needed here.
-    """
-
-    table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], phenotype, draw,
-                            #       value, value_from, value_to
-    result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
-                            #   adjusted/adjusted_from/adjusted_to with a reference
-    stats: object           # one row per contrast; `quantity` names the column contrasted
-
-
-class DeltaPhenotypicEntropy(TypedDict):
-    """H(phi|c) at ``cov_to`` minus at ``cov_from`` — one value per CLONE.
-
-    The only metric whose item axis is entity-matched: the same clonotype observed at both
-    levels, a biological barcode rather than a category measured twice.
-    """
-
-    table: pd.DataFrame     # cols: cov_from, cov_to, [groupby], [splitby], clonotype, draw,
-                            #       value, value_from, value_to
-    result: pd.DataFrame    # + null_value/null_value_from/null_value_to and
-                            #   adjusted/adjusted_from/adjusted_to with a reference
+    replicate: dict         # {draws, summary}: cov_from, cov_to, [groupby], [splitby], [draw],
+                            # value (+ the reference columns)
+    item: dict              # {draws, summary}: the same, per persistent clone (`clonotype`)
     stats: object           # one row per contrast; `quantity` names the column contrasted
 
 

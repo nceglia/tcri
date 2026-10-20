@@ -104,10 +104,10 @@ def _fit_the_nulls(model, adata):
 
     Carried by the FIXTURE rather than passed as `null_model=None` at every call site, so the
     default path is the tested path: a metric called the way a user calls it computes a
-    reference, writes a second `uns` key and returns the `adjusted` columns, and the suite sees
+    reference, writes a second `uns` key and stores the `adjusted` columns, and the suite sees
     all of that. The four tests that deliberately measure something else -- device parity,
-    recovery accuracy, the delta intersection rule, real-data timing -- pass `null_model=None`
-    and say why.
+    recovery accuracy, the persistent-clone rule of a change, real-data timing -- pass
+    `null_model=None` and say why.
 
     Two fits per kind rather than the default five: a reference of more than one fit is what
     every metric then pools, so the pooled path is the one the suite reads, at six fits per

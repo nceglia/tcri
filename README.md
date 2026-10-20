@@ -49,8 +49,9 @@ gene-expression matrix.
   all in bits over the posterior joint.
 - **Uncertainty-aware** — every metric can be reported as a posterior mean ± HDI by
   drawing from the fitted Dirichlet posterior (`n_samples > 0`).
-- **Group comparisons** — paired/unpaired contrasts across cohorts (e.g. disease vs
-  control), with `n` counting replicates rather than items.
+- **Comparisons** — the change between covariate levels within each replicate (e.g. pre →
+  post) on every metric, tested across replicates, and contrasts between cohorts (e.g. disease
+  vs control), with `n` counting replicates rather than items.
 - **Diagnostics** — posterior-predictive checks, phenotype calibration, and permutation
   nulls for the metrics.
 - **Contract-governed** — the public API, the generative model, the metric definitions,

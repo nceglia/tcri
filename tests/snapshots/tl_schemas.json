@@ -4,6 +4,33 @@
       "slots": {
         "item.draws": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "null",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "phenotype",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "draw",
+              "phenotype",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -23,6 +50,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -34,6 +67,39 @@
         },
         "item.summary": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "phenotype",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "phenotype",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -59,6 +125,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -70,6 +142,31 @@
         },
         "replicate.draws": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "null",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "draw",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -87,6 +184,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -98,6 +201,37 @@
         },
         "replicate.summary": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -121,6 +255,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -132,6 +272,49 @@
         },
         "stats": {
           "columns": {
+            "change_maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "change_minimal": [
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
             "maximal": [
               "<splitby>",
               "ci_high_a",
@@ -157,6 +340,12 @@
             "minimal": []
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -167,258 +356,6 @@
       },
       "version": 4,
       "writer": "tcri.tl.clonotypic_entropy"
-    },
-    "tcri_delta_clonotypic_entropy": {
-      "slots": {
-        "result": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "adjusted_from",
-              "adjusted_hdi_high",
-              "adjusted_hdi_low",
-              "adjusted_sd",
-              "adjusted_to",
-              "cov_from",
-              "cov_to",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "null_value_from",
-              "null_value_to",
-              "phenotype",
-              "sd",
-              "value",
-              "value_from",
-              "value_to"
-            ],
-            "minimal": [
-              "cov_from",
-              "cov_to",
-              "hdi_high",
-              "hdi_low",
-              "phenotype",
-              "sd",
-              "value",
-              "value_from",
-              "value_to"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        },
-        "stats": {
-          "columns": {
-            "maximal": [
-              "<splitby>",
-              "ci_high_a",
-              "ci_high_b",
-              "ci_low_a",
-              "ci_low_b",
-              "comparison",
-              "delta",
-              "level_a",
-              "level_b",
-              "mean_a",
-              "mean_b",
-              "n_a",
-              "n_b",
-              "p",
-              "quantity",
-              "replicate_unit",
-              "sd_a",
-              "sd_b",
-              "stars",
-              "stat"
-            ],
-            "minimal": []
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "adjusted_from",
-              "adjusted_to",
-              "cov_from",
-              "cov_to",
-              "draw",
-              "null",
-              "null_value",
-              "null_value_from",
-              "null_value_to",
-              "phenotype",
-              "value",
-              "value_from",
-              "value_to"
-            ],
-            "minimal": [
-              "cov_from",
-              "cov_to",
-              "draw",
-              "phenotype",
-              "value",
-              "value_from",
-              "value_to"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        }
-      },
-      "version": 4,
-      "writer": "tcri.tl.delta_clonotypic_entropy"
-    },
-    "tcri_delta_phenotypic_entropy": {
-      "slots": {
-        "result": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "adjusted_from",
-              "adjusted_hdi_high",
-              "adjusted_hdi_low",
-              "adjusted_sd",
-              "adjusted_to",
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "null_value_from",
-              "null_value_to",
-              "sd",
-              "value",
-              "value_from",
-              "value_to"
-            ],
-            "minimal": [
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "hdi_high",
-              "hdi_low",
-              "sd",
-              "value",
-              "value_from",
-              "value_to"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        },
-        "stats": {
-          "columns": {
-            "maximal": [
-              "<splitby>",
-              "ci_high_a",
-              "ci_high_b",
-              "ci_low_a",
-              "ci_low_b",
-              "comparison",
-              "delta",
-              "level_a",
-              "level_b",
-              "mean_a",
-              "mean_b",
-              "n_a",
-              "n_b",
-              "p",
-              "quantity",
-              "replicate_unit",
-              "sd_a",
-              "sd_b",
-              "stars",
-              "stat"
-            ],
-            "minimal": []
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "adjusted_from",
-              "adjusted_to",
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "draw",
-              "null",
-              "null_value",
-              "null_value_from",
-              "null_value_to",
-              "value",
-              "value_from",
-              "value_to"
-            ],
-            "minimal": [
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "draw",
-              "value",
-              "value_from",
-              "value_to"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        }
-      },
-      "version": 4,
-      "writer": "tcri.tl.delta_phenotypic_entropy"
     },
     "tcri_gene_importance": {
       "slots": {
@@ -630,6 +567,37 @@
       "slots": {
         "replicate.draws": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "denom_from",
+              "denom_to",
+              "draw",
+              "null",
+              "null_denom_from",
+              "null_denom_to",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "denom_from",
+              "denom_to",
+              "draw",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -650,6 +618,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -661,6 +635,43 @@
         },
         "replicate.summary": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "denom_from",
+              "denom_to",
+              "hdi_high",
+              "hdi_low",
+              "null_denom_from",
+              "null_denom_to",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "denom_from",
+              "denom_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -687,6 +698,12 @@
             ]
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -698,6 +715,49 @@
         },
         "stats": {
           "columns": {
+            "change_maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "change_minimal": [
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
             "maximal": [
               "<splitby>",
               "ci_high_a",
@@ -723,6 +783,12 @@
             "minimal": []
           },
           "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
             "maximal": [
               "None"
             ],
@@ -738,6 +804,33 @@
       "slots": {
         "item.draws": {
           "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "null",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "value",
+              "value_from",
+              "value_to"
+            ],
             "maximal": [
               "<groupby>",
               "<splitby>",
@@ -752,6 +845,338 @@
             "minimal": [
               "clonotype",
               "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "item.summary": {
+          "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "adjusted_to",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "clonotype",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.draws": {
+          "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "null",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "draw",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "covariate",
+              "draw",
+              "null",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "draw",
+              "value"
+            ]
+          },
+          "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.summary": {
+          "columns": {
+            "change_maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_from",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "adjusted_to",
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "null_value_from",
+              "null_value_to",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "change_minimal": [
+              "cov_from",
+              "cov_to",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value",
+              "value_from",
+              "value_to"
+            ],
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "null_value",
+              "sd",
+              "value"
+            ],
+            "minimal": [
+              "covariate",
+              "hdi_high",
+              "hdi_low",
+              "sd",
+              "value"
+            ]
+          },
+          "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "stats": {
+          "columns": {
+            "change_maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "change_minimal": [
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "maximal": [
+              "<splitby>",
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
+            ],
+            "minimal": []
+          },
+          "index": {
+            "change_maximal": [
+              "None"
+            ],
+            "change_minimal": [
+              "None"
+            ],
+            "maximal": [
+              "None"
+            ],
+            "minimal": []
+          },
+          "type": "DataFrame"
+        }
+      },
+      "version": 4,
+      "writer": "tcri.tl.phenotypic_entropy"
+    },
+    "tcri_phenotypic_flux": {
+      "slots": {
+        "item.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "clonotype",
+              "cov_from",
+              "cov_to",
+              "draw",
+              "null",
+              "null_value",
+              "value"
+            ],
+            "minimal": [
+              "clonotype",
+              "cov_from",
+              "cov_to",
               "draw",
               "value"
             ]
@@ -776,7 +1201,8 @@
               "adjusted_hdi_low",
               "adjusted_sd",
               "clonotype",
-              "covariate",
+              "cov_from",
+              "cov_to",
               "hdi_high",
               "hdi_low",
               "null_value",
@@ -785,7 +1211,8 @@
             ],
             "minimal": [
               "clonotype",
-              "covariate",
+              "cov_from",
+              "cov_to",
               "hdi_high",
               "hdi_low",
               "sd",
@@ -808,14 +1235,16 @@
               "<groupby>",
               "<splitby>",
               "adjusted",
-              "covariate",
+              "cov_from",
+              "cov_to",
               "draw",
               "null",
               "null_value",
               "value"
             ],
             "minimal": [
-              "covariate",
+              "cov_from",
+              "cov_to",
               "draw",
               "value"
             ]
@@ -839,81 +1268,6 @@
               "adjusted_hdi_high",
               "adjusted_hdi_low",
               "adjusted_sd",
-              "covariate",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "sd",
-              "value"
-            ],
-            "minimal": [
-              "covariate",
-              "hdi_high",
-              "hdi_low",
-              "sd",
-              "value"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
-        },
-        "stats": {
-          "columns": {
-            "maximal": [
-              "<splitby>",
-              "ci_high_a",
-              "ci_high_b",
-              "ci_low_a",
-              "ci_low_b",
-              "comparison",
-              "delta",
-              "level_a",
-              "level_b",
-              "mean_a",
-              "mean_b",
-              "n_a",
-              "n_b",
-              "p",
-              "quantity",
-              "replicate_unit",
-              "sd_a",
-              "sd_b",
-              "stars",
-              "stat"
-            ],
-            "minimal": []
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": []
-          },
-          "type": "DataFrame"
-        }
-      },
-      "version": 4,
-      "writer": "tcri.tl.phenotypic_entropy"
-    },
-    "tcri_phenotypic_flux": {
-      "slots": {
-        "result": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "adjusted_hdi_high",
-              "adjusted_hdi_low",
-              "adjusted_sd",
-              "clonotype",
               "cov_from",
               "cov_to",
               "hdi_high",
@@ -923,7 +1277,6 @@
               "value"
             ],
             "minimal": [
-              "clonotype",
               "cov_from",
               "cov_to",
               "hdi_high",
@@ -966,36 +1319,26 @@
               "stars",
               "stat"
             ],
-            "minimal": []
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": []
-          },
-          "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "draw",
-              "null",
-              "null_value",
-              "value"
-            ],
             "minimal": [
-              "clonotype",
-              "cov_from",
-              "cov_to",
-              "draw",
-              "value"
+              "ci_high_a",
+              "ci_high_b",
+              "ci_low_a",
+              "ci_low_b",
+              "comparison",
+              "delta",
+              "level_a",
+              "level_b",
+              "mean_a",
+              "mean_b",
+              "n_a",
+              "n_b",
+              "p",
+              "quantity",
+              "replicate_unit",
+              "sd_a",
+              "sd_b",
+              "stars",
+              "stat"
             ]
           },
           "index": {

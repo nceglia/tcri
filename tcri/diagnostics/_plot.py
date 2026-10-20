@@ -9,7 +9,23 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..plotting._base import _fit_ylabel, _sizes_from
+from ..plotting._base import _fit_ylabel
+
+
+def _sizes_from(counts, labels, *, lo=25.0, hi=190.0):
+    """Marker AREA proportional to each label's count, clamped to a legible band.
+
+    `s` is already area in points^2, so proportionality is perceptually right; the clamp stops
+    the largest count from swallowing the smallest at many times the area. Returns
+    ``(sizes, counts)``, or ``(None, None)`` when no count is finite.
+    """
+    n = np.array([counts.get(label, np.nan) for label in labels], dtype=float)
+    if not np.isfinite(n).any():
+        return None, None
+    lo_n, hi_n = np.nanmin(n), np.nanmax(n)
+    if not np.isfinite(lo_n) or hi_n <= lo_n:
+        return np.full(len(n), (lo + hi) / 2), n
+    return lo + (hi - lo) * (n - lo_n) / (hi_n - lo_n), n
 
 _LEGEND = dict(bbox_to_anchor=(1.02, 1.0), loc="upper left", frameon=False, fontsize=8,
                title_fontsize=8)

@@ -3,7 +3,9 @@
 Each metric stores ``{replicate, item, stats}``, a level holding ``draws`` and ``summary``, and
 returns ``None``; ``inplace=False`` returns that result instead. These tests pin the row sets
 (every replicate has a replicate row), the error for a normalizer of 0, the case with no
-replicate, and the ``tcri.get`` views.
+replicate, and the ``tcri.get`` views, which refuse a result not stored by level
+(``joint_distribution``). The levels of a change between two covariate levels, flux's
+included, are pinned in ``test_changes.py``.
 """
 from __future__ import annotations
 
@@ -54,10 +56,9 @@ def test_replicates_is_the_stored_replicate_summary(metric, cohort):
 def test_replicates_refuses_a_result_not_stored_by_level(cohort):
     _, adata = cohort
     adata = adata.copy()
-    a, b = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
-    tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b)
+    tcri.tl.joint_distribution(adata, covariate=_cov(adata))
     with pytest.raises(KeyError, match="not stored by level"):
-        tcri.get.replicates(adata, "phenotypic_flux")
+        tcri.get.replicates(adata, "joint_distribution")
 
 
 @pytest.mark.parametrize("metric", METRICS)
@@ -211,9 +212,34 @@ def test_the_get_views_read_the_stored_levels(cohort, tmp_path):
 
 
 def test_the_level_views_refuse_a_result_stored_otherwise(cohort):
+    """``joint_distribution`` stores ``{summary, draws}``: the level views refuse it, and
+    ``tcri.get.draws`` reads its one draws frame and has no item level to give."""
+    _, adata = cohort
+    adata = adata.copy()
+    tcri.tl.joint_distribution(adata, covariate=_cov(adata), n_samples=2, random_state=0)
+    for view in (tcri.get.items, tcri.get.replicates):
+        with pytest.raises(KeyError, match="not stored by level"):
+            view(adata, "joint_distribution")
+    pd.testing.assert_frame_equal(tcri.get.draws(adata, "joint_distribution"),
+                                  tcri.get.result(adata, "joint_distribution")["draws"])
+    with pytest.raises(KeyError, match="has no item level"):
+        tcri.get.draws(adata, "joint_distribution", items=True)
+
+
+@pytest.mark.parametrize("mode", ["covariate", "change"])
+def test_a_generator_random_state_is_recorded_as_its_integer_seed(mode, cohort, tmp_path):
+    """A numpy ``Generator`` as ``random_state`` runs on one integer seed, which ``params``
+    records: the result writes to ``.h5ad``, and the recorded seed reruns the same draws."""
     _, adata = cohort
     adata = adata.copy()
     a, b = list(adata.uns[K.COVARIATE_CATEGORIES])[:2]
-    tcri.tl.phenotypic_flux(adata, cov_from=a, cov_to=b)
-    with pytest.raises(KeyError, match="not stored by level"):
-        tcri.get.items(adata, "phenotypic_flux")
+    where = dict(covariate=a) if mode == "covariate" else dict(cov_from=a, cov_to=b)
+    tcri.tl.phenotypic_entropy(adata, **where, n_samples=3,
+                               random_state=np.random.default_rng(7))
+    seed = tcri.get.params(adata, "phenotypic_entropy")["random_state"]
+    assert isinstance(seed, (int, np.integer)), type(seed)
+    adata.write_h5ad(tmp_path / "generator.h5ad")
+    again = tcri.tl.phenotypic_entropy(adata, **where, n_samples=3, random_state=int(seed),
+                                       inplace=False)
+    pd.testing.assert_frame_equal(again["replicate"]["draws"],
+                                  tcri.get.draws(adata, "phenotypic_entropy"), check_dtype=False)

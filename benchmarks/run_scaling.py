@@ -44,7 +44,7 @@ PRESETS = {
     "full":    [("xs", 4, 12, 200), ("s", 8, 20, 400), ("m", 16, 30, 600),
                 ("l", 24, 50, 1000), ("xl", 40, 80, 1500)],
 }
-STAGES = ["simulate", "setup", "train", "to_anndata", "joint", "metrics", "deltas", "plot"]
+STAGES = ["simulate", "setup", "train", "to_anndata", "joint", "metrics", "changes", "plot"]
 
 
 class Timer:
@@ -111,19 +111,22 @@ def run_cell(label, n_patients, n_clones, n_cells, *, device, epochs, n_samples,
         for fn, kw in ((tcri.tl.mutual_information, {'null_model': None}),
                        (tcri.tl.clonotypic_entropy, {'null_model': None}),
                        (tcri.tl.phenotypic_entropy, {'null_model': None})):
-            fn(adata, covariate="post", groupby="patient", splitby="response",
+            fn(adata, covariate="post", groupby="patient", splitby="disease_status",
                n_samples=n_samples, random_state=seed, device=device, **kw)
         tcri.tl.phenotypic_flux(adata, null_model=None, cov_from="pre", cov_to="post", groupby="patient",
-                                splitby="response", n_samples=n_samples,
+                                splitby="disease_status", n_samples=n_samples,
                                 random_state=seed, device=device)
 
-    with t("deltas"):
-        tcri.tl.delta_phenotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
-                                         groupby="patient", splitby="response",
-                                         n_samples=n_samples, random_state=seed, device=device)
-        tcri.tl.delta_clonotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
-                                         groupby="patient", splitby="response",
-                                         n_samples=n_samples, random_state=seed, device=device)
+    # the changes go under their own keys, so the plot stage draws the single-level results
+    with t("changes"):
+        tcri.tl.phenotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
+                                   groupby="patient", splitby="disease_status",
+                                   n_samples=n_samples, random_state=seed, device=device,
+                                   key_added="phenotypic_entropy_change")
+        tcri.tl.clonotypic_entropy(adata, null_model=None, cov_from="pre", cov_to="post",
+                                   groupby="patient", splitby="disease_status",
+                                   n_samples=n_samples, random_state=seed, device=device,
+                                   key_added="clonotypic_entropy_change")
 
     with t("plot"):
         fig, axes = plt.subplots(2, 2, figsize=(11, 8))

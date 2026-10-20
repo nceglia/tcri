@@ -19,7 +19,9 @@ def clonotypic_entropy(adata, *, view="replicate", quantity="auto", key=None, or
     """Clonotypic entropy, from the cached ``tl.clonotypic_entropy``.
 
     The replicate view draws each replicate's H(C|P), by split when the result has one, with the
-    tests starred. The item view puts phenotypes on x, with the split as hue.
+    split test starred. The item view puts phenotypes on x, with the split as hue. A change
+    result (``cov_from``, ``cov_to``) draws each replicate's change, or each phenotype's with
+    ``view="item"``, against a zero rule.
 
     Parameters
     ----------
@@ -70,7 +72,9 @@ def phenotypic_entropy(adata, *, view="replicate", quantity="auto", key=None, or
     """Phenotypic entropy (plasticity), from the cached ``tl.phenotypic_entropy``.
 
     The replicate view draws each replicate's H(P|C), by split when the result has one, with the
-    tests starred. The item view draws one point per clone within each replicate.
+    split test starred. The item view draws one point per clone within each replicate. A change
+    result (``cov_from``, ``cov_to``) draws each replicate's change, or each persistent clone's
+    with ``view="item"``, against a zero rule.
 
     Parameters
     ----------

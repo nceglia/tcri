@@ -5,8 +5,8 @@ everything else reads it back without knowing the blob format: ``pl`` renders fr
 should any user code that wants the frame a plot was drawn from.
 
 A ``tl`` call stores its result and returns ``None``; this module is how it is read. Mutual
-information, the two entropies and ``perturb.gene_importance`` store their result by level,
-``{replicate, item, stats}``, each level holding ``draws`` and ``summary``:
+information, the two entropies, flux and ``perturb.gene_importance`` store their result by
+level, ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``:
 
     tcri.tl.phenotypic_entropy(adata, covariate="pre", splitby="response")
     tcri.get.replicates(adata, "phenotypic_entropy")  # one row per replicate
@@ -35,8 +35,6 @@ _RESULTS = {
     "clonotypic_entropy": _K.CLONOTYPIC_ENTROPY,
     "phenotypic_entropy": _K.PHENOTYPIC_ENTROPY,
     "phenotypic_flux": _K.PHENOTYPIC_FLUX,
-    "delta_clonotypic_entropy": _K.DELTA_CLONOTYPIC_ENTROPY,
-    "delta_phenotypic_entropy": _K.DELTA_PHENOTYPIC_ENTROPY,
     "gene_importance": _K.GENE_IMPORTANCE,
 }
 

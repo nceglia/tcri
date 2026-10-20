@@ -164,8 +164,8 @@ def test_the_ct_index_is_the_parents(fitted):
 def test_the_clone_map_is_a_no_op_on_the_main_fit(fitted):
     """The substrate-derived clone helpers agree with the obs reading on the main fit.
 
-    ``metric_table`` and the delta endpoints build their clone lists from the fit rather than
-    from ``obs``. On the main fit the two must be the same thing; if they ever are not, every
+    ``metric_frames`` and a change's persistent-clone lists build their clone lists from the fit
+    rather than from ``obs``. On the main fit the two must be the same thing; if they ever are not, every
     metric in the package silently moved.
     """
     _, adata, _ = fitted

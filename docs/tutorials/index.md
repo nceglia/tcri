@@ -40,7 +40,7 @@ Two properties matter downstream:
 
 - **Clones are paired across timepoints.** Each patient is simulated once, fixing its
   clone→phenotype structure, and every timepoint is drawn from that one population. Without
-  this, `phenotypic_flux` and the `delta_*` metrics would have nothing to measure.
+  this, `phenotypic_flux` and every change between timepoints would have nothing to measure.
 - **Clone sizes are heavy-tailed** — a power law, as real repertoires are: a few large
   expanded clones over a long tail of singletons.
 
@@ -91,7 +91,7 @@ TCRIModel.setup_anndata(
     layer="counts",
     clonotype_key="clone_id",
     phenotype_key="phenotype",
-    covariate_key="timepoint",   # the axis a delta is taken across
+    covariate_key="timepoint",   # the axis a change is taken across
     batch_key="patient",         # one-hot into the networks
     replicate="patient",         # the independent unit for statistics
 )
@@ -106,8 +106,9 @@ tcri.null.all(model, adata)
 `to_anndata` materializes everything the rest of the package reads — see
 [Concepts](../concepts/index.md) for the full table of what it writes. `tcri.null.all` fits the
 three permutation references beside it, five fits each: the same model on permuted labels, which
-is what every metric below is read against. One phenotype fit serves both entropies, mutual information and
-gene importance, so this is one prerequisite and not four. Pass `null_model=None` to a metric to
+is what every metric below is read against: the phenotype fits for both entropies and mutual
+information at one timepoint and for gene importance, the covariate fits for flux and every change
+between timepoints. Pass `null_model=None` to a metric to
 report the bare number instead.
 
 ## 3. Diagnostics — before trusting any metric
@@ -130,7 +131,7 @@ cached: a redraw reruns the check.
 ## 4. `tl` — compute once, cached with provenance
 
 Every `tl` call stores its result in `uns` and returns `None`; `tcri.get` reads it back.
-Mutual information and the two entropies store their result **by level**:
+Mutual information, the two entropies and flux store their result **by level**:
 
 | frame | one row per | read with |
 |---|---|---|
@@ -138,15 +139,16 @@ Mutual information and the two entropies store their result **by level**:
 | `replicate.draws` | (covariate, replicate, draw) | `tcri.get.draws` |
 | `item.summary` | (covariate, replicate, item) | `tcri.get.items` |
 | `item.draws` | (covariate, replicate, item, draw) | `tcri.get.draws(..., items=True)` |
-| `stats` | (split_a, split_b) | `tcri.get.stats` |
+| `stats` | test | `tcri.get.stats` |
 
-A summary is built *from* its draws, so the two cannot drift. Mutual information has one value
-per joint and no item level. `stats` appears only when `splitby` is set; it tests the replicate
-values, so its **n counts replicates, never items** — 18 clones from 4 patients give n=4, not
-n=18. `joint_distribution` stores its posterior-mean `summary` and its `draws`, read with
-`tcri.get.result` and `tcri.get.draws`. Flux and the deltas store `table` and `result`, and
-`stats` when they contrast groups, read with `tcri.get.result`. With `inplace=False` a call
-stores nothing and returns the whole result instead.
+A change between two timepoints (section 6), and flux, label their rows `cov_from` and `cov_to`
+in place of `covariate`. A summary is built *from* its draws, so the two cannot drift. Mutual
+information has one value per joint and no item level. `stats` appears when `splitby` is set or
+the call is a change between timepoints (section 6); it tests the replicate values, so its **n
+counts replicates, never items** — 18 clones from 4 patients give n=4, not n=18.
+`joint_distribution` stores its posterior-mean `summary` and its `draws`, read with
+`tcri.get.result` and `tcri.get.draws`. With `inplace=False` a call stores nothing and returns
+the whole result instead.
 
 ```python
 tcri.tl.mutual_information(
@@ -196,26 +198,97 @@ replicates.
 {func}`tcri.pl.resolve_colors` caches under scanpy's `uns["<key>_colors"]`, so a level keeps
 its color in every later figure — and `sc.pl.umap(color="disease_status")` matches too.
 
-## 6. The paired entropies — what changed, per clone
+## 6. Changes between timepoints
 
-`delta_*` takes `cov_from`/`cov_to` and subtracts **within a posterior draw**, so the reported
-interval is the interval of the *difference*.
+Mutual information and both entropies take `cov_from` and `cov_to` in place of `covariate`, and
+then report the change `cov_to − cov_from`. It is taken **within a posterior draw**, with both timepoints drawn from one
+shared sample, so the reported interval is the interval of the *difference*.
 
 ```python
-tcri.tl.delta_phenotypic_entropy(
+tcri.tl.phenotypic_entropy(
     adata, cov_from="pre", cov_to="post", groupby="patient", splitby="disease_status"
 )
+tcri.get.replicates(adata, "phenotypic_entropy")   # each patient's change
+tcri.get.items(adata, "phenotypic_entropy")        # each persistent clone's change
+tcri.get.stats(adata, "phenotypic_entropy")        # the tests
 ```
 
 HDIs do not subtract — you cannot recover the interval of a difference from the endpoints'
-intervals, which is why this is a function rather than arithmetic you do yourself.
+intervals, which is why the change is computed rather than arithmetic you do yourself. Its rows
+are labeled `cov_from` and `cov_to` instead of `covariate`, and each carries its endpoints,
+`value_from` and `value_to`, with `adjusted_from` and `adjusted_to` beside the reference.
 
-Support is the **intersection**: clones present at both timepoints, within each patient. A
-delta needs both endpoints, and the drop is warned about because it moves `n`.
+The change has the same two levels as the value:
 
-There is deliberately **no `delta_mutual_information`**. MI has no item axis, so it is already
-the repertoire-level number and its "delta" is a subtraction of two cached scalars. That one
-belongs to you, not the package.
+- **Per patient** it is the difference of the patient's two values, each counting every clone
+  the patient has at that timepoint. This is the number `stats` tests.
+- **Per item** the rows hold the **persistent** clones only, those present at both timepoints
+  within the patient. Phenotypic entropy has one row per persistent clone; clonotypic entropy
+  recomputes each phenotype on the persistent clones, so both sides share one clone set and one
+  normalizer. A clone seen at one timepoint has no item row.
+
+A change warns when some patients have no counted clone at a timepoint — their values are NaN
+and they leave the tests — and when no patient has a clone at both timepoints, whose usual cause
+is a covariate that is constant within each patient.
+
+The same call works on mutual information and clonotypic entropy, and flux always spans two
+timepoints:
+
+```python
+tcri.tl.mutual_information(adata, cov_from="pre", cov_to="post", splitby="disease_status")
+tcri.tl.clonotypic_entropy(adata, cov_from="pre", cov_to="post", splitby="disease_status")
+tcri.tl.phenotypic_flux(adata, cov_from="pre", cov_to="post", splitby="disease_status")
+```
+
+Mutual information has no items, so its change has the patient level only; each side is divided
+by its own normalizer, and both are stored, `denom_from` and `denom_to`. Flux is already a
+distance between the two timepoints, so it has no endpoints: per item it is each persistent
+clone's distance, and per patient those distances weighted by each clone's share of the
+`cov_from` joint: equally at the default `weighted=False`, by its cells at `cov_from` with
+`weighted=True`.
+
+Each call overwrites that metric's stored result, so the clonotypic entropy change above takes
+the place of the single-timepoint result of section 5; pass `key_added=` to keep both.
+
+### Did it change, and did the change differ
+
+A change result's `stats` holds two kinds of row, named in its `comparison` column:
+
+| `comparison` | question | test | rows |
+|---|---|---|---|
+| `"covariate"` | did the patients change? | Wilcoxon signed-rank on each patient's change | one per split level, or one over every patient without `splitby` |
+| `"split"` | did the change differ between arms? | Mann–Whitney between split levels on each patient's change | one per pair of split levels |
+
+On a covariate row `level_a` and `level_b` are `cov_from` and `cov_to`, the two arms are the
+endpoints, and `n` counts the patients the test used. The covariate rows are kept per arm because
+pooling the arms mixes the two groups the split row compares: when disease and control move in
+opposite directions, a pooled row reports no change although every patient changed. The note in
+section 1 applies here too: a two-sided signed-rank test over $n$ patients cannot go below
+$p = 2/2^n$, so an arm of 5 or fewer patients cannot reach $p<0.05$.
+
+Flux is never negative, so a test of its value against 0 would only report that every flux is
+positive and how many patients there are: its covariate row tests the adjusted flux against 0,
+and without a reference it has no test.
+
+```{note}
+The default reference of a change is the **covariate null**, which shuffles the timepoint each
+cell sits at within its clone and batch. The adjusted endpoints, `adjusted_from` and
+`adjusted_to`, are therefore measured against that null, and are not the adjusted values a
+single-timepoint call reports against its own default, the phenotype null.
+```
+
+### Drawing a change
+
+The `pl` twins draw a stored change as they draw a value:
+
+```python
+tcri.pl.phenotypic_entropy(adata)                # each patient's change, against a zero line
+tcri.pl.phenotypic_entropy(adata, view="item")   # each persistent clone's change
+tcri.pl.phenotypic_flux(adata, view="item")      # each persistent clone's flux
+```
+
+The default view draws one mark per patient, the number `stats` tests; `view="item"` draws the
+item summary. Mutual information has no item view.
 
 ## 7. `perturb` — which genes the calls rest on
 
@@ -231,7 +304,7 @@ tcri.pl.gene_importance(adata)                 # the top genes; one dot per pati
 tcri.pl.gene_importance(adata, view="item")    # gene x phenotype: which way each gene moves the call
 ```
 
-Two things to know before reading the ranking:
+Three things to know before reading the ranking:
 
 - **It is about the calls you see.** By default the head is combined with the clone ×
   covariate prior exactly as `predict()` does, so a gene can score low simply because the
