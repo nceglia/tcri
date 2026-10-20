@@ -70,7 +70,8 @@ def _calls(adata):
         "phenotypic_entropy": and_a_change(),
         # flux is always a change
         "phenotypic_flux": levels(change),
-        "gene_importance": levels(genes),
+        # gene_importance stores the adjusted value only, so it always runs with its reference
+        "gene_importance": {"minimal": genes, "maximal": {**genes, **wide}},
     }
 
 

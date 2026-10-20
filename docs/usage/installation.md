@@ -41,7 +41,6 @@ scvi-tools) is what enables model fitting:
 - numpy, pandas, scipy, scikit-learn
 - anndata, scanpy (single-cell data structures)
 - torch, pyro-ppl, scvi-tools (probabilistic modeling backbone)
-- umap-learn
 - matplotlib, seaborn (plotting)
 - tqdm
 

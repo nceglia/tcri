@@ -113,13 +113,15 @@ report the bare number instead.
 
 ## 3. Diagnostics — before trusting any metric
 
-`tcri.diag` asks whether the *fit* is worth interpreting. Every function returns a DataFrame,
-so the numbers are inspectable and not only drawn.
+`tcri.diag` asks whether the *fit* is worth interpreting. Each check returns a dict of named
+DataFrames, one per level of detail, so the numbers are inspectable, and with `plot=True` (the
+default) draws its figure from them. The return value is the same either way, and nothing is
+cached: a redraw reruns the check.
 
 | function | question |
 |---|---|
-| {func}`joint_distribution_ppc <tcri.diagnostics.joint_distribution_ppc>` | does the model's clone×phenotype table resemble the observed crosstab? Per-clone L1 distance, 0 perfect, 2 maximal |
-| {func}`phenotype_calibration <tcri.diagnostics.phenotype_calibration>` | when the classifier says 0.8, is it right 80% of the time? `ECE` is expected calibration error, lower better |
+| {func}`joint_distribution_ppc <tcri.diagnostics.joint_distribution_ppc>` | does the fit reproduce the phenotype labels it was trained on? A clone's `p` is where its observed labels fall among labels the fit simulates; under a correct fit `p` is uniform across clones, read as a QQ plot per clone-size bin. Below the diagonal, observed labels sit farther from the fit than its replicates; above it, closer, as when `label_error_rate` exceeds the labels' real noise |
+| {func}`phenotype_calibration <tcri.diagnostics.phenotype_calibration>` | when the classifier says 0.8, is it right 80% of the time? `ece` in its `summary` is expected calibration error, lower better |
 | {func}`reconstruction_ppc <tcri.diagnostics.reconstruction_ppc>` | does the decoder generate counts like the real ones? |
 | {func}`permutation_null <tcri.diagnostics.permutation_null>` | how large is the metric under shuffled labels? |
 
@@ -140,12 +142,13 @@ Mutual information, the two entropies and flux store their result **by level**:
 | `stats` | test | `tcri.get.stats` |
 
 A change between two timepoints (section 6), and flux, label their rows `cov_from` and `cov_to`
-in place of `covariate`. A summary is built *from* its draws, so the two cannot drift. Mutual information has one value
-per joint and no item level. `stats` appears when `splitby` is set or the call is a change
-between timepoints (section 6); it tests the replicate values, so its **n counts replicates,
-never items** — 18 clones from 4 patients give n=4, not n=18. `joint_distribution` stores
-`table` and `result`, read with `tcri.get.result`. With `inplace=False` a call stores nothing and
-returns the whole result instead.
+in place of `covariate`. A summary is built *from* its draws, so the two cannot drift. Mutual
+information has one value per joint and no item level. `stats` appears when `splitby` is set or
+the call is a change between timepoints (section 6); it tests the replicate values, so its **n
+counts replicates, never items** — 18 clones from 4 patients give n=4, not n=18.
+`joint_distribution` stores its posterior-mean `summary` and its `draws`, read with
+`tcri.get.result` and `tcri.get.draws`. With `inplace=False` a call stores nothing and returns
+the whole result instead.
 
 ```python
 tcri.tl.mutual_information(
@@ -298,15 +301,18 @@ same `groupby`/`splitby` machinery and the same cache as every metric.
 ```python
 tcri.perturb.gene_importance(model, adata, splitby="disease_status")
 tcri.pl.gene_importance(adata)                 # the top genes; one dot per patient, starred per gene
-tcri.pl.gene_importance(adata, kind="shift")   # gene x phenotype: which way each gene moves the call
+tcri.pl.gene_importance(adata, view="item")    # gene x phenotype: which way each gene moves the call
 ```
 
-Two things to know before reading the ranking:
+Three things to know before reading the ranking:
 
 - **It is about the calls you see.** By default the head is combined with the clone ×
   covariate prior exactly as `predict()` does, so a gene can score low simply because the
   cells expressing it sit in clones with confident priors. `use_gate=False` scores the
   expression pathway alone, invariant to the clone structure.
+- **It is adjusted.** Each gene's importance is stored less the same importance on the
+  phenotype null, and only that adjusted value is kept, so `tcri.null.phenotype` (or
+  `tcri.null.all`) comes first.
 - **The contrast is per gene**, over patients: `stats` has one row per gene, uncorrected
   across genes.
 

@@ -19,6 +19,74 @@ from .._compute._tables import _resolve_clones
 __all__ = ["joint_distribution"]
 
 
+def _substrate(adata, fit, *, use_logits, n_samples, caller="joint_distribution"):
+    """Validate and read one fit's substrate: the arrays the joint is built from.
+
+    Returns a dict with ``p_ct``, ``ct_to_cov``, ``ct_to_c``, ``ct_array``, ``cov_array``,
+    ``local_scale``, ``conc_ct``, ``logits`` (``None`` unless ``use_logits``) and ``gate_prob``.
+
+    ``fit`` selects WHICH FIT is read. This is the one place in the package where every per-fit
+    substrate key is read, so it is the one place the selection has to be made; the three
+    category lists and the metadata are shared between every fit of an object and are read
+    unprefixed whatever ``fit`` says. ``caller`` names the function in the error raised on a
+    sliced object.
+    """
+    _key = lambda base: K.fit_key(base, fit)   # noqa: E731 -- one name, used ten times
+
+    logits = None
+    if use_logits:
+        if _key(K.X_LOGITS) not in adata.obsm:
+            raise RuntimeError(
+                f"obsm[{_key(K.X_LOGITS)!r}] missing — run "
+                f"model.to_anndata(...{', fit=' + repr(fit) if fit else ''}) or pass "
+                f"use_logits=False."
+            )
+        logits = adata.obsm[_key(K.X_LOGITS)]
+
+    # subset/filtered-AnnData guard: the per-cell uns arrays live in full-cell space and
+    # are NOT sliced when adata is subset, whereas obsm/obs ARE — so a slice silently
+    # misaligns cells. Fail loudly rather than return a joint built on the wrong cells.
+    n_obs = adata.n_obs
+    if _key(K.CT_ARRAY) not in adata.uns:
+        raise KeyError(
+            f"no substrate for fit {fit!r} in this AnnData (uns[{_key(K.CT_ARRAY)!r}] is "
+            f"missing). Build it with tcri.null.all(model, adata), or write another model's "
+            f"with other.to_anndata(adata, fit=...), or pass fit=None for the main fit."
+        )
+    n_reg = len(np.asarray(adata.uns[_key(K.CT_ARRAY)]))
+    if n_reg != n_obs or len(np.asarray(adata.uns[_key(K.COV_ARRAY)])) != n_obs:
+        raise ValueError(
+            f"{caller} received an AnnData whose per-cell registration arrays "
+            f"(uns[{_key(K.CT_ARRAY)!r}], len {n_reg}) do not match adata.n_obs ({n_obs}). This "
+            f"happens on a filtered/sliced AnnData: the full-space uns arrays misalign against "
+            f"the subset obsm/obs. Re-run model.to_anndata(...) on the filtered object, or pass "
+            f"the full object and filter with `clones=`."
+        )
+
+    # local_scale is required for the Dirichlet draw; refuse to silently fall back at n>0.
+    local_scale = adata.uns.get(_key(K.LOCAL_SCALE), None)
+    if n_samples and int(n_samples) > 0 and local_scale is None:
+        raise RuntimeError(
+            f"n_samples>0 needs uns[{_key(K.LOCAL_SCALE)!r}] for the clamped-Dirichlet draw, but it "
+            f"is missing; run model.to_anndata(...)."
+        )
+    local_scale = float(local_scale) if local_scale is not None else 1.0
+    return {
+        "p_ct": adata.uns[_key(K.P_CT)],
+        "ct_to_cov": adata.uns[_key(K.CT_TO_COV)],
+        "ct_to_c": adata.uns[_key(K.CT_TO_C)],
+        "ct_array": adata.uns[_key(K.CT_ARRAY)],
+        "cov_array": adata.uns[_key(K.COV_ARRAY)],
+        "local_scale": local_scale,
+        # the guide's own posterior concentration: present on anything written by a current
+        # to_anndata, absent on older objects, which fall back to the local_scale
+        # reconstruction rather than failing.
+        "conc_ct": adata.uns.get(_key(K.CONC_CT), None),
+        "logits": logits,
+        "gate_prob": adata.uns.get(_key(K.GATE_PROB), None),
+    }
+
+
 def _engine_blocks(
     adata,
     *,
@@ -41,25 +109,11 @@ def _engine_blocks(
     where ``blocks`` is a list of ``(covariate_index, clone_idx, J)`` and ``J`` has
     shape ``[S, n_rows, P]``.
 
-    ``fit`` selects WHICH FIT the number is computed on. This is the one place in the package
-    where every per-fit substrate key is read, so it is the one place the selection has to be
-    made; the three category lists and the metadata are shared between every fit of an object
-    and are read unprefixed whatever ``fit`` says.
+    ``fit`` selects WHICH FIT the number is computed on, read through :func:`_substrate`.
     """
-    _key = lambda base: K.fit_key(base, fit)   # noqa: E731 -- one name, used ten times
     phenotype_cats = list(adata.uns[K.PHENOTYPE_CATEGORIES])
     clonotype_cats = list(adata.uns[K.CLONOTYPE_CATEGORIES])
     covariate_cats = list(adata.uns[K.COVARIATE_CATEGORIES])
-
-    logits = None
-    if use_logits:
-        if _key(K.X_LOGITS) not in adata.obsm:
-            raise RuntimeError(
-                f"obsm[{_key(K.X_LOGITS)!r}] missing — run "
-                f"model.to_anndata(...{', fit=' + repr(fit) if fit else ''}) or pass "
-                f"use_logits=False."
-            )
-        logits = adata.obsm[_key(K.X_LOGITS)]
 
     cov_idx = None
     if covariate is not None:
@@ -68,53 +122,21 @@ def _engine_blocks(
         except ValueError:
             raise ValueError(f"covariate {covariate!r} not found among {covariate_cats}")
 
-    # subset/filtered-AnnData guard: the per-cell uns arrays live in full-cell space and
-    # are NOT sliced when adata is subset, whereas obsm/obs ARE — so a slice silently
-    # misaligns cells. Fail loudly rather than return a joint built on the wrong cells.
-    n_obs = adata.n_obs
-    if _key(K.CT_ARRAY) not in adata.uns:
-        raise KeyError(
-            f"no substrate for fit {fit!r} in this AnnData (uns[{_key(K.CT_ARRAY)!r}] is "
-            f"missing). Build it with tcri.null.all(model, adata), or write another model's "
-            f"with other.to_anndata(adata, fit=...), or pass fit=None for the main fit."
-        )
-    n_reg = len(np.asarray(adata.uns[_key(K.CT_ARRAY)]))
-    if n_reg != n_obs or len(np.asarray(adata.uns[_key(K.COV_ARRAY)])) != n_obs:
-        raise ValueError(
-            f"joint_distribution received an AnnData whose per-cell registration arrays "
-            f"(uns[{_key(K.CT_ARRAY)!r}], len {n_reg}) do not match adata.n_obs ({n_obs}). This "
-            f"happens on a filtered/sliced AnnData: the full-space uns arrays misalign against "
-            f"the subset obsm/obs. Re-run model.to_anndata(...) on the filtered object, or pass "
-            f"the full object and filter with `clones=`."
-        )
-
-    # local_scale is required for the Dirichlet draw; refuse to silently fall back at n>0.
-    local_scale = adata.uns.get(_key(K.LOCAL_SCALE), None)
-    if n_samples and int(n_samples) > 0 and local_scale is None:
-        raise RuntimeError(
-            f"n_samples>0 needs uns[{_key(K.LOCAL_SCALE)!r}] for the clamped-Dirichlet draw, but it "
-            f"is missing; run model.to_anndata(...)."
-        )
-    local_scale = float(local_scale) if local_scale is not None else 1.0
-    # the guide's own posterior concentration: present on anything written by a current
-    # to_anndata, absent on older objects, which fall back to the local_scale reconstruction
-    # rather than failing.
-    conc_ct = adata.uns.get(_key(K.CONC_CT), None)
-
+    sub = _substrate(adata, fit, use_logits=use_logits, n_samples=n_samples)
     blocks, n_draws = _joint_draws(
-        adata.uns[_key(K.P_CT)],
-        adata.uns[_key(K.CT_TO_COV)],
-        adata.uns[_key(K.CT_TO_C)],
-        adata.uns[_key(K.CT_ARRAY)],
-        adata.uns[_key(K.COV_ARRAY)],
-        local_scale=local_scale,
-        conc_ct=conc_ct,
+        sub["p_ct"],
+        sub["ct_to_cov"],
+        sub["ct_to_c"],
+        sub["ct_array"],
+        sub["cov_array"],
+        local_scale=sub["local_scale"],
+        conc_ct=sub["conc_ct"],
         n_samples=n_samples,
         temperature=temperature,
         use_logits=use_logits,
         covariate_idx=cov_idx,
-        logits=logits,
-        gate_prob=adata.uns.get(_key(K.GATE_PROB), None),
+        logits=sub["logits"],
+        gate_prob=sub["gate_prob"],
         weighted=weighted,
         random_state=random_state,
         device=device,
@@ -122,7 +144,7 @@ def _engine_blocks(
     return blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats
 
 
-@tl_result(key=K.JOINT_DISTRIBUTION, version=1, schema=schemas.JointDistribution)
+@tl_result(key=K.JOINT_DISTRIBUTION, version=2, schema=schemas.JointDistribution)
 def joint_distribution(
     adata,
     *,
@@ -146,7 +168,7 @@ def joint_distribution(
         pass (adds a leading ``covariate`` index level).
     n_samples : int
         ``0`` → deterministic posterior-mean table; ``N`` → ``N`` clamped-Dirichlet
-        draws (adds a ``sample_id`` index level). Only place ``local_scale`` enters.
+        draws (adds a ``draw`` index level). Only place ``local_scale`` enters.
     use_logits : bool
         ``True`` → fold per-cell classifier logits with ``log(base)`` (gate-aware) and
         aggregate per clone, matching :meth:`~tcri.model._model.TCRIModel.predict`;
@@ -178,10 +200,12 @@ def joint_distribution(
     Returns
     -------
     dict or None
-        ``None``; with ``inplace=False`` nothing is stored and ``{table, result}`` is returned,
-        read otherwise with ``tcri.get.result``. Each is a frame with the phenotype categories
-        as columns. Index = clonotype (``+ sample_id`` for ``n_samples>0``, ``+ covariate``
-        leading level for ``covariate=None``); ``result`` is the mean over draws.
+        ``None``; with ``inplace=False`` nothing is stored and ``{summary, draws}`` is returned.
+        Each is a frame with the phenotype categories as columns, indexed by clonotype, with a
+        leading ``covariate`` level for ``covariate=None``. ``summary`` is the posterior mean
+        over draws, read with ``tcri.get.result(adata, "joint_distribution")["summary"]``;
+        ``draws`` adds a ``draw`` level for ``n_samples>0`` and equals ``summary`` at
+        ``n_samples=0``, read with ``tcri.get.draws(adata, "joint_distribution")``.
     """
     blocks, n_draws, clonotype_cats, covariate_cats, phenotype_cats = _engine_blocks(
         adata,
@@ -206,7 +230,7 @@ def joint_distribution(
             idx_clone = np.repeat(clone_ids, S)
             idx_samp = np.tile(np.arange(S), len(clone_ids))
             cols = [idx_clone, idx_samp]
-            names = ["clonotype", "sample_id"]
+            names = ["clonotype", "draw"]
         else:
             arr = J[0]                                            # [n_rows, P]
             cols = [clone_ids]
@@ -228,7 +252,7 @@ def joint_distribution(
     elif counted is not None:
         if isinstance(df.index, pd.MultiIndex):
             # filter to the listed clones (absent dropped, not all-zero) then order by the
-            # requested list — stable within the sample_id/covariate levels, so this matches
+            # requested list — stable within the draw/covariate levels, so this matches
             # the single-index reindex in the branch below.
             keep = df.index.get_level_values("clonotype").isin(counted)
             df = df[keep]
@@ -242,17 +266,17 @@ def joint_distribution(
     # would make the common case worse to read. The long convention applies where each item
     # reduces to ONE number; this does not.
     #
-    # `result` is the posterior mean over draws (identical to `table` at n_samples=0), so the
+    # `summary` is the posterior mean over draws (identical to `draws` at n_samples=0), so the
     # caller always has one table to reason about regardless of whether they sampled.
     if sampling:
-        result = df.groupby(level=[n for n in df.index.names if n != "sample_id"],
-                            observed=True, sort=False).mean()
+        summary = df.groupby(level=[n for n in df.index.names if n != "draw"],
+                             observed=True, sort=False).mean()
     else:
-        result = df
+        summary = df
 
     # `params` is captured by the decorator from the call signature, rather than stashed in
     # df.attrs -- attrs does not survive most pandas operations, nor a write_h5ad at all.
     # n_draws is what ACTUALLY happened, which the call arguments cannot say on their own --
     # the same distinction as epochs_actual vs max_epochs in the training record. Recorded as an
     # effective value so the provenance answers "how many draws is this table built from".
-    return with_resolved_params({"table": df, "result": result}, n_draws=int(n_draws))
+    return with_resolved_params({"summary": summary, "draws": df}, n_draws=int(n_draws))

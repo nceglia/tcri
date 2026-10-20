@@ -359,28 +359,23 @@
     },
     "tcri_gene_importance": {
       "slots": {
-        "result": {
+        "item.draws": {
           "columns": {
             "maximal": [
               "<groupby>",
               "<splitby>",
               "adjusted",
-              "adjusted_hdi_high",
-              "adjusted_hdi_low",
-              "adjusted_sd",
+              "draw",
               "gene",
-              "hdi_high",
-              "hdi_low",
-              "null_value",
-              "sd",
-              "value"
+              "null",
+              "phenotype"
             ],
             "minimal": [
+              "adjusted",
+              "draw",
               "gene",
-              "hdi_high",
-              "hdi_low",
-              "sd",
-              "value"
+              "null",
+              "phenotype"
             ]
           },
           "index": {
@@ -393,23 +388,81 @@
           },
           "type": "DataFrame"
         },
-        "shift": {
+        "item.summary": {
           "columns": {
             "maximal": [
               "<groupby>",
               "<splitby>",
-              "baseline",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "gene",
-              "perturbed",
-              "phenotype",
-              "shift"
+              "phenotype"
             ],
             "minimal": [
-              "baseline",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
               "gene",
-              "perturbed",
-              "phenotype",
-              "shift"
+              "phenotype"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.draws": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "draw",
+              "gene",
+              "null"
+            ],
+            "minimal": [
+              "adjusted",
+              "draw",
+              "gene",
+              "null"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "None"
+            ],
+            "minimal": [
+              "None"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "replicate.summary": {
+          "columns": {
+            "maximal": [
+              "<groupby>",
+              "<splitby>",
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "gene"
+            ],
+            "minimal": [
+              "adjusted",
+              "adjusted_hdi_high",
+              "adjusted_hdi_low",
+              "adjusted_sd",
+              "gene"
             ]
           },
           "index": {
@@ -456,34 +509,6 @@
             "minimal": []
           },
           "type": "DataFrame"
-        },
-        "table": {
-          "columns": {
-            "maximal": [
-              "<groupby>",
-              "<splitby>",
-              "adjusted",
-              "draw",
-              "gene",
-              "null",
-              "null_value",
-              "value"
-            ],
-            "minimal": [
-              "draw",
-              "gene",
-              "value"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "None"
-            ],
-            "minimal": [
-              "None"
-            ]
-          },
-          "type": "DataFrame"
         }
       },
       "version": 4,
@@ -491,28 +516,7 @@
     },
     "tcri_joint_distribution": {
       "slots": {
-        "result": {
-          "columns": {
-            "maximal": [
-              "<phenotype>"
-            ],
-            "minimal": [
-              "<phenotype>"
-            ]
-          },
-          "index": {
-            "maximal": [
-              "covariate",
-              "clonotype"
-            ],
-            "minimal": [
-              "covariate",
-              "clonotype"
-            ]
-          },
-          "type": "DataFrame"
-        },
-        "table": {
+        "draws": {
           "columns": {
             "maximal": [
               "<phenotype>"
@@ -525,7 +529,28 @@
             "maximal": [
               "covariate",
               "clonotype",
-              "sample_id"
+              "draw"
+            ],
+            "minimal": [
+              "covariate",
+              "clonotype"
+            ]
+          },
+          "type": "DataFrame"
+        },
+        "summary": {
+          "columns": {
+            "maximal": [
+              "<phenotype>"
+            ],
+            "minimal": [
+              "<phenotype>"
+            ]
+          },
+          "index": {
+            "maximal": [
+              "covariate",
+              "clonotype"
             ],
             "minimal": [
               "covariate",
@@ -535,7 +560,7 @@
           "type": "DataFrame"
         }
       },
-      "version": 1,
+      "version": 2,
       "writer": "tcri.tl.joint_distribution"
     },
     "tcri_mutual_information": {

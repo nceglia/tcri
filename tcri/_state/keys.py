@@ -9,6 +9,7 @@ LOCAL_SCALE = "tcri_local_scale"           # Dirichlet total-concentration scale
 CONC_CT = "tcri_conc_ct"                   # guide concentration lambda'_m, shape (n_ct, P)
 GATE_PROB = "tcri_gate_prob"               # classifier/prior gate, scalar or None
 CLASSIFIER_TEMPERATURE = "tcri_classifier_temperature"  # classifier temperature
+LABEL_ERROR_RATE = "tcri_label_error_rate"  # ε of the noisy-label readout; NaN when label-free
 
 CT_TO_COV = "tcri_ct_to_cov"               # ct -> covariate index
 CT_TO_C = "tcri_ct_to_c"                   # ct -> clonotype index
@@ -26,7 +27,6 @@ X_TCRI = "X_tcri"                          # latent posterior mean z
 X_LOGITS = "X_tcri_logits"                 # per-cell classifier logits
 X_LOGPOSTERIOR = "X_tcri_logposterior"     # logits + log prior
 X_PROBABILITIES = "X_tcri_probabilities"   # per-cell phenotype probabilities
-X_UMAP = "X_umap"
 
 # ── obs ──────────────────────────────────────────────────────────────────────
 PHENOTYPE = "tcri_phenotype"               # hard phenotype label
@@ -55,7 +55,7 @@ CLONOTYPIC_ENTROPY = "tcri_clonotypic_entropy"
 PHENOTYPIC_ENTROPY = "tcri_phenotypic_entropy"
 PHENOTYPIC_FLUX = "tcri_phenotypic_flux"
 #: The in-silico perturbation (``tcri.perturb.gene_importance``): a query on the fitted model,
-#: stored as ``{table, result, stats}`` plus a ``shift`` slot.
+#: stored by level like the metrics, ``{replicate, item, stats}``, with the adjusted value only.
 GENE_IMPORTANCE = "tcri_gene_importance"
 
 #: The layer recorded by setup_anndata.

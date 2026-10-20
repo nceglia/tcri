@@ -3,7 +3,8 @@
 Single home for the KL kernel, plus L1. Both operate on 1-D probability vectors and share
 one eps floor; KL is in bits (log base 2).
 ``phenotype_distance`` is the string→callable dispatcher used by
-``phenotypic_flux(distance_metric=)``.
+``phenotypic_flux(distance_metric=)``. ``phenotype_distance_rows`` is its batched form, over the
+last axis of two broadcastable arrays, with the same floor and normalization.
 """
 from __future__ import annotations
 
@@ -46,3 +47,45 @@ def phenotype_distance(metric):
             f"distance_metric must be a callable or one of {sorted(_REGISTRY)}; got {metric!r}"
         )
     return _REGISTRY[key]
+
+
+def _normalize_rows(p, eps=EPS):
+    p = np.clip(np.asarray(p, float), eps, None)
+    return p / p.sum(axis=-1, keepdims=True)
+
+
+def kl_divergence_rows(p, q, *, base: float = 2.0, eps: float = EPS) -> np.ndarray:
+    """:func:`kl_divergence` over the last axis."""
+    p, q = _normalize_rows(p, eps), _normalize_rows(q, eps)
+    return np.sum(p * (np.log(p / q) / np.log(base)), axis=-1)
+
+
+def l1_distance_rows(p, q) -> np.ndarray:
+    """:func:`l1_distance` over the last axis."""
+    return np.abs(_normalize_rows(p) - _normalize_rows(q)).sum(axis=-1)
+
+
+_ROWS = {
+    "l1": l1_distance_rows,
+    "kl": kl_divergence_rows,
+    "dkl": kl_divergence_rows,
+}
+
+
+def phenotype_distance_rows(metric):
+    """Resolve ``distance_metric`` to a function of two arrays that reduces their last axis.
+
+    A registered name gets its vectorized kernel. A callable ``f(p, q) -> float`` is applied to
+    one pair of vectors at a time over the broadcast leading axes.
+    """
+    if not callable(metric):
+        phenotype_distance(metric)              # same validation and message as the 1-D form
+        return _ROWS[str(metric).lower()]
+
+    def rows(p, q):
+        p, q = np.broadcast_arrays(np.asarray(p, float), np.asarray(q, float))
+        flat_p, flat_q = p.reshape(-1, p.shape[-1]), q.reshape(-1, q.shape[-1])
+        out = np.array([metric(a, b) for a, b in zip(flat_p, flat_q)], dtype=float)
+        return out.reshape(p.shape[:-1])
+
+    return rows

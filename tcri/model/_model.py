@@ -1200,7 +1200,7 @@ class TCRIModel(BaseModelClass):
         return pd.DataFrame(probs, index=adata.obs_names, columns=pheno_cats)
 
     @torch.no_grad()
-    def to_anndata(self, adata=None, *, batch_size: int = 4096, compute_umap: bool = False,
+    def to_anndata(self, adata=None, *, batch_size: int = 4096,
                    fit: Optional[str] = None) -> AnnData:
         """Write the model's learned state onto ``adata`` under the canonical
         ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it.
@@ -1214,9 +1214,12 @@ class TCRIModel(BaseModelClass):
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
         ``CT_ARRAY``/``COV_ARRAY``, ``LOCAL_SCALE``, ``GATE_PROB``,
-        ``CLASSIFIER_TEMPERATURE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
+        ``CLASSIFIER_TEMPERATURE``, ``LABEL_ERROR_RATE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
         ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from :meth:`predict`); ``obs``:
         ``PHENOTYPE`` argmax hard label.
+
+        To embed the latent space, build a neighbor graph on it with scanpy and run UMAP:
+        ``sc.pp.neighbors(adata, use_rep="X_tcri")``, then ``sc.tl.umap(adata)``.
         """
 
         adata = self._validate_anndata(adata)
@@ -1251,7 +1254,7 @@ class TCRIModel(BaseModelClass):
         known = K.fits(adata)
         if fit is None or K.METADATA not in adata.uns:
             # The main fit owns the shared keys. It also CARRIES THE FITS LIST FORWARD: rewriting
-            # the main substrate (re-running to_anndata for a UMAP, say) must not orphan the
+            # the main substrate (re-running to_anndata on new data, say) must not orphan the
             # named fits beside it, whose prefixed keys are all still there. A genuinely
             # different model overwriting the main fit leaves them stale, which is what each
             # fit's `parent` in FIT_SETTINGS is for -- joinability is checked, names are not.
@@ -1292,6 +1295,11 @@ class TCRIModel(BaseModelClass):
         gp = self.module.gate_prob
         adata.uns[_key(K.GATE_PROB)] = float(gp) if gp is not None else float("nan")
         adata.uns[_key(K.CLASSIFIER_TEMPERATURE)] = float(self.module.classifier_temperature)
+        # ε of the label readout, so the label likelihood can be rebuilt from the object alone
+        # (`diag.joint_distribution_ppc` draws replicate labels from it). NaN for a label-free
+        # fit, the same sentinel GATE_PROB uses, because h5ad cannot store None.
+        eps = self.module.label_error_rate
+        adata.uns[_key(K.LABEL_ERROR_RATE)] = float(eps) if eps is not None else float("nan")
 
         # 3) latent mean -----------------------------------------------------
         adata.obsm[_key(K.X_TCRI)] = self.get_latent_representation(
@@ -1322,13 +1330,5 @@ class TCRIModel(BaseModelClass):
         adata.obs[_key(K.PHENOTYPE)] = pd.Categorical.from_codes(
             probs_df.values.argmax(1), categories=list(probs_df.columns)
         )
-
-        if compute_umap:
-            # Per fit, like every other derived array: unprefixed, a null would overwrite the
-            # parent's embedding, which is the one obsm slot a reader is most likely to plot.
-            import umap
-            adata.obsm[_key(K.X_UMAP)] = umap.UMAP(random_state=42).fit_transform(
-                adata.obsm[_key(K.X_TCRI)]
-            )
 
         return adata

@@ -8,6 +8,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import tcri
 from tcri._state import keys as K
@@ -27,7 +28,7 @@ def test_identity_ct_table_equals_p_ct(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=1.0,
-                             inplace=False)['table']
+                             inplace=False)['draws']
 
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     rows = np.where(np.asarray(adata.uns[K.CT_TO_COV]) == cov_i)[0]
@@ -40,7 +41,7 @@ def test_identity_use_logits_equals_predict_aggregation(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     df = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0,
-                             inplace=False)['table']
+                             inplace=False)['draws']
 
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     mask = np.asarray(adata.uns[K.COV_ARRAY]) == cov_i
@@ -56,23 +57,23 @@ def test_point_estimate_is_deterministic(trained_model):
     """n_samples=0 is deterministic and bit-identical across repeated calls."""
     _, adata = trained_model
     cov = _first_covariate(adata)
-    a = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['table']
-    b = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['table']
+    a = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['draws']
+    b = tcri.joint_distribution(adata, covariate=cov, n_samples=0, inplace=False)['draws']
     assert np.array_equal(a.values, b.values)
 
 
 def test_sampling_is_seeded_reproducible(trained_model):
     """n_samples>0 is reproducible under a fixed random_state, varies otherwise, and
-    carries a (clonotype, sample_id) MultiIndex."""
+    carries a (clonotype, draw) MultiIndex."""
     _, adata = trained_model
     cov = _first_covariate(adata)
     kw = dict(covariate=cov, n_samples=8, inplace=False)
-    s1 = tcri.joint_distribution(adata, random_state=0, **kw)['table']
-    s2 = tcri.joint_distribution(adata, random_state=0, **kw)['table']
-    s3 = tcri.joint_distribution(adata, random_state=1, **kw)['table']
+    s1 = tcri.joint_distribution(adata, random_state=0, **kw)['draws']
+    s2 = tcri.joint_distribution(adata, random_state=0, **kw)['draws']
+    s3 = tcri.joint_distribution(adata, random_state=1, **kw)['draws']
     np.testing.assert_allclose(s1.values, s2.values)
     assert not np.allclose(s1.values, s3.values)
-    assert list(s1.index.names) == ["clonotype", "sample_id"]
+    assert list(s1.index.names) == ["clonotype", "draw"]
     # draws are valid simplices
     np.testing.assert_allclose(s1.values.sum(axis=1), 1.0, atol=1e-5)
 
@@ -83,9 +84,9 @@ def test_sampling_mean_approaches_tempered_base(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     base = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0,
-                                 inplace=False)['table']
+                                 inplace=False)['draws']
     draws = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=400, random_state=0,
-                                  inplace=False)['table']
+                                  inplace=False)['draws']
     mean = draws.groupby(level="clonotype", sort=False).mean().reindex(base.index)
     np.testing.assert_allclose(mean.values, base.values, atol=0.05)
 
@@ -96,9 +97,9 @@ def test_weighted_scales_rows_by_ct_cell_count(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     w0 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=False,
-                               inplace=False)['table']
+                               inplace=False)['draws']
     w1 = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, weighted=True,
-                               inplace=False)['table']
+                               inplace=False)['draws']
     np.testing.assert_allclose(w0.values.sum(axis=1), 1.0, atol=1e-6)          # unweighted rows sum to 1
     assert not np.allclose(w0.values, w1.values)
     # weighted row sum == that clone's cell count at this covariate
@@ -116,13 +117,39 @@ def test_shared_draw_invariant_across_covariates(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     allcov = tcri.joint_distribution(adata, covariate=None, n_samples=6, random_state=7,
-                                   inplace=False)['table']
+                                   inplace=False)['draws']
     tcri.joint_distribution(adata, covariate=cov, n_samples=6, random_state=7)
-    percov = tcri.get.result(adata, 'joint_distribution')['table']
+    percov = tcri.get.draws(adata, 'joint_distribution')
     assert "covariate" in allcov.index.names
     sl = allcov.xs(cov, level="covariate")
     np.testing.assert_allclose(sl.values, percov.values, atol=1e-6)
     assert tcri.get.params(adata, 'joint_distribution')["n_draws"] == 6  # one draw block, not ×#covariates
+
+
+def test_the_joint_stores_its_summary_and_draws(trained_model):
+    """``{summary, draws}`` and nothing else: the summary is the draws' mean over the ``draw``
+    level, and equals the draws at ``n_samples=0``. ``tcri.get.draws`` reads the draws; the
+    joint has no replicate or item level."""
+    _, adata = trained_model
+    a = adata.copy()
+    tcri.joint_distribution(a, covariate=None, n_samples=5, random_state=0)
+    stored = tcri.get.result(a, 'joint_distribution')
+    assert set(stored) == {"summary", "draws"}
+    draws = tcri.get.draws(a, 'joint_distribution')
+    pd.testing.assert_frame_equal(draws, stored["draws"])
+    assert list(draws.index.names) == ["covariate", "clonotype", "draw"]
+    assert sorted(set(draws.index.get_level_values("draw"))) == list(range(5))
+    mean = draws.groupby(level=["covariate", "clonotype"], sort=False).mean()
+    pd.testing.assert_frame_equal(stored["summary"], mean)
+    with pytest.raises(KeyError, match="no item level"):
+        tcri.get.draws(a, 'joint_distribution', items=True)
+    with pytest.raises(KeyError, match="not stored by level"):
+        tcri.get.replicates(a, 'joint_distribution')
+    assert tcri.get.stats(a, 'joint_distribution') is None
+
+    point = tcri.joint_distribution(a, covariate=_first_covariate(a), inplace=False)
+    pd.testing.assert_frame_equal(point["draws"], point["summary"])
+    assert list(point["summary"].index.names) == ["clonotype"]
 
 
 def test_provenance_is_json_serializable(trained_model):
@@ -182,7 +209,7 @@ def test_temperature_tempers_base_on_ct_path(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     df = tcri.joint_distribution(adata, covariate=cov, use_logits=False, n_samples=0, temperature=2.0,
-                             inplace=False)['table']
+                             inplace=False)['draws']
     cov_i = list(adata.uns[K.COVARIATE_CATEGORIES]).index(cov)
     rows = np.where(np.asarray(adata.uns[K.CT_TO_COV]) == cov_i)[0]
     expected = softmax(np.log(np.asarray(adata.uns[K.P_CT])[rows] + 1e-8) / 2.0, axis=1)
@@ -194,9 +221,9 @@ def test_temperature_changes_use_logits_joint(trained_model):
     _, adata = trained_model
     cov = _first_covariate(adata)
     a = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=1.0,
-                            inplace=False)['table']
+                            inplace=False)['draws']
     b = tcri.joint_distribution(adata, covariate=cov, use_logits=True, n_samples=0, temperature=2.0,
-                            inplace=False)['table']
+                            inplace=False)['draws']
     assert not np.allclose(a.values, b.values)
 
 

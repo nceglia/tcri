@@ -90,8 +90,8 @@ tcri.pl.clonotypic_entropy(adata, key="entropy_post", ax=axes[1])
 
 ## Gene importance
 
-The twin of {func}`tcri.perturbation.gene_importance`: a ranking of the most important genes,
-or the signed gene × phenotype shift behind it.
+The twin of {func}`tcri.perturbation.gene_importance`: a ranking of the most important genes
+(`view="replicate"`), or the signed gene × phenotype shift behind it (`view="item"`).
 
 ```{eval-rst}
 .. automodule:: tcri.plotting._perturbation

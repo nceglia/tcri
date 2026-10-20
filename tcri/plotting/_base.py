@@ -499,10 +499,9 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
                   rotation=90, decorate=None, view="replicate", distance=False):
     """Draw a cached ``tl`` result. The axes come from its ``params``, not from arguments.
 
-    ``view`` picks the level of a result stored by level: ``"replicate"`` draws the replicate
-    summary, one value per replicate, and stars the tests; ``"item"`` draws the item summary,
-    one value per replicate and item. A metric with no items raises for ``"item"``. A result
-    stored as ``{table, result, stats}`` is drawn from ``result``.
+    ``view`` picks the level of the stored result: ``"replicate"`` draws the replicate summary,
+    one value per replicate, and stars the split tests; ``"item"`` draws the item summary, one
+    value per replicate and item. A metric with no items raises for ``"item"``.
 
     ``item_as_x`` puts the metric's own item axis on x — right for clonotypic entropy, whose
     items are a handful of phenotypes, wrong for phenotypic entropy, whose items are every
@@ -536,18 +535,15 @@ def render_metric(adata, name, *, quantity, ylabel, item_col=None, item_as_x=Fal
     if change and not distance:
         # a change's axis says so; flux is between two levels by definition and keeps its label
         ylabel = f"Δ {ylabel}"
-    if "replicate" in payload:
-        if view == "item":
-            level = payload.get("item")
-            if level is None:
-                raise ValueError(
-                    f"{name} has no item view: it has one value per replicate and no items.")
-        else:
-            level = payload["replicate"]
-            item_col, item_as_x = None, False
-        result, table = level["summary"], level["draws"]
+    if view == "item":
+        level = payload.get("item")
+        if level is None:
+            raise ValueError(
+                f"{name} has no item view: it has one value per replicate and no items.")
     else:
-        result, table = payload["result"], payload.get("table")
+        level = payload["replicate"]
+        item_col, item_as_x = None, False
+    result, table = level["summary"], level["draws"]
     stats = payload.get("stats")
     if return_df:
         return result

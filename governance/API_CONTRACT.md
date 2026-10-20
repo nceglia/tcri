@@ -67,15 +67,16 @@ naming the column and the number of cells; a group that keeps no clone warns.
 **The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
-per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob` and
-`classifier_temperature`. Every `tl` metric reads that substrate and takes no model; `diag`
-functions that need the live networks take a model as well, and every `perturb` function takes
-the model first. Session I/O (`ut`) restores the
-model, the AnnData and the Pyro parameter store together; the store is process-global, so one
+per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob`,
+`classifier_temperature` and `label_error_rate` (NaN for a label-free fit). Every `tl` metric
+reads that substrate and takes no model; `diag` functions that need the live networks take a
+model as well, and every `perturb` function takes the model first. Session I/O (`ut`) restores
+the model, the AnnData and the Pyro parameter store together; the store is process-global, so one
 fitted model per process is the supported pattern.
 
 **`n_samples`.** `0` is the deterministic plug-in at the posterior mean: no draw, reproducible
-on repeat calls. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
+on repeat calls; `diag.joint_distribution_ppc` rejects it, since a single point estimate is not
+a posterior predictive check. `N > 0` draws `N` joints from the fitted Dirichlet posterior of `p_ct`, with
 the guide's clamped concentration, seeded by `random_state` through a torch generator. One draw
 serves every covariate, group and clone in a call (draw-once), so a level against itself changes
 by exactly zero.
@@ -115,16 +116,18 @@ or "tcri_<metric>"]` with a `params` block recording every argument, defaults in
 `None`; `inplace=False` stores nothing and returns the whole result. Nothing is read from a returned
 object: `tcri.get` is the only reader of a stored result. A stateful `random_state` (a numpy or
 torch generator) is turned into one integer seed before the call, and `params` records that
-integer. Mutual information, the two entropies and flux store `{replicate, item, stats}`. Each
-level holds `draws`, one row per (covariate, replicate[, item], draw), never reduced, and
-`summary`, which reduces over draw only; a change labels its rows `cov_from`/`cov_to` in place of
-`covariate` and carries `value_from`/`value_to` (mutual information also `denom_from`/`denom_to`),
-and its summaries reduce the change and its endpoints under one mask. The replicate level has one
-row per replicate, NaN when the replicate has no joint at a level; the item level has one row per
-replicate and phenotype (clonotypic entropy) or clone (phenotypic entropy; on a change and for
-flux, the persistent clones), and mutual information has no item level. `joint_distribution`
-stores `{table, result}` and `gene_importance` `{table, result, stats, shift}`: `table` one row per (covariate, group, item,
-draw), `result` reduced over draw only. Every summary and `result` carries
+integer. Mutual information, the two entropies, flux and `perturb.gene_importance` store
+`{replicate, item, stats}`. Each level holds `draws`, one row per (covariate, replicate[, item],
+draw), never reduced, and `summary`, which reduces over draw only; a change labels its rows
+`cov_from`/`cov_to` in place of `covariate` and carries `value_from`/`value_to` (mutual
+information also `denom_from`/`denom_to`), and its summaries reduce the change and its endpoints
+under one mask. The replicate level has one row per replicate, NaN when the replicate has no joint
+at a level; the item level has one row per replicate and phenotype (clonotypic entropy) or clone
+(phenotypic entropy; on a change and for flux, the persistent clones), and mutual information has
+no item level. Gene importance labels every row with the gene and stores only the adjusted value
+(**Perturbation**, below). `joint_distribution` stores `{summary, draws}`: the posterior-mean
+clone × phenotype table and its draws, indexed by `[covariate,] clonotype[, draw]`, read with
+`tcri.get.result` and `tcri.get.draws`. Every level's summary but gene importance's carries
 `value`, `sd`, `hdi_low`, `hdi_high` (a true highest-density interval, NaN at `n_samples ≤ 1`);
 `stats` is `None` when nothing is compared and otherwise carries one row per contrast, with
 `quantity` naming the column contrasted. Every frame survives an h5ad round trip: flat columns, no vectors in
@@ -142,14 +145,13 @@ permutation, namespace and records; the calls return the fitted models, a list p
 `n_nulls` times longer than with one. A null's permutation is drawn from the seed spawned by its
 kind, `key_added` and index, so it does not depend on the fits already on the object. Every scored
 metric takes `null_model`, defaulting to `"auto"`: the phenotype null at one covariate level, the
-covariate null for flux and every change. The reference is computed and every summary
-(`result`) gains `null_value` and `adjusted = value - null_value` beside every native value column
-(`null_denom` has no adjusted column; a denominator is not a reported quantity). The per-draw
-frames (`draws`, `table`) carry them per pair of draws, the fit's draw *d* paired with draw *d*
-of every fit of the reference, `null` numbering those fits, and the summary summarizes all the
-pairs: `adjusted` is their mean, with `adjusted_sd`,
-`adjusted_hdi_low` and `adjusted_hdi_high` beside it. At `n_samples=0` a row has one pair per
-null: `adjusted_sd` is the sd between the nulls and the HDI is NaN. The adjusted value is the
+covariate null for flux and every change. The reference is computed and every summary gains
+`null_value` and `adjusted = value - null_value` beside every native value column (`null_denom`
+has no adjusted column; a denominator is not a reported quantity). Each level's `draws` carries
+them per pair of draws, the fit's draw *d* paired with draw *d* of every fit of the reference,
+`null` numbering those fits, and the summary summarizes all the pairs: `adjusted` is their mean,
+with `adjusted_sd`, `adjusted_hdi_low` and `adjusted_hdi_high` beside it. At `n_samples=0` a
+row has one pair per null: `adjusted_sd` is the sd between the nulls and the HDI is NaN. The adjusted value is the
 quantity a metric reports: `stats` is computed on it, and `value` and `null_value` stay stored as
 its inputs. `null_model` takes `"auto"` (every fit of the metric's default reference), a
 reference's name (`"phenotype"`, `"null.phenotype"`: every fit), one fit's name
@@ -176,14 +178,15 @@ kind resolves to the fit that carries it.
 splits and distance it draws are the ones `tl` used, read from `params`. `pl` functions take
 no metric arguments. A mark shows one variance component: the coarsest unit that varies within
 an x position (replicate over item over draw). The quantity on the axis is `adjusted` when the
-result carries one, against a zero rule, and `quantity="value"` draws the value with its null
-behind it; the star a panel draws is always about the quantity on its axis. The twins of mutual
-information, the two entropies and flux take `view=`: `"replicate"` (the default) draws one mark
-per replicate from the replicate summary, with the split on x and its test starred; `"item"` draws
-the item summary; mutual information has no items and raises for `"item"`. A change is drawn
-against a zero rule; flux, a distance that is never negative, has its zero rule on the adjusted
-panel only. Connecting lines are
-drawn only between points sharing an identity across the compared levels. Every twin takes
+result carries one, against a zero rule, and in the metric twins `quantity="value"` draws the
+value with its null behind it; the star a panel draws is always about the quantity on its axis.
+Every twin takes `view=`, `"replicate"` (the default) drawing the replicate summary and `"item"`
+the item summary. In the twins of mutual information, the two entropies and flux the replicate
+view draws one mark per replicate, with the split on x and its test starred, and mutual
+information has no items and raises for `"item"`; the views of `pl.gene_importance` are under
+**Perturbation**. A change is drawn against a zero rule; flux, a distance that is never negative,
+has its zero rule on the adjusted panel only. Connecting lines are drawn only between points
+sharing an identity across the compared levels. Every twin takes
 `legend=`, and `False` draws no legend, so a row of panels can carry one; a y label longer than
 its axes is wrapped. In the metric twins the x axis is in the category order of the column on it
 (`order=` overrides), so a level sits at the same position in every panel, and dots that are
@@ -198,25 +201,53 @@ takes none; it permutes labels within each covariate on the empirical crosstab a
 Dirichlet samples. It is a model-free check on the data, not a reference for a model-based number
 — `tcri.null` is that.
 
+`joint_distribution_ppc` is a sampled-posterior predictive check of the labels. Each of
+`n_samples` posterior draws of `p_ct` (the draws `tl.joint_distribution` makes for the same
+`random_state`) rebuilds every cell's label likelihood, its classifier logits gated with its
+group's draw and passed through the label-noise matrix of `label_error_rate`, and `n_sims`
+simulated label sets are drawn cell by cell. A clone's `p` at a draw is the rank of its observed
+distance among its replicate distances, ties broken at random, so under a correct fit each draw's
+`p` is uniform across clones; `p` is never averaged over draws. Each fit is checked against its
+own training data: a phenotype null against its permuted labels, a clonotype or covariate null
+against its own groups. A label-free fit raises. It returns `draws` (one row per covariate, clone
+and draw), `summary` (per clone, no `p`) and `calibration` (per covariate, doubling clone-size bin
+and draw: the KS distance of `p` from uniform).
+
+The four checks that compute (`joint_distribution_ppc`, `phenotype_calibration`,
+`reconstruction_ppc`, `permutation_null`) return a dict of named DataFrames, one per level of
+detail, and put no numbers in `attrs`: `phenotype_calibration` returns `bins` and a one-row
+`summary` (`ece`, `n_cells`); `reconstruction_ppc` and `permutation_null` return `summary`. They
+take `plot=True` and `save=None`. `plot` draws the check's figure from the values it just
+computed, and the return value is the same whether or not it plots; `save` with `plot=False`
+raises. Nothing is cached: a redraw reruns the check. The three with a panel count known before
+the call also take `ax=None`, one Axes per panel; the PPC's panel count depends on the data, so it
+always draws its own figure. `reconstruction_ppc` and `joint_distribution_ppc` both call their
+count of simulated datasets `n_sims`.
+
 **Perturbation.** `perturb.*` is a query on the fitted model with its parameters held fixed:
 intervene on the expression matrix, read the phenotype call back through the per-cell rule
 `predict()` uses (`use_gate=True`, the default) or through the head alone (`use_gate=False`).
 The pass is deterministic at `n_samples=0`; no encoder sample is ever drawn. `knockout`
 returns the `predict()` frame and stores nothing unless `key_added` names an `obsm` slot;
-`gene_importance` stores `{table, result, stats, shift}` and returns `None` (the whole result at
-`inplace=False`), where `shift` is the
-signed per-phenotype decomposition of each importance, and its `stats` contrast is per gene. It
+`gene_importance` stores `{replicate, item, stats}` and returns `None` (the whole result at
+`inplace=False`). The gene is a label on every row: the replicate level is the importance, one
+row per gene and group, and the item level its signed shift, one row per gene, group and
+phenotype; a group with no cell at `covariate` has NaN rows. Only the adjusted value is stored:
+each level's `draws` holds `adjusted` per pair (`null`, `draw`) and its `summary` holds
+`adjusted`, `adjusted_sd` and the adjusted HDI; nothing is stored for the null runs. At
+`n_samples > 0` draw `d` is paired with null `d mod n_nulls` and each null draws only its share;
+at `n_samples = 0` the one value is paired with every null. `null_model=None` raises, and so does
+`0 < n_samples < n_nulls`. Its `stats` contrast is per gene, on the adjusted importance. It
 takes `null_model` like every scored metric and no `fit`: it is a query on a model, so a
 different fit is reached by handing it a different model, and `"auto"` rebuilds the phenotype
 null from the parameter store and this object.
 `adata` is required there because the result is stored into it. Definitions in
-`METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `kind="rank"` is the top
+`METRICS_CONTRACT.md`. `pl.gene_importance` renders that cache: `view="replicate"` is the top
 `n_top` genes under the mark rule, with each gene's own contrast starred above it when a
-split was used; `kind="shift"` is the gene × phenotype `shift`, averaged over groups, on a
-diverging scale centered on zero. Every twin takes `quantity`: the default is the adjusted value
-against a zero rule, drawn under the mark rule like the value, and `quantity="value"` is the
-value with its reference drawn behind it; `kind="shift"` draws only the value, because the reference has no per-phenotype
-decomposition stored.
+split was used; `view="item"` is the gene × phenotype shift from the item summary, averaged over
+groups, on a diverging scale centered on zero. It takes no `quantity`: both views draw the
+adjusted value, the one stored, against zero, and both show the genes ranked by the adjusted
+importance.
 
 ## The stub
 
@@ -264,8 +295,7 @@ class TCRIModel:
     ) -> pd.DataFrame: ...
     def get_p_ct(self) -> Any: ...
     def to_anndata(
-        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., compute_umap: bool = ...,
-        fit: Optional[str] = ...,
+        self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., fit: Optional[str] = ...,
     ) -> AnnData: ...
 
 
@@ -372,8 +402,7 @@ class pl:
         save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
-        adata: AnnData, *, kind: str = ..., quantity: str = ..., n_top: int = ...,
-        key: Optional[str] = ...,
+        adata: AnnData, *, view: str = ..., n_top: int = ..., key: Optional[str] = ...,
         order: Any = ..., hue_order: Any = ..., palette: Any = ..., legend: bool = ...,
         ax: Any = ..., figsize: Any = ..., save: Any = ..., show: Any = ...,
         return_df: bool = ...,
@@ -411,21 +440,25 @@ class get:
 # ── diagnostics (diag) ───────────────────────────────────────────────────────
 class diag:
     def joint_distribution_ppc(
-        adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: str = ...,
-        temperature: float = ..., clones: Any = ..., exclude_pools: bool = ...,
-        fit: Optional[str] = ...,
-    ) -> pd.DataFrame: ...
+        adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: Any = ...,
+        n_samples: int = ..., n_sims: int = ..., clones: Any = ...,
+        exclude_pools: bool = ..., random_state: Any = ..., fit: Optional[str] = ...,
+        plot: bool = ..., save: Any = ...,
+    ) -> dict: ...
     def phenotype_calibration(
-        adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ...,
-    ) -> pd.DataFrame: ...
+        adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ..., plot: bool = ...,
+        ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def reconstruction_ppc(
-        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ..., random_state: Any = ...,
-    ) -> pd.DataFrame: ...
+        model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ...,
+        random_state: Any = ..., plot: bool = ..., ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
         groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
-        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ...,
-    ) -> pd.DataFrame: ...
+        normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ..., plot: bool = ...,
+        ax: Any = ..., save: Any = ...,
+    ) -> dict: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
 

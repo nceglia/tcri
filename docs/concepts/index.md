@@ -224,6 +224,7 @@ function can read them:
 | `.uns` | `tcri_local_scale` | Dirichlet concentration scale for posterior sampling | scalar |
 | `.uns` | `tcri_gate_prob` | classifier/prior gate weight (`NaN` if gating is off) | scalar |
 | `.uns` | `tcri_classifier_temperature` | temperature applied to classifier logits | scalar |
+| `.uns` | `tcri_label_error_rate` | ε of the noisy-label readout (`NaN` for a label-free fit) | scalar |
 | `.uns` | `tcri_{phenotype,clonotype,covariate}_categories` | category label lists (index ↔ name) | — |
 | `.uns` | `tcri_metadata` | column-name mapping | dict |
 | `.obsm` | `X_tcri` | latent means $z$ | `(n_cells, n_latent)` |
@@ -299,8 +300,8 @@ Two ways to read the clone→phenotype distributions:
   into the metrics.
 
 {func}`joint_distribution <tcri.tools._joint.joint_distribution>` exposes both. Passing
-`n_samples > 0` stores a stack of posterior draws, one row per draw in its `table`, instead of a
-single point estimate, and
+`n_samples > 0` stores a stack of posterior draws, one row per clone and draw in its `draws`,
+beside the posterior-mean `summary`, and
 every metric accepts the same argument to report a posterior mean and HDI.
 
 ## Temperatures

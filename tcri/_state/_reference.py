@@ -21,9 +21,9 @@ differ: the null's draws are seeded by :func:`null_seed`, derived from the calle
 **``adjusted`` is computed per draw, against every fit of the reference.** A reference is the
 fits ``tcri.null.*`` wrote for it, ``null.phenotype[0]`` to ``null.phenotype[K-1]``; the caller's
 call runs on each. The fit and each null are independent fits, so draw ``d`` of the one is
-paired with draw ``d`` of every null: ``table`` carries ``null`` (which of the K), ``null_value``
-and ``adjusted`` on every pair, and ``result`` summarizes ``adjusted`` over all of them like any
-value, with its mean, ``adjusted_sd`` and an HDI. Pooling the pairs is what puts the null's
+paired with draw ``d`` of every null: each level's ``draws`` carries ``null`` (which of the K),
+``null_value`` and ``adjusted`` on every pair, and its ``summary`` summarizes ``adjusted`` over all
+of them like any value, with its mean, ``adjusted_sd`` and an HDI. Pooling the pairs is what puts the null's
 fit-to-fit spread into the interval; one null's draws do not carry it, and the mean of the
 nulls' draws would hide it. Each null draws from its own seed because two samples drawn from one
 seed share their underlying noise, and the difference of two correlated samples has a narrower
@@ -124,7 +124,7 @@ def usable_reference(frame, column="null_value") -> bool:
         pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)).any())
 
 
-def resolve_reference(adata, *, null_model, fit, default_null, metric):
+def resolve_reference(adata, *, null_model, fit, default_null, metric, bare=True):
     """The fits (or models) the reference is computed on, as a list, or ``None`` for none.
 
     ``None`` -> no reference. ``"auto"`` -> every fit of the metric's default reference from the
@@ -133,7 +133,8 @@ def resolve_reference(adata, *, null_model, fit, default_null, metric):
     reference (``"phenotype"``, ``"null.phenotype"``, ``"null.phenotype.b"``), so a bare kind and
     a full name are one rule, as in :func:`..keys.resolve_fit`. A model is that one fit, and a
     list of models is a reference of those fits: the list ``tcri.null.*`` returns can be passed
-    straight back.
+    straight back. ``bare=False`` is a metric with no bare value to fall back on, whose error for
+    a missing reference does not offer ``null_model=None``.
     """
     if null_model is None:
         return None
@@ -155,12 +156,13 @@ def resolve_reference(adata, *, null_model, fit, default_null, metric):
             return None
         group = K.resolve_group(adata, default_null)
         if group is None:
+            bare_value = (", or pass `null_model=None` to report the bare value" if bare else "")
             raise KeyError(
                 f"{metric} defaults to the {default_null!r} null and this AnnData carries no "
                 f"such reference. Build the references once with `tcri.null.all(model, adata)` "
-                f"(or `tcri.null.{default_null}(model, adata)` for this one), or pass "
-                f"`null_model=None` to report the bare value. A metric never fits a null "
-                f"itself: that is a decision with a cost, and it is yours."
+                f"(or `tcri.null.{default_null}(model, adata)` for this one){bare_value}. A "
+                f"metric never fits a null itself: that is a decision with a cost, and it is "
+                f"yours."
             )
         return list(group[1])
     known = K.fits(adata)
@@ -243,19 +245,6 @@ def _labels(result, values, reference_columns=()):
     """
     drop = set(values) | set(SUMMARY_COLUMNS) | set(reference_columns)
     return [c for c in result.columns if c not in drop]
-
-
-def attach(payload, references, *, values, denominators=()):
-    """Add the reference and adjusted columns to a ``{table, result}`` payload, in place.
-
-    ``references`` is the caller's call run on each fit of the reference, in order; each run's
-    ``table`` is paired with this one's by :func:`_attach_frames`.
-    """
-    table, result = _attach_frames(payload.get("table"), payload.get("result"),
-                                   [r.get("table") for r in references],
-                                   values=values, denominators=denominators)
-    payload["table"], payload["result"] = table, result
-    return payload
 
 
 def attach_levels(payload, references, *, values, denominators=()):
@@ -358,14 +347,17 @@ def mask_unmovable(payload, adata, references, *, arguments, values, denominator
 
     from .._compute._tables import unmovable_groups   # the lower layer, reached lazily
 
-    kinds = {(adata.uns.get(K.fit_key(K.FIT_SETTINGS, r)) or {}).get("kind")
-             for r in references if isinstance(r, str)}
+    kinds = {(adata.uns.get(K.fit_key(K.FIT_SETTINGS, name_of(r, adata))) or {}).get("kind")
+             for r in references}
     if "covariate" not in kinds:
         return []
     if arguments.get("cov_from") is not None:
         levels = (arguments["cov_from"], arguments.get("cov_to"))
+    elif arguments.get("covariate") is not None:
+        levels = (arguments["covariate"],)
     else:
-        levels = (arguments.get("covariate"),)
+        # a call over every level (gene importance at covariate=None) reads them all
+        levels = tuple(adata.uns[K.COVARIATE_CATEGORIES])
     groupby = arguments.get("groupby")
     unmoved = unmovable_groups(adata, levels=levels, groupby=groupby,
                                splitby=arguments.get("splitby"), clones=arguments.get("clones"),
@@ -401,48 +393,77 @@ def mask_unmovable(payload, adata, references, *, arguments, values, denominator
     return unmoved
 
 
-def restat(payload, *, groupby, splitby, per_gene=False):
-    """Recompute ``stats`` on the quantity this result reports: the adjusted value, each row's
-    mean over its paired draws, or the value when there is no usable adjustment.
+def rotation_shares(n_samples, n_nulls):
+    """The draws each fit of a reference contributes under rotated pairing.
 
-    The frame is replaced, not appended to, so a result never carries two contrasts. The adjusted
-    column is contrasted only when something in it is finite: a reference that is non-finite
-    everywhere is no reference, and the frame then says ``"value"``. Rebuilding on the value
-    rather than leaving the payload's frame alone is what makes the stored frame self-describing,
-    and what makes this function idempotent: the payload it receives may already carry an
-    adjusted frame from an earlier pass.
+    Fit draw ``d`` is paired with null ``d mod n_nulls`` only, so null ``i`` contributes the draws
+    ``i, i + n_nulls, i + 2·n_nulls, ...`` below ``n_samples``: ``n_samples / n_nulls`` each when
+    ``n_samples`` is a multiple of ``n_nulls``, one more for the first nulls otherwise. Returns
+    the share of each null, in order.
+
+    Raises
+    ------
+    ValueError
+        When ``0 < n_samples < n_nulls``: some null would contribute no draw.
     """
-    if "stats" not in payload:
-        return payload
-    result = payload.get("result")
-    if result is None or not len(result) or splitby is None:
-        return payload
-    target = "adjusted" if usable_reference(result, "adjusted") else "value"
-    if per_gene:
-        from ..perturbation._tables import stats_per_gene
-        rebuilt = stats_per_gene(result, groupby=groupby, splitby=splitby, value=target)
-    else:
-        from .._compute._tables import build_stats
-        rebuilt = build_stats(result, groupby=groupby, splitby=splitby, value=target)
-    # Never replace a frame with nothing: the frame already there is the one the result
-    # legitimately has.
-    if rebuilt is not None and len(rebuilt):
-        payload["stats"] = rebuilt
+    n = int(n_samples or 0)
+    if 0 < n < n_nulls:
+        raise ValueError(
+            f"n_samples={n} is fewer than the reference's {n_nulls} fits. Each draw of the fit is "
+            f"paired with one null, null (draw mod {n_nulls}), so some null would contribute no "
+            f"draw. Pass n_samples=0, or at least {n_nulls}; a multiple of {n_nulls} gives each "
+            f"null an equal share."
+        )
+    return [len(range(i, n, n_nulls)) for i in range(n_nulls)]
+
+
+def rotate_draws(payload, position, n_nulls):
+    """Renumber a reference run's draws on every level: draw ``j`` of the null at ``position``
+    becomes ``position + j·n_nulls``, the fit draw it is paired with under
+    :func:`rotation_shares`. Pairing on the draw then matches each fit draw with one null. Each
+    level's ``draws`` is replaced in the payload, not modified."""
+    for level in ("replicate", "item"):
+        own = payload.get(level) or {}
+        draws = own.get("draws")
+        if draws is not None and "draw" in draws.columns:
+            own["draws"] = draws.assign(draw=position + draws["draw"].to_numpy() * n_nulls)
     return payload
 
 
-def restat_levels(payload, *, groupby, splitby, change=None, without=()):
-    """Recompute a ``{replicate, item, stats}`` payload's ``stats`` on the replicate summary, as
-    :func:`restat` does for a ``{table, result, stats}`` one: on the adjusted value when it has
-    something finite, else on the value. ``change`` is the covariate-row settings of a change
-    call (:func:`~tcri._compute._tables.build_stats`), whose stats exist with or without
-    ``splitby``. ``without`` names groups (label rows, :func:`mask_unmovable`) that have no
-    reference and leave the tests, on the value as on the adjusted value."""
+def keep_adjusted(payload, *, values):
+    """Keep only the adjusted value on every level of a payload, in place.
+
+    Each level's ``draws`` keeps its labels, ``null``, ``draw`` and ``adjusted``; its ``summary``
+    keeps its labels, ``adjusted``, ``adjusted_sd`` and the adjusted HDI. The native values, the
+    null's values and the native value's spread are dropped.
+    """
+    native = {c for v in values for c in (v, null_column(v))}
+    for level in ("replicate", "item"):
+        own = payload.get(level)
+        if own is None:
+            continue
+        for frame, drop in (("draws", native), ("summary", native | set(SUMMARY_COLUMNS))):
+            if own.get(frame) is not None:
+                own[frame] = own[frame].drop(columns=[c for c in own[frame].columns
+                                                      if c in drop])
+    return payload
+
+
+def restat_levels(payload, *, groupby, splitby, change=None, without=(), per_gene=False,
+                  target=None):
+    """Recompute a ``{replicate, item, stats}`` payload's ``stats`` on the replicate summary: on
+    the adjusted value when it has something finite, else on the value, unless ``target`` names
+    the column. The frame is replaced, not appended to, so a result never carries two contrasts,
+    and a rebuild is idempotent: the payload it receives may already carry an adjusted frame. ``change`` is the
+    covariate-row settings of a change call (:func:`~tcri._compute._tables.build_stats`), whose
+    stats exist with or without ``splitby``. ``without`` names groups (label rows,
+    :func:`mask_unmovable`) that have no reference and leave the tests, on the value as on the
+    adjusted value. ``per_gene`` tests each gene of ``perturb.gene_importance`` on its own."""
     summary = (payload.get("replicate") or {}).get("summary")
     if summary is None or not len(summary) or (splitby is None and change is None):
         return payload
-    from .._compute._tables import build_stats
-    target = "adjusted" if usable_reference(summary, "adjusted") else "value"
+    if target is None:
+        target = "adjusted" if usable_reference(summary, "adjusted") else "value"
     if without:
         summary = summary.copy()
         if groupby is not None and groupby in summary.columns:
@@ -451,7 +472,13 @@ def restat_levels(payload, *, groupby, splitby, change=None, without=()):
             gone = np.ones(len(summary), dtype=bool)
         own = [c for c in ("value", "value_from", "value_to") if c in summary.columns]
         summary.loc[gone, own] = np.nan
-    rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target, change=change)
+    if per_gene:
+        from ..perturbation._tables import stats_per_gene
+        rebuilt = stats_per_gene(summary, groupby=groupby, splitby=splitby, value=target)
+    else:
+        from .._compute._tables import build_stats
+        rebuilt = build_stats(summary, groupby=groupby, splitby=splitby, value=target,
+                              change=change)
     if rebuilt is not None and len(rebuilt):
         payload["stats"] = rebuilt
     return payload

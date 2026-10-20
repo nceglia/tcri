@@ -126,9 +126,9 @@ def test_guide_concentration_reaches_the_metric_draw(fitted):
             del b.uns[K.CONC_CT]
         jd = tcri.tl.joint_distribution(b, covariate=None, n_samples=120, random_state=0,
                                         inplace=False)
-        # `table` is the unreduced substrate -- one block of rows per draw. `result` has
+        # `draws` is the unreduced substrate -- one block of rows per draw. `summary` has
         # already averaged them, and an interval width cannot be read off a posterior mean.
-        v = jd["table"].to_numpy(dtype=float).reshape(120, -1)
+        v = jd["draws"].to_numpy(dtype=float).reshape(120, -1)
         return float(np.mean(np.percentile(v, 97, 0) - np.percentile(v, 3, 0)))
 
     assert not np.isclose(_mean_width(True), _mean_width(False), rtol=1e-3), (

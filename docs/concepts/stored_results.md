@@ -64,14 +64,14 @@ The key is the tool's name, so the key says what wrote it.
 | `tl.mutual_information(adata, fit="null.phenotype[0]")` | `uns["tcri_null.phenotype[0]_mutual_information"]` |
 | `perturb.gene_importance(model, adata)` | `uns["tcri_gene_importance"]` |
 
-Mutual information, the two entropies and flux store their result by level:
+Mutual information, the two entropies, flux and `gene_importance` store their result by level:
 
 ```text
 adata.uns["tcri_<metric>"]
 ├── replicate
 │   ├── draws      one row per replicate and draw (and null fit)
 │   └── summary    one row per replicate           ← get.replicates
-├── item           (the entropies and flux; mutual information has none)
+├── item           (the entropies, flux and gene_importance; mutual information has none)
 │   ├── draws      one row per replicate, item and draw (and null fit)
 │   └── summary    one row per replicate and item
 ├── stats          one row per test; None when nothing is compared
@@ -96,11 +96,14 @@ share of the replicate's `cov_from` joint, renormalized over the persistent clon
 `weighted=False`, by cells at `cov_from` with `weighted=True`); a replicate with no
 persistent clone has a NaN replicate row.
 
-The other tools, `joint_distribution` and `gene_importance`, store a dict of frames: `table` is
-the unreduced substrate, one row per covariate, group and item (and draw, with `n_samples > 0`),
-and `result` is the reduced per-group frame the plots consume. `joint_distribution`, which
-contrasts nothing, has only the two; `gene_importance` adds `stats` and `shift`, its per-phenotype
-decomposition. The snapshot below is the written record of which slots each tool has.
+`gene_importance` labels every row with the gene: its replicate level is the importance, one row
+per gene and group, and its item level the per-phenotype shift, one row per gene, group and
+phenotype. It stores only the adjusted value, so its frames carry `adjusted` and, on the
+summaries, `adjusted_sd` and the adjusted HDI, and no `value` (the reference, below).
+
+`joint_distribution` stores `{summary, draws}`: its posterior-mean clone × phenotype table and
+its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`. The
+snapshot below is the written record of which slots each tool has.
 
 ## What is recorded beside the payload
 
@@ -152,12 +155,12 @@ adata.uns['tcri_mutual_information'] not found. Run tcri.tl.mutual_information(a
 first — tcri.pl.* renders the stored result and never recomputes it.
 ```
 
-`get.items` and `get.draws(items=True)` raise for mutual information, which has no items, and
-`get.replicates`, `get.items` and `get.draws` raise for a result stored as `table` and `result`
-(the joint and gene importance), which `get.result` reads.
+`get.items` and `get.draws(items=True)` raise for mutual information and the joint, which have no
+items. `get.replicates` raises for the joint, whose summary `get.result(adata,
+"joint_distribution")["summary"]` reads and whose draws `get.draws` reads.
 
 `pl` functions take `return_df=True` to hand back the frame they would have drawn: the replicate
-summary, or with `view="item"` the item summary, or the stored `result` of the other tools.
+summary, or with `view="item"` the item summary.
 
 ## Named fits, side by side
 
@@ -176,17 +179,21 @@ An ambiguous name raises rather than silently preferring one, and so does a refe
 
 When a metric declares `null_model`, the decorator runs the whole call again on each fit of the
 named reference, with every other argument forwarded verbatim and each null's draws seeded from
-their own seed, and joins them draw by draw: every per-draw frame (each level's `draws`, or
-`table`) gains a `null` column numbering the fits, every frame gains `null_*` columns and, for
-the value columns, `adjusted*` columns, and each summary (or `result`) carries the adjusted
-value's spread over all the pairs. Forwarding verbatim is
-the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change the
-estimand, and a reference computed at defaults would be a different quantity subtracted from a
-different quantity.
+their own seed, and joins them draw by draw: each level's `draws` gains a `null` column
+numbering the fits, every frame gains `null_*` columns and, for the value columns, `adjusted*`
+columns, and each summary carries the adjusted value's spread over all the pairs. Forwarding
+verbatim is the point — `weighted`, `normalized`, `clones`, `n_samples` and the rest each change
+the estimand, and a reference computed at defaults would be a different quantity subtracted from
+a different quantity.
 
 The reference run is itself a stored result under its own fit key, so it is plottable with
 `key=`, readable through `tcri.get`, and never computed twice. `pl` draws the adjusted value
 against a zero rule by default, or `quantity="value"` with the reference behind it.
+
+`gene_importance` forwards its arguments the same way, but at `n_samples > 0` it pairs each draw
+with one null, its null runs store nothing, and it keeps only the `adjusted*` columns, so
+`pl.gene_importance` takes no `quantity`; its pairing is on the
+[perturbation page](../api/perturbation.md).
 
 ## Surviving `.h5ad`
 

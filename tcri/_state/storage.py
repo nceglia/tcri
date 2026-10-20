@@ -16,26 +16,26 @@ them: it adds ``key_added``, ``inplace`` and, for a tool with a reference, ``nul
 published signature::
 
     @tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
-               default_null="phenotype")
-    def mutual_information(adata, *, covariate, groupby=None, ..., fit=None):
+               default_null={"covariate": "phenotype", "change": "covariate"})
+    def mutual_information(adata, *, covariate=None, cov_from=None, cov_to=None, ..., fit=None):
         ...
-        return {"table": table, "result": result}
+        return {"replicate": {"draws": draws, "summary": summary}, "stats": stats}
 
-    # published: mutual_information(adata, *, covariate, groupby=None, ..., fit=None,
-    #                               null_model="auto", key_added=None, inplace=True)
+    # published: mutual_information(adata, *, covariate=None, cov_from=None, cov_to=None, ...,
+    #                               fit=None, null_model="auto", key_added=None, inplace=True)
 
 The decorator reads ``inplace`` / ``key_added`` from the call, optionally checks the result
 against a ``schema`` TypedDict, auto-captures the remaining arguments as ``params``, serializes
 to an ``.h5ad``-safe dict-of-arrays blob, and writes it to ``uns[key_added or key]``, returning
-``None``; with ``inplace=False`` it writes nothing and returns the result. :func:`decode_blob` / :func:`load_result` invert it
-for the ``tcri.get.*`` accessors.
+``None``; with ``inplace=False`` it writes nothing and returns the result. :func:`decode_blob` /
+:func:`load_result` invert it for the ``tcri.get.*`` accessors.
 
 A body that *resolves* a param the caller left implicit (``groupby=None`` -> the registry's
 ``replicate``) records the effective value with :func:`with_resolved_params`, so the cached
 provenance — and every ``pl`` / ``tcri.get`` reader of it — sees the real column rather than the
 ``None`` placeholder::
 
-    return with_resolved_params({"table": table, "result": result}, groupby=gkey)
+    return with_resolved_params(payload, groupby=gkey)
 
 **h5ad safety.** h5py treats ``/`` as a path separator, so a clonotype id like ``"TRB/1"`` used
 as a dict key would silently split into nested groups on write. The encoder therefore never
@@ -108,7 +108,7 @@ def _encode_index(index):
     writer for a tuple -- it fails with "Can't implicitly convert non-string objects to
     strings", named against the enclosing group rather than the index, which is a long way
     from the cause. ``joint_distribution(n_samples>0)`` produces exactly that: a
-    (clonotype, sample_id) MultiIndex on its `table`. Flattening it level by level keeps the
+    (clonotype, draw) MultiIndex on its `draws`. Flattening it level by level keeps the
     result writable to .h5ad, which is what this module exists to guarantee.
     """
     if isinstance(index, pd.MultiIndex):
@@ -272,12 +272,6 @@ def _null_for(default_null, change):
     return default_null
 
 
-def _has_levels(result) -> bool:
-    """Whether a result is laid out by level, ``{replicate, item, stats}``, rather than as
-    ``{table, result, stats}``."""
-    return isinstance(result, dict) and "replicate" in result
-
-
 def _check_schema(schema, result, fn_name: str) -> None:
     """Presence-only check of a TypedDict's required keys.
 
@@ -308,7 +302,7 @@ def _with_owned(sig: inspect.Signature, owned) -> inspect.Signature:
 
 def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
               values=("value",), denominators=(), default_null=None, reference_arg="fit",
-              per_gene_stats=False, distance=False):
+              per_gene_stats=False, adjusted_only=False, distance=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return ``None``.
 
     With ``inplace=False`` nothing is stored and the whole result is returned. A stored result is
@@ -366,6 +360,14 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     beside the split rows, rebuilt on the adjusted value once the reference is attached.
     ``distance=True`` marks a metric whose change is a distance between the two levels (flux):
     its covariate row tests the adjusted value against 0.
+
+    ``adjusted_only`` stores the adjusted value alone, for a tool whose bare value is not worth
+    keeping (``perturb.gene_importance``): ``null_model=None`` raises, every level keeps
+    ``adjusted`` and its summary and drops the native and null columns, ``stats`` tests the
+    adjusted value, and the reference runs store nothing of their own. Its pairing is rotated
+    at ``n_samples > 0``: fit draw ``d`` is paired with null ``d mod n_nulls`` only, and each null
+    run draws only its share (:func:`._reference.rotation_shares`); at ``n_samples = 0`` the one
+    fit draw is paired with every null.
     """
     def deco(fn):
         sig = inspect.signature(fn)
@@ -387,6 +389,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         takes_fit = "fit" in names
 
         def run(args, kwargs, *, null_model, key_added, inplace):
+            if adjusted_only and null_model is None:
+                raise ValueError(
+                    f"{fn.__name__} stores the adjusted value only, so it needs a reference: "
+                    f"null_model=None leaves nothing to adjust against. Build the references "
+                    f"once with tcri.null.all(model, adata), or tcri.null.{default_null}"
+                    f"(model, adata) for this one, and pass null_model='auto' or a reference.")
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             arguments = dict(bound.arguments)
@@ -414,6 +422,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             # doing it here safe.
             if takes_fit and arguments.get("fit") is not None:
                 arguments["fit"] = _keys.resolve_fit(adata, arguments["fit"])
+            references = None
+            if adjusted_only and null_model is not None:
+                # resolved and checked before the call computes anything
+                references = _resolve(adata, arguments, null_model)
+                _reference.rotation_shares(arguments.get("n_samples"), len(references or ()))
             result = fn(**arguments)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
@@ -427,14 +440,10 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 _check_schema(schema, result, fn.__name__)
 
             # ── the reference ────────────────────────────────────────────────
-            references = None
             change = _change_of(arguments)
             if takes_null and isinstance(result, dict):
-                references = _reference.resolve_reference(
-                    adata, null_model=null_model,
-                    fit=arguments.get("fit") if takes_fit else None,
-                    default_null=_null_for(default_null, change), metric=fn.__name__,
-                )
+                if references is None:
+                    references = _resolve(adata, arguments, null_model)
                 if references is not None:
                     if reference_arg == "fit":
                         references = [_reference.fit_of(r, adata) for r in references]
@@ -446,25 +455,27 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                         # read the same groups and would repeat it once per fit
                         warnings.filterwarnings("ignore", message=rf"{re.escape(fn.__name__)}: ",
                                                 category=UserWarning)
-                        runs = [_run_call(_reference_call(arguments, r,
-                                                          _reference.index_of(r, adata),
-                                                          inplace=inplace,
-                                                          key_added=key_added))
+                        if adjusted_only:
+                            runs = _rotated_runs(arguments, references, resolved,
+                                                 key_added=key_added)
+                        else:
+                            runs = [_run_call(_reference_call(arguments, r,
+                                                              _reference.index_of(r, adata),
+                                                              inplace=inplace,
+                                                              key_added=key_added))
                                 for r in references]
-                    if _has_levels(result):
-                        _reference.attach_levels(result, runs, values=values,
-                                                 denominators=denominators)
-                        unmoved = _reference.mask_unmovable(
-                            result, adata, references, arguments=arguments, values=values,
-                            denominators=denominators, metric=fn.__name__)
-                        _reference.restat_levels(result, groupby=arguments.get("groupby"),
-                                                 splitby=arguments.get("splitby"),
-                                                 change=change, without=unmoved)
-                    else:
-                        _reference.attach(result, runs, values=values, denominators=denominators)
-                        _reference.restat(result, groupby=arguments.get("groupby"),
-                                          splitby=arguments.get("splitby"),
-                                          per_gene=per_gene_stats)
+                    _reference.attach_levels(result, runs, values=values,
+                                             denominators=denominators)
+                    unmoved = _reference.mask_unmovable(
+                        result, adata, references, arguments=arguments, values=values,
+                        denominators=denominators, metric=fn.__name__)
+                    _reference.restat_levels(result, groupby=arguments.get("groupby"),
+                                             splitby=arguments.get("splitby"),
+                                             change=change, without=unmoved,
+                                             per_gene=per_gene_stats,
+                                             target="adjusted" if adjusted_only else None)
+                    if adjusted_only:
+                        _reference.keep_adjusted(result, values=values)
 
             if inplace:
                 blob = _encode(result)
@@ -491,6 +502,36 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 return None
             return {"cov_from": arguments["cov_from"], "cov_to": arguments.get("cov_to"),
                     "distance": distance}
+
+        def _resolve(adata, arguments, null_model):
+            return _reference.resolve_reference(
+                adata, null_model=null_model,
+                fit=arguments.get("fit") if takes_fit else None,
+                default_null=_null_for(default_null, _change_of(arguments)), metric=fn.__name__,
+                bare=not adjusted_only,
+            )
+
+        def _rotated_runs(arguments, references, resolved, *, key_added):
+            """The caller's call on each fit of the reference, under rotated pairing.
+
+            With draws taken (the body's resolved `n_draws`, else `n_samples`), each null run
+            draws only its share and its draws are renumbered to the fit draws they pair with;
+            without, each run is the one plug-in draw, paired with the fit's. Nothing is stored.
+            """
+            adata = arguments[_data_param]
+            taken = (resolved or {}).get("n_draws", arguments.get("n_samples"))
+            shares = _reference.rotation_shares(taken, len(references)) if taken else None
+            runs = []
+            for position, r in enumerate(references):
+                call = _reference_call(arguments, r, _reference.index_of(r, adata),
+                                       inplace=False, key_added=key_added)
+                if shares:
+                    call["n_samples"] = shares[position]
+                run = _run_call(call)
+                if shares:
+                    _reference.rotate_draws(run, position, len(references))
+                runs.append(run)
+            return runs
 
         def _run_call(call):
             """Run a call mapping, the decorator's own parameters included, through `_run`."""
@@ -565,6 +606,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         wrapper.tcri_default_null = default_null
         wrapper.tcri_values = tuple(values)
         wrapper.tcri_denominators = tuple(denominators)
+        wrapper.tcri_adjusted_only = bool(adjusted_only)
         wrapper.tcri_key = key
         wrapper.tcri_schema_version = int(version)
         wrapper.tcri_schema = schema

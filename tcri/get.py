@@ -5,8 +5,8 @@ everything else reads it back without knowing the blob format: ``pl`` renders fr
 should any user code that wants the frame a plot was drawn from.
 
 A ``tl`` call stores its result and returns ``None``; this module is how it is read. Mutual
-information, the two entropies and flux store their result by level, ``{replicate, item,
-stats}``, each level holding ``draws`` and ``summary``:
+information, the two entropies, flux and ``perturb.gene_importance`` store their result by
+level, ``{replicate, item, stats}``, each level holding ``draws`` and ``summary``:
 
     tcri.tl.phenotypic_entropy(adata, covariate="pre", splitby="response")
     tcri.get.replicates(adata, "phenotypic_entropy")  # one row per replicate
@@ -15,7 +15,8 @@ stats}``, each level holding ``draws`` and ``summary``:
     tcri.get.draws(adata, "phenotypic_entropy")       # replicate rows, one per draw
 
 :func:`result` returns the whole stored result, provenance stripped, and :func:`params` the
-provenance.
+provenance. ``joint_distribution`` stores ``{summary, draws}``: its summary is read with
+:func:`result` and its draws with :func:`draws`.
 """
 from __future__ import annotations
 
@@ -118,7 +119,10 @@ def params(adata, name: str, *, key=None, fit=None) -> dict:
 
 
 def _level(adata, name, level, *, key=None, fit=None):
-    payload = result(adata, name, key=key, fit=fit)
+    return _pick(result(adata, name, key=key, fit=fit), name, level)
+
+
+def _pick(payload, name, level):
     if not isinstance(payload, dict) or "replicate" not in payload:
         raise KeyError(
             f"the stored {name!r} result is not stored by level; read it with "
@@ -157,5 +161,14 @@ def stats(adata, name: str, *, key=None, fit=None):
 
 def draws(adata, name: str, *, items: bool = False, key=None, fit=None):
     """The per-draw rows of a stored result: the replicate level, or the item level with
-    ``items=True``. With a reference, one row per (row, null, draw)."""
-    return _level(adata, name, "item" if items else "replicate", key=key, fit=fit)["draws"]
+    ``items=True``. With a reference, one row per (row, null, draw).
+
+    For ``joint_distribution``, its ``draws`` frame, which has no levels; ``items=True`` raises
+    ``KeyError`` there.
+    """
+    payload = result(adata, name, key=key, fit=fit)
+    if isinstance(payload, dict) and "replicate" not in payload and "draws" in payload:
+        if items:
+            raise KeyError(f"{name!r} has no item level: its draws are one frame.")
+        return payload["draws"]
+    return _pick(payload, name, "item" if items else "replicate")["draws"]

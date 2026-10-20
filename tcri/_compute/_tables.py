@@ -32,7 +32,7 @@ def joint_draws(adata, covariate, *, n_samples, weighted, temperature, clones, r
 
     Consumes the engine's raw blocks directly. Going through
     :func:`~tcri.tools._joint.joint_distribution` would flatten ``[S, n_rows, P]``
-    into a MultiIndex DataFrame only for this function to ``groupby('sample_id')``
+    into a MultiIndex DataFrame only for this function to ``groupby('draw')``
     and unpack it straight back to arrays.
     Ordering matches the DataFrame path exactly (blocks in covariate order, clones in
     block order, then the ``clones=`` filter applied as a stable reorder).
@@ -716,7 +716,8 @@ def rows_of(clone_ids, J, wanted):
     return J[[at[c] for c in wanted]].reshape(len(wanted), J.shape[-1])
 
 
-def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_empty):
+def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_empty,
+            validate=True):
     """Yield ``(label_row, clones)`` for every group: its labels and the clones it counts.
 
     The group loop lives here so every metric means the same thing by ``groupby``. The clones
@@ -734,8 +735,9 @@ def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_e
         yield dict(base), counted
         return
 
-    _validate_group_clones(clone_labels, obs[groupby], groupby,
-                           hint=_refit_hint(adata, fit, groupby))
+    if validate:
+        _validate_group_clones(clone_labels, obs[groupby], groupby,
+                               hint=_refit_hint(adata, fit, groupby))
     n_missing = int(obs[groupby].isna().sum())
     if n_missing:
         warnings.warn(
@@ -802,7 +804,8 @@ def unmovable_groups(adata, *, levels, groupby, splitby, clones, exclude_pools, 
     """The label rows of the groups the covariate null cannot move at ``levels``: groups with a
     counted clone at one of ``levels``, none of which is in :func:`movable_clones`. A group with
     no counted clone at those levels has no values to adjust and is not one of them. The groups
-    are those of :func:`_groups`."""
+    are those of :func:`_groups`, without its clone-disjointness check: the question is which
+    clones a group's cells belong to, which a tool grouping cells (gene importance) asks too."""
     movable = movable_clones(adata, levels)
     frame = _cell_levels(adata)
     present = set(frame.loc[frame["level"].isin(_level_names(adata, levels)), "clone"])
@@ -811,7 +814,8 @@ def unmovable_groups(adata, *, levels, groupby, splitby, clones, exclude_pools, 
         # the metric's own pass over the groups has already warned about cells with no group
         warnings.simplefilter("ignore", UserWarning)
         groups = list(_groups(adata, groupby=groupby, splitby=splitby, clones=clones,
-                              exclude_pools=exclude_pools, fit=fit, base={}, skip_empty=False))
+                              exclude_pools=exclude_pools, fit=fit, base={}, skip_empty=False,
+                              validate=False))
     for label_row, group_clones in groups:
         counted = (group_clones if group_clones is not None
                    else adata.uns[K.CLONOTYPE_CATEGORIES])

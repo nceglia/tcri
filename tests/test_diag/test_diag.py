@@ -1,4 +1,7 @@
-"""tcri.diag smoke — each PPC returns a DataFrame; the two plots return axes."""
+"""tcri.diag smoke — each check returns what it computed and, with ``plot=True``, draws its figure
+without changing that return; the two training plots return axes."""
+import inspect
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -12,29 +15,38 @@ import tcri
 
 def test_joint_distribution_ppc(trained_model):
     _, adata = trained_model
-    df = tcri.diag.joint_distribution_ppc(adata, distance_metric="l1")
-    assert isinstance(df, pd.DataFrame)
-    if len(df):
-        assert {"covariate", "clonotype", "distance"}.issubset(df.columns)
+    res = tcri.diag.joint_distribution_ppc(adata, distance_metric="l1", n_samples=2,
+                                           n_sims=5, random_state=0, plot=False)
+    assert set(res) == {"draws", "summary", "calibration"}
+    assert all(isinstance(frame, pd.DataFrame) for frame in res.values())
 
 
 def test_phenotype_calibration(trained_model):
     _, adata = trained_model
-    df = tcri.diag.phenotype_calibration(adata, n_bins=5)
-    assert {"bin", "mean_pred", "emp_freq", "count"}.issubset(df.columns)
-    assert "ECE" in df.attrs and df.attrs["ECE"] >= 0
+    res = tcri.diag.phenotype_calibration(adata, n_bins=5, plot=False)
+    assert list(res) == ["bins", "summary"]
+    assert {"bin", "mean_pred", "emp_freq", "count"}.issubset(res["bins"].columns)
+    summary = res["summary"]
+    assert list(summary.columns) == ["ece", "n_cells"] and len(summary) == 1
+    assert summary["ece"].iloc[0] >= 0 and summary["n_cells"].iloc[0] == adata.n_obs
+    assert int(res["bins"]["count"].sum()) == adata.n_obs
 
 
 def test_reconstruction_ppc(trained_model):
     model, adata = trained_model
-    df = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0)
+    res = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0,
+                                      plot=False)
+    assert list(res) == ["summary"]
+    df = res["summary"]
     assert {"statistic", "observed", "simulated", "discrepancy"}.issubset(df.columns)
     assert (df["discrepancy"] >= 0).all()
 
 
 def test_permutation_null(trained_model):
     _, adata = trained_model
-    df = tcri.diag.permutation_null(adata, n_perm=30, random_state=0)
+    res = tcri.diag.permutation_null(adata, n_perm=30, random_state=0, plot=False)
+    assert list(res) == ["summary"]
+    df = res["summary"]
     assert {"covariate", "observed", "null_mean", "null_sd", "z", "p"}.issubset(df.columns)
     assert ((df["p"] >= 0) & (df["p"] <= 1)).all()
 
@@ -178,8 +190,10 @@ def test_reconstruction_ppc_n_sims_is_wired(trained_model):
     """
     model, adata = trained_model
 
-    one = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0)
-    many = tcri.diag.reconstruction_ppc(model, adata, n_sims=8, random_state=0)
+    one = tcri.diag.reconstruction_ppc(model, adata, n_sims=1, random_state=0,
+                                      plot=False)["summary"]
+    many = tcri.diag.reconstruction_ppc(model, adata, n_sims=8, random_state=0,
+                                       plot=False)["summary"]
 
     assert list(one["statistic"]) == list(many["statistic"])
     # observed data does not depend on the number of draws
@@ -188,8 +202,8 @@ def test_reconstruction_ppc_n_sims_is_wired(trained_model):
         "n_sims does not change the simulated statistics, so it is still inert"
     )
 
-    with pytest.raises(ValueError, match="n_sims must be >= 1"):
-        tcri.diag.reconstruction_ppc(model, adata, n_sims=0)
+    with pytest.raises(ValueError, match="n_sims must be an integer >= 1"):
+        tcri.diag.reconstruction_ppc(model, adata, n_sims=0, plot=False)
 
 
 def _perfectly_coupled_adata(n_clones=6, per_clone=30):
@@ -229,7 +243,7 @@ def test_permutation_null_p_value_is_floored(R):
     observation, the raw fraction is already nonzero, and the floor is invisible.
     """
     adata = _perfectly_coupled_adata()
-    df = tcri.diag.permutation_null(adata, n_perm=R, random_state=0)
+    df = tcri.diag.permutation_null(adata, n_perm=R, random_state=0, plot=False)["summary"]
 
     assert (df["p"] > 0).all(), f"p of exactly 0 from {R} permutations: {df['p'].tolist()}"
     assert float(df["p"].iloc[0]) == pytest.approx(1.0 / (R + 1)), (
@@ -247,14 +261,16 @@ def test_permutation_null_honors_normalize_mode(trained_model):
     — it is not a null for their statistic at all.
     """
     model, adata = trained_model
-    lo = tcri.diag.permutation_null(adata, n_perm=50, normalize_mode="min", random_state=0)
-    hi = tcri.diag.permutation_null(adata, n_perm=50, normalize_mode="average", random_state=0)
+    lo = tcri.diag.permutation_null(adata, n_perm=50, normalize_mode="min", random_state=0,
+                                    plot=False)["summary"]
+    hi = tcri.diag.permutation_null(adata, n_perm=50, normalize_mode="average", random_state=0,
+                                    plot=False)["summary"]
 
     assert not np.allclose(lo["observed"].to_numpy(), hi["observed"].to_numpy()), (
         "normalize_mode does not change the statistic, so it is still hardcoded"
     )
     with pytest.raises(ValueError, match="normalize_mode must be"):
-        tcri.diag.permutation_null(adata, n_perm=10, normalize_mode="nonsense")
+        tcri.diag.permutation_null(adata, n_perm=10, normalize_mode="nonsense", plot=False)
 
 
 def test_permutation_null_groupby_matches_the_metric_surface(trained_model):
@@ -270,8 +286,9 @@ def test_permutation_null_groupby_matches_the_metric_surface(trained_model):
     model, adata = trained_model
     assert "groupby" in inspect.signature(tcri.diag.permutation_null).parameters
 
-    flat = tcri.diag.permutation_null(adata, n_perm=30, random_state=0)
-    grouped = tcri.diag.permutation_null(adata, groupby="patient", n_perm=30, random_state=0)
+    flat = tcri.diag.permutation_null(adata, n_perm=30, random_state=0, plot=False)["summary"]
+    grouped = tcri.diag.permutation_null(adata, groupby="patient", n_perm=30, random_state=0,
+                                         plot=False)["summary"]
 
     assert "patient" in grouped.columns, "the group label is not carried into the result"
     n_groups = adata.obs["patient"].nunique()
@@ -283,4 +300,136 @@ def test_permutation_null_groupby_matches_the_metric_surface(trained_model):
     ) or n_groups == 1, "grouping did not change the statistic, so groupby is still inert"
 
     with pytest.raises(ValueError, match="not a column"):
-        tcri.diag.permutation_null(adata, groupby="no_such_column", n_perm=5)
+        tcri.diag.permutation_null(adata, groupby="no_such_column", n_perm=5, plot=False)
+
+
+# ── plot= ────────────────────────────────────────────────────────────────────
+
+def _ppc_panels(result):
+    """The PPC's grid is a row per covariate and a column per figure size panel plus "all";
+    a row with fewer panels than the widest leaves blank cells. Returns the drawn panel count."""
+    from tcri.diagnostics._plot import _panel_bins
+
+    per_cov = result["summary"].groupby("covariate", sort=False)["n_cells"]
+    return sum(len(_panel_bins(n.to_numpy())) + 1 for _, n in per_cov)
+
+
+def _checks(model, adata):
+    """Each computing check with small arguments, and the panel count its figure has: one per
+    returned row for the permutation null, one per (covariate, size bin) for the PPC."""
+    n_cov = len(adata.uns["tcri_covariate_categories"])
+    return {
+        "joint_distribution_ppc": (lambda **kw: tcri.diag.joint_distribution_ppc(
+            adata, n_samples=3, n_sims=10, random_state=0, **kw), None),
+        "phenotype_calibration": (lambda **kw: tcri.diag.phenotype_calibration(
+            adata, n_bins=5, **kw), 1),
+        "reconstruction_ppc": (lambda **kw: tcri.diag.reconstruction_ppc(
+            model, adata, n_sims=2, random_state=0, **kw), 1),
+        "permutation_null": (lambda **kw: tcri.diag.permutation_null(
+            adata, groupby="patient", n_perm=20, random_state=0, **kw),
+            n_cov * adata.obs["patient"].nunique()),
+    }
+
+
+def _same(a, b):
+    assert isinstance(a, dict) and a.keys() == b.keys()
+    for k in a:
+        pd.testing.assert_frame_equal(a[k], b[k], obj=k)
+
+
+@pytest.mark.parametrize("name", ["joint_distribution_ppc", "phenotype_calibration",
+                                  "reconstruction_ppc", "permutation_null"])
+def test_plot_draws_the_figure_and_returns_the_same_values(trained_model, name, tmp_path):
+    """``plot=True`` draws one panel per covariate or row and returns exactly what
+    ``plot=False`` returns; ``save`` writes the file; ``ax`` must hold one Axes per panel."""
+    import matplotlib.pyplot as plt
+
+    model, adata = trained_model
+    run, n_panels = _checks(model, adata)[name]
+    plt.close("all")
+    quiet = run(plot=False)
+    assert not plt.get_fignums(), "plot=False drew a figure"
+    n_grid = n_drawn = n_panels
+    if n_panels is None:
+        n_drawn = _ppc_panels(quiet)
+
+    path = tmp_path / f"{name}.png"
+    drawn = run(plot=True, save=path)
+    _same(drawn, quiet)
+    assert path.exists() and path.stat().st_size > 0
+    fig = plt.figure(plt.get_fignums()[-1])
+    assert len([a for a in fig.axes if a.get_visible() and a.get_title()]) == n_drawn
+
+    if n_panels is None:
+        # the PPC's panel count depends on the data, so it always draws its own figure
+        assert "ax" not in inspect.signature(tcri.diag.joint_distribution_ppc).parameters
+        plt.close("all")
+        return
+    fig2, axes = plt.subplots(1, n_grid, squeeze=False)
+    _same(run(ax=list(axes.ravel())), quiet)
+    assert sum(a.has_data() for a in axes.ravel()) == n_drawn
+    with pytest.raises(ValueError, match="panel"):
+        run(ax=list(axes.ravel()) + [fig2.add_subplot(3, 3, 9)])
+    plt.close("all")
+
+
+@pytest.mark.parametrize("name", ["joint_distribution_ppc", "phenotype_calibration",
+                                  "reconstruction_ppc", "permutation_null"])
+def test_a_seeded_check_leaves_global_state_alone(trained_model, name):
+    """A seeded check, drawing its figure, leaves numpy's and torch's global random state and
+    matplotlib's rcParams as it found them: a diagnostic must not change what the caller's
+    next random draw or next figure does."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import torch
+
+    model, adata = trained_model
+    run, _ = _checks(model, adata)[name]
+    np_before = np.random.get_state()
+    torch_before = torch.random.get_rng_state().clone()
+    rc_before = dict(matplotlib.rcParams)
+    run(plot=True)
+    np_after = np.random.get_state()
+    assert np_before[0] == np_after[0] and np.array_equal(np_before[1], np_after[1])
+    assert np_before[2:] == np_after[2:]
+    assert torch.equal(torch_before, torch.random.get_rng_state())
+    assert dict(matplotlib.rcParams) == rc_before
+    plt.close("all")
+
+
+@pytest.mark.parametrize("name", ["joint_distribution_ppc", "phenotype_calibration",
+                                  "reconstruction_ppc", "permutation_null"])
+def test_every_check_returns_named_frames_and_no_numbers_in_attrs(trained_model, name):
+    model, adata = trained_model
+    run, _ = _checks(model, adata)[name]
+    res = run(plot=False)
+    assert isinstance(res, dict) and res
+    for key, frame in res.items():
+        assert isinstance(frame, pd.DataFrame), key
+        assert not frame.attrs, (key, frame.attrs)
+
+
+@pytest.mark.parametrize("name", ["joint_distribution_ppc", "phenotype_calibration",
+                                  "reconstruction_ppc", "permutation_null"])
+def test_save_without_plot_raises(trained_model, name, tmp_path):
+    model, adata = trained_model
+    run, _ = _checks(model, adata)[name]
+    path = tmp_path / "never.png"
+    with pytest.raises(ValueError, match="plot=False"):
+        run(plot=False, save=path)
+    assert not path.exists()
+
+
+def test_reconstruction_ppc_is_unseeded_by_default(trained_model):
+    """``random_state`` defaults to ``None``: two default calls draw different replicates, and a
+    seed reproduces them."""
+    model, adata = trained_model
+    assert inspect.signature(tcri.diag.reconstruction_ppc).parameters["random_state"].default \
+        is None
+    kw = dict(n_sims=2, plot=False)
+    a = tcri.diag.reconstruction_ppc(model, adata, **kw)["summary"]
+    b = tcri.diag.reconstruction_ppc(model, adata, **kw)["summary"]
+    assert not np.allclose(a["simulated"], b["simulated"])
+    c = tcri.diag.reconstruction_ppc(model, adata, random_state=5, **kw)["summary"]
+    d = tcri.diag.reconstruction_ppc(model, adata, random_state=5, **kw)["summary"]
+    pd.testing.assert_frame_equal(c, d)

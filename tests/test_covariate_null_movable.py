@@ -230,3 +230,21 @@ def test_flux_names_its_own_call_form():
     with pytest.raises(ValueError, match="cov_from= and cov_to=") as err:
         tcri.tl.phenotypic_flux(adata, cov_from="cov_0", cov_to=None, null_model=None)
     assert "covariate=" not in str(err.value)
+
+
+def test_gene_importance_groups_cells_under_the_rule_too(split_libraries):
+    """Gene importance groups cells, so its groups may share clones; the movable rule reads which
+    clones a group's cells belong to and does not refuse that. Under a covariate null passed as
+    the fitted models it names the libraries it cannot move, as it does for a named reference."""
+    model, adata = split_libraries
+    nulls = [m for m in tcri.null.covariate(model, adata, n_nulls=1)]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = tcri.perturb.gene_importance(model, adata, genes=[0, 1], groupby="library",
+                                           null_model=nulls, inplace=False)
+    named = [str(w.message) for w in caught if "cannot move any cell" in str(w.message)]
+    assert len(named) == 1 and "'P0_cov_0'" in named[0] and "'P2'" not in named[0], named
+    rows = res["replicate"]["summary"]
+    gone = rows["library"].astype(str).str.startswith(SPLIT_LIBRARIES)
+    assert rows.loc[gone, "adjusted"].isna().all()
+    assert np.isfinite(rows.loc[~gone, "adjusted"].to_numpy(dtype=float)).all()

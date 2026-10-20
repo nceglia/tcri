@@ -212,12 +212,18 @@ def test_the_get_views_read_the_stored_levels(cohort, tmp_path):
 
 
 def test_the_level_views_refuse_a_result_stored_otherwise(cohort):
+    """``joint_distribution`` stores ``{summary, draws}``: the level views refuse it, and
+    ``tcri.get.draws`` reads its one draws frame and has no item level to give."""
     _, adata = cohort
     adata = adata.copy()
-    tcri.tl.joint_distribution(adata, covariate=_cov(adata))
-    for view in (tcri.get.items, tcri.get.draws):
+    tcri.tl.joint_distribution(adata, covariate=_cov(adata), n_samples=2, random_state=0)
+    for view in (tcri.get.items, tcri.get.replicates):
         with pytest.raises(KeyError, match="not stored by level"):
             view(adata, "joint_distribution")
+    pd.testing.assert_frame_equal(tcri.get.draws(adata, "joint_distribution"),
+                                  tcri.get.result(adata, "joint_distribution")["draws"])
+    with pytest.raises(KeyError, match="has no item level"):
+        tcri.get.draws(adata, "joint_distribution", items=True)
 
 
 @pytest.mark.parametrize("mode", ["covariate", "change"])

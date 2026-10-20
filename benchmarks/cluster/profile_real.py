@@ -165,8 +165,9 @@ def main():
         print(f"    SKIPPED flux+changes: covariate has {len(covs)} level(s)", flush=True)
 
     with s("diagnostics"):
-        tcri.diag.joint_distribution_ppc(adata, covariate=cov, distance_metric="l1")
-        tcri.diag.phenotype_calibration(adata, n_bins=10)
+        tcri.diag.joint_distribution_ppc(adata, covariate=cov, distance_metric="l1",
+                                         random_state=0, plot=False)
+        tcri.diag.phenotype_calibration(adata, n_bins=10, plot=False)
 
     if torch.cuda.is_available() and args.device == "cuda":
         rec["peak_gpu_gb"] = round(torch.cuda.max_memory_allocated() / 2**30, 3)

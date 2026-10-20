@@ -993,8 +993,10 @@ def test_legend_false_draws_none(cohort):
     model, adata = cohort
     adata = adata.copy()
     for name, draw in _all_twins(adata, model).items():
-        assert draw(quantity="value").get_legend() is not None, f"{name}: no legend to remove"
-        assert draw(quantity="value", legend=False).get_legend() is None, name
+        # gene importance draws its one quantity; its legend is the split's
+        kw = {} if name == "gene_importance" else {"quantity": "value"}
+        assert draw(**kw).get_legend() is not None, f"{name}: no legend to remove"
+        assert draw(**kw, legend=False).get_legend() is None, name
 
 
 def test_replicates_on_an_item_axis_are_colored_by_replicate(cohort):

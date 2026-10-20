@@ -21,7 +21,7 @@ def cell_groups(adata, *, cov_col, covariate, groupby, splitby):
     group.
 
     ``covariate`` restricts to the cells at that level; ``groupby`` partitions them. Cells with
-    no group label are excluded with the same warning ``metric_frames`` gives. No clone
+    no group label are excluded with the same warning the metrics give. No clone
     disjointness is required: the reduction is over cells.
     """
     obs = adata.obs
@@ -61,7 +61,7 @@ def cell_groups(adata, *, cov_col, covariate, groupby, splitby):
 
 
 def _label_columns(*, covariate, groupby, labels, split, splitby, group_index):
-    """The label columns shared by ``table`` and ``shift`` for a flat group index."""
+    """The label columns shared by both levels for a flat group index."""
     cols = {}
     if covariate is not None:
         cols["covariate"] = np.full(len(group_index), covariate, dtype=object)
@@ -73,53 +73,58 @@ def _label_columns(*, covariate, groupby, labels, split, splitby, group_index):
     return cols
 
 
-def importance_table(importance, *, names, labels, present, covariate, groupby, splitby,
-                     split):
-    """``importance[G, S, n_groups]`` -> one row per (gene, group, draw) with ``value``.
+def importance_frames(shift, *, names, phenotypes, labels, covariate, groupby, splitby, split):
+    """The per-draw frames of both levels, from ``shift[G, S, n_groups, P]``.
 
-    Groups with no cell (``present`` false) are dropped.
+    ``shift`` is ``baseline − perturbed`` per draw, NaN for a group with no cell. Returns
+    ``(replicate_draws, item_draws)``: one row per (gene, group, draw) whose ``value`` is the
+    importance ``Σ_p |shift|``, and one row per (gene, group, phenotype, draw) whose ``value`` is
+    the shift. Every group has its rows, NaN where it has no cell, so the row set is fixed by the
+    genes, the groups and the phenotypes.
     """
-    G, S, n_groups = importance.shape
-    groups = np.flatnonzero(present)
-    n = G * S * len(groups)
-    gene_i = np.repeat(np.arange(G), S * len(groups))
-    draw_i = np.tile(np.repeat(np.arange(S), len(groups)), G)
-    group_i = np.tile(groups, G * S)
-    frame = {"gene": np.asarray(names, dtype=object)[gene_i]}
-    frame.update(_label_columns(covariate=covariate, groupby=groupby, labels=labels,
-                                split=split, splitby=splitby, group_index=group_i))
-    frame["draw"] = draw_i
-    frame["value"] = importance[gene_i, draw_i, group_i]
-    assert len(frame["value"]) == n
-    return pd.DataFrame(frame)
+    G, S, n_groups, P = shift.shape
+    importance = np.abs(shift).sum(axis=-1)                     # [G, S, n_groups]
+
+    gene_i = np.repeat(np.arange(G), S * n_groups)
+    draw_i = np.tile(np.repeat(np.arange(S), n_groups), G)
+    group_i = np.tile(np.arange(n_groups), G * S)
+    replicate = {"gene": np.asarray(names, dtype=object)[gene_i]}
+    replicate.update(_label_columns(covariate=covariate, groupby=groupby, labels=labels,
+                                    split=split, splitby=splitby, group_index=group_i))
+    replicate["draw"] = draw_i
+    replicate["value"] = importance[gene_i, draw_i, group_i]
+
+    gene_i = np.repeat(gene_i, P)
+    draw_i = np.repeat(draw_i, P)
+    group_i = np.repeat(group_i, P)
+    pheno_i = np.tile(np.arange(P), G * S * n_groups)
+    item = {"gene": np.asarray(names, dtype=object)[gene_i],
+            "phenotype": np.asarray(phenotypes, dtype=object)[pheno_i]}
+    item.update(_label_columns(covariate=covariate, groupby=groupby, labels=labels,
+                               split=split, splitby=splitby, group_index=group_i))
+    item["draw"] = draw_i
+    item["value"] = shift[gene_i, draw_i, group_i, pheno_i]
+    return pd.DataFrame(replicate), pd.DataFrame(item)
 
 
-def shift_table(baseline, perturbed, *, names, phenotypes, labels, present, covariate,
-                groupby, splitby, split):
-    """The signed decomposition, averaged over draws.
+def in_gene_order(frame, names, phenotypes=None):
+    """``frame`` with its rows in the caller's gene order and, on the item level, the phenotype
+    categories' order.
 
-    ``baseline[S, n_groups, P]``, ``perturbed[G, S, n_groups, P]`` -> one row per
-    (gene, phenotype, group) with ``baseline``, ``perturbed`` and ``shift = baseline −
-    perturbed``, so a positive shift means silencing the gene REMOVED mass from that phenotype.
+    ``build_result`` sorts its keys; the caller's gene order is the contract ("one importance
+    each, in this order"), so it is restored with a stable sort that keeps the group order.
     """
-    G, S, n_groups, P = perturbed.shape
-    groups = np.flatnonzero(present)
-    b = baseline.mean(axis=0)            # [n_groups, P]
-    p = perturbed.mean(axis=1)           # [G, n_groups, P]
-    gene_i = np.repeat(np.arange(G), len(groups) * P)
-    group_i = np.tile(np.repeat(groups, P), G)
-    pheno_i = np.tile(np.arange(P), G * len(groups))
-    frame = {"gene": np.asarray(names, dtype=object)[gene_i],
-             "phenotype": np.asarray(phenotypes, dtype=object)[pheno_i]}
-    frame.update(_label_columns(covariate=covariate, groupby=groupby, labels=labels,
-                                split=split, splitby=splitby, group_index=group_i))
-    frame["baseline"] = b[group_i, pheno_i]
-    frame["perturbed"] = p[gene_i, group_i, pheno_i]
-    frame["shift"] = frame["baseline"] - frame["perturbed"]
-    return pd.DataFrame(frame)
+    if frame is None or not len(frame):
+        return frame
+    rank = frame["gene"].map({g: i for i, g in enumerate(names)}).to_numpy()
+    if phenotypes is not None:
+        rank = rank * len(phenotypes) + frame["phenotype"].map(
+            {p: i for i, p in enumerate(phenotypes)}).to_numpy()
+    order = np.argsort(rank, kind="stable")
+    return frame.iloc[order].reset_index(drop=True)
 
 
-def stats_per_gene(result, *, groupby, splitby, value="value"):
+def stats_per_gene(summary, *, groupby, splitby, value="value"):
     """The between-split contrast, once per gene.
 
     ``build_stats`` averages items to one value per group before contrasting, which for a
@@ -128,13 +133,14 @@ def stats_per_gene(result, *, groupby, splitby, value="value"):
     column. Uncorrected across genes, as every contrast in the package is uncorrected across
     pairs; multiplicity is the caller's.
 
-    ``value`` names the column contrasted, as in ``build_stats``; the frame carries one row per
-    (gene, contrast) and a ``quantity`` column naming that column.
+    ``summary`` is the replicate summary, one row per gene and group. ``value`` names the column
+    contrasted, as in ``build_stats``; the frame carries one row per (gene, contrast) and a
+    ``quantity`` column naming that column.
     """
-    if splitby is None or groupby is None or result is None or not len(result):
+    if splitby is None or groupby is None or summary is None or not len(summary):
         return None
     frames = []
-    for gene, sub in result.groupby("gene", sort=False, observed=True):
+    for gene, sub in summary.groupby("gene", sort=False, observed=True):
         st = build_stats(sub, groupby=groupby, splitby=splitby, value=value)
         if st is not None and len(st):
             frames.append(st.assign(gene=gene))
