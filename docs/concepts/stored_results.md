@@ -102,8 +102,9 @@ phenotype. It stores only the adjusted value, so its frames carry `adjusted` and
 summaries, `adjusted_sd` and the adjusted HDI, and no `value` (the reference, below).
 
 `joint_distribution` stores `{summary, draws}`: its posterior-mean clone × phenotype table and
-its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`. The
-snapshot below is the written record of which slots each tool has.
+its draws, read with `get.result(adata, "joint_distribution")["summary"]` and `get.draws`.
+`pl.joint_distribution` draws the summary. The snapshot below is the written record of which
+slots each tool has.
 
 The repertoire summaries of `tcri.pp` store their result the same way, under
 `uns["tcri_<function>"]` or `key_added`, and return `None`; `inplace=False` returns it instead.

@@ -258,8 +258,8 @@ print(null["summary"][["covariate", "observed", "null_mean", "null_sd", "z", "p"
 # value per joint and no item level. A change between two timepoints (section 6) labels its
 # rows `cov_from`/`cov_to` in place of `covariate`. `stats` holds a split row for each pair of
 # `splitby` levels, and a change adds its covariate rows; its **n counts replicates, never
-# items** — 18 clones from 4 patients give n=4, not n=18. `joint_distribution` stores `table`
-# and `result`, read with `tcri.get.result`.
+# items** — 18 clones from 4 patients give n=4, not n=18. `joint_distribution` stores `summary`
+# and `draws`, read with `tcri.get.result` and `tcri.get.draws`.
 
 # %%
 tcri.tl.mutual_information(
@@ -370,6 +370,19 @@ axes[1, 0].set_title("phenotypic_entropy — one value per CLONE", fontsize=10)
 tcri.pl.phenotypic_flux(adata, ax=axes[1, 1])
 axes[1, 1].set_title("phenotypic_flux — how far clones moved pre → post", fontsize=10)
 fig.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### The joint distribution as a phenotype-flow Sankey
+#
+# `pl.joint_distribution` draws the stored joint across covariate values: at each timepoint a
+# bar of the phenotypes its cells carry, and between the two, bands carrying each clone's cells
+# from pre to post. It needs the joint at every covariate value, so this call leaves `covariate`
+# out and stores under its own key, beside the post-only joint above.
+
+# %%
+tcri.tl.joint_distribution(adata, n_samples=20, random_state=SEED, key_added="joint_all")
+tcri.pl.joint_distribution(adata, key="joint_all", order=["pre", "post"])
 plt.show()
 
 # %% [markdown]
