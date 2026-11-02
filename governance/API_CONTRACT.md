@@ -202,8 +202,10 @@ default) drawing the replicate summary and `"item"` the item summary. In the twi
 view draws one mark per replicate, with the split on x and its test starred, and mutual
 information has no items and raises for `"item"`; the views of `pl.gene_importance` are under
 **Perturbation**. A change is drawn against a zero rule; flux, a distance that is never negative,
-has its zero rule on the adjusted panel only. Connecting lines are drawn only between points
-sharing an identity across the compared levels. Every twin takes
+has its zero rule on the adjusted panel only. `pl.joint_distribution` draws the stored joint
+summary as a phenotype-flow Sankey, `view="sankey"`, weighting each clone's mix by its cells in
+`obs`; it has no `quantity`, and `normalize=` chooses fractions or cell counts. Connecting lines
+are drawn only between points sharing an identity across the compared levels. Every twin takes
 `legend=`, and `False` draws no legend, so a row of panels can carry one; a y label longer than
 its axes is wrapped. In the metric twins the x axis is in the category order of the column on it
 (`order=` overrides), so a level sits at the same position in every panel, and dots that are
@@ -420,6 +422,11 @@ class pl:
         order: Any = ..., hue_order: Any = ...,
         palette: Any = ..., legend: bool = ..., ax: Any = ..., figsize: Any = ...,
         save: Any = ..., show: Any = ..., return_df: bool = ...,
+    ) -> Any: ...
+    def joint_distribution(
+        adata: AnnData, *, view: str = ..., normalize: bool = ..., key: Optional[str] = ...,
+        order: Any = ..., palette: Any = ..., legend: bool = ..., ax: Any = ...,
+        figsize: Any = ..., save: Any = ..., show: Any = ..., return_df: bool = ...,
     ) -> Any: ...
     def gene_importance(
         adata: AnnData, *, view: str = ..., n_top: int = ..., key: Optional[str] = ...,

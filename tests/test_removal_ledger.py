@@ -46,10 +46,12 @@ REMOVED = {
         "polar_plot", "probability_distribution", "bayesian_mutual_information",
         "probability_ternary", "top_clone_umap", "clone_size_umap",
         "plot_phenotype_probabilities", "compare_phenotypes", "ridge_delta_entropy",
-        "clonality", "tcri_boxplot", "set_color_palette", "plot_pheno_sankey",
+        "clonality", "tcri_boxplot", "set_color_palette",
         "resolve_palette", "centropy", "pentropy",
         # a change result is drawn by its metric's own twin
         "delta_clonotypic_entropy", "delta_phenotypic_entropy",
+        # drawn by pl.joint_distribution(view="sankey")
+        "plot_pheno_sankey",
     ],
     # out of the package
     "ut": [

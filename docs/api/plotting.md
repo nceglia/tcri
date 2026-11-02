@@ -6,10 +6,10 @@ the shared color helpers. Exposed as ``tcri.pl``.
 
 ## One quantity, and `quantity`
 
-Every twin takes `quantity`. The default draws the adjusted value, `value - null_value`, on y
-against a zero rule when the cached result carries a reference; `quantity="adjusted"` asks for
-that panel by name. `quantity="value"` draws the raw value with its permutation reference behind
-it — the same mark, gray and hollow, at the same x positions.
+Every metric twin takes `quantity`. The default draws the adjusted value, `value - null_value`,
+on y against a zero rule when the cached result carries a reference; `quantity="adjusted"` asks
+for that panel by name. `quantity="value"` draws the raw value with its permutation reference
+behind it — the same mark, gray and hollow, at the same x positions.
 
 ```python
 tcri.pl.mutual_information(adata)                    # the adjusted value, on a zero rule
@@ -85,6 +85,22 @@ tcri.pl.clonotypic_entropy(adata, key="entropy_post", ax=axes[1])
 
 ```{eval-rst}
 .. automodule:: tcri.plotting._flux
+   :members:
+```
+
+## Joint distribution
+
+The twin of {func}`tcri.tl.joint_distribution`. `view="sankey"` draws the phenotype-flow Sankey
+across covariate values: a bar of each value's phenotypes, and bands carrying each clone's cells
+from one value to the next. `normalize=False` draws cell counts instead of fractions.
+
+```python
+tcri.tl.joint_distribution(adata)
+tcri.pl.joint_distribution(adata, order=["pre", "post"])
+```
+
+```{eval-rst}
+.. automodule:: tcri.plotting._joint
    :members:
 ```
 
