@@ -17,12 +17,13 @@ import numpy as np
 import pandas as pd
 
 from ._base import _fit_ylabel
-from ._colors import resolve_colors
+from ._colors import resolve_colors, tcri_colors
 
 __all__ = ["repertoire_summary", "clonotype_sharing", "clone_persistence"]
 
-#: The band colors of the sharing panels, and red also where two levels share no clone.
-GREEN, YELLOW, RED = "#7e9437", "#f0bd00", "#cd442a"
+#: The band colors of the sharing panels, and red also where two levels share no clone: the
+#: first three colors of the cycle.
+GREEN, YELLOW, RED = tcri_colors[:3]
 
 #: The bands of the sharing panels, ``(low, high)``: green below ``low``, yellow from ``low``
 #: to ``high``, red above ``high``. A pair's share and a group's shared fraction are in
