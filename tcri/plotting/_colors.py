@@ -17,9 +17,11 @@ from .._state import keys as K
 __all__ = ["tcri_colors", "NA_COLOR", "resolve_colors"]
 
 #: The categorical cycle, and the only one: every default category color is taken from here,
-#: in this order. The near-black entries sit late in the cycle on purpose, so the first few
-#: categories of a figure are the distinguishable ones.
+#: in this order. It opens with green, yellow and red, so one level is green, two are green and
+#: yellow, and three add red. The near-black entries sit late in the cycle on purpose, so the
+#: first few categories of a figure are the distinguishable ones.
 tcri_colors = [
+    "#7e9437", "#f0bd00", "#cd442a",
     "#AE81FF", "#FD971F", "#66D9EF", "#A6E22E", "#F92672", "#E6DB74", "#75715E",
     "#D65F0E", "#004d47", "#D291BC", "#3A506B", "#5D8A5E", "#A6A1E2", "#E97451",
     "#6C8D67", "#832232", "#1E1E1E", "#F92659", "#272822", "#8B4513",

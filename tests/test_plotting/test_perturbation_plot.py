@@ -151,6 +151,76 @@ def test_rank_view_without_groups_draws_points_then_violins(cohort):
     assert _n_violins(vio) == 4, "with only draws varying, each gene is a violin of its draws"
 
 
+def _face_colors(ax):
+    """The face colors of the dots or violins, and of the boxes, each without its alpha.
+
+    Seaborn desaturates a box's fill, so a box never reads back as the color of its own dots;
+    the two are compared apart.
+    """
+    from matplotlib.colors import to_hex
+
+    marks = {to_hex(c, keep_alpha=False)
+             for coll in ax.collections for c in coll.get_facecolor() if c[3] > 0}
+    boxes = {to_hex(p.get_facecolor(), keep_alpha=False) for p in ax.patches}
+    return marks, boxes
+
+
+def test_rank_view_without_a_split_colors_each_dot_by_its_group(cohort):
+    """The dots are the groups, each in its stored color at every gene, over one box color: a
+    color per gene would say nothing the x axis does not, and hide which dot is which group."""
+    from matplotlib.collections import PathCollection
+
+    model, adata = cohort
+    a = adata.copy()
+    tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3])
+    ax = tcri.pl.gene_importance(a)
+    stored = {c.lower() for c in a.uns[K.colors("patient")]}
+    at = {}
+    for coll in ax.collections:
+        if isinstance(coll, PathCollection):
+            for (x, _y), c in zip(coll.get_offsets(), coll.get_facecolor()):
+                at.setdefault(int(round(x)), set()).add(matplotlib.colors.to_hex(c).lower())
+    assert len(at) == 4
+    for x, colors in at.items():
+        assert colors == stored, f"gene {x}: {colors}"
+    _, boxes = _face_colors(ax)
+    assert len(boxes) == 1, f"a box color per gene: {boxes}"
+    assert ax.get_legend().get_title().get_text() == "patient"
+
+
+@pytest.mark.parametrize("branch", ["violins", "points"])
+def test_rank_view_without_groups_draws_every_gene_in_the_first_color(cohort, branch):
+    """With no groups to show, each gene's violin or point takes the cycle's first color.
+
+    Seaborn desaturates a violin's fill as it does a box's, so the violins are checked for one
+    color and the points for the first color itself.
+    """
+    model, adata = cohort
+    a = _without_replicate(adata)
+    kw = {"n_samples": 6, "random_state": 0} if branch == "violins" else {}
+    tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], **kw)
+    ax = tcri.pl.gene_importance(a)
+    drawn = {"violins": _n_violins(ax) == 4,
+             "points": _n_points(ax) == 4 and _n_violins(ax) == 0}
+    assert drawn[branch], f"the {branch} branch was not the one drawn"
+    marks, _ = _face_colors(ax)
+    assert len(marks) == 1, f"a color per gene: {marks}"
+    if branch == "points":
+        assert marks == {tcri.pl.tcri_colors[0].lower()}, marks
+
+
+def test_rank_view_with_a_split_keeps_one_color_per_split_level(cohort):
+    model, adata = cohort
+    a = adata.copy()
+    tcri.perturb.gene_importance(model, a, genes=[0, 1, 2, 3], splitby="disease_status")
+    ax = tcri.pl.gene_importance(a)
+    stored = {c.lower() for c in a.uns[K.colors("disease_status")]}
+    assert len(stored) == a.obs["disease_status"].nunique()
+    marks, boxes = _face_colors(ax)
+    assert marks == stored, f"dot colors other than the split's: {marks}"
+    assert len(boxes) == len(stored), f"not one box color per split level: {boxes}"
+
+
 def test_item_view_is_a_gene_by_phenotype_heatmap_centered_on_zero(cohort):
     """The item view draws the item summary's adjusted shift averaged over groups, for the
     genes the replicate view ranks."""
