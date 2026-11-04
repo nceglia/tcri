@@ -6,7 +6,9 @@ Two views of one cached result, selected by ``view``:
     The top genes by adjusted importance, one x position per gene, the mark following the
     package's one rule: replicates when they vary (one dot per patient, boxed; the split as hue,
     with that gene's contrast starred above it), draws when only they vary (a violin per gene),
-    a point with its HDI otherwise.
+    a point with its HDI otherwise. A gene never has a color of its own, because it is already
+    the x position: the dots take the colors of their groups, or of the split levels when there
+    is a split, and the violins and points take one color.
 
 ``"item"``
     Which way each top gene moves the call: a gene × phenotype heatmap of the item summary's
@@ -101,17 +103,18 @@ def _rank(adata, payload, params, *, genes, hue_order, palette, legend, ax, figs
     if has_groups:
         hue = splitby if (splitby and splitby in d.columns) else None
         _boxstrip(adata, d, x="gene", y=_QUANTITY, hue=hue, order=genes, hue_order=hue_order,
-                  palette=palette, ax=ax, ylabel=_YLABEL, rotation=90)
+                  palette=palette, ax=ax, ylabel=_YLABEL, rotation=90, color_x=False,
+                  replicate=groupby)
         if hue is not None:
             _star_labels(ax, stats, genes)
     elif table is not None and "draw" in table.columns and table["draw"].nunique() > 1:
         # draws are the sample: each paired draw's adjusted importance
         t = table[table["gene"].isin(genes)].dropna(subset=[_QUANTITY])
         _violins(adata, t, x="gene", y=_QUANTITY, palette=palette, ax=ax, ylabel=_YLABEL,
-                 rotation=90, order=genes)
+                 rotation=90, order=genes, color_x=False)
     else:
         _points(adata, d, x="gene", y=_QUANTITY, palette=palette, ax=ax, ylabel=_YLABEL,
-                rotation=90, order=genes)
+                rotation=90, order=genes, color_x=False)
     _zero_rule(ax)
     ax.set_xlabel("gene")
     return _finish(fig, ax, save=save, show=show, legend=legend)

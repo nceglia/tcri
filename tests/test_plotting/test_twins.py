@@ -574,6 +574,22 @@ def test_the_palette_has_one_definition():
     assert tcri.pl.tcri_colors[0] != "#272822", "the background color is not a category color"
 
 
+def test_the_first_levels_are_green_yellow_and_red(trained_model):
+    """One level is green, two are green and yellow, three add red, and a fourth takes the next
+    color of the cycle; a mark drawn in a single color takes the same green."""
+    from tcri.plotting._base import tcri_bar_color
+
+    _, adata = trained_model
+    a = adata.copy()
+    first = ["#7e9437", "#f0bd00", "#cd442a", tcri.pl.tcri_colors[3].lower()]
+    for n in range(1, 5):
+        a.obs[f"levels{n}"] = np.array([f"L{i % n}" for i in range(a.n_obs)])
+        a.obs[f"levels{n}"] = a.obs[f"levels{n}"].astype("category")
+        assert list(tcri.pl.resolve_colors(a, f"levels{n}").values()) == first[:n]
+        assert a.uns[K.colors(f"levels{n}")] == first[:n], "not the colors stored in uns"
+    assert tcri_bar_color.lower() == first[0]
+
+
 def test_plots_route_through_the_shared_palette(trained_model):
     """A plot must not invent its own colors — otherwise the same patient changes color
     between two figures in one notebook.

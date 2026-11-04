@@ -48,12 +48,13 @@ import numpy as np
 
 from .._state import _reference
 from .._state import keys as K
-from ._colors import resolve_colors
+from ._colors import resolve_colors, tcri_colors
 
 __all__: list[str] = []  # private module
 
-#: The one color of a mark whose x levels carry no color of their own (an item axis).
-tcri_bar_color = "#66D9EF"
+#: The one color of a mark whose x levels carry no color of their own (an item axis): the first
+#: color of the cycle, so a single color is the color a single level would take.
+tcri_bar_color = tcri_colors[0]
 
 #: Coarsest first. The sample at an x position is the first of these that varies there.
 _UNIT_ORDER = ("replicate", "item", "draw")
