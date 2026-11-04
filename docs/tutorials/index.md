@@ -100,7 +100,7 @@ model = TCRIModel(adata, n_latent=10, n_hidden=64, n_layers=2,
                   classifier_n_layers=1, classifier_hidden=64, K=4, seed=0)
 model.train(max_epochs=150, batch_size=256)
 model.to_anndata(adata)
-tcri.null.all(model, adata)
+nulls = tcri.null.all(model, adata)
 ```
 
 `to_anndata` materializes everything the rest of the package reads — see

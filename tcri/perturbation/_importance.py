@@ -14,11 +14,12 @@ and ``shift_j,p`` the item level, one row per gene, group and phenotype.
 """
 from __future__ import annotations
 
-import warnings
+import math
 
 import numpy as np
 import torch
 
+from .. import _output
 from .._compute._tables import _resolve_clones, build_result, resolve_groupby, validate_splitby
 from .._state import keys as K
 from .._state import schemas
@@ -47,9 +48,15 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
     gid_all = torch.as_tensor(gid, dtype=torch.long)
     gate = module.gate_prob
 
+    # the bar over passes the caller's call opened, if any: one step per batch of every pass
+    passes = _output.current_passes()
+    if passes is not None:
+        passes.batches(math.ceil(adata.n_obs / batch_size))
     offset = 0
     with torch.no_grad():
         for x, b, idx, n in batches(model, adata, batch_size=batch_size):
+            if passes is not None:
+                passes.advance()
             # labels follow ROW order (the loader is sequential, as predict() relies on);
             # the prior follows the GLOBAL id (ct_array is indexed by training cell id)
             g_rows = gid_all[offset:offset + n]
@@ -78,7 +85,7 @@ def _accumulate(model, adata, *, positions, gid, n_groups, draws, use_gate, batc
 
 @tl_result(key=K.GENE_IMPORTANCE, version=4, schema=schemas.GeneImportance, data_param="adata",
            default_null="phenotype", reference_arg="model", per_gene_stats=True,
-           adjusted_only=True)
+           adjusted_only=True, progress=True)
 def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, splitby=None,
                     exclude_pools=True, n_samples=0, use_gate=True, batch_size=4096,
                     random_state=None) -> dict:
@@ -139,6 +146,12 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
         over phenotypes are not the adjusted importance. There is no ``fit=``: this is a query on
         a MODEL rather than on a stored substrate, so a different fit is reached by handing it a
         different model.
+    print
+        Print a table of the result: the adjusted importance per gene and group, highest first,
+        and the contrasts of the five highest-ranked genes, with the ``tcri.get.stats`` call
+        that reads the rest.
+    enable_progress_bar
+        Show one bar over the call's passes over the cells: the model's, then each null's.
 
     Returns
     -------
@@ -167,10 +180,9 @@ def gene_importance(model, adata, *, genes=None, covariate=None, groupby=None, s
     positions, names = resolve_genes(adata, genes)
 
     if not use_gate and n_samples and int(n_samples) > 0:
-        warnings.warn(
+        _output.warn(
             "n_samples has no effect when use_gate=False: the head alone does not depend on "
-            "p_ct, so there is no posterior to draw from. Computing the plug-in.",
-            UserWarning, stacklevel=2,
+            "p_ct, so there is no posterior to draw from. Computing the plug-in."
         )
         n_samples = 0
     draws = prior_draws(module, n_samples=n_samples, random_state=random_state)

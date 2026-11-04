@@ -42,6 +42,8 @@ scvi-tools) is what enables model fitting:
 - anndata, scanpy (single-cell data structures)
 - torch, pyro-ppl, scvi-tools (probabilistic modeling backbone)
 - matplotlib, seaborn (plotting)
+- rich, ipywidgets (printed tables, panels and progress bars; ipywidgets draws the bars in
+  Jupyter)
 - tqdm
 
 Reading a MuData object, such as Scirpy writes, with `tcri.pp.from_mudata` needs the `mudata`

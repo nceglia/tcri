@@ -1,10 +1,10 @@
 """Private helpers for clonotype labels and the clonotype derivation record.
 
-This module may import numpy, pandas and :mod:`tcri._state.keys`, and nothing else from tcri, so
-that ``preprocessing``, ``model`` and the metric tables can all import it without reaching across
-layers.
+This module may import numpy, pandas, :mod:`tcri._state.keys` and :mod:`tcri._output`, and
+nothing else from tcri, so that ``preprocessing``, ``model`` and the metric tables can all import
+it without reaching across layers.
 
-- :class:`TCRIDataWarning`: the warning class of tcri's pre-fit data checks.
+- :class:`TCRIDataWarning`: the category of every tcri warning about the data.
 - :func:`_missing_clonotypes`: the one definition of a cell without a clonotype.
 - :func:`_label_problems`: empty strings, literal ``"nan"`` and unused categories in label
   columns.
@@ -17,23 +17,22 @@ layers.
 """
 from __future__ import annotations
 
-import logging
 import operator
-import warnings
 
 import numpy as np
 import pandas as pd
 
+from .. import _output
 from .._state import keys as K
-
-logger = logging.getLogger(__name__)
 
 
 class TCRIDataWarning(UserWarning):
-    """Emitted by tcri's pre-fit data checks.
+    """A tcri warning about the data: cells, clones or genes a call drops or cannot use, before
+    or after the fit.
 
-    A class of its own, so these warnings can be filtered or raised as errors apart from the
-    warnings scvi emits during registration.
+    Exported as ``tcri.TCRIDataWarning``, so these warnings can be filtered, or raised as errors
+    in a strict pipeline, apart from every other warning:
+    ``warnings.filterwarnings("error", category=tcri.TCRIDataWarning)``.
     """
 
 
@@ -440,7 +439,7 @@ def _pool_labels(adata, clonotype_key: str) -> list[str]:
 # ── pooling rare clones ──────────────────────────────────────────────────────────────────────
 
 def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
-                      samples: str | None = None, key_added: str | None = None) -> None:
+                      samples: str | None = None, key_added: str | None = None) -> pd.DataFrame:
     """Pool each group's rare clones into one ``pooled@{group}`` label per group.
 
     Cells are counted per (group, clonotype), so a clonotype carried by two groups is two
@@ -454,8 +453,8 @@ def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int
     carries ``pooled@{group}``. The source column is never modified. Records one step through
     :func:`_record_derivation`, with ``suffixed`` true when any kept id gained the suffix, the
     pool labels, and the numbers of clones and cells pooled; running again with the same
-    ``key_added`` replaces that step. Logs one line per group on the ``tcri`` logger: clones
-    kept, clones pooled, and cells pooled with their share of the group.
+    ``key_added`` replaces that step. Returns one row per group with cells: clones kept, clones
+    pooled, cells pooled, cells, and the share of the group's cells pooled.
 
     Parameters
     ----------
@@ -594,21 +593,23 @@ def _pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int
                        n_cells_pooled=int(rare.sum()))
     adata.obs[key_added] = pd.Categorical(labels, categories=np.unique(labels))
 
+    rows = []
     for i, level in enumerate(group.cat.categories):
         cells, cells_pooled = int(per_group["cells"][i]), int(per_group["cells_pooled"][i])
         if not cells:
             continue
         clones_kept = int(per_group["clones_kept"][i])
-        logger.info(
-            f"pool_rare_clones: {groupby} {level!r}: clones kept {clones_kept:,}, clones pooled "
-            f"{int(per_group['clones_pooled'][i]):,}, cells pooled {cells_pooled:,} of "
-            f"{cells:,} ({cells_pooled / cells:.1%})."
-        )
+        rows.append({groupby: level, "clones kept": clones_kept,
+                     "clones pooled": int(per_group["clones_pooled"][i]),
+                     "cells pooled": cells_pooled, "cells": cells,
+                     "share pooled": cells_pooled / cells})
         if not clones_kept:
             seen = " and come from one sample" if samples is not None else ""
-            warnings.warn(
+            _output.warn(
                 f"{groupby} {level!r} keeps no clone: all of its clones have fewer than "
                 f"{min_cells} cells{seen}, so every cell of the group is pooled into "
                 f"'pooled@{level}'.",
-                TCRIDataWarning, stacklevel=3,
+                TCRIDataWarning,
             )
+    return pd.DataFrame(rows, columns=[groupby, "clones kept", "clones pooled", "cells pooled",
+                                       "cells", "share pooled"])

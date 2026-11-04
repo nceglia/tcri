@@ -457,7 +457,7 @@ def test_repertoire_functions_store_their_result_and_change_nothing_else(functio
         pd.testing.assert_frame_equal(stored, returned)
     signature = inspect.signature(getattr(tcri.pp, function))
     defaults = {name: parameter.default for name, parameter in signature.parameters.items()
-                if name not in ("adata", "key_added", "inplace")}
+                if name not in ("adata", "key_added", "inplace", "print")}
     assert tcri.get.params(adata, function) == {**defaults, **arguments}
 
     getattr(tcri.pp, function)(adata, key_added="mine", **arguments)

@@ -6,9 +6,9 @@ imported lazily inside functions — importing this module never touches CUDA.
 """
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
+
+from .. import _output
 
 
 def resolve_device(device: str | None) -> str:
@@ -32,12 +32,9 @@ def resolve_device(device: str | None) -> str:
         except Exception:
             pass
         if device == "cuda":
-            warnings.warn(
-                "device='cuda' requested but torch CUDA is unavailable; using CPU.",
-                stacklevel=2,
-            )
+            _output.warn("device='cuda' requested but torch CUDA is unavailable; using CPU.")
         return "cpu"
-    warnings.warn(f"device={device!r} not recognized; using CPU.", stacklevel=2)
+    _output.warn(f"device={device!r} not recognized; using CPU.")
     return "cpu"
 
 

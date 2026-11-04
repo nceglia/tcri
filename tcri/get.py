@@ -19,16 +19,22 @@ provenance. ``joint_distribution`` stores ``{summary, draws}``: its summary is r
 :func:`result` and its draws with :func:`draws`. The repertoire summaries of ``tcri.pp`` are
 stored the same way and read with :func:`result`: ``repertoire_summary`` and
 ``clone_persistence`` store a frame, ``clonotype_sharing`` stores ``{pairs, groups, clonotypes}``.
+
+:func:`show` prints instead of returning: the table the tool printed when it ran, or any one
+level of the stored result, without computing anything again.
 """
 from __future__ import annotations
 
 # Aliased private: this module IS the public accessor namespace, so anything bound at module
 # scope becomes tcri.get.<name>. Without the underscores, `dir(tcri.get)` would advertise K,
 # load_result and load_result_params -- the storage internals the accessors exist to hide.
+from . import _output
+from ._output._results import accessor as _accessor, result_table as _result_table
 from ._state import keys as _K
 from ._state.storage import load_result as _load_result, load_result_params as _load_result_params
+from ._state.storage import _REGISTRY as _TOOLS
 
-__all__ = ["result", "params", "replicates", "items", "stats", "draws", "fits"]
+__all__ = ["result", "params", "replicates", "items", "stats", "draws", "fits", "show"]
 
 #: tool name -> canonical uns key
 _RESULTS = {
@@ -180,3 +186,107 @@ def draws(adata, name: str, *, items: bool = False, key=None, fit=None):
             raise KeyError(f"{name!r} has no item level: its draws are one frame.")
         return payload["draws"]
     return _pick(payload, name, "item" if items else "replicate")["draws"]
+
+
+#: ``show``'s levels of a result stored by level: where each frame is, and its accessor.
+_SHOWN_LEVELS = {
+    "replicate": (("replicate", "summary"), "replicates"),
+    "item": (("item", "summary"), "items"),
+    "stats": (("stats",), "stats"),
+    "draws": (("replicate", "draws"), "draws"),
+}
+
+
+def _reference_size(payload) -> int:
+    """The fits a stored result was adjusted against: the distinct ``null`` of its replicate
+    draws, whatever fits the object carries now; 0 without a reference."""
+    level = payload.get("replicate") if isinstance(payload, dict) else None
+    draws = level.get("draws") if isinstance(level, dict) else None
+    if draws is None or "null" not in draws:
+        return 0
+    return int(draws["null"].nunique())
+
+
+def _tool_name(adata, name, key, fit) -> str:
+    """The tool that wrote the stored result, by its name: read from the result itself, so a
+    raw ``tcri_*`` key or a ``key_added`` shows as its tool does."""
+    blob = adata.uns.get(_resolve_key(name, key, fit))
+    stored = blob.get("tool") if isinstance(blob, dict) else None
+    return next((n for n, k in _RESULTS.items() if k == stored), name)
+
+
+def show(adata, name: str, *, level: str | None = None, key=None, fit=None) -> None:
+    """Print a stored result as a table, without computing anything again.
+
+    Parameters
+    ----------
+    adata
+        The object the result is stored on.
+    name
+        The tool's name: ``"mutual_information"``, ``"phenotypic_flux"``, ``"gene_importance"``
+        and so on.
+    level
+        ``None`` prints what the tool printed when it ran: for a metric, the replicate summary,
+        the reference it was adjusted against and the ``stats`` rows. For a result stored by
+        level (mutual information, the two entropies, flux, ``gene_importance``),
+        ``"replicate"``, ``"item"``, ``"stats"`` or ``"draws"`` (the replicate level's draws)
+        prints that frame. ``joint_distribution`` takes ``"summary"`` or ``"draws"``, and
+        ``clonotype_sharing`` ``"pairs"``, ``"groups"`` or ``"clonotypes"``.
+        ``repertoire_summary`` and ``clone_persistence`` store one frame, which ``None`` prints.
+    key, fit
+        Which stored result, as for :func:`result`.
+
+    A frame longer than 20 rows is cut, and the footer names the accessor that returns it whole.
+    Returns ``None``.
+
+    Raises
+    ------
+    KeyError
+        No such stored result, or no such level in it.
+    """
+    payload = result(adata, name, key=key, fit=fit)
+    extra = "".join(f", {k}={v!r}" for k, v in (("key", key), ("fit", fit)) if v)
+    tool = _tool_name(adata, name, key, fit)
+    provenance = params(adata, name, key=key, fit=fit)
+    if level is None:
+        table = _result_table(tool, payload, provenance,
+                              null_model=provenance.get("null_model"),
+                              n_references=_reference_size(payload),
+                              rest=f"tcri.get.{_accessor(payload)}(adata, {name!r}{extra})",
+                              distance=getattr(_TOOLS.get(_RESULTS.get(tool)), "tcri_distance",
+                                               False))
+        if table is None:
+            raise KeyError(f"no table is defined for the stored {name!r} result; pass level=.")
+        _output.print_out(table)
+        return None
+    if not isinstance(payload, dict):
+        raise KeyError(f"level={level!r}: the stored {name!r} result is one frame; show it with "
+                       f"level=None, or read it whole with tcri.get.result(adata, {name!r}).")
+    if "replicate" in payload:
+        if level not in _SHOWN_LEVELS:
+            raise KeyError(f"level={level!r}: {name!r} has the levels {list(_SHOWN_LEVELS)}.")
+        path, accessor = _SHOWN_LEVELS[level]
+        frame = payload
+        for step in path:
+            frame = frame.get(step) if isinstance(frame, dict) else None
+    else:
+        import pandas as pd
+
+        frames = [k for k, v in payload.items() if isinstance(v, pd.DataFrame) or k == "stats"]
+        if level not in frames:
+            raise KeyError(f"level={level!r}: the stored {name!r} result has the frames {frames}.")
+        frame = payload[level]
+        accessor = ("stats" if level == "stats" else "draws" if level == "draws"
+                    else f"result(adata, {name!r}{extra})[{level!r}]")
+    if frame is None:
+        if level == "stats":
+            splitby = provenance.get("splitby")
+            why = ("splitby was not set" if splitby is None
+                   else f"fewer than two levels of {splitby!r} among its replicates")
+            _output.print_out(f"{tool} · stats: no contrast ({why})")
+            return None
+        raise KeyError(f"{name!r} has no {level} level: it has one value per replicate.")
+    call = (f"tcri.get.{accessor}" if accessor.startswith("result(")
+            else f"tcri.get.{accessor}(adata, {name!r}{extra})")
+    _output.print_out(_output.frame_table(frame, title=f"{tool} · {level}", rest=call))
+    return None

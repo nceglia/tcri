@@ -329,20 +329,26 @@ def test_pool_warns_when_a_group_keeps_nothing():
         _pool_rare_clones(_cohort(), clonotype_key="clone_id", groupby="patient")
 
 
-def test_pool_logs_one_line_per_group(caplog):
-    """One INFO line per group on the tcri logger: clones kept, clones pooled, and cells pooled
-    with their share of the group. A category no cell carries gets no line."""
+def test_pool_counts_one_row_per_group():
+    """One row per group: clones kept, clones pooled, cells pooled, cells and the share pooled,
+    which ``pp.pool_rare_clones`` prints as its table. A category no cell carries gets no row."""
     adata = _cohort()
     adata.obs["patient"] = pd.Categorical(adata.obs["patient"], categories=["P1", "P2", "P3"])
-    with caplog.at_level(logging.INFO, logger="tcri"):
-        _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
-    lines = [r.getMessage() for r in caplog.records if r.name.startswith("tcri")]
-    assert lines == [
-        "pool_rare_clones: patient 'P1': clones kept 1, clones pooled 2, cells pooled 3 of 6 "
-        "(50.0%).",
-        "pool_rare_clones: patient 'P2': clones kept 1, clones pooled 1, cells pooled 2 of 6 "
-        "(33.3%).",
+    counts = _pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient")
+    assert counts.to_dict("records") == [
+        {"patient": "P1", "clones kept": 1, "clones pooled": 2, "cells pooled": 3, "cells": 6,
+         "share pooled": 0.5},
+        {"patient": "P2", "clones kept": 1, "clones pooled": 1, "cells pooled": 2, "cells": 6,
+         "share pooled": 2 / 6},
     ]
+
+
+def test_pool_prints_its_table(capsys):
+    adata = _cohort()
+    tcri.pp.pool_rare_clones(adata, clonotype_key="clone_id", groupby="patient", print=True)
+    out = capsys.readouterr().out
+    assert "pool_rare_clones · clone_id → clone_id_pooled · min_cells 3" in out
+    assert "50.0%" in out and "33.3%" in out
 
 
 def test_pool_step_in_derivation_record(tmp_path):
@@ -387,15 +393,19 @@ def test_pool_step_in_derivation_record(tmp_path):
 
 
 def test_public_function_forwards_every_argument():
-    """``tcri.pp.pool_rare_clones`` has the private function's signature and writes the same
-    column and record, with every argument away from its default."""
-    assert inspect.signature(tcri.pp.pool_rare_clones) == inspect.signature(_pool_rare_clones)
+    """``tcri.pp.pool_rare_clones`` takes the private function's arguments, plus ``print`` for
+    its table, and writes the same column and record, with every argument away from its
+    default."""
+    public = inspect.signature(tcri.pp.pool_rare_clones).parameters
+    private = inspect.signature(_pool_rare_clones).parameters
+    assert list(public) == [*private, "print"]
+    assert all(public[name] == private[name] for name in private)
     kwargs = dict(clonotype_key="clone_id", groupby="patient", min_cells=4, samples="sample",
                   key_added="pooled")
     public, private = _cohort(), _cohort()
     for adata in (public, private):
         adata.obs["sample"] = ["s1", "s1", "s1", "s1", "s2", "s1"] * 2
-    tcri.pp.pool_rare_clones(public, **kwargs)
+    tcri.pp.pool_rare_clones(public, **kwargs, print=False)
     _pool_rare_clones(private, **kwargs)
     pd.testing.assert_frame_equal(public.obs, private.obs)
     assert _derivation_steps(public) == _derivation_steps(private)

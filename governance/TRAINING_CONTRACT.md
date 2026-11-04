@@ -111,9 +111,20 @@ schedules or stopping; they change with a recorded reason.
 - **B9** A fit records provenance in `training_record_`: epochs actually run,
   `n_epochs_kl_warmup`, `warmup_epochs_taken`, `steps_per_epoch`, `ramp_completes_at_epoch` (the
   epochs of this call before selection opens), `ramp_completed`, `selection_criterion`,
-  `selected_epoch`, `stopped_early`, `seed`; `kl_weight` is logged per epoch. `stopped_early`
-  is true only when the stopping rule ended the fit; a fit ended by another limit, such as
-  `max_steps`, records false and warns. `test_a_fit_ended_by_another_limit_is_not_an_early_stop`.
+  `selected_epoch`, `selected_score`, `stopped_early`, `stop_reason`, `seed`, `call_seed`,
+  `device`, `duration_s`; `kl_weight` is logged per epoch. `stopped_early` is true only when the
+  stopping rule ended the fit; a fit ended by another limit, such as `max_steps`, records false
+  and warns. `stop_reason` says how it ended: `"patience"`, `"non-finite objective"` (which also
+  fires the rule, and warns), `"max_epochs"`, `"other limit"` or `"error"` (a call that raised
+  after its first optimizer step: the record describes that call, with no selected check, and the
+  exception propagates; a call that raised before that step leaves the previous record).
+  `call_seed` is the seed this call used, `seed` plus the call index; `device` is a string and
+  `duration_s` a float of seconds, so the record writes to h5ad: `to_anndata` stores it, with the
+  loss curves, under `tcri_training` for every fit, the main one and each null. A field that is
+  `None` (no selected check, no seed) is left out of the stored record, since h5ad cannot write
+  `None`. `test_a_fit_ended_by_another_limit_is_not_an_early_stop`,
+  `test_the_record_carries_device_duration_reason_and_the_call_seed`,
+  `test_a_call_that_raises_records_what_it_did`.
 - **B10** A permutation null is fitted with the parent's knobs, the parent's seed and the
   parent's train/validation split; only the permutation draws from a stream of its own, spawned
   from the seed by the null's kind, `key_added` and index and by nothing else on the object, so
@@ -127,7 +138,9 @@ schedules or stopping; they change with a recorded reason.
 - **B11** No argument is accepted and then ignored. `train()` raises for a Trainer argument
   this model replaces (`early_stopping_warmup_epochs`, `early_stopping_monitor`,
   `early_stopping_mode`, `trainer_config`, `learning_rate_monitor`, `enable_checkpointing`,
-  `checkpointing_monitor`) and for `check_val_every_n_epoch` other than 1 or
+  `checkpointing_monitor`, and scvi's `simple_progress_bar` and `progress_bar_refresh_rate`,
+  because tcri draws the status bar), for a Lightning `ProgressBar` in `callbacks`, and for
+  `check_val_every_n_epoch` other than 1 or
   `val_check_interval` other than 1.0, which would change what patience counts. It raises before
   anything is fitted for more than one device (`devices` above 1, several devices, `-1`,
   `num_nodes` above 1, or a multi-device `strategy`): the guide concentrations live in Pyro's

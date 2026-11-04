@@ -201,6 +201,8 @@ def joint_distribution(
     -------
     dict or None
         ``None``; with ``inplace=False`` nothing is stored and ``{summary, draws}`` is returned.
+        With ``print=True`` it also prints the clone and phenotype counts per
+        covariate level; ``tcri.get.show`` prints any stored frame.
         Each is a frame with the phenotype categories as columns, indexed by clonotype, with a
         leading ``covariate`` level for ``covariate=None``. ``summary`` is the posterior mean
         over draws, read with ``tcri.get.result(adata, "joint_distribution")["summary"]``;

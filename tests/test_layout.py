@@ -34,7 +34,7 @@ ALLOWED_TOP_LEVEL = {"__init__.py", "get.py"}
 
 #: Lower layers, in dependency order. Nothing here may import UP into a view package at module
 #: scope. (Lazy in-function imports are allowed and used deliberately, with a note at the site.)
-LOWER_LAYERS = ["_compute", "_stats", "_state"]
+LOWER_LAYERS = ["_output", "_compute", "_stats", "_state"]
 VIEW_PACKAGES = ["tools", "plotting", "preprocessing", "diagnostics", "perturbation", "null",
                  "model", "utils", "datasets"]
 

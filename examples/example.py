@@ -16,7 +16,7 @@
 # %% [markdown]
 # # tcri — an end-to-end walkthrough
 #
-# One pass through the package on a synthetic cohort: **8 patients**, sampled **pre** and
+# One pass through the package on a synthetic cohort: **16 patients**, sampled **pre** and
 # **post** treatment, split into a **disease** and a **control** arm.
 #
 # The order below is the order you would actually work in — build, fit, *check the fit*,
@@ -25,16 +25,6 @@
 
 # %%
 # %matplotlib inline
-import logging
-import warnings
-
-# before importing anything else: tqdm warns about ipywidgets on import, which is noise here
-warnings.filterwarnings("ignore")
-logging.disable(logging.INFO)
-
-import contextlib
-import io
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -119,7 +109,7 @@ plt.show()
 
 # %%
 preview = adata.copy()
-tcri.pp.pool_rare_clones(preview, clonotype_key="clone_id", groupby="patient")
+tcri.pp.pool_rare_clones(preview, clonotype_key="clone_id", groupby="patient", print=True)
 print(f"clones: {adata.obs['clone_id'].nunique()} -> "
       f"{preview.obs['clone_id_pooled'].nunique()} if clones with fewer than 3 cells were pooled")
 
@@ -150,14 +140,15 @@ TCRIModel.setup_anndata(
 model = TCRIModel(adata, n_latent=10, n_hidden=64, n_layers=2,
                   classifier_n_layers=1, classifier_hidden=64, K=4, seed=SEED)
 
-with contextlib.redirect_stdout(io.StringIO()):
-    model.train(max_epochs=150, batch_size=256, accelerator="cpu",
-                enable_progress_bar=False, enable_model_summary=False)
-    model.to_anndata(adata)
-    # The permutation references, fitted once. Every scored metric below is read against one:
-    # the same model, the same knobs, the same seed, on one permuted label vector. Without
-    # them a metric raises rather than reporting a bare number.
-    tcri.null.all(model, adata, enable_progress_bar=False, enable_model_summary=False)
+# no max_epochs: the early-stopping rule ends the fit, and each null fit, once it converges
+model.train(batch_size=256, accelerator="cpu", print=False, enable_progress_bar=False,
+            enable_model_summary=False)
+model.to_anndata(adata)
+# The permutation references, fitted once. Every scored metric below is read against one:
+# the same model, the same knobs, the same seed, on one permuted label vector. Without
+# them a metric raises rather than reporting a bare number.
+tcri.null.all(model, adata, print=False, enable_progress_bar=False,
+              enable_model_summary=False)
 
 # what actually happened, not what was requested -- early stopping can end a run short
 record = model.training_record_
@@ -185,8 +176,9 @@ probs.head().round(3)
 # %% [markdown]
 # ## 3. Diagnostics — before trusting any metric
 #
-# `tcri.diag` asks whether the *fit* is worth interpreting. Every function returns a
-# DataFrame, so the numbers are inspectable and not only drawn.
+# `tcri.diag` asks whether the *fit* is worth interpreting. `loss` and `archetypes` draw the
+# fit; each check after them prints a table and returns a dict of its named frames, so the
+# numbers are inspectable and not only drawn.
 
 # %%
 # did training converge, and did the VampPrior components separate?
@@ -515,15 +507,20 @@ plt.show()
 # cached `tl` result, since those live in `uns`.
 
 # %%
-import tempfile
+import shutil
+import warnings
 
-with tempfile.TemporaryDirectory() as tmp:
-    manifest = tcri.ut.save_tcri_session(model, adata, f"{tmp}/run")
-    print("wrote:", sorted(manifest))
+session = "example_session"                            # a folder beside this notebook
+tcri.ut.save_tcri_session(model, adata, session, print=True)   # prints what it wrote
 
-    reloaded_model, reloaded = tcri.ut.load_tcri_session(f"{tmp}/run")
-    cached = tcri.get.replicates(reloaded, "mutual_information")
-    print(f"\nreloaded {reloaded.n_obs} cells")
-    print(f"cached MI survived the round trip: "
-          f"{np.allclose(cached['value'], mi_post['value'])}")
-    print(f"provenance survived: {tcri.get.params(reloaded, 'mutual_information')['covariate']!r}")
+# Loading into the session that saved it replaces this model's parameters in Pyro's store,
+# which tcri warns about; replacing them is the point of this round trip.
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="The Pyro store already holds")
+    reloaded_model, reloaded = tcri.ut.load_tcri_session(session)
+cached = tcri.get.replicates(reloaded, "mutual_information")
+print(f"\nreloaded {reloaded.n_obs} cells")
+print(f"cached MI survived the round trip: "
+      f"{np.allclose(cached['value'], mi_post['value'])}")
+print(f"provenance survived: {tcri.get.params(reloaded, 'mutual_information')['covariate']!r}")
+shutil.rmtree(session)

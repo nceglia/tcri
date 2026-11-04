@@ -14,6 +14,9 @@ boundary — one callback would then be selecting from a series the other had al
 recording. scvi ships an ``early_stopping_warmup_epochs`` that counts the epochs of one
 ``train()`` call, while the ramp's position lives on the module and continues across calls;
 using it alongside this gate would be exactly that bug. So it is deliberately not used.
+
+``TrainingStatus`` reads the same counters to refresh tcri's status bar; it changes nothing about
+the fit.
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ import torch
 from lightning.pytorch.callbacks import Callback, EarlyStopping
 from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason
 
-__all__ = ["RampGatedEarlyStopping", "BestObjectiveSnapshot", "ramp_is_complete"]
+__all__ = ["RampGatedEarlyStopping", "BestObjectiveSnapshot", "TrainingStatus", "ramp_is_complete"]
 
 
 def _is_own_guide_param(module, store_name: str) -> bool:
@@ -84,14 +87,21 @@ class RampGatedEarlyStopping(EarlyStopping):
         #: the step floor start.
         self._gate_step: int | None = None
         self._steps_since_gate = 0
+        #: Called with the trainer after every check, so a display reads the check's outcome:
+        #: Lightning runs this check after every other epoch-end callback.
+        self.after_check = None
 
     def _run_early_stopping_check(self, trainer):
-        if not ramp_is_complete(trainer.lightning_module):
-            return
-        if self._gate_step is None:
-            self._gate_step = int(trainer.global_step)
-        self._steps_since_gate = int(trainer.global_step) - self._gate_step
-        super()._run_early_stopping_check(trainer)
+        try:
+            if not ramp_is_complete(trainer.lightning_module):
+                return
+            if self._gate_step is None:
+                self._gate_step = int(trainer.global_step)
+            self._steps_since_gate = int(trainer.global_step) - self._gate_step
+            super()._run_early_stopping_check(trainer)
+        finally:
+            if self.after_check is not None:
+                self.after_check(trainer)
 
     def _evaluate_stopping_criteria(self, current):
         should_stop, reason = super()._evaluate_stopping_criteria(current)
@@ -199,3 +209,50 @@ class BestObjectiveSnapshot(Callback):
                 saved = self._store_state.get(name)
                 if saved is not None:
                     leaf.data.copy_(saved.to(leaf.device))
+
+
+class TrainingStatus(Callback):
+    """Refresh tcri's status line once per epoch, after the stopping rule's check.
+
+    The line says where the stopping rule stands, not how far the epoch budget is spent: under
+    early stopping the end of a fit is not known in advance. While the KL ramp runs it shows the
+    ramp's progress; after it, the best check so far and the patience left, and, while the
+    ``step_floor`` is what keeps the fit going, the steps counted toward it. Epochs are numbered
+    from 0, as in ``training_record_``.
+
+    With early stopping on, the stopping rule calls it after each check (Lightning runs that
+    check after every other epoch-end callback, so a refresh of its own would read the previous
+    epoch's count); with early stopping off, it refreshes after validation.
+    """
+
+    def __init__(self, status, *, stopper, snapshot):
+        super().__init__()
+        self._status = status
+        self._stopper = stopper
+        self._snapshot = snapshot
+        if stopper is not None:
+            stopper.after_check = self._refresh
+
+    def on_validation_end(self, trainer, pl_module):
+        if self._stopper is None and not trainer.sanity_checking:
+            self._refresh(trainer)
+
+    def _refresh(self, trainer):
+        pl_module = trainer.lightning_module
+        parts = [f"train  epoch {int(trainer.current_epoch):,}"]
+        if self._snapshot.best_epoch is not None:
+            parts.append(f"best {self._snapshot.best_epoch:,} ({self._snapshot.best_score:.3g})")
+        if not ramp_is_complete(pl_module):
+            done = int(getattr(pl_module.module, "_kl_warmup_epochs", 0))
+            parts.append(f"KL ramp {done:,}/{int(pl_module.n_epochs_kl_warmup):,}")
+        else:
+            parts.append("ramp done")
+            stopper = self._stopper
+            if stopper is not None and stopper._gate_step is not None:
+                left = max(int(stopper.patience) - int(stopper.wait_count), 0)
+                if left == 0 and stopper._steps_since_gate < stopper.step_floor:
+                    parts.append(f"patience 0 · step floor "
+                                 f"{stopper._steps_since_gate:,}/{stopper.step_floor:,}")
+                else:
+                    parts.append(f"patience {left:,} left")
+        self._status.update(" · ".join(parts))

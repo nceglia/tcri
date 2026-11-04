@@ -1,7 +1,6 @@
 """The TCRI Pyro module: a CVAE (encoder/decoder over gene expression) coupled to
 two-level hierarchical Dirichlet priors (clonotype -> clonotype x covariate) and a
 phenotype classifier head."""
-import warnings
 from typing import Dict, Optional
 
 import torch
@@ -13,6 +12,7 @@ from scvi import REGISTRY_KEYS
 from scvi.nn import Encoder, DecoderSCVI
 from scvi.module.base import PyroBaseModuleClass, auto_move_data
 
+from .. import _output
 from ._classifier import PhenotypeClassifier
 from ._priors import VampPrior, MixtureDirichlet, encoder_posterior
 
@@ -294,12 +294,10 @@ class TCRIModule(PyroBaseModuleClass):
         if current and warn_on_replace:
             dropped = sorted({_null_namespace(k) for k in current
                               if k.startswith(self.pname("null."))} - restored_nulls)
-            warnings.warn(
+            _output.warn(
                 f"The Pyro store already holds {len(current)} entries for model {self.name!r} "
                 f"and its nulls; this load replaces them with the saved ones."
-                + (f" Nulls the save does not have are dropped: {dropped}." if dropped else ""),
-                UserWarning,
-                stacklevel=3,
+                + (f" Nulls the save does not have are dropped: {dropped}." if dropped else "")
             )
         for key in current:
             del store[key]

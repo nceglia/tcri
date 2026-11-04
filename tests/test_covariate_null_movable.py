@@ -110,8 +110,8 @@ def test_an_unmovable_patient_has_no_reference(mode, split_libraries):
                                          random_state=0, inplace=False)
     named = [str(w.message) for w in caught if "cannot move any cell" in str(w.message)]
     assert len(named) == 1 and "'P0', 'P1'" in named[0], named
-    assert all(w.filename == __file__ for w in caught
-               if "cannot move any cell" in str(w.message))
+    assert all(w.filename == __file__ and issubclass(w.category, tcri.TCRIDataWarning)
+               for w in caught if "cannot move any cell" in str(w.message))
 
     reference = ("null_value", "adjusted", "adjusted_sd", "adjusted_hdi_low", "adjusted_hdi_high",
                  "null_value_from", "null_value_to", "adjusted_from", "adjusted_to")

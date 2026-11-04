@@ -75,7 +75,9 @@ def mutual_information(
     and that whole result is returned. The replicate summary is read with
     ``tcri.get.replicates`` and the tests with ``tcri.get.stats``. Mutual information has one
     value per joint, so it has no item level. ``pl.mutual_information`` renders the stored
-    result rather than recomputing, so the plot cannot disagree with it.
+    result rather than recomputing, so the plot cannot disagree with it. With ``print=True``
+    it also prints a table of the result, a change with the endpoints of the
+    quantity it tests; ``tcri.get.show`` prints it again.
 
     ``groupby`` is the replicate; left implicit it resolves to the column registered as
     ``replicate`` at ``setup_anndata``, and the effective value is recorded in provenance.

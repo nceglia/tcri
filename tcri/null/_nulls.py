@@ -12,12 +12,14 @@ function that quietly triples its own runtime is worse than one that says what i
 from __future__ import annotations
 
 import builtins
+import time
 import uuid
 import warnings
 
 import numpy as np
 import pyro
 
+from .. import _output
 from .._state import keys as K
 from . import _permute
 from ._permute import KINDS
@@ -121,12 +123,11 @@ def _check_the_name_is_free(adata, model, fit):
     main = str((adata.uns.get(K.FIT_SETTINGS) or {}).get("name", ""))
     unnamed = (not held or _is_generated_name(held)) and _is_generated_name(model.name)
     if unnamed and main == str(model.name):
-        warnings.warn(
+        _output.warn(
             f"fit {fit!r} on this object was written by parent {held!r}. Neither that model nor "
             f"this one ({model.name!r}) was given `name=`, and this one wrote the object's main "
             f"fit, so this is taken as a refit and the fit is rewritten. Give the models `name=` "
-            f"at construction if they are different models.",
-            UserWarning, stacklevel=3,
+            f"at construction if they are different models."
         )
         return
     # A copy of the AnnData is not a way out: it carries the same record and raises the same.
@@ -141,24 +142,6 @@ def _check_the_name_is_free(adata, model, fit):
     )
 
 
-def _training_for_uns(null):
-    """A null's ``history_`` and ``training_record_``, in a form h5ad writes.
-
-    A null has no saved model of its own, so this is what lets ``rebuild`` hand
-    ``tcri.diag.loss`` the curves after the process that fitted it has ended. Each history
-    series is kept as its epochs and its values; record entries that are ``None`` are left out,
-    because h5ad cannot write them, and read back as missing.
-    """
-    history = {
-        name: {"epoch": np.asarray(frame.index, dtype=np.int64),
-               "value": np.asarray(frame.to_numpy(), dtype=float).ravel()}
-        for name, frame in (getattr(null, "history_", None) or {}).items()
-    }
-    record = {k: v for k, v in (getattr(null, "training_record_", None) or {}).items()
-              if v is not None}
-    return {"history": history, "record": record}
-
-
 def _owned_namespace(record, model):
     """The namespace a fit's record names, when ``model`` is the parent that owns it.
 
@@ -170,9 +153,10 @@ def _owned_namespace(record, model):
 
 
 def _null(model, adata, *, kind, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
-          **train_kwargs):
+          session=None, **train_kwargs):
     """The shared body: ``n_nulls`` fits of one kind, each permuted, constructed, trained and
-    written. One per kind, no branching after this."""
+    written. One per kind, no branching after this. ``session`` collects what the public call
+    reports: its bar, and every fit written, with the arguments it ran with."""
     from ..model._model import _int_at_least
 
     if kind not in KINDS:
@@ -205,10 +189,19 @@ def _null(model, adata, *, kind, n_nulls=N_NULLS, within=None, seed=None, key_ad
             f"tcri.null.{kind}(model, adata, max_epochs=..., batch_size=...)."
         )
 
-    nulls = [_fit_member(model, adata, kind=kind, group=group, index=i, n_nulls=n_nulls,
-                         strata=strata, seed=base_seed, key_added=key_added,
-                         train_args=train_args)
-             for i in range(n_nulls)]
+    nulls = []
+    for i in range(n_nulls):
+        bar = session["bar"] if session is not None else None
+        if bar is not None:
+            bar.describe(K.member_name(group, i))
+        null = _fit_member(model, adata, kind=kind, group=group, index=i, n_nulls=n_nulls,
+                           strata=strata, seed=base_seed, key_added=key_added,
+                           train_args=train_args)
+        nulls.append(null)
+        if session is not None:
+            session["done"].append((K.member_name(group, i), null, train_args))
+        if bar is not None:
+            bar.advance()
     # A refit with fewer nulls than the group it replaces leaves none of the earlier members
     # behind: a reference read from the records would otherwise pool the old fits with the new.
     for fit in earlier:
@@ -236,10 +229,15 @@ def _fit_member(model, adata, *, kind, group, index, n_nulls, strata, seed, key_
                                           model)
 
     namespace = _namespace(model, fit)
-    null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
-                     **_init_params(model))
-    null._fit_name = fit
-    null.train(**train_args)
+    # A null fit is silent: what it would warn about is reported once for the whole set, from
+    # its training record (_report_conditions), and its construction repeats the parent's.
+    # "ignore", so a caller's "error" filter cannot raise a warning the set does not report.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        null = TCRIModel(adata, name=namespace, permutation=(_permute.AXIS[kind], perm),
+                         **_init_params(model))
+        null._fit_name = fit
+        null.train(**train_args, print=False, enable_progress_bar=False)
     null.to_anndata(adata, fit=fit)
     if replaced_namespace is not None and replaced_namespace != namespace:
         _drop_namespace(replaced_namespace)
@@ -248,7 +246,6 @@ def _fit_member(model, adata, *, kind, group, index, n_nulls, strata, seed, key_
     adata.uns[K.fit_key(K.BUFFERS, fit)] = {
         k: v.detach().cpu().numpy() for k, v in null.module.named_buffers() if v is not None
     }
-    adata.uns[K.fit_key(K.TRAINING, fit)] = _training_for_uns(null)
     adata.uns[K.fit_key(K.FIT_SETTINGS, fit)] = {
         **adata.uns[K.fit_key(K.FIT_SETTINGS, fit)],
         "kind": kind,
@@ -269,6 +266,153 @@ def _fit_member(model, adata, *, kind, group, index, n_nulls, strata, seed, key_
     return null
 
 
+#: The conditions a set of null fits reports once, in place of one warning per fit: the
+#: condition's key, whether it needs early stopping on to be a problem, and how to say it.
+_CONDITIONS = (
+    ("max_epochs", True,
+     "stopped at max_epochs={max_epochs} without converging", "Adjusted values read against "
+     "them may be understated; refit the nulls with a larger max_epochs."),
+    ("ramp", False,
+     "did not complete the KL ramp", "Their fitted prior is scaled by kl_weight below "
+     "max_kl_weight, and no checkpoint was selected."),
+    ("other limit", True,
+     "ended before max_epochs without the early-stopping rule firing (a Lightning limit or an "
+     "interrupt)", "They are truncated, not converged."),
+    ("non-finite objective", False,
+     "stopped because the validation criterion became non-finite", "They diverged; values "
+     "read against them are not meaningful."),
+)
+
+
+def _condition_of(record, key) -> bool:
+    if key == "ramp":
+        return not bool(record.get("ramp_completed", True))
+    return record.get("stop_reason") == key
+
+
+def _conditions(done) -> dict:
+    """``{condition: [fit names]}`` over the fits written, from each fit's training record."""
+    found = {key: [] for key, *_ in _CONDITIONS}
+    for fit, null, args in done:
+        record = getattr(null, "training_record_", None) or {}
+        for key, needs_stopping, *_ in _CONDITIONS:
+            if needs_stopping and not args.get("early_stopping", True):
+                continue
+            if _condition_of(record, key):
+                found[key].append(fit)
+    return found
+
+
+def _report_conditions(model, adata, done) -> None:
+    """One warning per condition over the fits written, naming them."""
+    if not done:
+        return
+    n = len(done)
+    for key, _needs, what, consequence in _CONDITIONS:
+        fits = _conditions(done)[key]
+        if fits:
+            max_epochs = done[0][2].get("max_epochs")
+            _output.warn(f"{len(fits)} of {n} null fits {what.format(max_epochs=max_epochs)}: "
+                          f"{', '.join(fits)}. {consequence}")
+    parent_batch = (getattr(model, "train_kwargs_", None) or {}).get("batch_size")
+    batch = done[0][2].get("batch_size")
+    if batch is not None and batch != parent_batch and batch >= adata.n_obs:
+        _output.warn(
+            f"the null fits ran with batch_size={batch} >= n_obs={adata.n_obs}, which the parent "
+            f"did not: each of their epochs is a single optimizer step, so per-epoch overhead "
+            f"dominates and max_epochs becomes the number of gradient updates."
+        )
+
+
+def _set_panel(model, done, seconds):
+    """The panel a set of null fits prints: each reference with its fits and conditions."""
+    from rich.text import Text
+
+    rows = []
+    by_reference: dict = {}
+    for fit, null, args in done:
+        by_reference.setdefault(fit.rsplit("[", 1)[0], []).append((fit, null, args))
+    for reference, members in by_reference.items():
+        epochs = [int((getattr(n, "training_record_", None) or {}).get("epochs_run", 0))
+                  for _f, n, _a in members]
+        span = f"{min(epochs):,}" if min(epochs) == max(epochs) else f"{min(epochs):,}–{max(epochs):,}"
+        text = Text(f"{len(members)} fit{'s' if len(members) != 1 else ''} · {span} epochs")
+        for key, _needs, what, _consequence in _CONDITIONS:
+            k = len(_conditions(members)[key])
+            if k:
+                label = "reached max_epochs" if key == "max_epochs" else (
+                    "ramp incomplete" if key == "ramp" else key)
+                text.append(" · ")
+                text.append(f"{k} {label}", style="bold")
+        rows.append((reference, text))
+    rows.append(("Time", Text(_output.duration(seconds))))
+    return _output.panel(f"null fits · {model.name}", rows)
+
+
+class NullSet(dict):
+    """The null fits one :func:`all` call made: a ``dict`` of ``{kind: [models]}``.
+
+    ``nulls["phenotype"][0]`` is the first phenotype null's fitted model, for a direct look at
+    its networks (``predict``, ``tcri.diag.loss``, ``tcri.perturb.gene_importance(null_model=)``).
+    The metrics never need this object: every fit is recorded on the AnnData and its parameters
+    stay in Pyro's store. Displayed (a notebook cell's last line, ``print``, ``rich.print``), it
+    is the set's panel: each reference with its fits, epochs, conditions and time.
+    """
+
+    def __init__(self, models, panel=None):
+        super().__init__(models)
+        self._panel = panel
+
+    def __rich__(self):
+        from rich.text import Text
+
+        return self._panel if self._panel is not None else Text(repr(self))
+
+    def _repr_mimebundle_(self, include=None, exclude=None):
+        from rich.jupyter import JupyterMixin
+
+        return JupyterMixin._repr_mimebundle_(self, include=include, exclude=exclude)
+
+    def __str__(self) -> str:
+        return _output.plain_text(self.__rich__())
+
+    def __repr__(self) -> str:
+        kinds = ", ".join(f"{kind}={len(models)}" for kind, models in self.items())
+        return f"NullSet({kinds})"
+
+
+def _fit_set(model, adata, plan, *, n_nulls, seed, key_added, print, enable_progress_bar,
+             train_kwargs):
+    """Fit each ``(kind, within)`` in ``plan`` under one bar; report once; print the panel.
+
+    The conditions are reported after the panel, and also when the call fails partway, for the
+    fits it already wrote.
+    """
+    from ..model._model import _int_at_least
+
+    n_nulls = _int_at_least("n_nulls", n_nulls, 1)
+    session = {"bar": None, "done": []}
+    started = time.perf_counter()
+    out = {}
+    try:
+        with _output.set_progress(enable_progress_bar, "null fits",
+                                   n_nulls * len(plan)) as bar:
+            session["bar"] = bar
+            for kind, within in plan:
+                out[kind] = _null(model, adata, kind=kind, n_nulls=n_nulls, within=within,
+                                  seed=seed, key_added=key_added, session=session,
+                                  **train_kwargs)
+    except BaseException:
+        _report_conditions(model, adata, session["done"])
+        raise
+    panel = (_set_panel(model, session["done"], time.perf_counter() - started)
+             if session["done"] else None)
+    if print and panel is not None:
+        _output.print_out(panel)
+    _report_conditions(model, adata, session["done"])
+    return NullSet(out, panel)
+
+
 _N_NULLS_DOC = """
     The reference is ``n_nulls`` fits, ``null.<kind>[0]`` to ``null.<kind>[n_nulls - 1]``
     (``null.<kind>.<key_added>[i]`` when named), each on its own permutation and in its own
@@ -281,11 +425,19 @@ _N_NULLS_DOC = """
     A null's permutation is drawn from ``seed`` (default: the parent's seed), spawned by its
     kind, ``key_added`` and index alone, so the same call reproduces the same permutations
     whatever else the object carries. Returns the ``n_nulls`` fitted models, in index order.
+
+    The fits are quiet: one bar over them (``enable_progress_bar``), and, with ``print=True``, a
+    panel when they are done, each reference with its fits, the epochs they ran and how many
+    reached ``max_epochs``, did not complete the KL ramp, ended by another limit or stopped on a
+    non-finite criterion. A fit's own warnings are not repeated per fit; each of those conditions
+    is reported once, naming the fits, also when the call fails partway.
+    ``print`` and ``enable_progress_bar`` are this call's own and are not passed to the fits;
+    every other keyword is a ``train()`` argument, replayed over the parent's.
 """
 
 
 def phenotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
-              **train_kwargs):
+              print=True, enable_progress_bar=True, **train_kwargs):
     """Refit the parent with phenotype labels shuffled within (batch, covariate, replicate).
 
     The reference for anything that scores how much a clone's phenotype composition departs from
@@ -293,12 +445,13 @@ def phenotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_adde
     Each cell keeps its clone, its covariate level and its counts, so ``ct_array`` is the parent's
     cell for cell and only the labels move.
     """
-    return _null(model, adata, kind="phenotype", n_nulls=n_nulls, within=within, seed=seed,
-                 key_added=key_added, **train_kwargs)
+    return _fit_set(model, adata, [("phenotype", within)], n_nulls=n_nulls, seed=seed,
+                    key_added=key_added, print=print, enable_progress_bar=enable_progress_bar,
+                    train_kwargs=train_kwargs)["phenotype"]
 
 
 def clonotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_added=None,
-              **train_kwargs):
+              print=True, enable_progress_bar=True, **train_kwargs):
     """Refit the parent with clone ids shuffled within (batch, covariate, replicate).
 
     Keeps the clone-size distribution and every cell's phenotype; destroys which cells share a
@@ -306,11 +459,13 @@ def clonotype(model, adata, *, n_nulls=N_NULLS, within=None, seed=None, key_adde
     metric that moves under this one and not under the phenotype null is reading clonal
     structure rather than phenotype structure.
     """
-    return _null(model, adata, kind="clonotype", n_nulls=n_nulls, within=within, seed=seed,
-                 key_added=key_added, **train_kwargs)
+    return _fit_set(model, adata, [("clonotype", within)], n_nulls=n_nulls, seed=seed,
+                    key_added=key_added, print=print, enable_progress_bar=enable_progress_bar,
+                    train_kwargs=train_kwargs)["clonotype"]
 
 
-def covariate(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **train_kwargs):
+def covariate(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, print=True,
+              enable_progress_bar=True, **train_kwargs):
     """Refit the parent with the covariate label shuffled within (clonotype, batch).
 
     Each clone keeps its cells and its size; which covariate level a cell sits at is random. The
@@ -322,8 +477,9 @@ def covariate(model, adata, *, n_nulls=N_NULLS, seed=None, key_added=None, **tra
     shuffle could then move a cell. A metric reading this null blanks the reference of any group
     it cannot move at the levels read, and names it in a warning.
     """
-    return _null(model, adata, kind="covariate", n_nulls=n_nulls, seed=seed,
-                 key_added=key_added, **train_kwargs)
+    return _fit_set(model, adata, [("covariate", None)], n_nulls=n_nulls, seed=seed,
+                    key_added=key_added, print=print, enable_progress_bar=enable_progress_bar,
+                    train_kwargs=train_kwargs)["covariate"]
 
 
 for _f in (phenotype, clonotype, covariate):
@@ -332,8 +488,9 @@ del _f
 
 
 def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, key_added=None,
-        **train_kwargs):
-    """Fit every null in ``kinds`` in sequence and return ``{kind: [models]}``.
+        print=True, enable_progress_bar=True, **train_kwargs):
+    """Fit every null in ``kinds`` in sequence and return them as a ``NullSet``: a ``dict`` of
+    ``{kind: [models]}`` that displays as the set's panel.
 
     The common path: one call after ``train()`` and ``to_anndata()`` and the object carries every
     reference the metrics default to. Each kind is ``n_nulls`` fits, so the default of 5 over
@@ -341,6 +498,9 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
     longer than with one null. ``covariate`` is skipped, with a warning, when the covariate has one
     level -- a covariate null needs two levels to permute between -- and never skipped
     silently.
+
+    One bar runs over all the fits, and ``print=True`` prints one panel for the set when they are
+    done; see :func:`phenotype` for what is reported and how.
     """
     kinds = [kinds] if isinstance(kinds, str) else list(kinds)
     unknown = [k for k in kinds if k not in KINDS]
@@ -360,21 +520,20 @@ def all(model, adata, *, n_nulls=N_NULLS, kinds=KINDS, within=None, seed=None, k
         # checked before any kind is fitted, so a covariate null that could move nothing fails
         # before the other references spend their training
         _permute.check_covariate_movable(adata)
-    out = {}
+    plan = []
     for kind in kinds:
         if kind == "covariate" and n_levels < 2:
-            warnings.warn(
+            _output.warn(
                 f"skipping the covariate null: the covariate has {n_levels} level(s) and a "
                 f"covariate null permutes cells between its levels. The metrics that default "
                 f"to it (phenotypic_flux and every change between levels) are not defined here "
-                f"either.",
-                UserWarning, stacklevel=2,
+                f"either."
             )
             continue
-        out[kind] = _null(model, adata, kind=kind, n_nulls=n_nulls, seed=seed,
-                          key_added=key_added,
-                          within=(within if kind != "covariate" else None), **train_kwargs)
-    return out
+        plan.append((kind, within if kind != "covariate" else None))
+    return _fit_set(model, adata, plan, n_nulls=n_nulls, seed=seed, key_added=key_added,
+                    print=print, enable_progress_bar=enable_progress_bar,
+                    train_kwargs=train_kwargs)
 
 
 # `all` shadows the builtin inside this module; nothing here needs it, and the name is worth

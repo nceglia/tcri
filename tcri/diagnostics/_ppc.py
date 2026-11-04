@@ -1,7 +1,7 @@
-"""``tcri.diag`` posterior-predictive checks. Each computes and returns a dict of named
-DataFrames, one per level of detail, and with ``plot=True`` draws its figure from those values;
-nothing is cached. ``model`` is required only
-for ``reconstruction_ppc`` (the live ZINB decoder); the rest are adata-only.
+"""``tcri.diag`` posterior-predictive checks. Each computes a dict of named DataFrames, one per
+level of detail; with ``plot=True`` draws its figure from those values, with ``print=True``
+prints a table of them, and with ``return_dict=True`` returns them. Nothing is cached. ``model``
+is required only for ``reconstruction_ppc`` (the live ZINB decoder); the rest are adata-only.
 """
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .._state import keys as K
+from . import _report
 
 __all__ = ["joint_distribution_ppc", "phenotype_calibration", "reconstruction_ppc", "permutation_null"]
 
@@ -123,7 +124,8 @@ def _fit_labels(adata, fit, phenos):
 
 def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_samples=100,
                            n_sims=100, clones=None, exclude_pools=True,
-                           random_state=None, fit=None, plot=True, save=None):
+                           random_state=None, fit=None, plot=True, save=None, print=True,
+                           return_dict=True):
     """Posterior predictive check of the clone x phenotype fit: does the fit reproduce the
     phenotype labels it was trained on, clone by clone?
 
@@ -187,10 +189,15 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
         bin. The panel count depends on the data, so the check always draws its own figure.
     save : str | path | None
         Where to save the figure. Needs ``plot=True``.
+    print : bool
+        Print a table: the median over draws of the KS distance of ``p`` from uniform, per
+        covariate and clone-size bin, with each bin's clone count.
+    return_dict : bool
+        Return the frames below; ``False`` returns ``None``.
 
     Returns
     -------
-    dict
+    dict or None
         ``"draws"``: one row per (covariate, clonotype, draw) with ``n_cells``,
         ``distance_observed``, ``distance_replicated`` (mean over the draw's replicates) and
         ``p``. ``"summary"``: one row per (covariate, clonotype) with ``n_cells`` and both
@@ -203,7 +210,8 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     ------
     ValueError
         ``n_samples`` or ``n_sims`` below 1, an unknown ``covariate``, a label-free fit,
-        which has no label likelihood to check, or ``save`` with ``plot=False``.
+        which has no label likelihood to check, ``save`` with ``plot=False``, or ``plot``,
+        ``print`` and ``return_dict`` all ``False``.
     RuntimeError
         The fit's logits or label error rate are missing: rerun ``model.to_anndata``.
     """
@@ -215,6 +223,7 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
     from ..tools._joint import _substrate
 
     _check_save(plot, save)
+    _report.check_outputs(plot, print, return_dict)
     S = _count_arg("n_samples", n_samples)
     R = _count_arg("n_sims", n_sims)
     dist_rows = phenotype_distance_rows(distance_metric)
@@ -327,7 +336,8 @@ def joint_distribution_ppc(adata, *, covariate=None, distance_metric="l1", n_sam
         from ._plot import ppc_figure
 
         ppc_figure(result, save=save)
-    return result
+    return _report.finish("joint_distribution_ppc", result, print=print,
+                          return_dict=return_dict)
 
 
 def _calibration(draws):
@@ -346,7 +356,8 @@ def _calibration(draws):
     return pd.DataFrame(rows, columns=["covariate", "size_bin", "draw", "n_clones", "ks"])
 
 
-def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, save=None):
+def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, save=None,
+                          print=True, return_dict=True):
     """Reliability of predict() probabilities: bin cells by predicted max-prob and compare the
     mean predicted prob to the empirical accuracy per bin. adata-only.
 
@@ -360,11 +371,14 @@ def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, sav
     ``save`` is a path to write it to and needs ``plot=True``. The return is the same either
     way.
 
-    Returns a dict: ``"bins"``, one row per bin with ``bin``, ``mean_pred``, ``emp_freq`` and
-    ``count`` (NaN means for an empty bin); ``"summary"``, one row with ``ece``, the expected
-    calibration error (bin accuracy gaps weighted by bin size), and ``n_cells``.
+    ``print=True`` prints the bins as a table with the ECE under it. Returns a dict, or ``None``
+    with ``return_dict=False``: ``"bins"``, one row per bin with ``bin``, ``mean_pred``,
+    ``emp_freq`` and ``count`` (NaN means for an empty bin); ``"summary"``, one row with ``ece``,
+    the expected calibration error (bin accuracy gaps weighted by bin size), and ``n_cells``.
+    ``plot``, ``print`` and ``return_dict`` all ``False`` raises ``ValueError``.
     """
     _check_save(plot, save)
+    _report.check_outputs(plot, print, return_dict)
     fit = K.resolve_fit(adata, fit)
     probs = np.asarray(adata.obsm[K.fit_key(K.X_PROBABILITIES, fit)], dtype=float)
     phenos = list(adata.uns[K.PHENOTYPE_CATEGORIES])
@@ -393,11 +407,11 @@ def phenotype_calibration(adata, *, n_bins=10, fit=None, plot=True, ax=None, sav
         from ._plot import calibration_figure
 
         calibration_figure(result, ax=ax, save=save)
-    return result
+    return _report.finish("phenotype_calibration", result, print=print, return_dict=return_dict)
 
 
 def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot=True,
-                       ax=None, save=None):
+                       ax=None, save=None, print=True, return_dict=True):
     """ZINB reconstruction PPC: simulate counts from the fitted decoder and compare library
     size / dropout / mean / variance vs observed. ``model`` REQUIRED (live decoder).
 
@@ -416,12 +430,15 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot
     column says so. ``ax`` is the one Axes to draw on (``None`` makes the figure); ``save`` is a
     path to write it to and needs ``plot=True``. The return is the same either way.
 
-    Returns a dict: ``"summary"``, one row per statistic with ``observed``, ``simulated`` (the
-    mean over replicates) and ``discrepancy`` (their absolute difference).
+    ``print=True`` prints the summary as a table. Returns a dict, or ``None`` with
+    ``return_dict=False``: ``"summary"``, one row per statistic with ``observed``, ``simulated``
+    (the mean over replicates) and ``discrepancy`` (their absolute difference). ``plot``,
+    ``print`` and ``return_dict`` all ``False`` raises ``ValueError``.
     """
     import torch
 
     _check_save(plot, save)
+    _report.check_outputs(plot, print, return_dict)
     n_sims = _count_arg("n_sims", n_sims)
 
     module = model.module
@@ -429,14 +446,16 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot
     adata = model._validate_anndata(adata)
     device = next(module.parameters()).device
     if random_state is None:
-        return _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
+        result = _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
+        return _report.finish("reconstruction_ppc", result, print=print, return_dict=return_dict)
     # Seeded inside a fork, so the caller's global torch random state is the same afterwards.
     # The CPU state is always forked; a CUDA device's is forked too. device_type is always a
     # real type: torch 2.4 builds a device from it, so None raises there.
     cuda = device.type == "cuda"
     with torch.random.fork_rng(devices=[device.index or 0] if cuda else [], device_type="cuda"):
         torch.manual_seed(int(random_state))
-        return _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
+        result = _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
+    return _report.finish("reconstruction_ppc", result, print=print, return_dict=return_dict)
 
 
 def _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save):
@@ -520,7 +539,8 @@ def _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save):
 
 def permutation_null(adata, *, metric="mutual_information", covariate=None, groupby=None,
                      clones=None, exclude_pools=True, normalize_mode="min", n_perm=1000,
-                     random_state=None, plot=True, ax=None, save=None):
+                     random_state=None, plot=True, ax=None, save=None, print=True,
+                     return_dict=True):
     """Permutation null for a clone↔phenotype metric: permute phenotype labels within each
     covariate, recompute the metric on the **empirical** clone×phenotype joint to form a null;
     report observed, null mean/sd, z, p. adata-only, model-free.
@@ -551,13 +571,16 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
     the observed value marked. ``ax`` is one Axes per row, or ``None`` to make the figure;
     ``save`` is a path to write it to and needs ``plot=True``. The return is the same either way.
 
-    Returns a dict: ``"summary"``, one row per covariate (and group, with ``groupby``) with
-    ``observed``, ``null_mean``, ``null_sd``, ``z`` and ``p``.
+    ``print=True`` prints the summary as a table. Returns a dict, or ``None`` with
+    ``return_dict=False``: ``"summary"``, one row per covariate (and group, with ``groupby``) with
+    ``observed``, ``null_mean``, ``null_sd``, ``z`` and ``p``. ``plot``, ``print`` and
+    ``return_dict`` all ``False`` raises ``ValueError``.
     """
     from .._compute._tables import _resolve_clones
     from ..tools._mutual_information import _mi_from_joint
 
     _check_save(plot, save)
+    _report.check_outputs(plot, print, return_dict)
     if metric != "mutual_information":
         raise ValueError("permutation_null currently supports metric='mutual_information'.")
     rng = np.random.default_rng(random_state)
@@ -635,4 +658,5 @@ def permutation_null(adata, *, metric="mutual_information", covariate=None, grou
         from ._plot import permutation_null_figure
 
         permutation_null_figure(df, nulls, groupby=groupby, ax=ax, save=save)
-    return {"summary": df}
+    return _report.finish("permutation_null", {"summary": df}, print=print,
+                          return_dict=return_dict)

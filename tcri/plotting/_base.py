@@ -331,8 +331,10 @@ def _violins(adata, d, *, x, y, palette, ax, ylabel, rotation, order=None, color
         order = category_order(adata, x, d[x].dropna().unique().tolist())
     colors = (_colors_for(adata, x, order, palette) if color_x
                else {lv: tcri_bar_color for lv in order})
-    sns.violinplot(data=d, x=x, y=y, order=order, ax=ax, palette=colors,
-                   inner="quartile", cut=0, density_norm="width", linewidth=0.8)
+    # seaborn takes a palette only with a hue, so x is its own hue (one color per x level)
+    sns.violinplot(data=d, x=x, y=y, order=order, hue=x, hue_order=order, legend=False,
+                   dodge=False, ax=ax, palette=colors, inner="quartile", cut=0,
+                   density_norm="width", linewidth=0.8)
     ax.set_ylabel(ylabel)
     ax.set_xlabel(x)
     for label in ax.get_xticklabels():
@@ -418,11 +420,15 @@ def _boxstrip(adata, d, *, x, y, hue, order, hue_order, palette, ax, ylabel, rot
     common = dict(data=d, x=x, y=y, order=order, ax=ax)
     if hue is not None:
         common.update(hue=hue, hue_order=levels)
+    else:
+        # seaborn takes a palette only with a hue, so x is its own hue (one color per x level)
+        common.update(hue=x, hue_order=order)
     first_collection, first_patch, first_line = (len(ax.collections), len(ax.patches),
                                                  len(ax.lines))
     if reference:
         colors = {lv: "0.85" for lv in levels}
-    sns.boxplot(**common, palette=colors, showfliers=False, boxprops=dict(alpha=0.5))
+    sns.boxplot(**common, palette=colors, showfliers=False, boxprops=dict(alpha=0.5),
+                **({} if hue is not None else {"legend": False, "dodge": False}))
     if by_replicate:
         reps = category_order(adata, replicate, d[replicate].dropna().unique().tolist())
         rep_colors = _colors_for(adata, replicate, reps, None)

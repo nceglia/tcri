@@ -185,6 +185,8 @@ def repertoire_summary(adata, *, clonotype_key, groupby=None, splitby=None, cova
         ``"tcri_repertoire_summary"``.
     inplace
         ``True`` stores the table and returns ``None``; ``False`` stores nothing and returns it.
+    print
+        Print the table, at most 20 rows, with the ``tcri.get`` call that reads the rest.
 
     Returns
     -------
@@ -430,6 +432,8 @@ def clone_persistence(adata, *, clonotype_key, covariate_key, groupby=None,
         ``"tcri_clone_persistence"``.
     inplace
         ``True`` stores the frame and returns ``None``; ``False`` stores nothing and returns it.
+    print
+        Print the frame, at most 20 rows, with the ``tcri.get`` call that reads the rest.
 
     Returns
     -------
@@ -573,6 +577,9 @@ def clonotype_sharing(adata, *, clonotype_key, groupby, splitby=None) -> dict:
         ``"tcri_clonotype_sharing"``.
     inplace
         ``True`` stores the result and returns ``None``; ``False`` stores nothing and returns it.
+    print
+        Print the ``groups`` frame, at most 20 rows, with the ``tcri.get`` calls that read
+        ``pairs`` and ``clonotypes``.
 
     Returns
     -------

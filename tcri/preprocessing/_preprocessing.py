@@ -7,12 +7,12 @@ heavy imported here is paid for on every import of the package.
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
 
+from .. import _output
 from .._compute._genes import _INVARIANT_SEGMENTS, _looks_like_ensembl, _segment_genes
 from .._compute._repertoire import TCRIDataWarning, _missing_clonotypes, _pool_rare_clones
 from .._state import keys as K
@@ -24,7 +24,8 @@ __all__ = ["pool_rare_clones", "exclude_tcr_genes", "clone_size", "from_mudata"]
 
 
 def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int = 3,
-                     samples: str | None = None, key_added: str | None = None) -> None:
+                     samples: str | None = None, key_added: str | None = None,
+                     print: bool = False) -> None:
     """Pool each individual's rare clones into one label per individual.
 
     A clone is a set of cells within one individual, so cells are counted within each
@@ -51,8 +52,8 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     Run it on the source clonotype column before ``TCRIModel.setup_anndata``, and register the
     column it writes. It writes ``obs[key_added]``, a categorical with sorted categories, and
     records the step in ``uns['tcri_clonotype_derivations']``; a second call with the same
-    ``key_added`` replaces both. One line per group is logged on the ``tcri`` logger: clones
-    kept, clones pooled, and cells pooled with their share of the group.
+    ``key_added`` replaces both. With ``print=True`` it prints one row per group: clones kept,
+    clones pooled, cells pooled, cells, and the share of the group's cells pooled.
 
     Parameters
     ----------
@@ -72,10 +73,12 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
     key_added
         The column to write; ``f"{clonotype_key}_pooled"`` when ``None``. It must differ from
         ``clonotype_key``, ``groupby`` and ``samples``.
+    print
+        Print the per-group table to stdout.
 
     Warns
     -----
-    UserWarning
+    TCRIDataWarning
         When a group keeps no clone, naming the group: every cell of that group is pooled.
 
     Raises
@@ -92,8 +95,15 @@ def pool_rare_clones(adata, *, clonotype_key: str, groupby: str, min_cells: int 
         ``pooled@{group}``, as a clonotype named ``"pooled"`` does, or a pool does when a column
         this function wrote is pooled again. Nothing is written when it raises.
     """
-    _pool_rare_clones(adata, clonotype_key=clonotype_key, groupby=groupby, min_cells=min_cells,
-                      samples=samples, key_added=key_added)
+    counts = _pool_rare_clones(adata, clonotype_key=clonotype_key, groupby=groupby,
+                               min_cells=min_cells, samples=samples, key_added=key_added)
+    if print:
+        name = key_added if key_added is not None else f"{clonotype_key}_pooled"
+        shown = counts.assign(**{"share pooled": counts["share pooled"].map("{:.1%}".format)})
+        # every group is shown: the counts are not stored anywhere a footer could point to
+        _output.print_out(_output.frame_table(
+            shown, title=f"pool_rare_clones · {clonotype_key} → {name} · min_cells {min_cells}",
+            max_rows=len(shown)))
 
 
 def exclude_tcr_genes(adata, *, keep: Iterable[str] = _INVARIANT_SEGMENTS,
@@ -298,7 +308,7 @@ def from_mudata(
 
     Warns
     -----
-    UserWarning
+    tcri.TCRIDataWarning
         When GEX cells have no AIRR data, and when cells without a clonotype are dropped, each
         with the number of cells dropped.
 
@@ -386,16 +396,16 @@ def from_mudata(
 
     n_gex_only = gex.n_obs - len(shared)
     if n_gex_only:
-        warnings.warn(
+        _output.warn(
             f"{n_gex_only} of {gex.n_obs} cells of mdata.mod[{gex_mod!r}] have no AIRR data in "
             f"mdata.mod[{airr_mod!r}] and are dropped.",
-            TCRIDataWarning, stacklevel=2,
+            TCRIDataWarning,
         )
     if missing.any():
-        warnings.warn(
+        _output.warn(
             f"{int(missing.sum())} of {len(shared)} cells have no clonotype in {clonotype_source} "
             "and are dropped.",
-            TCRIDataWarning, stacklevel=2,
+            TCRIDataWarning,
         )
 
     adata.uns["tcri_adapter"] = {
