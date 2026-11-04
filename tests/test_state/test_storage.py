@@ -87,10 +87,11 @@ def test_data_param_names_the_store_target_and_drops_the_objects_before_it(adata
 
 
 def test_the_decorator_publishes_the_parameters_it_owns():
-    """``key_added`` and ``inplace``, and ``null_model`` on a tool with a reference, belong to the
-    decorator: it publishes them after the wrapped function's own parameters and reads them
-    itself, so the body declares only what it computes with. A tool without a reference has no
-    ``null_model`` to accept."""
+    """``key_added``, ``inplace`` and ``print``, and ``null_model`` on a tool with a reference,
+    belong to the decorator: it publishes them after the wrapped function's own parameters and
+    reads them itself, so the body declares only what it computes with. A tool without a
+    reference has no ``null_model`` to accept, and one without a bar no
+    ``enable_progress_bar``."""
 
     @tl_result(key="tcri_plain")
     def _plain(adata, *, groupby=None):
@@ -101,9 +102,9 @@ def test_the_decorator_publishes_the_parameters_it_owns():
         return pd.DataFrame({"v": [1.0]})
 
     assert list(inspect.signature(_plain).parameters) == [
-        "adata", "groupby", "key_added", "inplace"]
+        "adata", "groupby", "key_added", "inplace", "print"]
     assert list(inspect.signature(_scored).parameters) == [
-        "adata", "groupby", "fit", "null_model", "key_added", "inplace"]
+        "adata", "groupby", "fit", "null_model", "key_added", "inplace", "print"]
     with pytest.raises(TypeError, match="null_model"):
         _plain(AnnData(X=np.zeros((1, 1), dtype="float32")), null_model=None)
 

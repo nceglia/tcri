@@ -6,11 +6,12 @@ arrays instead. ``build_result``/``build_stats`` from ``_compute`` then apply un
 """
 from __future__ import annotations
 
-import warnings
 
 import numpy as np
 import pandas as pd
 
+from .. import _output
+from .._compute._repertoire import TCRIDataWarning
 from .._compute._tables import build_stats
 
 __all__: list[str] = []  # private module
@@ -44,11 +45,11 @@ def cell_groups(adata, *, cov_col, covariate, groupby, splitby):
     g = obs[groupby]
     n_missing = int(g.isna().sum())
     if n_missing:
-        warnings.warn(
+        _output.warn(
             f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
             f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
             f"from every row of this result.",
-            UserWarning, stacklevel=3,
+            TCRIDataWarning,
         )
     labels = g.dropna().unique().tolist()
     code = {lab: i for i, lab in enumerate(labels)}

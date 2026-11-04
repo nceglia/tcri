@@ -21,10 +21,10 @@ Like every twin it takes no metric arguments: the genes, groups, split and draws
 """
 from __future__ import annotations
 
-import warnings
 
 import numpy as np
 
+from .. import _output
 from ._base import (_axes, _boxstrip, _empty, _finish, _points, _violins, _zero_rule,
                     filter_quantity)
 
@@ -62,12 +62,11 @@ def _star_labels(ax, stats, genes):
         # and it is a limitation of a panel that puts ONE star above each gene: there is no
         # position for the other pairs. Draw nothing and say why, rather than starring one pair
         # and letting it read as the whole comparison.
-        warnings.warn(
+        _output.warn(
             f"not starring the ranking: `splitby` has more than two levels, so each gene "
             f"carries {stats.groupby('gene', observed=True).size().max()} contrasts and this "
             f"panel has one position per gene. Read them from "
             f"`tcri.get.stats(adata, 'gene_importance')`, or plot two levels at a time.",
-            UserWarning, stacklevel=3,
         )
         return
     # blank stars are a test that was not run (an undefined p): nothing is drawn for that gene

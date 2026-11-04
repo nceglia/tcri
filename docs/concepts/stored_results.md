@@ -47,11 +47,15 @@ def mutual_information(adata, *, covariate=None, cov_from=None, cov_to=None, gro
     ...
 ```
 
-The function declares the parameters it computes with. The decorator adds `key_added`, `inplace`
-and, for a metric with a reference, `null_model` after them, and reads those three itself.
-`values` lists every value column the metric can return, and a call skips those it does not
-return; `default_null` is the reference `null_model="auto"` resolves to, here the phenotype null
-at one covariate level and the covariate null on a change.
+The function declares the parameters it computes with. The decorator adds `key_added`, `inplace`,
+`print` and, for a metric with a reference, `null_model` after them, and reads them itself; a tool
+that draws a bar over its passes (`perturb.gene_importance`) also gets `enable_progress_bar`.
+`print=True` (default `False`) prints a table of the result: the replicate summary (for the joint,
+its clone and phenotype counts), the reference it was adjusted against and the `stats` rows, at
+most 20 rows, with the `tcri.get` call that reads the rest. `values` lists every value column the
+metric can return, and a call skips those it does not return; `default_null` is the reference
+`null_model="auto"` resolves to, here the phenotype null at one covariate level and the covariate
+null on a change.
 
 ## Where a result lands
 
@@ -111,7 +115,8 @@ The repertoire summaries of `tcri.pp` store their result the same way, under
 `pp.repertoire_summary` stores its table, one row per group (and covariate level).
 `pp.clone_persistence` stores one frame, one row per group and pair of covariate levels.
 `pp.clonotype_sharing` stores `{pairs, groups, clonotypes}`: one row per pair of groups, one per
-group, and one per shared clonotype. Their `pl` functions of the same name draw them.
+group, and one per shared clonotype. With `print=True` each prints its frame (`clonotype_sharing`
+its `groups` frame), and their `pl` functions of the same name draw them.
 
 ## What is recorded beside the payload
 
@@ -128,8 +133,8 @@ Four provenance keys sit in the stored blob next to the payload:
 **every argument in the signature, including defaults the caller never passed** — provenance
 that records only explicit arguments cannot answer "what was this run with". Excluded are the
 data argument itself, any object argument before it (the fitted model in
-`gene_importance(model, adata, ...)`), and the two arguments about storage, `key_added` and
-`inplace`.
+`gene_importance(model, adata, ...)`), the two arguments about storage, `key_added` and
+`inplace`, and the two about display, `print` and `enable_progress_bar`.
 
 Arguments the tool *resolved* are recorded as resolved, not as the caller spelled them. A
 `groupby=None` that the tool resolved to the registered replicate column is recorded as that
@@ -248,8 +253,9 @@ The procedure for bumping a version is in the
 ## Adding a tool that stores its result
 
 1. Declare only the parameters the body computes with, and decorate the function with
-   `@tl_result(key=..., version=1, schema=...)`, which adds `key_added` and `inplace` (and
-   `null_model`, given a `default_null`). Declaring one of those three yourself raises.
+   `@tl_result(key=..., version=1, schema=...)`, which adds `key_added`, `inplace` and `print`
+   (and `null_model`, given a `default_null`; `enable_progress_bar`, given `progress=True`).
+   Declaring one of those yourself raises.
 2. Give the payload a `TypedDict` in `tcri/_state/schemas.py`; its required keys are checked on
    every call.
 3. Add the canonical key to `tcri/_state/keys.py` and the tool to the registry in `tcri.get`,

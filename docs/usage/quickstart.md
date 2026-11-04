@@ -82,7 +82,7 @@ Then build the permutation references once. Every scored metric reads its own ag
 raises rather than reporting a bare number if they are not there.
 
 ```python
-tcri.null.all(model, adata)
+nulls = tcri.null.all(model, adata)
 ```
 
 ```{important}

@@ -59,7 +59,8 @@ def phenotypic_flux(adata, *, cov_from, cov_to, groupby=None, splitby=None, n_sa
     nothing is stored and the whole result is returned. The replicate level has one row per
     replicate, read with ``tcri.get.replicates``; the item level one row per replicate and
     persistent clone, read with ``tcri.get.items``. A clone at one level only has no item row; a
-    replicate with no persistent clone has a NaN replicate row.
+    replicate with no persistent clone has a NaN replicate row. With ``print=True``
+    it also prints a table of the result; ``tcri.get.show`` prints it again.
 
     Flux is defined as the KL divergence, which is why ``distance_metric`` defaults to
     ``"kl"``; ``"l1"`` is available for when a bounded or symmetric measure is wanted.

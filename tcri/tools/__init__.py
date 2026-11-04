@@ -5,8 +5,13 @@ provenance block, and returns ``None``; with ``inplace=False`` it stores nothing
 whole result. :mod:`tcri.get` reads the store, and ``pl`` renders it; neither recomputes. Mutual
 information, the two entropies and flux store ``{replicate, item, stats}``, read with
 ``tcri.get.replicates``, ``items``, ``stats`` and ``draws``; ``joint_distribution`` stores
-``{summary, draws}``, read with ``tcri.get.result`` and ``tcri.get.draws``. Mutual information and the entropies
-take ``covariate=`` or ``cov_from=`` with ``cov_to=``, the change from one level to another.
+``{summary, draws}``, read with ``tcri.get.result`` and ``tcri.get.draws``. Mutual information
+and the entropies take ``covariate=`` or ``cov_from=`` with ``cov_to=``, the change from one
+level to another.
+
+With ``print=True`` a tool also prints a table of its result: the replicate summary
+(for the joint, its clone and phenotype counts), the reference it was adjusted against, and the
+``stats`` rows.
 
 ``splitby`` produces the between-split contrast as part of the metric, stored under ``stats``.
 The replicate unit is the group: the test runs on one value per group, so items are never

@@ -11,9 +11,10 @@ stored once, and every ``pl.*`` reads that cache instead of recomputing, so a pl
 disagree with the table the user holds.
 
 Usage — the wrapped function declares the parameters it computes with and returns its
-*natural* result. The decorator owns storage and the reference, and the parameters that steer
-them: it adds ``key_added``, ``inplace`` and, for a tool with a reference, ``null_model`` to the
-published signature::
+*natural* result. The decorator owns storage, the reference and the printed table, and the
+parameters that steer them: it adds ``key_added``, ``inplace``, ``print`` and, for a tool with a
+reference, ``null_model`` to the published signature (``enable_progress_bar`` too, for a tool
+that draws a bar)::
 
     @tl_result(key=K.MUTUAL_INFORMATION, version=4, schema=schemas.MutualInformation,
                default_null={"covariate": "phenotype", "change": "covariate"})
@@ -22,7 +23,8 @@ published signature::
         return {"replicate": {"draws": draws, "summary": summary}, "stats": stats}
 
     # published: mutual_information(adata, *, covariate=None, cov_from=None, cov_to=None, ...,
-    #                               fit=None, null_model="auto", key_added=None, inplace=True)
+    #                               fit=None, null_model="auto", key_added=None, inplace=True,
+    #                               print=False)
 
 The decorator reads ``inplace`` / ``key_added`` from the call, optionally checks the result
 against a ``schema`` TypedDict, auto-captures the remaining arguments as ``params``, serializes
@@ -47,13 +49,14 @@ from __future__ import annotations
 import functools
 import importlib.metadata
 import inspect
-import re
 import warnings
 from typing import Callable
 
 import numpy as np
 import pandas as pd
 
+from .. import _output
+from .._output._results import accessor, result_table
 from . import _reference
 from . import keys as _keys
 
@@ -80,8 +83,9 @@ def _tcri_version() -> str:
 
 
 #: The parameters ``tl_result`` adds to a wrapped tool's signature and reads itself. A wrapped
-#: function never declares them; ``null_model`` is added only for a tool with a reference.
-_OWNED = ("null_model", "key_added", "inplace")
+#: function never declares them; ``null_model`` is added only for a tool with a reference, and
+#: ``enable_progress_bar`` only for a tool with a bar.
+_OWNED = ("null_model", "key_added", "inplace", "print", "enable_progress_bar")
 
 _DF = "__tcri_df__"
 _SERIES = "__tcri_series__"
@@ -300,21 +304,36 @@ def _with_owned(sig: inspect.Signature, owned) -> inspect.Signature:
     return sig.replace(parameters=[*head, *owned, *tail], return_annotation=returns)
 
 
+def _rest(name: str, result, inplace: bool, key_added, fit) -> str:
+    """Where the full result is, for a printed table cut short."""
+    if not inplace:
+        return "the returned result"
+    extra = "".join(f", {k}={v!r}" for k, v in (("key", key_added), ("fit", fit)) if v)
+    return f"tcri.get.{accessor(result)}(adata, {name!r}{extra})"
+
+
 def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None = None,
               values=("value",), denominators=(), default_null=None, reference_arg="fit",
-              per_gene_stats=False, adjusted_only=False, distance=False):
+              per_gene_stats=False, adjusted_only=False, distance=False, progress=False):
     """Store the wrapped ``tl``'s result under ``uns[key_added or key]`` and return ``None``.
 
     With ``inplace=False`` nothing is stored and the whole result is returned. A stored result is
     read back through :mod:`tcri.get` only, so there is one copy of it, which cannot drift from a
     returned one.
 
-    The decorator owns three parameters, :data:`_OWNED`: ``key_added`` and ``inplace`` on every
-    tool, and ``null_model`` on a tool with a ``default_null``. It declares them on its own
+    The decorator owns the parameters in :data:`_OWNED`: ``key_added``, ``inplace`` and
+    ``print`` on every tool, ``null_model`` on a tool with a ``default_null``, and
+    ``enable_progress_bar`` on a tool with ``progress=True``. It declares them on its own
     wrapper, reads them there, and publishes the wrapped function's signature followed by them,
     so the ``.pyi`` conformance check sees the whole contract signature. The wrapped function
     declares only the parameters it computes with; declaring an owned one raises ``TypeError``,
     because the body would accept a value it never reads.
+
+    ``print`` (default ``False``) prints the result's table to stdout
+    (:mod:`tcri._output._results`), and ``enable_progress_bar`` draws one bar over the call's
+    passes (the call itself and each reference run). Both are display only: never recorded in
+    ``params``, read only by the caller's own call, so a reference run prints nothing and draws
+    no bar of its own.
 
     ``params`` captures every argument the wrapped function declares, **including defaults the
     caller never passed**, via ``bind`` + ``apply_defaults``. That is the point: provenance that
@@ -330,11 +349,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
 
     **The reference.** When the tool has a ``default_null``, the decorator runs it
     again on each fit of a permutation reference and adds the ``null``/``null_*``/``adjusted*``
-    columns, per pair of draws on the per-draw frames (each level's ``draws``, or ``table``) and
-    summarized on the summaries (each level's ``summary``, or ``result``)
-    (:mod:`tcri._state._reference`). It lives here rather than in each body for one reason that
-    is not tidiness: the reference has to be *the caller's own call on the null*, and only the
-    decorator holds the caller's bound arguments. A body re-invoking itself would have to re-list what to forward, and that list
+    columns, per pair of draws on each level's per-draw frame (``draws``) and summarized on its
+    ``summary`` (:mod:`tcri._state._reference`). It lives here rather than in each body for one
+    reason that is not tidiness: the reference has to be *the caller's own call on the null*, and
+    only the decorator holds the caller's bound arguments. A body re-invoking itself would have
+    to re-list what to forward, and that list
     would drift from the signature the first time a knob was added.
 
     ``values`` names every NATIVE value column the metric can return, before any reference
@@ -368,6 +387,15 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
     at ``n_samples > 0``: fit draw ``d`` is paired with null ``d mod n_nulls`` only, and each null
     run draws only its share (:func:`._reference.rotation_shares`); at ``n_samples = 0`` the one
     fit draw is paired with every null.
+
+    **Reference runs are silent.** Each one repeats the caller's own call on a null, so any
+    warning it raised -- a data fact, a device fallback, a rebuilt model's k-means notice --
+    would repeat once per fit of the reference. The caller's call has raised each of them once
+    already, so the reference runs' warnings are ignored, whatever the caller's filters say.
+
+    ``progress`` marks a tool that draws a bar over its passes of cell batches
+    (``perturb.gene_importance``); the body advances it through
+    :func:`tcri._output.current_passes`.
     """
     def deco(fn):
         sig = inspect.signature(fn)
@@ -388,7 +416,8 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         takes_null = default_null is not None
         takes_fit = "fit" in names
 
-        def run(args, kwargs, *, null_model, key_added, inplace):
+        def run(args, kwargs, *, null_model, key_added, inplace, print=False,
+                enable_progress_bar=True):
             if adjusted_only and null_model is None:
                 raise ValueError(
                     f"{fn.__name__} stores the adjusted value only, so it needs a reference: "
@@ -404,15 +433,28 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # every reference run, and that integer is what params records
                 from .._compute._tables import resolve_seed   # the lower layer, reached lazily
                 arguments["random_state"] = resolve_seed(seed)
-            result = _run(arguments, null_model=null_model, key_added=key_added,
-                          inplace=inplace)
+            report = {}
+            with _output.pass_progress(progress and enable_progress_bar, fn.__name__):
+                result = _run(arguments, null_model=null_model, key_added=key_added,
+                              inplace=inplace, report=report)
+            table = None
+            if print:
+                table = result_table(
+                    fn.__name__, result, {**arguments, **report.get("resolved", {})},
+                    null_model=report.get("null_model"),
+                    n_references=report.get("n_references", 0),
+                    rest=_rest(fn.__name__, result, inplace, key_added, report.get("fit")),
+                    distance=distance)
+            if table is not None:
+                _output.print_out(table)
             return None if inplace else result
 
-        def _run(arguments, *, null_model, key_added, inplace):
+        def _run(arguments, *, null_model, key_added, inplace, report=None):
             """Compute, attach the reference, store; return the full result.
 
             The reference runs come back through here too, so they return their draws, which
-            the pairing needs, whatever the outer call returns.
+            the pairing needs, whatever the outer call returns. Only the caller's own call passes
+            ``report``, which collects what its printed table names.
             """
             adata = arguments[_data_param]
 
@@ -427,6 +469,10 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                 # resolved and checked before the call computes anything
                 references = _resolve(adata, arguments, null_model)
                 _reference.rotation_shares(arguments.get("n_samples"), len(references or ()))
+            passes = _output.current_passes() if report is not None else None
+            if passes is not None:
+                passes.set_passes(1 + len(references or ()))
+                passes.next_pass("fit")
             result = fn(**arguments)
 
             # pop BEFORE the schema check so the tag never trips required-key validation
@@ -450,11 +496,11 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                         for r in references:
                             _reference.check_joinable(
                                 adata, r, against=arguments.get("fit") if takes_fit else None)
+                    # silent: the caller's call raised each of these warnings once already.
+                    # "ignore" rather than recording: a caller's "error" filter would otherwise
+                    # raise a warning here that its own call never shows
                     with warnings.catch_warnings():
-                        # the call has warned about its own groups; its runs on the reference
-                        # read the same groups and would repeat it once per fit
-                        warnings.filterwarnings("ignore", message=rf"{re.escape(fn.__name__)}: ",
-                                                category=UserWarning)
+                        warnings.simplefilter("ignore")
                         if adjusted_only:
                             runs = _rotated_runs(arguments, references, resolved,
                                                  key_added=key_added)
@@ -477,6 +523,12 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
                     if adjusted_only:
                         _reference.keep_adjusted(result, values=values)
 
+            if report is not None:
+                report["null_model"] = (_reference.name_of(references, adata)
+                                        if takes_null and references is not None else None)
+                report["n_references"] = len(references or ())
+                report["resolved"] = dict(resolved or {})
+                report["fit"] = arguments.get("fit") if takes_fit else None
             if inplace:
                 blob = _encode(result)
                 if not isinstance(blob, dict):
@@ -522,7 +574,10 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
             taken = (resolved or {}).get("n_draws", arguments.get("n_samples"))
             shares = _reference.rotation_shares(taken, len(references)) if taken else None
             runs = []
+            passes = _output.current_passes()
             for position, r in enumerate(references):
+                if passes is not None:
+                    passes.next_pass(str(_reference.name_of(r, adata)))
                 call = _reference_call(arguments, r, _reference.index_of(r, adata),
                                        inplace=False, key_added=key_added)
                 if shares:
@@ -590,13 +645,20 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         # the published signature is the wrapped function's own followed by these. Their
         # defaults therefore have one definition, and a tool without a reference has no
         # `null_model` to accept.
-        if takes_null:
-            def wrapper(*args, null_model="auto", key_added=None, inplace=True, **kwargs):
+        if takes_null and progress:
+            def wrapper(*args, null_model="auto", key_added=None, inplace=True, print=False,
+                        enable_progress_bar=True, **kwargs):
                 return run(args, kwargs, null_model=null_model, key_added=key_added,
-                           inplace=inplace)
+                           inplace=inplace, print=print, enable_progress_bar=enable_progress_bar)
+        elif takes_null:
+            def wrapper(*args, null_model="auto", key_added=None, inplace=True, print=False,
+                        **kwargs):
+                return run(args, kwargs, null_model=null_model, key_added=key_added,
+                           inplace=inplace, print=print)
         else:
-            def wrapper(*args, key_added=None, inplace=True, **kwargs):
-                return run(args, kwargs, null_model=None, key_added=key_added, inplace=inplace)
+            def wrapper(*args, key_added=None, inplace=True, print=False, **kwargs):
+                return run(args, kwargs, null_model=None, key_added=key_added, inplace=inplace,
+                           print=print)
 
         owned = [p for p in inspect.signature(wrapper).parameters.values()
                  if p.kind is inspect.Parameter.KEYWORD_ONLY]
@@ -607,6 +669,7 @@ def tl_result(*, key: str, version: int = 1, schema=None, data_param: str | None
         wrapper.tcri_values = tuple(values)
         wrapper.tcri_denominators = tuple(denominators)
         wrapper.tcri_adjusted_only = bool(adjusted_only)
+        wrapper.tcri_distance = bool(distance)
         wrapper.tcri_key = key
         wrapper.tcri_schema_version = int(version)
         wrapper.tcri_schema = schema

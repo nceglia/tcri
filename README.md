@@ -101,7 +101,7 @@ model.train(max_epochs=200, batch_size=512)
 model.to_anndata(adata)
 
 # 3. fit the permutation references, once: every metric is read against one
-tcri.null.all(model, adata)
+nulls = tcri.null.all(model, adata)
 
 # 4. compute information-theoretic metrics (bits), each with its own floor; each call stores
 #    its result in adata.uns and tcri.get reads it back

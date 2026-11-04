@@ -488,6 +488,8 @@ def test_a_change_explains_a_covariate_constant_within_every_replicate(metric,
     assert "taken within each patient" in messages[1], "the warning must name the rule"
     assert "varies inside a single patient" in messages[1]
     assert all(w.filename == __file__ for w in mine), "a warning names a line in the package"
+    # what the data leaves out is a data warning; a covariate that never varies is the call's
+    assert [w.category for w in mine] == [tcri.TCRIDataWarning, UserWarning]
 
     rep = res["replicate"]["summary"]
     assert sorted(rep["patient"].astype(str)) == ["P0", "P1"]

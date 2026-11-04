@@ -9,15 +9,15 @@ relies on clones being disjoint across groups (a TCR clone never spans two patie
 from __future__ import annotations
 
 import itertools
-import os
 import warnings
 
 import numpy as np
 import pandas as pd
 
+from .. import _output
 from .._state import keys as K
 from .._stats import hdi
-from ._repertoire import _clonotype_sharing, _pool_labels
+from ._repertoire import TCRIDataWarning, _clonotype_sharing, _pool_labels
 # NOTE: ``tools._joint`` is imported lazily inside the functions that need it, never at module
 # level. ``_compute`` is the lower layer — every tools/* metric imports *down* into this module —
 # so a module-level import back up into ``tools`` inverts the layering and makes the package
@@ -751,11 +751,11 @@ def _groups(adata, *, groupby, splitby, clones, exclude_pools, fit, base, skip_e
                                hint=_refit_hint(adata, fit, groupby))
     n_missing = int(obs[groupby].isna().sum())
     if n_missing:
-        warnings.warn(
+        _output.warn(
             f"groupby={groupby!r}: {n_missing} of {len(obs)} cells "
             f"({100 * n_missing / max(len(obs), 1):.1f}%) have no group label and are excluded "
             f"from every row of this result.",
-            UserWarning, stacklevel=4,
+            TCRIDataWarning,
         )
 
     for g in obs[groupby].dropna().unique().tolist():
@@ -901,26 +901,20 @@ def metric_frames(adata, *, covariate=None, cov_from=None, cov_to=None, groupby,
     return pd.DataFrame(rep_rows), item_draws
 
 
-#: Warnings are attributed to the caller's line, never to a frame inside the package. The
-#: trailing separator keeps a sibling directory whose name starts with the package's out of it.
-_PACKAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "")
-
-
 def _warn_change(metric, *, groupby, cov_from, cov_to, n_groups, missing, persistent, has_items):
     unit = groupby or "replicate"
     if missing:
-        warnings.warn(
+        _output.warn(
             f"{metric}: {missing} of {n_groups} {unit} groups have no counted clone at "
             f"{cov_from!r} or at {cov_to!r}; their values are NaN and they leave the tests.",
-            UserWarning, skip_file_prefixes=(_PACKAGE_DIR,),
+            TCRIDataWarning,
         )
     if not persistent:
         items = ", so there are no item rows" if has_items else ""
-        warnings.warn(
+        _output.warn(
             f"{metric}: no {unit} has a clone at both {cov_from!r} and {cov_to!r}{items}. A "
             f"change is taken within each {unit}: it needs a covariate that varies inside a "
             f"single {unit} (a timepoint, say). A covariate that is constant within each {unit} "
-            f"only distinguishes one {unit} from another.",
-            UserWarning, skip_file_prefixes=(_PACKAGE_DIR,),
+            f"only distinguishes one {unit} from another."
         )
 

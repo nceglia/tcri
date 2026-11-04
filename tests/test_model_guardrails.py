@@ -271,8 +271,9 @@ def test_to_anndata_binds_p_ct_by_cell_not_by_loader_position():
     from tcri._state.keys import X_LOGPOSTERIOR
 
     model, adata = _fitted_for_binding()
-    full = model.to_anndata(adata.copy())
-    rev = model.to_anndata(adata[::-1].copy())
+    full, rev = adata.copy(), adata[::-1].copy()
+    model.to_anndata(full)
+    model.to_anndata(rev)
 
     order = [list(rev.obs_names).index(n) for n in full.obs_names]
     delta = float(np.abs(full.obsm[X_LOGPOSTERIOR] - rev.obsm[X_LOGPOSTERIOR][order]).max())

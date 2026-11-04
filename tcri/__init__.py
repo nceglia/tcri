@@ -18,6 +18,13 @@ from . import get             # accessors for cached tl results
 
 # The unified engine, re-exported top-level for prominence.
 from .tools import joint_distribution
+# The category of every warning about the data, so it can be filtered or raised as an error.
+from ._compute._repertoire import TCRIDataWarning
+
+# tcri's own logger gets its one handler; no other logger is touched (tcri._output._logging).
+from ._output import install_handler as _install_handler
+
+_install_handler()
 
 import sys as _sys
 
@@ -32,5 +39,5 @@ _sys.modules.update({f'{__name__}.{m}': globals()[m]
 __all__ = [
     "tl", "pp", "pl", "ut", "ml", "diag", "perturb", "null", "datasets", "get",
     "tools", "preprocessing", "plotting", "utils", "model", "diagnostics", "perturbation",
-    "joint_distribution", "__version__",
+    "joint_distribution", "TCRIDataWarning", "__version__",
 ]

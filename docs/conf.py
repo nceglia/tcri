@@ -154,6 +154,7 @@ autodoc_mock_imports = [
     "mpltern",
     "umap",
     "tqdm",
+    "rich",
     "daft",
     "gseapy",
 ]

@@ -36,6 +36,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .. import _output
 from . import keys as K
 
 #: Columns :func:`.._compute._tables.summarize` adds beside the value. Not labels, not values:
@@ -342,10 +343,8 @@ def mask_unmovable(payload, adata, references, *, arguments, values, denominator
     is decided from ``obs`` (:func:`~tcri._compute._tables.movable_clones`), never from a drawn
     shuffle. Returns the label rows of the groups blanked, for :func:`restat_levels`.
     """
-    import os
-    import warnings
-
-    from .._compute._tables import unmovable_groups   # the lower layer, reached lazily
+    from .._compute._repertoire import TCRIDataWarning   # the lower layer, reached lazily
+    from .._compute._tables import unmovable_groups
 
     kinds = {(adata.uns.get(K.fit_key(K.FIT_SETTINGS, name_of(r, adata))) or {}).get("kind")
              for r in references}
@@ -381,14 +380,12 @@ def mask_unmovable(payload, adata, references, *, arguments, values, denominator
             frame.loc[rows, present] = np.nan
     where = (f"{groupby} {', '.join(repr(x) for x in labels)}" if labels is not None
              else "the whole object")
-    warnings.warn(
+    _output.warn(
         f"{metric}: the covariate null cannot move any cell of {where} at "
         f"{', '.join(repr(x) for x in levels)}: within each of its clones, every batch holds one "
         f"covariate level, so a shuffle within (clonotype, batch) changes nothing and there is no "
         f"reference. Its adjusted values are NaN and it leaves the tests.",
-        UserWarning,
-        skip_file_prefixes=(os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), ""),),
+        TCRIDataWarning,
     )
     return unmoved
 

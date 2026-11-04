@@ -621,6 +621,7 @@ def test_a_replicate_with_no_cells_at_a_level_is_counted_and_nan(metric, uneven)
         f"values are NaN and they leave the tests."
     ]
     assert all(w.filename == __file__ for w in mine), "the warning names a line in the package"
+    assert all(issubclass(w.category, tcri.TCRIDataWarning) for w in mine)
 
     for slot in ("draws", "summary"):
         rep = res["replicate"][slot]

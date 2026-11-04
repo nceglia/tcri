@@ -82,7 +82,7 @@ TRUTH = "tcri_truth"
 PERMUTATION = "tcri_permutation"        # the integer permutation a null was built from
 FIT_SETTINGS = "tcri_fit_settings"      # kind, strata, seed, train args, parent, joinability
 BUFFERS = "tcri_buffers"                # the module's non-parameter state (BatchNorm, archetypes)
-TRAINING = "tcri_training"              # a null's training history and record, for diag.loss
+TRAINING = "tcri_training"              # each fit's loss curves and training_record_
 
 #: Inside `uns[METADATA]`: the fits this object carries, main first as ``None``.
 FITS = "fits"

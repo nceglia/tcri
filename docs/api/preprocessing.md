@@ -22,8 +22,9 @@ computed by `tcri.tl.joint_distribution` after `model.to_anndata`.
 
 ## Repertoire summaries
 
-Each summary stores its result in `adata.uns`, read back with `tcri.get.result`, and the
-`tcri.pl` function of the same name draws it; `inplace=False` returns the result instead.
+Each summary stores its result in `adata.uns`, read back with `tcri.get.result`, and prints a
+table of it with `print=True`; the `tcri.pl` function of the same name draws it, and
+`inplace=False` returns the result instead.
 
 ```{eval-rst}
 .. automodule:: tcri.preprocessing._repertoire

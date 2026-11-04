@@ -219,7 +219,9 @@ def clonotypic_entropy(adata, *, covariate=None, cov_from=None, cov_to=None, gro
     ``uns[key_added or 'tcri_clonotypic_entropy']`` and returns ``None``; with
     ``inplace=False`` nothing is stored and the whole result is returned. The replicate level has
     one row per replicate, read with ``tcri.get.replicates``; the item level one row per
-    replicate and phenotype, read with ``tcri.get.items``.
+    replicate and phenotype, read with ``tcri.get.items``. With ``print=True`` it
+    also prints a table of the result, a change with the endpoints of the quantity it tests;
+    ``tcri.get.show`` prints it again.
 
     Pass ``covariate`` for the value at one level, or ``cov_from`` with ``cov_to`` for the change
     from one to the other (see the module docstring); on a change each phenotype's item value is
@@ -261,7 +263,9 @@ def phenotypic_entropy(adata, *, covariate=None, cov_from=None, cov_to=None, gro
     ``uns[key_added or 'tcri_phenotypic_entropy']`` and returns ``None``; with
     ``inplace=False`` nothing is stored and the whole result is returned. The replicate level has
     one row per replicate, read with ``tcri.get.replicates``; the item level one row per
-    replicate and clone, read with ``tcri.get.items``.
+    replicate and clone, read with ``tcri.get.items``. With ``print=True`` it
+    also prints a table of the result, a change with the endpoints of the quantity it tests;
+    ``tcri.get.show`` prints it again.
 
     Pass ``covariate`` for the value at one level, or ``cov_from`` with ``cov_to`` for the change
     from one to the other (see the module docstring); on a change the item rows are the

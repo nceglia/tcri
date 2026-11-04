@@ -17,6 +17,7 @@ import math
 import operator
 import os
 import re
+import time
 import uuid
 import warnings
 
@@ -36,13 +37,18 @@ from scvi.data.fields import CategoricalObsField, LayerField
 from scvi.model.base import BaseModelClass
 from scvi.train import TrainRunner
 from scvi.dataloaders import DataSplitter
+from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason
+from rich.jupyter import JupyterMixin
 
+from .. import _output
 from .._compute._genes import _INVARIANT_SEGMENTS, _segment_genes
 from .._compute._repertoire import TCRIDataWarning, _missing_clonotypes
 from .._state import keys as K
 from .._state._resolution import resolve_clonotype_key
 from ._module import TCRIModule
-from ._callbacks import BestObjectiveSnapshot, RampGatedEarlyStopping, ramp_is_complete
+from ._callbacks import (BestObjectiveSnapshot, RampGatedEarlyStopping, TrainingStatus,
+                         ramp_is_complete)
+from ._summary import model_panel, setup_panel
 from ._training import UnifiedTrainingPlan, build_archetypes
 
 #: Every store entry a TCRIModule registers, with its namespace stripped: the two guide
@@ -224,11 +230,14 @@ _REPLACED_TRAIN_ARGS = {
         "the best check is restored in memory at the end of the fit",
     "checkpointing_monitor": "checkpointing is not supported; see enable_checkpointing",
     "n_steps_kl_warmup": "the KL warmup is counted in epochs; use n_epochs_kl_warmup",
+    "simple_progress_bar":
+        "train() draws its own status bar; pass enable_progress_bar=False to hide it",
+    "progress_bar_refresh_rate":
+        "train() draws its own status bar, refreshed once per epoch; pass "
+        "enable_progress_bar=False to hide it",
 }
 
 __all__ = ["TCRIModel"]
-
-warnings.filterwarnings("ignore", category=UserWarning, message="Found auxiliary vars")
 
 #: scvi warns when a registered category has fewer than 3 cells. For the clonotype column that is
 #: the normal state of a repertoire, not a training problem: the clonotype never enters the
@@ -256,10 +265,10 @@ def _quiet_small_categories():
 # scoped to train() and restored afterwards; see _slurm_autodetect_disabled.
 #
 # logging.basicConfig() configures the ROOT logger, which is the application's decision, not
-# a library's. Importing tcri would switch on INFO logging for everything in the process. A
-# library attaches a NullHandler and leaves configuration to the caller.
+# a library's. Importing tcri would switch on INFO logging for everything in the process. This
+# module logs on its own logger, which propagates to the `tcri` logger; that one logger's handler
+# (tcri._output._logging) decides where a record goes and leaves the root logger alone.
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
 
 
 @contextlib.contextmanager
@@ -273,6 +282,16 @@ def _slurm_autodetect_disabled():
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+def _stop_reason(stopper, epochs_run: int, max_epochs: int) -> str:
+    """How a fit ended: ``"patience"``, ``"non-finite objective"``, ``"max_epochs"`` or
+    ``"other limit"`` (``max_steps``, ``max_time``, ``fast_dev_run`` or an interrupt)."""
+    if stopper is not None and stopper.fired:
+        if stopper.stopping_reason == EarlyStoppingReason.NON_FINITE_METRIC:
+            return "non-finite objective"
+        return "patience"
+    return "max_epochs" if epochs_run >= max_epochs else "other limit"
 
 
 def _int_at_least(name: str, value, minimum: int) -> int:
@@ -381,7 +400,24 @@ def _train_kwarg_sources():
     return out
 
 
-class TCRIModel(BaseModelClass):
+def _training_for_uns(model) -> dict:
+    """A fit's ``history_`` and ``training_record_``, in a form h5ad writes.
+
+    Each history series is kept as its epochs and its values; record entries that are ``None``
+    are left out, because h5ad cannot write them, and read back as missing. A model that has not
+    been trained gives empty ones. ``tcri.null`` reads it back onto a rebuilt null.
+    """
+    history = {
+        name: {"epoch": np.asarray(frame.index, dtype=np.int64),
+               "value": np.asarray(frame.to_numpy(), dtype=float).ravel()}
+        for name, frame in (getattr(model, "history_", None) or {}).items()
+    }
+    record = {k: v for k, v in (getattr(model, "training_record_", None) or {}).items()
+              if v is not None}
+    return {"history": history, "record": record}
+
+
+class TCRIModel(JupyterMixin, BaseModelClass):
     @classmethod
     def setup_anndata(
         cls,
@@ -393,6 +429,7 @@ class TCRIModel(BaseModelClass):
         covariate_key: str = "timepoint",
         batch_key: str = "patient",
         replicate: Optional[str] = None,
+        print: bool = True,
         **kwargs,
     ) -> None:
         """Register clonotype/phenotype/covariate/batch/count fields with scvi.
@@ -413,14 +450,21 @@ class TCRIModel(BaseModelClass):
         by the prior (:func:`tcri.pp.pool_rare_clones` pools the smallest ones before setup).
         It still shows for the phenotype, covariate and batch columns.
 
-        A ``UserWarning`` names a few of the registered genes that are TCR V, D or J
+        A ``tcri.TCRIDataWarning`` names a few of the registered genes that are TCR V, D or J
         segment genes outside the default ``keep`` of :func:`tcri.pp.exclude_tcr_genes`: each
         clone expresses its own segments, so they let the model learn clone identity from
         expression. Genes are matched by ``var_names``. A load, which runs this method again
         with the saved registry, does not warn.
+
+        With ``print=True`` it prints a panel of what was registered: the cells, genes and
+        counts layer, and each registered column with its number of clones, phenotypes,
+        covariate levels, batches and replicates. A load prints nothing.
         """
         if clonotype_key == "auto":
             clonotype_key = resolve_clonotype_key(adata.obs)
+        # The setup a load replays: the arguments alone, taken before any working variable
+        # exists; `print` is display only and is left out.
+        setup_locals = {k: v for k, v in locals().items() if k != "print"}
 
         for col in [clonotype_key, phenotype_key, covariate_key, batch_key]:
             if col not in adata.obs:
@@ -461,12 +505,12 @@ class TCRIModel(BaseModelClass):
         segments = adata.var_names[_segment_genes(adata.var_names, _INVARIANT_SEGMENTS)]
         if len(segments) and kwargs.get("source_registry") is None:
             named = ", ".join(segments[:3]) + (", ..." if len(segments) > 3 else "")
-            warnings.warn(
+            _output.warn(
                 f"{len(segments)} of the {adata.n_vars} registered genes are TCR V, D or J segment "
                 f"genes ({named}). Each clone expresses its own, so they let the encoder and the "
                 f"classifier learn clone identity from expression. Leave them out before choosing "
                 f"variable genes with tcri.pp.exclude_tcr_genes(adata).",
-                TCRIDataWarning, stacklevel=2,
+                TCRIDataWarning,
             )
         adata.obs["indices"] = list(range(len(adata.obs.index)))
         anndata_fields = [
@@ -477,7 +521,7 @@ class TCRIModel(BaseModelClass):
             CategoricalObsField("indices", "indices"),
             CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
         ]
-        setup_method_args = cls._get_setup_method_args(**locals())
+        setup_method_args = cls._get_setup_method_args(**setup_locals)
         adata_manager = AnnDataManager(
             fields=anndata_fields, setup_method_args=setup_method_args
         )
@@ -492,6 +536,10 @@ class TCRIModel(BaseModelClass):
             adata.uns.pop("tcri_layer", None)
         else:
             adata.uns["tcri_layer"] = layer
+        if print and kwargs.get("source_registry") is None:
+            _output.print_out(setup_panel(
+                adata, layer=layer, clonotype_key=clonotype_key, phenotype_key=phenotype_key,
+                covariate_key=covariate_key, batch_key=batch_key, replicate=replicate))
 
     def _validate_anndata(self, adata=None, copy_if_view: bool = True):
         """scvi's validation, which transfers this model's setup to an unregistered AnnData,
@@ -515,7 +563,9 @@ class TCRIModel(BaseModelClass):
         """
         token = _LOADING.set(True)
         try:
-            return super().load(dir_path, adata=adata, **kwargs)
+            # scvi's device parsing and its download notice are not the caller's to read
+            with _output.quiet_third_party():
+                return super().load(dir_path, adata=adata, **kwargs)
         finally:
             _LOADING.reset(token)
 
@@ -597,21 +647,20 @@ class TCRIModel(BaseModelClass):
                     "pass either `max_kl_weight` or the deprecated `kl_weight_max`, not both"
                 )
             max_kl_weight = kwargs.pop("kl_weight_max")
-            warnings.warn("`kl_weight_max` is deprecated; use `max_kl_weight`.",
-                          FutureWarning, stacklevel=2)
+            _output.warn("`kl_weight_max` is deprecated; use `max_kl_weight`.", FutureWarning)
         # A saved constructor record can carry use_enumeration, which the model does not take: it
         # has no discrete latent to enumerate. It is dropped; True warns, because that record asked
         # for something the model does not do.
         if kwargs.pop("use_enumeration", False):
-            warnings.warn("`use_enumeration` is not a model argument and is ignored: the model has "
-                          "no discrete latent to enumerate.", FutureWarning, stacklevel=2)
+            _output.warn("`use_enumeration` is not a model argument and is ignored: the model has "
+                          "no discrete latent to enumerate.", FutureWarning)
         for old, new in _MOVED_TO_TRAIN.items():
             if old in kwargs:
                 kwargs.pop(old)
-                warnings.warn(
+                _output.warn(
                     f"`{old}` is not a model argument and is ignored: early stopping is set in "
                     f"train({new}=...).",
-                    FutureWarning, stacklevel=2,
+                    FutureWarning,
                 )
         if kwargs:
             raise TypeError(
@@ -679,11 +728,9 @@ class TCRIModel(BaseModelClass):
         # crashing — a dataset with few clones is legitimate (and is exactly what the
         # synthetic examples use).
         if K > c_count:
-            warnings.warn(
+            _output.warn(
                 f"K={K} archetypes requested but the data has only {c_count} "
                 f"clonotype(s); using K={c_count}.",
-                UserWarning,
-                stacklevel=2,
             )
             K = c_count
         self.centers, self.labels = build_archetypes(self.clone_phenotype_prior, K=K)
@@ -753,7 +800,7 @@ class TCRIModel(BaseModelClass):
             target_phenotypes=target_codes,
             ct_to_cov_array=ct_to_cov_torch,
         )
-        logger.info(
+        logger.debug(
             f"Unified model: c_count={c_count}, ct_count={ct_count}, P={P}, "
             f"global_scale={global_scale}, local_scale={local_scale}, "
             f"prior_temperature={prior_temperature}, guide_temperature={guide_temperature}."
@@ -776,8 +823,10 @@ class TCRIModel(BaseModelClass):
         # (scvi/dataloaders/_data_splitting.py), and that setting defaults to None -- i.e. OS
         # entropy. Seeding lightning and pyro is NOT sufficient: without this line, which cells
         # land in the validation split stays random and two fits at one seed differ.
-        # tests/test_model_determinism.py covers this.
-        _scvi.settings.seed = seed
+        # tests/test_model_determinism.py covers this. scvi's setter reseeds through Lightning,
+        # which announces "Seed set to N"; that announcement is not the caller's to read.
+        with _output.quiet_third_party():
+            _scvi.settings.seed = seed
 
     def train(
         self,
@@ -790,6 +839,7 @@ class TCRIModel(BaseModelClass):
         early_stopping: bool = True,
         early_stopping_patience: int = 300,
         early_stopping_min_delta: float = 0.0,
+        print: bool = True,
         **kwargs,
     ):
         """Fit the model on the registered AnnData.
@@ -836,13 +886,22 @@ class TCRIModel(BaseModelClass):
             more than this, in the criterion's own units (per cell). Finite and ``>= 0``. At 0,
             every new low restarts the count. A positive value ends a fit that is still
             descending, if it descends by less than this per ``early_stopping_patience`` epochs.
+        print
+            Print the fit's panel when the fit ends: how it ended, the best epoch, the KL ramp,
+            the data, the device and the time. The same panel is the model's display. Display
+            only: it is not recorded in ``train_kwargs_``, so a null fitted from this record
+            prints nothing.
         kwargs
             Forwarded to scvi's ``TrainRunner`` and lightning's ``Trainer``, plus ``callbacks``.
-            An unrecognized name raises ``TypeError`` here rather than several frames deep in
-            scvi, and so does a name those accept but this model replaces:
+            ``enable_progress_bar`` (default ``True``) switches tcri's status bar, which shows the
+            epoch, the best check, the KL ramp and the patience left; Lightning's own bar is
+            always off. An unrecognized name raises ``TypeError`` here rather than several frames
+            deep in scvi, and so does a name those accept but this model replaces:
             ``early_stopping_warmup_epochs``, ``early_stopping_monitor``,
             ``early_stopping_mode``, ``trainer_config``, ``learning_rate_monitor``,
-            ``enable_checkpointing`` and ``checkpointing_monitor``. ``check_val_every_n_epoch``
+            ``enable_checkpointing``, ``checkpointing_monitor``, ``simple_progress_bar`` and
+            ``progress_bar_refresh_rate``, as does a Lightning ``ProgressBar`` in ``callbacks``,
+            because tcri draws the bar. ``check_val_every_n_epoch``
             other than 1 and ``val_check_interval`` other than 1.0 raise, because patience is
             counted in epochs. The train/validation split is fixed at 0.9. Training runs on one
             device: ``devices`` above 1, a list of several devices, ``-1`` or ``"-1"``,
@@ -867,8 +926,16 @@ class TCRIModel(BaseModelClass):
         come from different objectives and are not comparable.
 
         Sets ``training_record_`` -- epochs run, warmup steps taken, steps per epoch, the epoch
-        and score selected, whether the early-stopping rule ended the fit, and the seed -- and
-        stores the arguments this fit ran with, so ``tcri.null.*`` can fit a null the same way.
+        and score selected, whether the early-stopping rule ended the fit and why
+        (``stop_reason``), the seed and the seed this call used, the device and the fit's
+        duration in seconds -- and stores the arguments this fit ran with, so ``tcri.null.*``
+        can fit a null the same way. A call that raises after its first optimizer step still
+        sets it, with ``stop_reason="error"`` and no selected epoch, before the exception
+        propagates; one that raises before that step leaves it as it was.
+
+        scvi's and Lightning's notices about the device, the dataloaders, the logging interval and
+        the seed are dropped for the span of the fit; the caller's warning filters and logger
+        settings are as they were when it returns.
         """
 
         # Names scvi's or Lightning's Trainer accepts but this model replaces. The unknown-kwarg
@@ -889,6 +956,13 @@ class TCRIModel(BaseModelClass):
             raise TypeError(
                 "train() validates once per epoch: early_stopping_patience is counted in epochs, "
                 f"so val_check_interval={kwargs['val_check_interval']!r} would change its unit."
+            )
+        from lightning.pytorch.callbacks import ProgressBar
+
+        if any(isinstance(cb, ProgressBar) for cb in (kwargs.get("callbacks") or [])):
+            raise TypeError(
+                "train() draws its own status bar, so a Lightning ProgressBar callback cannot be "
+                "added; pass enable_progress_bar=False to hide tcri's bar."
             )
         multi = _multi_device_request(kwargs)
         if multi is not None:
@@ -918,10 +992,16 @@ class TCRIModel(BaseModelClass):
                 f"or scvi's TrainRunner accepts; the train/validation split is fixed at 0.9 and "
                 f"is not configurable."
             )
+        # Display only: tcri's bar follows enable_progress_bar, and Lightning's is always off (the
+        # status bar is a plain callback, and scvi adds its own bar only when this is True).
+        show_bar = bool(kwargs.pop("enable_progress_bar", True))
+        kwargs["enable_progress_bar"] = False
+
         # Re-seed per call, offset by the call index: a second train() on the same model is
         # reproducible without being a bit-for-bit replay of the first.
-        if self._seed is not None:
-            self._apply_seed(self._seed + self._n_train_calls)
+        call_seed = None if self._seed is None else self._seed + self._n_train_calls
+        if call_seed is not None:
+            self._apply_seed(call_seed)
         self._n_train_calls += 1
 
         # The KL ramp is carried on the module, so a second train() CONTINUES the schedule
@@ -940,13 +1020,11 @@ class TCRIModel(BaseModelClass):
         # the number of gradient updates rather than a pass count.
         n_obs = self.adata.n_obs
         if batch_size >= n_obs:
-            warnings.warn(
+            _output.warn(
                 f"batch_size={batch_size} >= n_obs={n_obs}: each epoch is a SINGLE "
                 "optimizer step, so per-epoch overhead dominates and `max_epochs` "
                 "becomes the number of gradient updates. Use a smaller batch_size "
-                "(e.g. 256-1024) for a comparable number of updates in far less time.",
-                UserWarning,
-                stacklevel=2,
+                "(e.g. 256-1024) for a comparable number of updates in far less time."
             )
 
         splitter = DataSplitter(
@@ -1016,32 +1094,109 @@ class TCRIModel(BaseModelClass):
             "devices": kwargs.get("devices", "auto"),
         }
 
-        runner = TrainRunner(
-            self,
-            training_plan=plan,
-            data_splitter=splitter,
-            max_epochs=max_epochs,
-            **kwargs,
-        )
+        # The quiet span opens BEFORE TrainRunner is built: scvi's accelerator notice comes from
+        # its constructor, and Lightning's device notices and SLURM detection from the Trainer's.
+        started = time.perf_counter()
+        with _output.status_progress(show_bar, "train") as status, \
+                _output.quiet_third_party(), _slurm_autodetect_disabled():
+            if status is not None:
+                kwargs["callbacks"].append(
+                    TrainingStatus(status, stopper=stopper, snapshot=snapshot))
+            runner = TrainRunner(
+                self,
+                training_plan=plan,
+                data_splitter=splitter,
+                max_epochs=max_epochs,
+                **kwargs,
+            )
 
-        # Lightning only captures and restores the per-submodule train/eval flags around
-        # validation; it never forces train mode. scvi's TrainRunner calls module.eval() when a
-        # fit ENDS, and predict()/to_anndata()/get_latent_representation()/a session load do
-        # the same. Without this line a train() that followed any of those runs the ENTIRE fit
-        # in eval mode -- classifier dropout off, encoder BatchNorm frozen at its running
-        # statistics -- silently and bit-reproducibly, which is why a seed check cannot see it.
-        # test_train_resets_module_mode pins it.
-        self.module.train()
-        with _slurm_autodetect_disabled():
-            runner()
+            # Lightning only captures and restores the per-submodule train/eval flags around
+            # validation; it never forces train mode. scvi's TrainRunner calls module.eval() when
+            # a fit ENDS, and predict()/to_anndata()/get_latent_representation()/a session load
+            # do the same. Without this line a train() that followed any of those runs the
+            # ENTIRE fit in eval mode -- classifier dropout off, encoder BatchNorm frozen at its
+            # running statistics -- silently and bit-reproducibly, which is why a seed check
+            # cannot see it. test_train_resets_module_mode pins it.
+            self.module.train()
+            try:
+                runner()
+            except BaseException:
+                # A call that raised after its first optimizer step has moved the parameters, so
+                # the record describes it, not the call before: a record that outlived its fit
+                # would be stored beside a substrate it never produced. One that raised before
+                # that step changed nothing and leaves the record as it was.
+                if int(runner.trainer.global_step) > 0:
+                    self.training_record_ = self._call_record(
+                        runner, plan, snapshot, stopper, failed=True, max_epochs=max_epochs,
+                        n_epochs_kl_warmup=n_epochs_kl_warmup, warmup_at_start=warmup_at_start,
+                        call_seed=call_seed, started=started)
+                raise
+        self.training_record_ = self._call_record(
+            runner, plan, snapshot, stopper, failed=False, max_epochs=max_epochs,
+            n_epochs_kl_warmup=n_epochs_kl_warmup, warmup_at_start=warmup_at_start,
+            call_seed=call_seed, started=started)
+        epochs_run = self.training_record_["epochs_run"]
+        ramp_done = self.training_record_["ramp_completed"]
+        if print:
+            _output.print_out(self.__rich__())
+        if self.training_record_["stop_reason"] == "non-finite objective":
+            _output.warn(
+                f"training stopped at epoch {epochs_run} because the validation criterion "
+                f"{MONITOR!r} became non-finite: the fit diverged. Metrics computed from it are "
+                f"not meaningful. Try a smaller lr or a larger batch_size. "
+                f"`model.training_record_['stop_reason']` records this."
+            )
+        if early_stopping and epochs_run < max_epochs and not stopper.fired:
+            _output.warn(
+                f"training ended after {epochs_run} epochs, before max_epochs={max_epochs}, "
+                f"without the early-stopping rule firing: a Lightning limit (max_steps, "
+                f"max_time, fast_dev_run) or an interrupt ended it. The fit is truncated, not "
+                f"converged; `model.training_record_['stopped_early']` is False."
+            )
+        if early_stopping and epochs_run >= max_epochs:
+            # Hitting the cap means early stopping never fired -- the model was still
+            # improving when the budget ran out, so this fit is truncated rather than
+            # converged. It is silent otherwise: the run looks identical to a converged one,
+            # and a metric read from it can be understated by however far the fit still had to
+            # go, so the warning is the only signal a caller gets.
+            _output.warn(
+                f"training stopped because it reached max_epochs={max_epochs}, not because "
+                f"it converged -- the early-stopping rule never engaged, so the model was "
+                f"still improving when the budget ran out. The best epoch was "
+                f"{snapshot.best_epoch}. Metrics computed from this fit may be understated. "
+                f"Re-run with a larger max_epochs and compare: if the value moves, the "
+                f"shorter fit was truncated. `model.training_record_['stopped_early']` "
+                f"records this."
+            )
+        if not ramp_done:
+            _output.warn(
+                f"the KL ramp did not complete: "
+                f"{self.training_record_['warmup_epochs_taken']:.3g} of {n_epochs_kl_warmup} "
+                f"warmup epochs after this fit's {epochs_run} epochs; it needs "
+                f"{self.training_record_['ramp_completes_at_epoch']} epochs of it. No checkpoint "
+                f"was selected and the final weights are kept, because no two checks in this run "
+                f"came from the same objective. The fitted prior is scaled by "
+                f"kl_weight={self.module.kl_weight:.3g}, not max_kl_weight="
+                f"{self.module.max_kl_weight:.3g}."
+            )
+        return
 
-        # A fit records what actually happened -- the provenance fields required by
-        # governance/TRAINING_CONTRACT.md. `steps_per_epoch` is Lightning's count of training
-        # batches, the same number the ramp divides an epoch by.
-        epochs_run = max(int(runner.trainer.current_epoch), 1)
-        steps_per_epoch = int(runner.trainer.num_training_batches)
+    def _call_record(self, runner, plan, snapshot, stopper, *, failed, max_epochs,
+                     n_epochs_kl_warmup, warmup_at_start, call_seed, started) -> dict:
+        """What one ``train()`` call did: the provenance fields required by
+        governance/TRAINING_CONTRACT.md (B9).
+
+        ``failed`` is a call that raised after its first optimizer step: its epochs are those it
+        completed, nothing was selected or restored (the parameters are its last step's), and
+        ``stop_reason`` is ``"error"``. ``steps_per_epoch`` is Lightning's count of training
+        batches, the same number the ramp divides an epoch by.
+        """
+        trainer = runner.trainer
+        epochs_run = (int(trainer.current_epoch) if failed
+                      else max(int(trainer.current_epoch), 1))
+        steps_per_epoch = int(trainer.num_training_batches)
         ramp_done = ramp_is_complete(plan)
-        self.training_record_ = {
+        return {
             "epochs_run": epochs_run,
             "n_epochs_kl_warmup": n_epochs_kl_warmup,
             # The position keeps counting after the ramp completes; the ramp itself is
@@ -1056,55 +1211,40 @@ class TCRIModel(BaseModelClass):
             "ramp_completes_at_epoch": max(0, n_epochs_kl_warmup - warmup_at_start)
                                        if n_epochs_kl_warmup > 0 else 0,
             "ramp_completed": ramp_done,
-            "selection_criterion": (MONITOR if ramp_done
+            "selection_criterion": ("none (the call raised)" if failed
+                                    else MONITOR if ramp_done
                                     else "last epoch (ramp incomplete)"),
-            "selected_epoch": snapshot.best_epoch,
-            "selected_score": snapshot.best_score,
+            "selected_epoch": None if failed else snapshot.best_epoch,
+            "selected_score": None if failed else snapshot.best_score,
             # Did the stopping rule end the fit, or did something else: the budget, or a
             # Lightning limit such as max_steps or max_time? Read from the rule itself, because
             # epochs_run < max_epochs cannot tell those apart, and they mean opposite things
             # about whether the fit is finished.
-            "stopped_early": bool(stopper is not None and stopper.fired),
+            "stopped_early": (not failed) and bool(stopper is not None and stopper.fired),
+            # How the fit ended. Read from the rule itself, because a non-finite criterion also
+            # fires it (stopped_early is True then too) and means the opposite of a converged fit.
+            "stop_reason": "error" if failed else _stop_reason(stopper, epochs_run, max_epochs),
             "seed": self._seed,
+            # The seed this call used: `seed` plus the call index, which is not saved with the
+            # model, so it cannot be recomputed after a load.
+            "call_seed": call_seed,
+            # h5ad-writable types: `to_anndata` writes the record to `uns` (_training_for_uns)
+            "device": str(trainer.strategy.root_device),
+            "duration_s": float(time.perf_counter() - started),
         }
-        if early_stopping and epochs_run < max_epochs and not stopper.fired:
-            warnings.warn(
-                f"training ended after {epochs_run} epochs, before max_epochs={max_epochs}, "
-                f"without the early-stopping rule firing: a Lightning limit (max_steps, "
-                f"max_time, fast_dev_run) or an interrupt ended it. The fit is truncated, not "
-                f"converged; `model.training_record_['stopped_early']` is False.",
-                stacklevel=2,
-            )
-        if early_stopping and epochs_run >= max_epochs:
-            # Hitting the cap means early stopping never fired -- the model was still
-            # improving when the budget ran out, so this fit is truncated rather than
-            # converged. It is silent otherwise: the run looks identical to a converged one,
-            # and a metric read from it can be understated by however far the fit still had to
-            # go, so the warning is the only signal a caller gets.
-            warnings.warn(
-                f"training stopped because it reached max_epochs={max_epochs}, not because "
-                f"it converged -- the early-stopping rule never engaged, so the model was "
-                f"still improving when the budget ran out. The best epoch was "
-                f"{snapshot.best_epoch}. Metrics computed from this fit may be understated. "
-                f"Re-run with a larger max_epochs and compare: if the value moves, the "
-                f"shorter fit was truncated. `model.training_record_['stopped_early']` "
-                f"records this.",
-                stacklevel=2,
-            )
-        if not ramp_done:
-            warnings.warn(
-                f"the KL ramp did not complete: "
-                f"{self.training_record_['warmup_epochs_taken']:.3g} of {n_epochs_kl_warmup} "
-                f"warmup epochs after this fit's {epochs_run} epochs; it needs "
-                f"{self.training_record_['ramp_completes_at_epoch']} epochs of it. No checkpoint "
-                f"was selected and the final weights are kept, because no two checks in this run "
-                f"came from the same objective. The fitted prior is scaled by "
-                f"kl_weight={self.module.kl_weight:.3g}, not max_kl_weight="
-                f"{self.module.max_kl_weight:.3g}.",
-                UserWarning,
-                stacklevel=2,
-            )
-        return
+
+    def __rich__(self):
+        """The model's panel: ``model`` as a notebook cell's last line, ``rich.print(model)``, and
+        what ``train(print=True)`` prints when a fit ends."""
+        return model_panel(self)
+
+    def __str__(self) -> str:
+        """The model's panel as plain text, for ``print(model)`` and files."""
+        return _output.plain_text(self.__rich__())
+
+    def __repr__(self) -> str:
+        """A short description for debugging and for lists of models."""
+        return f"TCRIModel(name={self.name!r}, trained={bool(self.is_trained_)})"
 
     @torch.no_grad()
     def get_latent_representation(self, adata=None, indices=None, batch_size=4096):
@@ -1201,9 +1341,10 @@ class TCRIModel(BaseModelClass):
 
     @torch.no_grad()
     def to_anndata(self, adata=None, *, batch_size: int = 4096,
-                   fit: Optional[str] = None) -> AnnData:
+                   fit: Optional[str] = None) -> None:
         """Write the model's learned state onto ``adata`` under the canonical
-        ``tcri_*`` keys (from :mod:`tcri._state.keys`) and return it.
+        ``tcri_*`` keys (from :mod:`tcri._state.keys`), in place; ``None`` writes onto
+        ``model.adata``. Returns ``None``.
 
         ``fit`` names a SECOND fit on the same object: every per-fit key is written under that
         prefix (``tcri_null.phenotype_p_ct`` and so on), the shared keys are left alone, and the
@@ -1214,14 +1355,23 @@ class TCRIModel(BaseModelClass):
         Writes — ``uns``: ``METADATA`` + covariate/clonotype/phenotype categories,
         ``P_CT`` (posterior-mean ``p_ct``), ``CT_TO_COV``/``CT_TO_C``, per-cell
         ``CT_ARRAY``/``COV_ARRAY``, ``LOCAL_SCALE``, ``GATE_PROB``,
-        ``CLASSIFIER_TEMPERATURE``, ``LABEL_ERROR_RATE``; ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``,
-        ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from :meth:`predict`); ``obs``:
-        ``PHENOTYPE`` argmax hard label.
+        ``CLASSIFIER_TEMPERATURE``, ``LABEL_ERROR_RATE``, ``FIT_SETTINGS`` (the training
+        arguments), ``TRAINING`` (``{history, record}``: the loss curves and
+        ``training_record_``, without its ``None`` entries, which h5ad cannot write);
+        ``obsm``: ``X_TCRI`` latent, ``X_LOGITS``, ``X_LOGPOSTERIOR``, ``X_PROBABILITIES`` (from
+        :meth:`predict`); ``obs``: ``PHENOTYPE`` argmax hard label.
 
         To embed the latent space, build a neighbor graph on it with scanpy and run UMAP:
         ``sc.pp.neighbors(adata, use_rep="X_tcri")``, then ``sc.tl.umap(adata)``.
-        """
 
+        Raises ``ValueError`` for a view: the state would be written onto a copy of it that the
+        caller never sees. Pass ``adata[...].copy()``.
+        """
+        if adata is not None and adata.is_view:
+            raise ValueError(
+                "adata is a view: to_anndata writes onto the AnnData it is given and returns "
+                "nothing, so it would write onto a copy you never see. Pass adata[...].copy()."
+            )
         adata = self._validate_anndata(adata)
         self.module.eval()
         device = next(self.module.parameters()).device
@@ -1289,6 +1439,9 @@ class TCRIModel(BaseModelClass):
             "train": dict(self.train_kwargs_),
             **categories,
         }
+        # How the fit went: its loss curves and `training_record_`, so fits can be compared, and
+        # `tcri.diag.loss` drawn, from the object alone after the model is gone.
+        adata.uns[_key(K.TRAINING)] = _training_for_uns(self)
         # The guide's actual concentration, so credible intervals come from the fitted
         # posterior rather than from a reconstructed local_scale * mean.
         adata.uns[_key(K.CONC_CT)] = self.module.get_conc_ct().detach().cpu().numpy()
@@ -1331,4 +1484,4 @@ class TCRIModel(BaseModelClass):
             probs_df.values.argmax(1), categories=list(probs_df.columns)
         )
 
-        return adata
+        return None

@@ -81,11 +81,13 @@ two clones. Each takes `splitby`, checked as the metrics check it, and its frame
 label as a string. `pl.repertoire_summary`, `pl.clonotype_sharing` and `pl.clone_persistence` draw
 the stored result and compute nothing.
 
-**The substrate.** `TCRIModel.to_anndata()` writes the learned state under the keys in
+**The substrate.** `TCRIModel.to_anndata()` writes in place and returns `None` (it raises for a
+view, whose copy the caller would never see). It writes the learned state under the keys in
 `tcri._state.keys`: the fitted clone × covariate distributions `p_ct` (the posterior mean, no
 temperature baked in), the index maps between cells, groups, clones and covariates, the
-per-cell latent, logits and probabilities, the argmax label, and `local_scale`, `gate_prob`,
-`classifier_temperature` and `label_error_rate` (NaN for a label-free fit). Every `tl` metric
+per-cell latent, logits and probabilities, the argmax label, `local_scale`, `gate_prob`,
+`classifier_temperature` and `label_error_rate` (NaN for a label-free fit), and the fit's loss
+curves and `training_record_` (`tcri_training`, per fit). Every `tl` metric
 reads that substrate and takes no model; `diag` functions that need the live networks take a
 model as well, and every `perturb` function takes the model first. Session I/O (`ut`) restores
 the model, the AnnData and the Pyro parameter store together; the store is process-global, so one
@@ -153,6 +155,35 @@ cells, per-draw values as rows with a `draw` column. Read back with `tcri.get.re
 `tcri.get.draws(adata, name, items=False)` (the frames of a result stored by level), and
 `tcri.get.params(adata, name)`. A normalized replicate value whose normalizer is 0 raises
 `ValueError` naming the metric, the replicate and the covariate level.
+
+**Printed output.** `print=True` is the default for `setup_anndata`, `train` and the `null.*` fits;
+every other `print` is off by default. With `print=True`, every `tl`, and
+`perturb.gene_importance`, prints a table of its result to stdout: the replicate summary for a
+result stored by level (a change with the endpoints of the quantity it tests), the clone and
+phenotype counts for `joint_distribution`, then one line per `stats` row: a change's paired test of
+`cov_from` against `cov_to` per split level (for flux, of the adjusted value against 0), then the
+contrast between split levels (for `gene_importance`, those of its five highest-ranked genes). A
+table shows at most 20 rows, with the `tcri.get` call that reads the rest; `tcri.get.show(adata,
+name)` prints that table again from the stored result, and `level="replicate" | "item" | "stats" |
+"draws"` (or a stored frame's key, such as `clonotype_sharing`'s `"pairs"`) prints that frame,
+without computing anything. `setup_anndata(print=True)` prints what it registered;
+`train(print=True)` prints the fit's panel, which is also the model's display (`str(model)`,
+`model` in a notebook), with the nulls fitted against it and their times; `null.*(print=True)`
+prints one panel for the set of fits, and `null.all` returns a `NullSet`, a `dict` of `{kind:
+[models]}` that displays as that panel; `pp.pool_rare_clones(print=True)` prints its per-group
+counts; `pp.repertoire_summary` and `pp.clone_persistence` print their stored frame and
+`pp.clonotype_sharing` its `groups` frame; `ut.save_tcri_session(print=True)` prints what it wrote,
+and it returns its manifest either way; `ut.load_tcri_session(print=True)` prints what it loaded.
+`enable_progress_bar` switches the bar of `train`, `null.*` and `perturb.gene_importance`. Both are
+display only: never recorded in `params` or `train_kwargs_`, and never passed to a reference run or
+a null fit, which print nothing. `repr(model)` is `TCRIModel(name=..., trained=...)`. Every warning
+about the data is a `tcri.TCRIDataWarning`; every tcri warning names the caller's line, except one
+raised inside scvi's or Lightning's code (the Pyro-store warning of a model load), which names that
+frame. scvi's and Lightning's notices about the device, the dataloaders, the logging interval and
+the seed are dropped for the span of tcri's own calls, which leave the caller's warning filters and
+logger settings as they were. Notices go to the `tcri` logger; with no handler on the root logger
+they print on stderr, and otherwise they reach the root logger's handlers at its level, or at the
+`tcri` logger's level once the caller sets it.
 
 **References.** `tcri.null.phenotype`, `.clonotype`, `.covariate` and `.all` take `n_nulls`
 (default 5): a reference is that many fits of the parent, `null.<kind>[0]` to
@@ -238,7 +269,11 @@ detail, and put no numbers in `attrs`: `phenotype_calibration` returns `bins` an
 `summary` (`ece`, `n_cells`); `reconstruction_ppc` and `permutation_null` return `summary`. They
 take `plot=True` and `save=None`. `plot` draws the check's figure from the values it just
 computed, and the return value is the same whether or not it plots; `save` with `plot=False`
-raises. Nothing is cached: a redraw reruns the check. The three with a panel count known before
+raises. They also take `print=True`, which prints a table of the result (the PPC's median KS
+per covariate and clone-size bin, the calibration bins with the ECE, the other two's
+`summary`), and `return_dict=True`; with `return_dict=False` they return `None`, and with
+`plot`, `print` and `return_dict` all `False` they raise. Nothing is cached: a redraw reruns the
+check. The three with a panel count known before
 the call also take `ax=None`, one Axes per panel; the PPC's panel count depends on the data, so it
 always draws its own figure. `reconstruction_ppc` and `joint_distribution_ppc` both call their
 count of simulated datasets `n_sims`.
@@ -295,7 +330,7 @@ class TCRIModel:
         cls, adata: AnnData, *, layer: Optional[str] = ...,
         clonotype_key: str = ..., phenotype_key: str = ...,
         covariate_key: str = ..., batch_key: str = ...,
-        replicate: Optional[str] = ..., **kwargs: Any,
+        replicate: Optional[str] = ..., print: bool = ..., **kwargs: Any,
     ) -> None: ...
     @classmethod
     def load(cls, dir_path: str, adata: Optional[AnnData] = ..., **kwargs: Any) -> Any: ...
@@ -303,7 +338,7 @@ class TCRIModel:
         self, max_epochs: int = ..., batch_size: int = ..., lr: float = ...,
         reconstruction_loss_scale: float = ..., n_epochs_kl_warmup: int = ...,
         num_particles: int = ..., early_stopping: bool = ..., early_stopping_patience: int = ...,
-        early_stopping_min_delta: float = ..., **kwargs: Any,
+        early_stopping_min_delta: float = ..., print: bool = ..., **kwargs: Any,
     ) -> None: ...
     def get_latent_representation(
         self, adata: Optional[AnnData] = ..., indices: Any = ...,
@@ -315,14 +350,14 @@ class TCRIModel:
     def get_p_ct(self) -> Any: ...
     def to_anndata(
         self, adata: Optional[AnnData] = ..., *, batch_size: int = ..., fit: Optional[str] = ...,
-    ) -> AnnData: ...
+    ) -> None: ...
 
 
 # ── preprocessing (pp) ───────────────────────────────────────────────────────
 class pp:
     def pool_rare_clones(
         adata: AnnData, *, clonotype_key: str, groupby: str, min_cells: int = ...,
-        samples: Optional[str] = ..., key_added: Optional[str] = ...,
+        samples: Optional[str] = ..., key_added: Optional[str] = ..., print: bool = ...,
     ) -> None: ...
     def exclude_tcr_genes(
         adata: AnnData, *, keep: Sequence[str] = ..., gene_symbols: Optional[str] = ...,
@@ -338,16 +373,16 @@ class pp:
         adata: AnnData, *, clonotype_key: str, groupby: Optional[str] = ...,
         splitby: Optional[str] = ..., covariate_key: Optional[str] = ...,
         phenotype_key: Optional[str] = ..., key_added: Optional[str] = ...,
-        inplace: bool = ...,
+        inplace: bool = ..., print: bool = ...,
     ) -> Optional[pd.DataFrame]: ...
     def clone_persistence(
         adata: AnnData, *, clonotype_key: str, covariate_key: str,
         groupby: Optional[str] = ..., splitby: Optional[str] = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[pd.DataFrame]: ...
     def clonotype_sharing(
         adata: AnnData, *, clonotype_key: str, groupby: str, splitby: Optional[str] = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Any: ...
 
 
@@ -358,7 +393,7 @@ class tl:
         n_samples: int = ..., use_logits: bool = ..., weighted: bool = ...,
         clones: Any = ..., exclude_pools: bool = ..., temperature: float = ...,
         random_state: Any = ..., device: Any = ..., fit: Optional[str] = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[dict]: ...
     def clonotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
@@ -367,7 +402,7 @@ class tl:
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., n_clones_ref: Any = ..., random_state: Any = ...,
         device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[dict]: ...
     def phenotypic_entropy(
         adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
@@ -376,7 +411,7 @@ class tl:
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[dict]: ...
     def mutual_information(
         adata: AnnData, *, covariate: Optional[str] = ..., cov_from: Optional[str] = ...,
@@ -385,7 +420,7 @@ class tl:
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         normalized: bool = ..., normalize_mode: str = ..., random_state: Any = ...,
         device: Any = ..., fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[dict]: ...
     def phenotypic_flux(
         adata: AnnData, *, cov_from: str, cov_to: str, groupby: Optional[str] = ...,
@@ -393,7 +428,7 @@ class tl:
         clones: Any = ..., exclude_pools: bool = ..., weighted: bool = ...,
         distance_metric: str = ..., random_state: Any = ..., device: Any = ...,
         fit: Optional[str] = ..., null_model: Any = ...,
-        key_added: Optional[str] = ..., inplace: bool = ...,
+        key_added: Optional[str] = ..., inplace: bool = ..., print: bool = ...,
     ) -> Optional[dict]: ...
 
 
@@ -475,6 +510,10 @@ class get:
         fit: Optional[str] = ...,
     ) -> pd.DataFrame: ...
     def fits(adata: AnnData) -> list: ...
+    def show(
+        adata: AnnData, name: str, *, level: Optional[str] = ..., key: Optional[str] = ...,
+        fit: Optional[str] = ...,
+    ) -> None: ...
 
 
 # ── diagnostics (diag) ───────────────────────────────────────────────────────
@@ -483,22 +522,23 @@ class diag:
         adata: AnnData, *, covariate: Optional[str] = ..., distance_metric: Any = ...,
         n_samples: int = ..., n_sims: int = ..., clones: Any = ...,
         exclude_pools: bool = ..., random_state: Any = ..., fit: Optional[str] = ...,
-        plot: bool = ..., save: Any = ...,
-    ) -> dict: ...
+        plot: bool = ..., save: Any = ..., print: bool = ..., return_dict: bool = ...,
+    ) -> Optional[dict]: ...
     def phenotype_calibration(
         adata: AnnData, *, n_bins: int = ..., fit: Optional[str] = ..., plot: bool = ...,
-        ax: Any = ..., save: Any = ...,
-    ) -> dict: ...
+        ax: Any = ..., save: Any = ..., print: bool = ..., return_dict: bool = ...,
+    ) -> Optional[dict]: ...
     def reconstruction_ppc(
         model: Any, adata: Optional[AnnData] = ..., *, n_sims: int = ...,
         random_state: Any = ..., plot: bool = ..., ax: Any = ..., save: Any = ...,
-    ) -> dict: ...
+        print: bool = ..., return_dict: bool = ...,
+    ) -> Optional[dict]: ...
     def permutation_null(
         adata: AnnData, *, metric: str = ..., covariate: Optional[str] = ...,
         groupby: Optional[str] = ..., clones: Any = ..., exclude_pools: bool = ...,
         normalize_mode: str = ..., n_perm: int = ..., random_state: Any = ..., plot: bool = ...,
-        ax: Any = ..., save: Any = ...,
-    ) -> dict: ...
+        ax: Any = ..., save: Any = ..., print: bool = ..., return_dict: bool = ...,
+    ) -> Optional[dict]: ...
     def loss(model: Any, *, log_scale: bool = ..., ax: Any = ..., save: Any = ...) -> Any: ...
     def archetypes(model: Any, *, ax: Any = ..., save: Any = ...) -> Any: ...
 
@@ -514,7 +554,7 @@ class perturb:
         groupby: Optional[str] = ..., splitby: Optional[str] = ..., exclude_pools: bool = ...,
         n_samples: int = ..., use_gate: bool = ..., batch_size: int = ...,
         random_state: Any = ..., null_model: Any = ..., key_added: Optional[str] = ...,
-        inplace: bool = ...,
+        inplace: bool = ..., print: bool = ..., enable_progress_bar: bool = ...,
     ) -> Optional[dict]: ...
 
 
@@ -522,19 +562,23 @@ class perturb:
 class null:
     def phenotype(
         model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
-        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., print: bool = ...,
+        enable_progress_bar: bool = ..., **train_kwargs: Any,
     ) -> list: ...
     def clonotype(
         model: Any, adata: AnnData, *, n_nulls: int = ..., within: Any = ...,
-        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., print: bool = ...,
+        enable_progress_bar: bool = ..., **train_kwargs: Any,
     ) -> list: ...
     def covariate(
         model: Any, adata: AnnData, *, n_nulls: int = ..., seed: Optional[int] = ...,
-        key_added: Optional[str] = ..., **train_kwargs: Any,
+        key_added: Optional[str] = ..., print: bool = ..., enable_progress_bar: bool = ...,
+        **train_kwargs: Any,
     ) -> list: ...
     def all(
         model: Any, adata: AnnData, *, n_nulls: int = ..., kinds: Any = ..., within: Any = ...,
-        seed: Optional[int] = ..., key_added: Optional[str] = ..., **train_kwargs: Any,
+        seed: Optional[int] = ..., key_added: Optional[str] = ..., print: bool = ...,
+        enable_progress_bar: bool = ..., **train_kwargs: Any,
     ) -> dict: ...
 
 
@@ -542,9 +586,11 @@ class null:
 class ut:
     def save_tcri_session(
         model: Any, adata: AnnData, out_dir: str, *, save_adata: bool = ..., compression: str = ...,
+        print: bool = ...,
     ) -> dict: ...
     def load_tcri_session(
         run_dir: str, *, adata_path: Optional[str] = ..., map_location: Any = ..., layer: Optional[str] = ...,
+        print: bool = ...,
     ) -> Any: ...
 
 

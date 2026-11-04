@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+from .. import _output
 from .._compute._repertoire import TCRIDataWarning
 from .._state import keys as K
 from .._state.storage import _tcri_version
@@ -72,8 +73,66 @@ def _read_session_meta(run_dir: str) -> Dict[str, Any]:
         with open(meta_file, "r") as f:
             return dict(_json.load(f))
     except Exception as e:
-        _warnings.warn(f"Could not read {META_FILE}: {e}")
+        _output.warn(f"Could not read {META_FILE}: {e}")
         return {}
+
+
+def _dist_version(name: str) -> str:
+    """An installed distribution's version, read from its metadata (``__version__`` is deprecated
+    in anndata and scanpy)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _fit_lines(adata):
+    """``reference: n fits`` per reference the AnnData carries, or ``None``."""
+    from rich.text import Text
+
+    references: dict = {}
+    for fit in K.fits(adata):
+        settings = adata.uns.get(K.fit_key(K.FIT_SETTINGS, fit)) or {}
+        reference = str(settings.get("reference", fit))
+        references[reference] = references.get(reference, 0) + 1
+    if not references:
+        return None
+    return Text("\n".join(f"{ref}: {n} fit{'s' if n != 1 else ''}"
+                          for ref, n in references.items()))
+
+
+def _saved_panel(out_dir, model, adata, paths):
+    """The panel ``save_tcri_session`` prints: where, what, and the fits the AnnData carries."""
+    from rich.text import Text
+
+    files = ", ".join(_os.path.basename(str(p)) if kind != "model_dir" else "model.pt"
+                      for kind, p in paths.items())
+    rows = [
+        ("Directory", Text(str(out_dir))),
+        ("Files", Text(files)),
+        ("Model", Text(f"{model.name} · {'trained' if model.is_trained_ else 'not trained'}")),
+        ("Data", Text(f"{adata.n_obs:,} cells · {adata.n_vars:,} genes")
+         if "adata" in paths else Text("not saved (save_adata=False)")),
+        ("Fits", _fit_lines(adata)),
+    ]
+    return _output.panel("save_tcri_session", rows)
+
+
+def _session_panel(run_dir, model, adata, meta):
+    """The panel ``load_tcri_session`` prints: what was loaded, and what wrote it."""
+    from rich.text import Text
+
+    rows = [
+        ("Directory", Text(str(run_dir))),
+        ("Model", Text(f"{model.name} · {'trained' if model.is_trained_ else 'not trained'}")),
+        ("Data", Text(f"{adata.n_obs:,} cells · {adata.n_vars:,} genes")),
+        ("Fits", _fit_lines(adata)),
+        ("Written by", Text(f"tcri {meta.get('versions', {}).get('tcri', 'unknown')}")
+         if meta else None),
+    ]
+    return _output.panel("session", rows)
 
 
 def load_tcri_session(
@@ -82,7 +141,41 @@ def load_tcri_session(
     adata_path: Optional[str] = None,
     map_location: Optional[str] = None,
     layer: Optional[str] = None,
+    print: bool = False,
 ):
+    """Load a session saved with :func:`save_tcri_session`.
+
+    The AnnData is read, registered again with the saved setup, and the model loaded onto it with
+    its Pyro store: its posteriors and its nulls' parameters.
+
+    Parameters
+    ----------
+    run_dir
+        The directory :func:`save_tcri_session` wrote.
+    adata_path
+        An ``.h5ad`` to read instead of the one in ``run_dir``.
+    map_location
+        Where to load the saved Pyro store's tensors, as ``torch.load`` takes it.
+    layer
+        The counts layer to register; the saved setup's layer when ``None``.
+    print
+        Print a panel of what was loaded: the directory, the model, the data, the fits the
+        object carries, and the tcri version that wrote the session.
+
+    Returns
+    -------
+    tuple
+        ``(model, adata)``.
+
+    Raises
+    ------
+    ValueError
+        The session was written by a newer tcri, in a format this one cannot read.
+    FileNotFoundError
+        There is no AnnData file at ``adata_path`` or in ``run_dir``.
+    RuntimeError
+        The saved Pyro store cannot be read.
+    """
     TCRIModel = _resolve_TCRIModel()
 
     # 0) What wrote this session. Checked BEFORE anything is loaded: a session from a newer tcri
@@ -110,7 +203,7 @@ def load_tcri_session(
         with open(setup_file, "r") as f:
             setup = _json.load(f)
     else:
-        _warnings.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
+        _output.warn("setup.json not found; attempting to infer from adata.uns['tcri_metadata'].")
         setup = _collect_setup_from_adata_or_model(adata, model=None)
     _restore_category_order(adata, setup)
 
@@ -132,6 +225,7 @@ def load_tcri_session(
             covariate_key=setup.get("covariate_col", "timepoint"),
             batch_key=setup.get("batch_col", "patient"),
             replicate=setup.get("replicate"),
+            print=False,
         )
 
     # 3) The Pyro store saved beside the model, read before anything is loaded: a corrupt file
@@ -161,7 +255,8 @@ def load_tcri_session(
     # `train_kwargs_` stays empty and `tcri.null.*` raises rather than guessing.
     if meta.get("train_kwargs"):
         model.train_kwargs_ = dict(meta["train_kwargs"])
-
+    if print:
+        _output.print_out(_session_panel(run_dir, model, adata, meta))
     return model, adata
 
 
@@ -278,7 +373,40 @@ def save_tcri_session(
     *,
     save_adata: bool = True,
     compression: str = "gzip",
+    print: bool = False,
 ) -> Dict[str, Any]:
+    """Save a fitted model with its AnnData, for :func:`load_tcri_session`.
+
+    Writes the model (weights and registry, without the AnnData), Pyro's parameter store, the
+    setup, the AnnData (with ``save_adata``) and a ``meta.json`` recording the arguments the model
+    was trained with and the package versions.
+
+    Parameters
+    ----------
+    model
+        The fitted model.
+    adata
+        Its AnnData, with whatever ``to_anndata`` and the metrics wrote onto it.
+    out_dir
+        The directory to write; created if missing.
+    save_adata
+        Write the AnnData as ``adata.h5ad``.
+    compression
+        The ``.h5ad`` compression.
+    print
+        Print a panel of what was written: the directory, the files, and the fits the AnnData
+        carries.
+
+    Returns
+    -------
+    dict
+        The manifest, ``{file kind: path}``.
+
+    Raises
+    ------
+    RuntimeError
+        ``model`` has no ``save``.
+    """
     _ensure_dir(out_dir)
     paths: Dict[str, Any] = {}
 
@@ -294,7 +422,7 @@ def save_tcri_session(
         _pyro.get_param_store().save(_os.path.join(out_dir, PYRO_FILE))
         paths["pyro"] = _os.path.join(out_dir, PYRO_FILE)
     except Exception as e:
-        _warnings.warn(f"Could not save Pyro param store: {e}")
+        _output.warn(f"Could not save Pyro param store: {e}")
 
     # 3) Save setup metadata needed to rebuild the AnnData manager on load
     setup = _collect_setup_from_adata_or_model(adata, model)
@@ -322,8 +450,8 @@ def save_tcri_session(
         "versions": {
             "tcri": _tcri_version(),
             "python": f"{_os.sys.version_info.major}.{_os.sys.version_info.minor}.{_os.sys.version_info.micro}",
-            "anndata": getattr(_ad, "__version__", "unknown"),
-            "scanpy": getattr(_sc, "__version__", "unknown"),
+            "anndata": _dist_version("anndata"),
+            "scanpy": _dist_version("scanpy"),
             "torch": getattr(_torch, "__version__", "unknown"),
             "pyro": getattr(_pyro, "__version__", "unknown"),
         },
@@ -332,4 +460,6 @@ def save_tcri_session(
     with open(_os.path.join(out_dir, META_FILE), "w") as f:
         _json.dump(meta, f, indent=2)
     paths["meta"] = _os.path.join(out_dir, META_FILE)
+    if print:
+        _output.print_out(_saved_panel(out_dir, model, adata, paths))
     return paths

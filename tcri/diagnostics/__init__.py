@@ -1,6 +1,7 @@
-"""``tcri.diag`` — diagnostics: four checks that return what they computed and, with
-``plot=True``, draw their figure from it, plus the two training plots. Read-only checks on a
-finalized model.
+"""``tcri.diag`` — diagnostics: four checks and the two training plots. Each check draws its
+figure (``plot=True``), prints a table (``print=True``) and returns what it computed
+(``return_dict=True``); turning all three off raises. ``loss`` and ``archetypes`` only draw.
+Read-only checks on a finalized model.
 """
 from ._ppc import (
     joint_distribution_ppc,

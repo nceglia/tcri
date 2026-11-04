@@ -69,7 +69,7 @@ the same cells and the same rule. `null_model=None` raises: there is nothing to 
 The null runs store nothing of their own.
 
 ```python
-tcri.null.all(model, adata)                          # once, after to_anndata
+nulls = tcri.null.all(model, adata)                  # once, after to_anndata
 tcri.perturb.gene_importance(model, adata)
 tcri.get.replicates(adata, "gene_importance")        # the adjusted importance
 tcri.get.items(adata, "gene_importance")             # the adjusted shift

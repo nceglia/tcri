@@ -765,10 +765,11 @@ def test_every_scvi_trainer_argument_is_forwarded_or_replaced():
 
     from tcri.model._model import TCRIModel, _REPLACED_TRAIN_ARGS
 
+    # enable_progress_bar keeps its plain meaning (the bar on or off) but switches tcri's own
+    # status bar; scvi's two bar settings are replaced, because tcri draws the bar.
     forwarded = {"accelerator", "devices", "benchmark", "max_epochs", "default_root_dir",
                  "num_sanity_val_steps", "enable_model_summary", "enable_progress_bar",
-                 "progress_bar_refresh_rate", "simple_progress_bar", "logger",
-                 "log_every_n_steps", "log_save_dir", "check_val_every_n_epoch"}
+                 "logger", "log_every_n_steps", "log_save_dir", "check_val_every_n_epoch"}
     set_by_train = {"model", "training_plan", "data_splitter", "early_stopping",
                     "early_stopping_patience", "early_stopping_min_delta"}
     lightning = set(inspect.signature(LightningTrainer.__init__).parameters)
