@@ -1169,7 +1169,7 @@ def test_validation_step_does_not_call_training_step():
     assert "super().training_step" not in src, "validation_step reaches SVI.step() again (DE-1)"
     assert "_objective_blocks" in src, "validation_step must evaluate through _objective_blocks"
     assert "max_kl_weight" in src and "finally" in src, "the kl_weight pin and its restore (I3, B1)"
-    assert "fork_rng" in src and "manual_seed" in src, "the fixed evaluation seed (I3)"
+    assert "seeded_rng" in src and "_validation_seed" in src, "the fixed evaluation seed (I3)"
 
 
 def test_every_test_the_contract_names_exists():

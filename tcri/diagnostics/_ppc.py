@@ -435,7 +435,7 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot
     (the mean over replicates) and ``discrepancy`` (their absolute difference). ``plot``,
     ``print`` and ``return_dict`` all ``False`` raises ``ValueError``.
     """
-    import torch
+    from .._compute._xp import seeded_rng
 
     _check_save(plot, save)
     _report.check_outputs(plot, print, return_dict)
@@ -448,12 +448,9 @@ def reconstruction_ppc(model, adata=None, *, n_sims=100, random_state=None, plot
     if random_state is None:
         result = _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
         return _report.finish("reconstruction_ppc", result, print=print, return_dict=return_dict)
-    # Seeded inside a fork, so the caller's global torch random state is the same afterwards.
-    # The CPU state is always forked; a CUDA device's is forked too. device_type is always a
-    # real type: torch 2.4 builds a device from it, so None raises there.
-    cuda = device.type == "cuda"
-    with torch.random.fork_rng(devices=[device.index or 0] if cuda else [], device_type="cuda"):
-        torch.manual_seed(int(random_state))
+    # Seeds the CPU generator and the model's device generator, CUDA or MPS, and restores both,
+    # so the caller's torch random state is the same afterwards.
+    with seeded_rng(int(random_state), device):
         result = _reconstruction_ppc(model, module, adata, device, n_sims, plot, ax, save)
     return _report.finish("reconstruction_ppc", result, print=print, return_dict=return_dict)
 

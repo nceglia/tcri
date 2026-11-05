@@ -45,22 +45,17 @@ def _seed_int(random_state):
 
 
 @contextlib.contextmanager
-def _torch_seed(random_state):
-    """Seed the global torch RNG from ``random_state`` for the duration, then restore
-    it (so the draw is reproducible without a permanent global side effect). ``None``
-    leaves the RNG untouched (non-reproducible)."""
-    import torch
-
+def _torch_seed(random_state, device="cpu"):
+    """Seed torch from ``random_state`` for the duration, then restore it, so the draw is
+    reproducible without a permanent global side effect. ``device`` is where the draw is made;
+    the CPU generator and that device's generator are seeded and restored, and no other device's
+    generator is touched. ``None`` leaves the RNG untouched (non-reproducible)."""
     seed = _seed_int(random_state)
     if seed is None:
         yield
         return
-    prev = torch.random.get_rng_state()
-    torch.manual_seed(seed)
-    try:
+    with _xp.seeded_rng(seed, device):
         yield
-    finally:
-        torch.random.set_rng_state(prev)
 
 
 def _gate(gate_prob):
@@ -124,7 +119,7 @@ def _posterior_bases(p_ct, *, local_scale, conc_ct=None, n_samples=0, temperatur
         conc = torch.clamp(mag * base, min=1e-3)
     else:
         conc = torch.clamp(float(local_scale) * base, min=1e-3)
-    with _torch_seed(random_state):
+    with _torch_seed(random_state, conc.device):
         bases = torch.distributions.Dirichlet(conc).sample((int(n_samples),))  # [N, n_ct, P]
     return bases, int(n_samples)
 
