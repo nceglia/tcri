@@ -15,6 +15,7 @@ from pyro import poutine
 from pyro.infer import Trace_ELBO
 from sklearn.cluster import KMeans
 
+from .._compute._xp import seeded_rng
 from ._module import TCRIModule
 
 __all__ = ["UnifiedTrainingPlan", "build_archetypes"]
@@ -254,12 +255,13 @@ class UnifiedTrainingPlan(PyroTrainingPlan):
 
         # I3: pin, fork, evaluate. The pin is restored in `finally` so B1's monotone TRAINING
         # schedule is untouched -- kl_weight is raised for the duration of the check only.
+        # The seed covers the CPU and the module's device, CUDA or MPS, and both generators are
+        # restored afterwards, so the next training step continues its own stream rather than
+        # restarting from the evaluation seed every epoch.
         prev_kl = self.module.kl_weight
-        fork_devices = [device.index] if device.type == "cuda" else []
         try:
             self.module.kl_weight = self.module.max_kl_weight
-            with torch.random.fork_rng(devices=fork_devices), torch.no_grad():
-                torch.manual_seed(self._validation_seed)
+            with seeded_rng(self._validation_seed, device), torch.no_grad():
                 per_cell, global_block = self._objective_blocks(*args, **kwargs)
         finally:
             self.module.kl_weight = prev_kl
